@@ -1,0 +1,56 @@
+# Example Vinifera Collector configuration.
+#
+# The pipeline is the v0 vertical slice:
+#   OTLP/HTTP logs (:4318)
+#     -> viniferaredaction  (defense-in-depth redaction floor)
+#     -> viniferadrift      (live-vs-spec + version-diff findings)
+#     -> viniferastore      (writes calls + findings to the embedded store)
+# The viniferastore EXTENSION owns the SQLite file; the exporter and UI share it.
+# The viniferaui EXTENSION serves the localhost UI + the flag action.
+#
+# Every key here is frozen in contracts/CONTRACTS.md §8.
+
+extensions:
+  # Single SQLite owner. db_path MUST be on a persistent volume (PVC).
+  viniferastore:
+    db_path: /data/vinifera.db
+    window_max_rows: 10000
+    window_max_bytes: 268435456 # 256 MiB
+
+  # localhost UI + read API + POST /api/flag -> control plane.
+  viniferaui:
+    ui_endpoint: 127.0.0.1:5335 # loopback only — the collector is outbound-only
+    integration_id: acme-payments
+    consumer_display_name: Acme Consumer Ltd
+    cp_base_url: https://cp.vinifera.test
+    cp_deploy_token: ${env:CP_DEPLOY_TOKEN} # the only outbound auth (Bearer)
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # The floor is always on; no tuning in v0.
+  viniferaredaction: {}
+
+  viniferadrift:
+    integration_id: acme-payments
+    spec_path: /etc/vinifera/spec-v1.yaml
+    spec_v2_path: /etc/vinifera/spec-v2.yaml # optional — enables the version-diff finding
+
+exporters:
+  # Discovers the viniferastore extension via the collector host; nothing to tune.
+  viniferastore: {}
+
+service:
+  extensions: [viniferastore, viniferaui]
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [viniferaredaction, viniferadrift]
+      exporters: [viniferastore]
+  telemetry:
+    logs:
+      level: info

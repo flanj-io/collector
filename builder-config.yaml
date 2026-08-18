@@ -1,0 +1,48 @@
+# ocb (OpenTelemetry Collector Builder) manifest for the Vinifera Collector.
+#
+# THE VERSION TRIAD IS THE #1 BUILD HAZARD (CONTRACTS §1). ocb, the beta
+# components, and the stable components must stay in lockstep:
+#   - ocb                                     v0.159.0  (dist.otelcol_version)
+#   - beta components (otlpreceiver, ...)     v0.159.0
+#   - stable components (component/confmap/…) v1.65.0   (resolved by ocb from otelcol_version)
+# otlpreceiver is CORE (go.opentelemetry.io/collector/receiver/otlpreceiver), NOT contrib.
+#
+# The five custom components are local Go modules, wired in via gomod + a replace
+# that points at the in-repo source. The root module (github.com/vinifera-io/collector)
+# is also replaced locally because the components import its internal/ packages
+# (redact, drift, store, promote, model, otlpattr).
+dist:
+  name: vinifera-collector
+  description: Vinifera Collector — OTLP in, redact + detect drift near source, embedded rolling-window store, localhost UI. Outbound-only. ELv2.
+  output_path: ./_build
+  otelcol_version: 0.159.0
+
+receivers:
+  # Core OTLP receiver — the SDK ships OTLP/HTTP protobuf logs to :4318 (CONTRACTS §2).
+  - gomod: go.opentelemetry.io/collector/receiver/otlpreceiver v0.159.0
+
+processors:
+  # Defense-in-depth redaction floor (idempotent, add-only).
+  - gomod: github.com/vinifera-io/collector/processor/viniferaredaction v0.0.0
+  # Technical-adherence drift: live-vs-spec (kin-openapi) + version-diff (oasdiff).
+  - gomod: github.com/vinifera-io/collector/processor/viniferadrift v0.0.0
+
+exporters:
+  # Writes call + finding records into the shared embedded store.
+  - gomod: github.com/vinifera-io/collector/exporter/viniferastore v0.0.0
+
+extensions:
+  # SINGLE SQLite owner (WAL, ring-buffer). Shared via host.GetExtensions().
+  - gomod: github.com/vinifera-io/collector/extension/viniferastore v0.0.0
+  # localhost UI + read API + POST /api/flag -> control plane.
+  - gomod: github.com/vinifera-io/collector/extension/viniferaui v0.0.0
+
+# Replaces are written verbatim into ./_build/go.mod, so they are relative to
+# that directory (one level under the repo root) — hence the ../ prefix.
+replaces:
+  - github.com/vinifera-io/collector => ../
+  - github.com/vinifera-io/collector/processor/viniferaredaction => ../processor/viniferaredaction
+  - github.com/vinifera-io/collector/processor/viniferadrift => ../processor/viniferadrift
+  - github.com/vinifera-io/collector/exporter/viniferastore => ../exporter/viniferastore
+  - github.com/vinifera-io/collector/extension/viniferastore => ../extension/viniferastore
+  - github.com/vinifera-io/collector/extension/viniferaui => ../extension/viniferaui

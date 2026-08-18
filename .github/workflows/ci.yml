@@ -38,7 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: { go-version: '1.24' }
+        with: { go-version: '1.26' }
       - name: Unit + contract tests (custom components)
         run: go test ./... -count=1
 

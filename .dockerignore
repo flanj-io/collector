@@ -1,0 +1,20 @@
+# Build outputs and caches — never send to the Docker build context.
+_build/
+/vinifera-collector
+bin/
+.gopath/
+.gocache/
+go.mod.test
+**/node_modules/
+ui/dist/
+# The SPA is rebuilt by the node stage and embedded fresh; keep any local build
+# out of the context (the placeholder index.html is restored by the build stage).
+extension/viniferaui/web/dist/assets/
+*.db
+*.db-wal
+*.db-shm
+*.log
+.git/
+.env
+.env.*
+.DS_Store
