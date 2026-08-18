@@ -1,0 +1,24 @@
+# Vinifera Collector
+
+A single-binary [OpenTelemetry Collector](https://opentelemetry.io/docs/collector/) distribution for the
+**local, self-hosted** side of Vinifera. It receives captured calls from the [SDK](https://github.com/vinifera-io/sdk),
+re-applies redaction (defense-in-depth), validates live traffic against a provider's OpenAPI/AsyncAPI spec to
+detect **drift**, stores redacted calls in an embedded rolling-window store, and serves a **local UI** on
+`localhost` — all inside your own environment. **Raw calls never leave.**
+
+Headless and **outbound-only** apart from the localhost UI. Ships and deploys as one unit (collector + store +
+UI embedded in the binary).
+
+- OTLP receiver → redaction processor → drift detection → embedded SQLite store (rolling window on a PVC).
+- Local Vue UI: **Health** (observed vs declared) + **Contract** (live-traffic-vs-spec drift) with the
+  correlation keys that make a finding actionable, plus a **flag** action that promotes a redacted call to the
+  control plane.
+
+## Status
+
+Pre-release (v0). See [docs/CONCEPTS.md](docs/CONCEPTS.md) and [CLAUDE.md](CLAUDE.md).
+
+## License
+
+[Elastic License 2.0](LICENSE) (source-available). Contributions require a DCO sign-off — see
+[CONTRIBUTING.md](CONTRIBUTING.md).

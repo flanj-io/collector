@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vinifera.io/contracts/v1/cp-flag-request.schema.json",
+  "title": "CP POST /api/v1/flags request body",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["idempotency_key", "consumer_display_name", "invitee_email", "message", "call", "finding"],
+  "properties": {
+    "idempotency_key": { "type": "string", "minLength": 1 },
+    "consumer_display_name": { "type": "string", "minLength": 1 },
+    "invitee_email": { "type": "string", "format": "email" },
+    "message": { "type": "string" },
+    "call": { "$ref": "https://vinifera.io/contracts/v1/redacted-call.schema.json" },
+    "finding": { "$ref": "https://vinifera.io/contracts/v1/finding.schema.json" }
+  }
+}

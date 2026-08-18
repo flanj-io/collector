@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vinifera.io/contracts/v1/redacted-call.schema.json",
+  "title": "RedactedCall",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version", "id", "captured_at", "integration", "direction",
+    "method", "url", "route", "status_code",
+    "request_body", "response_body", "correlation", "redaction"
+  ],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "id": { "type": "string", "format": "uuid" },
+    "captured_at": { "type": "string", "format": "date-time" },
+    "integration": { "type": "string" },
+    "direction": { "type": "string", "enum": ["client", "server"] },
+    "method": { "type": "string" },
+    "url": { "type": "string" },
+    "route": { "type": "string" },
+    "status_code": { "type": "integer" },
+    "request_headers": { "type": "object" },
+    "request_body": { "type": "string" },
+    "request_body_truncated": { "type": "boolean" },
+    "request_content_type": { "type": "string" },
+    "response_headers": { "type": "object" },
+    "response_body": { "type": "string" },
+    "response_body_truncated": { "type": "boolean" },
+    "response_content_type": { "type": "string" },
+    "correlation": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "request_id": { "type": ["string", "null"] },
+        "idempotency_key": { "type": ["string", "null"] },
+        "trace_id": { "type": ["string", "null"] },
+        "span_id": { "type": ["string", "null"] }
+      }
+    },
+    "duration_ms": { "type": "integer" },
+    "redaction": {
+      "type": "object",
+      "required": ["applied", "patterns"],
+      "additionalProperties": true,
+      "properties": {
+        "applied": { "type": "boolean" },
+        "patterns": { "type": "array", "items": { "type": "string" } },
+        "spec_aware": { "type": "boolean" }
+      }
+    }
+  }
+}

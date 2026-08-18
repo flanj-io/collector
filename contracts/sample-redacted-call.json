@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "id": "0191e8c4-1a2b-7c3d-8e4f-0a1b2c3d4e5f",
+  "captured_at": "2026-08-18T08:00:00.000Z",
+  "integration": "acme-payments",
+  "direction": "client",
+  "method": "POST",
+  "url": "https://api.acme.test/v1/charges",
+  "route": "/v1/charges",
+  "status_code": 200,
+  "request_headers": { "content-type": "application/json", "idempotency-key": "idem_9f2c1a" },
+  "request_body": "{\"amount\":1200,\"currency\":\"usd\",\"source\":\"⟦REDACTED:PAN⟧\"}",
+  "request_body_truncated": false,
+  "request_content_type": "application/json",
+  "response_headers": { "content-type": "application/json", "x-request-id": "req_0Vy9aX2bK" },
+  "response_body": "{\"id\":\"ch_1Mox\",\"object\":\"charge\",\"amount\":\"1200\",\"currency\":\"usd\",\"status\":\"succeeded\",\"created\":1755504000,\"card\":{\"last4\":\"1111\",\"brand\":\"visa\"}}",
+  "response_body_truncated": false,
+  "response_content_type": "application/json",
+  "correlation": {
+    "request_id": "req_0Vy9aX2bK",
+    "idempotency_key": "idem_9f2c1a",
+    "trace_id": "5b8efff798038103d269b633813fc60c",
+    "span_id": "eee19b7ec3c1b174"
+  },
+  "duration_ms": 42,
+  "redaction": { "applied": true, "patterns": ["PAN"], "spec_aware": false }
+}

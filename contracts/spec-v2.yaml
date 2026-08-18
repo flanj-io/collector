@@ -1,0 +1,75 @@
+openapi: 3.0.3
+info:
+  title: Acme Payments API
+  version: "2.0.0"
+  description: >
+    A newer provider spec. Diffed against spec-v1 by the collector's version-diff detector (oasdiff).
+    Two intentional BREAKING changes for the spec-v1 -> spec-v2 finding:
+      1. Charge.amount type changed integer -> string  (response-property-type-changed, ERR)
+      2. Charge.status enum value `pending` removed     (response-property-enum-value-removed, ERR)
+servers:
+  - url: https://api.acme.test
+paths:
+  /v1/charges:
+    post:
+      operationId: createCharge
+      summary: Create a charge
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChargeRequest"
+      responses:
+        "200":
+          description: Charge created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Charge"
+components:
+  schemas:
+    ChargeRequest:
+      type: object
+      required: [amount, currency, source]
+      properties:
+        amount:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        source:
+          type: string
+        idempotency_key:
+          type: string
+    Charge:
+      type: object
+      required: [id, object, amount, currency, status, created, card]
+      properties:
+        id:
+          type: string
+        object:
+          type: string
+          enum: [charge]
+        amount:
+          type: string
+          description: BREAKING - was integer in v1.
+        currency:
+          type: string
+        status:
+          type: string
+          enum: [succeeded, failed]
+          description: BREAKING - `pending` removed vs v1.
+        created:
+          type: integer
+          format: int64
+        card:
+          $ref: "#/components/schemas/Card"
+    Card:
+      type: object
+      required: [last4, brand]
+      properties:
+        last4:
+          type: string
+        brand:
+          type: string

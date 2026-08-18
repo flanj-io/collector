@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "id": "0191e8c4-2b3c-7d4e-9f50-1a2b3c4d5e6f",
+  "kind": "live-vs-spec",
+  "severity": "breaking",
+  "integration": "acme-payments",
+  "endpoint": "POST /v1/charges",
+  "field_path": "amount",
+  "location": "$.response.body.amount",
+  "expected": "type=integer",
+  "actual": "type=string (\"1200\")",
+  "rule": "type-mismatch",
+  "spec_version_from": null,
+  "spec_version_to": null,
+  "source_call_id": "0191e8c4-1a2b-7c3d-8e4f-0a1b2c3d4e5f",
+  "detected_at": "2026-08-18T08:00:01.000Z",
+  "detail": "Response field `amount` is a string; spec-v1 declares integer."
+}

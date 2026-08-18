@@ -1,0 +1,70 @@
+name: ci
+
+# Per-PR CI for the collector. Fixtures-only — never needs the private control-plane (flag POST is
+# tested against a stub). Builds the multi-stage image, runs Go unit + contract tests (ingest
+# contracts/golden-otlp-call.json -> expected Finding; redaction vs vectors). Pings e2e on merge.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  dco:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Verify DCO sign-off on PR commits
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          missing=0
+          for c in $(git rev-list "$BASE_SHA..$HEAD_SHA"); do
+            if ! git log -1 --format=%B "$c" | grep -qiE '^Signed-off-by: .+ <.+@.+>'; then
+              echo "::error::commit $c is missing a Signed-off-by trailer (use git commit -s)"
+              missing=1
+            fi
+          done
+          exit $missing
+
+  go-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: '1.24' }
+      - name: Unit + contract tests (custom components)
+        run: go test ./... -count=1
+
+  docker-build:
+    # The single-binary artifact is built entirely in Docker (multi-stage: node builds the Vue UI ->
+    # go builds the collector embedding it). No host Go needed for the artifact.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build collector image
+        run: docker build -t vinifera-collector:ci .
+
+  notify-e2e:
+    needs: [dco, go-test, docker-build]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch integration gate
+        env:
+          TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          if [ -z "$TOKEN" ]; then echo "E2E_DISPATCH_TOKEN not set; skipping dispatch"; exit 0; fi
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/vinifera-io/e2e/dispatches \
+            -d "$(jq -n --arg sha "$HEAD_SHA" '{event_type:"component-updated",client_payload:{repo:"collector",sha:$sha}}')"
