@@ -1,0 +1,8 @@
+# Default owners for everything in this repo. See https://docs.github.com/articles/about-code-owners
+* @IdanBerko
+
+# Redaction + detection are the security- and correctness-critical cores.
+/processor/viniferaredaction/ @IdanBerko
+/processor/viniferadrift/ @IdanBerko
+/internal/redact/ @IdanBerko
+/builder-config.yaml @IdanBerko
