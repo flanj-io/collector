@@ -43,21 +43,26 @@ func createLogsProcessor(
 ) (processor.Logs, error) {
 	c := cfg.(*Config)
 
-	// Load the spec once, at construction, so a bad spec fails the build fast.
-	doc, err := drift.LoadSpecFile(c.SpecPath)
-	if err != nil {
-		return nil, fmt.Errorf("viniferadrift: load spec %q: %w", c.SpecPath, err)
-	}
+	dp := &driftProcessor{cfg: c, logger: set.Logger}
 
-	dp := &driftProcessor{cfg: c, doc: doc, logger: set.Logger}
-
-	// Compute the version-diff findings once, at load, if a v2 spec is provided.
-	if c.SpecV2Path != "" {
-		vf, err := drift.DetectVersionDiff(c.SpecPath, c.SpecV2Path, c.IntegrationID)
+	// The spec is OPTIONAL: with no spec_path the processor is a pass-through that
+	// still stamps call ids so capture + edge discovery work. When a spec IS
+	// configured, load it once at construction so a bad spec fails the build fast.
+	if c.SpecPath != "" {
+		doc, err := drift.LoadSpecFile(c.SpecPath)
 		if err != nil {
-			return nil, fmt.Errorf("viniferadrift: version diff: %w", err)
+			return nil, fmt.Errorf("viniferadrift: load spec %q: %w", c.SpecPath, err)
 		}
-		dp.versionFindings = vf
+		dp.doc = doc
+
+		// Compute the version-diff findings once, at load, if a v2 spec is provided.
+		if c.SpecV2Path != "" {
+			vf, err := drift.DetectVersionDiff(c.SpecPath, c.SpecV2Path, c.IntegrationID)
+			if err != nil {
+				return nil, fmt.Errorf("viniferadrift: version diff: %w", err)
+			}
+			dp.versionFindings = vf
+		}
 	}
 
 	return processorhelper.NewLogs(

@@ -9,7 +9,8 @@ packages — so the acceptance oracles run without a running collector.
 |---|---|---|
 | `redact` | Redaction floor (idempotent, add-only). Governed by `contracts/redaction-vectors.json`. | `redact_test.go` (vectors + idempotency + add-only) |
 | `drift` | live-vs-spec (kin-openapi) + version-diff (oasdiff). Technical adherence only. | `drift_test.go` (golden call + two breaking findings) |
-| `store` | Single SQLite store: schema, WAL, ring-buffer eviction, pin-on-finding, evict-after-promote. | `store_test.go` (stable fill, pinned survive, persistence) |
+| `store` | Single SQLite store: schema, WAL, ring-buffer eviction, pin-on-finding, evict-after-promote, **edge auto-discovery** (edges table keyed by peer_host+direction) + **per-signature finding dedup**. | `store_test.go` (stable fill, pinned survive, persistence, edge discovery, drift dedup) |
+| `edge` | Edge classification heuristic (external vs internal, identical to the SDK) + role/orientation from direction. | `edge_test.go` (classification + role) |
 | `promote` | Builds + POSTs the CP flag body (redacts the message). | `promote_test.go` (schema conformance + headers) |
 | `model` | Cross-component record types mirroring the frozen JSON Schemas. | — |
 | `otlpattr` | Maps `vinifera.*` OTLP attributes ↔ records; stamps the shared `vinifera.call.id`. | — |

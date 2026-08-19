@@ -7,7 +7,9 @@ API + the flag action.
 
 - Serves the built SPA (`go:embed all:web/dist`) — the Dockerfile's node stage
   copies `ui/dist` over `web/dist` before the Go build.
-- Read API: `GET /api/health | /api/calls | /api/findings`.
+- Read API: `GET /api/health | /api/edges | /api/calls | /api/findings`.
+  `GET /api/edges` returns the auto-discovered **external** edges (inbound +
+  outbound); internal same-team edges are classified out and never returned.
 - Flag action: `POST /api/flag` → assembles the CP flag body from the stored
   call + finding and POSTs `cp_base_url/api/v1/flags` (Bearer `cp_deploy_token`);
   on success marks the call promoted (evict-after-promote).

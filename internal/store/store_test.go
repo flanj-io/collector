@@ -38,6 +38,164 @@ func makeCall(i int) model.RedactedCall {
 	}
 }
 
+func makeEdgeCall(i int, peerHost, direction, class string) model.RedactedCall {
+	c := makeCall(i)
+	c.PeerHost = peerHost
+	c.Direction = direction
+	c.EdgeClass = class
+	return c
+}
+
+// driftFinding builds a live-vs-spec finding on one endpoint. Each carries the
+// SAME signature (the drift is per-endpoint) but a distinct id + source call so
+// dedup can be observed.
+func driftFinding(id, sourceCallID string) model.Finding {
+	f := model.Finding{
+		SchemaVersion: model.SchemaVersion,
+		ID:            id,
+		Kind:          model.KindLiveVsSpec,
+		Severity:      model.SeverityBreaking,
+		Integration:   "acme-payments",
+		Endpoint:      "POST /v1/charges",
+		FieldPath:     model.Ptr("amount"),
+		Location:      model.Ptr("$.response.body.amount"),
+		Expected:      "type=integer",
+		Actual:        `type=string ("1200")`,
+		Rule:          "type-mismatch",
+		SourceCallID:  &sourceCallID,
+		DetectedAt:    "2026-08-18T08:00:01.000Z",
+	}
+	f.Signature = f.ComputeSignature()
+	return f
+}
+
+// TestEdgeDiscovery proves edges are auto-discovered from client + server OTLP
+// records — keyed by (peer_host, direction), role/orientation derived from
+// direction, class carried through — with internal edges excluded from the
+// external listing (GET /api/edges).
+func TestEdgeDiscovery(t *testing.T) {
+	s := openTemp(t, 0, 0)
+
+	// Outbound: this org is the consumer calling an external provider (2 calls).
+	if err := s.InsertCall(makeEdgeCall(1, "api.acme.test", "client", "external")); err != nil {
+		t.Fatalf("insert client call 1: %v", err)
+	}
+	if err := s.InsertCall(makeEdgeCall(2, "api.acme.test", "client", "external")); err != nil {
+		t.Fatalf("insert client call 2: %v", err)
+	}
+	// Inbound: this org is the provider serving an external consumer (1 call).
+	if err := s.InsertCall(makeEdgeCall(3, "partner.acme.test", "server", "external")); err != nil {
+		t.Fatalf("insert server call: %v", err)
+	}
+	// Internal same-team edge — must be classified out of the external listing.
+	if err := s.InsertCall(makeEdgeCall(4, "billing.svc.cluster.local", "client", "internal")); err != nil {
+		t.Fatalf("insert internal call: %v", err)
+	}
+
+	all, err := s.ListEdges(false)
+	if err != nil {
+		t.Fatalf("list all edges: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("discovered %d edges total, want 3 (2 external + 1 internal)", len(all))
+	}
+
+	ext, err := s.ListEdges(true)
+	if err != nil {
+		t.Fatalf("list external edges: %v", err)
+	}
+	if len(ext) != 2 {
+		t.Fatalf("external edges = %d, want 2 (internal excluded)", len(ext))
+	}
+
+	byKey := map[string]model.Edge{}
+	for _, e := range ext {
+		byKey[e.PeerHost+"/"+e.Direction] = e
+	}
+	out, ok := byKey["api.acme.test/client"]
+	if !ok {
+		t.Fatalf("missing outbound edge api.acme.test/client; got %+v", ext)
+	}
+	if out.Role != "consumer" {
+		t.Errorf("outbound role = %q, want consumer", out.Role)
+	}
+	if out.Class != "external" {
+		t.Errorf("outbound class = %q, want external", out.Class)
+	}
+	if out.CallCount != 2 {
+		t.Errorf("outbound call_count = %d, want 2", out.CallCount)
+	}
+	in, ok := byKey["partner.acme.test/server"]
+	if !ok {
+		t.Fatalf("missing inbound edge partner.acme.test/server; got %+v", ext)
+	}
+	if in.Role != "provider" {
+		t.Errorf("inbound role = %q, want provider", in.Role)
+	}
+	if in.CallCount != 1 {
+		t.Errorf("inbound call_count = %d, want 1", in.CallCount)
+	}
+
+	// A drift finding on the outbound edge's call bumps that edge's drift_count.
+	if err := s.InsertFinding(driftFinding("0191e8c4-ffff-7000-8000-00000000aa01", makeCall(1).ID)); err != nil {
+		t.Fatalf("insert finding: %v", err)
+	}
+	ext, _ = s.ListEdges(true)
+	for _, e := range ext {
+		if e.PeerHost == "api.acme.test" && e.DriftCount != 1 {
+			t.Errorf("outbound drift_count = %d, want 1", e.DriftCount)
+		}
+		if e.PeerHost == "partner.acme.test" && e.DriftCount != 0 {
+			t.Errorf("inbound drift_count = %d, want 0", e.DriftCount)
+		}
+	}
+}
+
+// TestDriftDedup is the acceptance oracle for per-endpoint dedup: N drifting
+// calls on ONE endpoint collapse into exactly ONE finding with occurrence_count=N
+// (CONTRACTS §4). The stored finding id stays stable (flag idempotency).
+func TestDriftDedup(t *testing.T) {
+	s := openTemp(t, 0, 0)
+	const N = 2000
+
+	firstID := ""
+	for i := 0; i < N; i++ {
+		call := makeEdgeCall(i, "api.acme.test", "client", "external")
+		if err := s.InsertCall(call); err != nil {
+			t.Fatalf("insert call %d: %v", i, err)
+		}
+		fid := fmt.Sprintf("0191e8c4-dddd-7000-8000-%012d", i)
+		if i == 0 {
+			firstID = fid
+		}
+		if err := s.InsertFinding(driftFinding(fid, call.ID)); err != nil {
+			t.Fatalf("insert finding %d: %v", i, err)
+		}
+	}
+
+	findings, err := s.ListFindings(100)
+	if err != nil {
+		t.Fatalf("list findings: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("dedup failed: %d findings, want exactly 1 for one endpoint", len(findings))
+	}
+	f := findings[0]
+	if f.OccurrenceCount != N {
+		t.Errorf("occurrence_count = %d, want %d", f.OccurrenceCount, N)
+	}
+	if f.ID != firstID {
+		t.Errorf("finding id = %q, want the FIRST call's finding id %q (stable across re-drift)", f.ID, firstID)
+	}
+	_, findingCount, err := s.Counts()
+	if err != nil {
+		t.Fatalf("counts: %v", err)
+	}
+	if findingCount != 1 {
+		t.Errorf("findings table holds %d rows, want 1", findingCount)
+	}
+}
+
 // TestRingBuffer_StableFill_RowCap fills far past the row cap and asserts the
 // window holds at the cap (oldest evicted first, FIFO).
 func TestRingBuffer_StableFill_RowCap(t *testing.T) {

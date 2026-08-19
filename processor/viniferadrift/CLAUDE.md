@@ -14,6 +14,16 @@ downstream to the store exporter.
 **Technical adherence ONLY** — fields/types/shapes/enums. Never business/economic
 correctness (FX/fees/spreads) — that would be a false-positive storm.
 
+**Everything is OPTIONAL** — the collector auto-discovers edges from traffic and
+never requires a target/integration/spec. With no `spec_path` the processor is a
+pass-through (still stamps `vinifera.call.id`); capture + edge discovery work
+regardless. A loaded spec is matched to one discovered edge by `peer_host`.
+
+**A drift is per endpoint, not per call.** Each drifting call emits a finding
+record carrying a `signature` (integration|endpoint|kind|rule|field_path); the
+store dedups on it — the first call creates the finding, later calls increment
+`occurrence_count` + `last_seen`. One drift ⇒ one finding ⇒ one flag.
+
 ## Files
 
 - `factory.go` — loads `spec_path` at construction (bad spec fails the build

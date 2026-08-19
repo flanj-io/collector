@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 
+	"github.com/vinifera-io/collector/internal/edge"
 	"github.com/vinifera-io/collector/internal/model"
 )
 
@@ -20,6 +21,9 @@ const (
 	AttrCaptureVersion = "vinifera.capture.version"
 	AttrRecordType     = "vinifera.record.type"
 	AttrDirection      = "vinifera.direction"
+	AttrPeerHost       = "vinifera.peer.host"
+	AttrEdgeClass      = "vinifera.edge.class"
+	AttrCaptureBodies  = "vinifera.capture.bodies"
 	AttrIntegration    = "vinifera.integration"
 	AttrMethod         = "vinifera.http.method"
 	AttrRoute          = "vinifera.http.route"
@@ -117,12 +121,21 @@ func CallFromRecord(lr plog.LogRecord) model.RedactedCall {
 	if id == "" {
 		id = NewID()
 	}
+	peerHost := getStr(m, AttrPeerHost)
+	edgeClass := getStr(m, AttrEdgeClass)
+	// Defense-in-depth: if the SDK omitted the class, reconstruct it from the
+	// peer host with the identical heuristic so classification is never lost.
+	if edgeClass == "" && peerHost != "" {
+		edgeClass = edge.Classify(peerHost)
+	}
 	return model.RedactedCall{
 		SchemaVersion:         model.SchemaVersion,
 		ID:                    id,
 		CapturedAt:            capturedAt,
 		Integration:           getStr(m, AttrIntegration),
 		Direction:             getStr(m, AttrDirection),
+		PeerHost:              peerHost,
+		EdgeClass:             edgeClass,
 		Method:                getStr(m, AttrMethod),
 		URL:                   getStr(m, AttrURLFull),
 		Route:                 getStr(m, AttrRoute),

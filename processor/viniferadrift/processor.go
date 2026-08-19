@@ -40,7 +40,16 @@ func (p *driftProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.Logs
 					continue
 				}
 				otlpattr.EnsureCallID(lr) // stamp the shared id before reconstruct
+				// No spec loaded → pass-through (capture + edge discovery only).
+				if p.doc == nil {
+					continue
+				}
 				call := otlpattr.CallFromRecord(lr)
+				// Spec-matched-by-host: when PeerHost is configured, only validate
+				// calls on that edge against this spec.
+				if p.cfg.PeerHost != "" && call.PeerHost != p.cfg.PeerHost {
+					continue
+				}
 				fs, err := drift.DetectLiveVsSpec(p.doc, call)
 				if err != nil {
 					// A route miss or reconstruction error is logged, not fatal —

@@ -65,7 +65,7 @@ func DetectVersionDiff(pathV1, pathV2, integration string) ([]model.Finding, err
 		if ac, ok := c.(checker.ApiChange); ok {
 			endpoint = ac.Operation + " " + ac.Path
 		}
-		findings = append(findings, model.Finding{
+		vf := model.Finding{
 			SchemaVersion:   model.SchemaVersion,
 			ID:              otlpattr.NewID(),
 			Kind:            model.KindVersionDiff,
@@ -79,7 +79,12 @@ func DetectVersionDiff(pathV1, pathV2, integration string) ([]model.Finding, err
 			SpecVersionTo:   model.Ptr(toV),
 			DetectedAt:      now,
 			Detail:          c.GetUncolorizedText(localizer),
-		})
+			OccurrenceCount: 1,
+			FirstSeen:       now,
+			LastSeen:        now,
+		}
+		vf.Signature = vf.ComputeSignature()
+		findings = append(findings, vf)
 	}
 	return findings, nil
 }

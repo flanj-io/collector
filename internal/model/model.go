@@ -23,14 +23,21 @@ type Redaction struct {
 }
 
 // RedactedCall is the stored, always-redacted representation of one HTTP call.
-// Mirrors contracts/v1/redacted-call.schema.json.
+// Mirrors contracts/v1/redacted-call.schema.json (readers tolerate the extra
+// peer_host/edge_class local-discovery fields — additionalProperties:true).
 type RedactedCall struct {
-	SchemaVersion         int               `json:"schema_version"`
-	ID                    string            `json:"id"`
-	CapturedAt            string            `json:"captured_at"`
-	Integration           string            `json:"integration"`
-	Direction             string            `json:"direction"`
-	Method                string            `json:"method"`
+	SchemaVersion int    `json:"schema_version"`
+	ID            string `json:"id"`
+	CapturedAt    string `json:"captured_at"`
+	Integration   string `json:"integration"`
+	Direction     string `json:"direction"`
+	// PeerHost is the other end's host[:port] — the edge key (CONTRACTS §2
+	// vinifera.peer.host). Local discovery metadata; not part of the frozen
+	// RedactedCall surface but carried for edge attribution.
+	PeerHost string `json:"peer_host,omitempty"`
+	// EdgeClass is the SDK/heuristic classification of PeerHost: external|internal.
+	EdgeClass string `json:"edge_class,omitempty"`
+	Method    string `json:"method"`
 	URL                   string            `json:"url"`
 	Route                 string            `json:"route"`
 	StatusCode            int               `json:"status_code"`
@@ -76,6 +83,41 @@ type Finding struct {
 	SourceCallID    *string `json:"source_call_id"`
 	DetectedAt      string  `json:"detected_at"`
 	Detail          string  `json:"detail,omitempty"`
+
+	// Dedup fields (CONTRACTS §4): a drift is per-endpoint, not per-call. The
+	// Signature (integration|endpoint|kind|rule|field_path) collapses every call
+	// carrying the SAME drift into ONE finding; OccurrenceCount counts them and
+	// First/LastSeen bound the window. SourceCallID is a REPRESENTATIVE call.
+	Signature       string `json:"signature,omitempty"`
+	OccurrenceCount int    `json:"occurrence_count,omitempty"`
+	FirstSeen       string `json:"first_seen,omitempty"`
+	LastSeen        string `json:"last_seen,omitempty"`
+}
+
+// Edge is a discovered integration edge, keyed by (peer_host, direction). Edges
+// are derived from observed traffic — no target list is configured. role and the
+// edge orientation fall out of direction; class is carried from the call's
+// edge.class. Only external edges are surfaced.
+type Edge struct {
+	PeerHost   string `json:"peer_host"`
+	Direction  string `json:"direction"`
+	Role       string `json:"role"`
+	Class      string `json:"class"`
+	FirstSeen  string `json:"first_seen"`
+	LastSeen   string `json:"last_seen"`
+	CallCount  int    `json:"call_count"`
+	DriftCount int    `json:"drift_count"`
+}
+
+// ComputeSignature returns the dedup key for a finding:
+// integration|endpoint|kind|rule|field_path (CONTRACTS §4). All calls carrying
+// the SAME drift share this signature and collapse into one finding.
+func (f Finding) ComputeSignature() string {
+	field := ""
+	if f.FieldPath != nil {
+		field = *f.FieldPath
+	}
+	return f.Integration + "|" + f.Endpoint + "|" + f.Kind + "|" + f.Rule + "|" + field
 }
 
 // Ptr is a small helper for the nullable string fields.

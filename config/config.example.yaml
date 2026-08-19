@@ -3,10 +3,17 @@
 # The pipeline is the v0 vertical slice:
 #   OTLP/HTTP logs (:4318)
 #     -> viniferaredaction  (defense-in-depth redaction floor)
-#     -> viniferadrift      (live-vs-spec + version-diff findings)
-#     -> viniferastore      (writes calls + findings to the embedded store)
+#     -> viniferadrift      (OPTIONAL live-vs-spec + version-diff findings)
+#     -> viniferastore      (writes calls + findings; auto-discovers edges)
 # The viniferastore EXTENSION owns the SQLite file; the exporter and UI share it.
 # The viniferaui EXTENSION serves the localhost UI + the flag action.
+#
+# NO TARGET LIST IS CONFIGURED. Integration edges are auto-discovered from
+# observed traffic, keyed by (peer.host, direction), and classified external vs
+# internal — only external edges are surfaced on the UI Edges overview / GET
+# /api/edges. Drift detection is an OPTIONAL enhancer: it runs only on the edge a
+# locally-loaded spec is matched to (by host). With no spec the collector still
+# captures, redacts, and discovers edges.
 #
 # Every key here is frozen in contracts/CONTRACTS.md §8.
 
@@ -36,10 +43,14 @@ processors:
   # The floor is always on; no tuning in v0.
   viniferaredaction: {}
 
+  # OPTIONAL drift enhancer. Omit the whole block (or leave spec_path empty) to run
+  # capture + edge discovery with no detection. When a spec IS loaded it is matched
+  # to a discovered edge by host.
   viniferadrift:
-    integration_id: acme-payments
-    spec_path: /etc/vinifera/spec-v1.yaml
+    integration_id: acme-payments # OPTIONAL — labels findings from this spec
+    spec_path: /etc/vinifera/spec-v1.yaml # OPTIONAL — empty disables live-vs-spec
     spec_v2_path: /etc/vinifera/spec-v2.yaml # optional — enables the version-diff finding
+    peer_host: api.acme.test # optional — scope this spec to one discovered edge by host
 
 exporters:
   # Discovers the viniferastore extension via the collector host; nothing to tune.

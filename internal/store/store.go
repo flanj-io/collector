@@ -27,6 +27,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"github.com/vinifera-io/collector/internal/edge"
 	"github.com/vinifera-io/collector/internal/model"
 )
 
@@ -82,6 +83,9 @@ CREATE TABLE IF NOT EXISTS calls (
   id           TEXT NOT NULL UNIQUE,
   captured_at  TEXT NOT NULL,
   integration  TEXT NOT NULL,
+  peer_host    TEXT,
+  direction    TEXT,
+  edge_class   TEXT,
   method       TEXT NOT NULL,
   route        TEXT NOT NULL,
   status_code  INTEGER NOT NULL,
@@ -94,19 +98,35 @@ CREATE TABLE IF NOT EXISTS calls (
   doc          TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS findings (
-  seq            INTEGER PRIMARY KEY AUTOINCREMENT,
-  id             TEXT NOT NULL UNIQUE,
-  kind           TEXT NOT NULL,
-  severity       TEXT NOT NULL,
-  integration    TEXT NOT NULL,
-  endpoint       TEXT NOT NULL,
-  rule           TEXT NOT NULL,
-  source_call_id TEXT,
-  detected_at    TEXT NOT NULL,
-  doc            TEXT NOT NULL
+  seq              INTEGER PRIMARY KEY AUTOINCREMENT,
+  id               TEXT NOT NULL UNIQUE,
+  signature        TEXT NOT NULL UNIQUE,
+  kind             TEXT NOT NULL,
+  severity         TEXT NOT NULL,
+  integration      TEXT NOT NULL,
+  endpoint         TEXT NOT NULL,
+  rule             TEXT NOT NULL,
+  source_call_id   TEXT,
+  occurrence_count INTEGER NOT NULL DEFAULT 1,
+  first_seen       TEXT NOT NULL,
+  last_seen        TEXT NOT NULL,
+  detected_at      TEXT NOT NULL,
+  doc              TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS edges (
+  peer_host    TEXT NOT NULL,
+  direction    TEXT NOT NULL,
+  role         TEXT NOT NULL,
+  class        TEXT NOT NULL,
+  first_seen   TEXT NOT NULL,
+  last_seen    TEXT NOT NULL,
+  call_count   INTEGER NOT NULL DEFAULT 0,
+  drift_count  INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (peer_host, direction)
 );
 CREATE INDEX IF NOT EXISTS idx_calls_pinned_seq ON calls(pinned, seq);
 CREATE INDEX IF NOT EXISTS idx_findings_source ON findings(source_call_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_findings_signature ON findings(signature);
 `
 	_, err := s.db.Exec(schema)
 	if err != nil {
@@ -115,7 +135,9 @@ CREATE INDEX IF NOT EXISTS idx_findings_source ON findings(source_call_id);
 	return nil
 }
 
-// InsertCall stores a RedactedCall (idempotent on id) and then runs eviction.
+// InsertCall stores a RedactedCall (idempotent on id), discovers/updates the edge
+// it belongs to, and then runs eviction. Edge discovery is keyed by
+// (peer_host, direction) — no target list is configured.
 func (s *Store) InsertCall(c model.RedactedCall) error {
 	doc, err := json.Marshal(c)
 	if err != nil {
@@ -123,45 +145,157 @@ func (s *Store) InsertCall(c model.RedactedCall) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, err = s.db.Exec(
+	res, err := s.db.Exec(
 		`INSERT OR IGNORE INTO calls
-		  (id, captured_at, integration, method, route, status_code, request_id, idem_key, trace_id, byte_size, pinned, doc)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,0,?)`,
-		c.ID, c.CapturedAt, c.Integration, c.Method, c.Route, c.StatusCode,
+		  (id, captured_at, integration, peer_host, direction, edge_class, method, route, status_code, request_id, idem_key, trace_id, byte_size, pinned, doc)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)`,
+		c.ID, c.CapturedAt, c.Integration, nullStr(c.PeerHost), nullStr(c.Direction), nullStr(c.EdgeClass),
+		c.Method, c.Route, c.StatusCode,
 		nullStr(c.Correlation.RequestID), nullStr(c.Correlation.IdempotencyKey), nullStr(c.Correlation.TraceID),
 		len(doc), string(doc),
 	)
 	if err != nil {
 		return fmt.Errorf("insert call: %w", err)
 	}
+	// Only fold a genuinely new row into the edge (idempotent replays of the same
+	// id must not double-count call_count).
+	if n, _ := res.RowsAffected(); n > 0 && c.PeerHost != "" {
+		if err := s.upsertEdgeLocked(c.PeerHost, c.Direction, c.EdgeClass, c.CapturedAt); err != nil {
+			return err
+		}
+	}
 	return s.evictLocked()
 }
 
-// InsertFinding stores a Finding and pins its source call (pin-on-finding) so the
-// evidence behind an open finding is never evicted out from under the UI.
-func (s *Store) InsertFinding(f model.Finding) error {
-	doc, err := json.Marshal(f)
+// upsertEdgeLocked records/updates the edge a call belongs to. role and class
+// fall out of direction / the call's edge.class. Caller must hold s.mu.
+func (s *Store) upsertEdgeLocked(peerHost, direction, class, at string) error {
+	if class == "" {
+		class = edge.Classify(peerHost)
+	}
+	role := edge.Role(direction)
+	_, err := s.db.Exec(
+		`INSERT INTO edges (peer_host, direction, role, class, first_seen, last_seen, call_count, drift_count)
+		   VALUES (?,?,?,?,?,?,1,0)
+		 ON CONFLICT(peer_host, direction) DO UPDATE SET
+		   last_seen  = MAX(edges.last_seen, excluded.last_seen),
+		   first_seen = MIN(edges.first_seen, excluded.first_seen),
+		   call_count = edges.call_count + 1,
+		   class      = excluded.class,
+		   role       = excluded.role`,
+		peerHost, direction, role, class, at, at,
+	)
 	if err != nil {
-		return fmt.Errorf("marshal finding: %w", err)
+		return fmt.Errorf("upsert edge: %w", err)
+	}
+	return nil
+}
+
+// InsertFinding stores a Finding, deduped by signature: a drift is per-endpoint,
+// not per-call (CONTRACTS §4). The FIRST call carrying a signature creates the
+// finding (occurrence_count=1, pinning its representative source call); every
+// subsequent matching call increments occurrence_count + last_seen and creates NO
+// duplicate row. The stored finding id (and thus the flag idempotency key) stays
+// stable across the drift's lifetime.
+func (s *Store) InsertFinding(f model.Finding) error {
+	if f.Signature == "" {
+		f.Signature = f.ComputeSignature()
 	}
 	var sourceCallID *string
 	if f.SourceCallID != nil && *f.SourceCallID != "" {
 		sourceCallID = f.SourceCallID
 	}
+	seen := f.DetectedAt
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, err := s.db.Exec(
-		`INSERT OR IGNORE INTO findings
-		  (id, kind, severity, integration, endpoint, rule, source_call_id, detected_at, doc)
-		 VALUES (?,?,?,?,?,?,?,?,?)`,
-		f.ID, f.Kind, f.Severity, f.Integration, f.Endpoint, f.Rule, nullPtr(sourceCallID), f.DetectedAt, string(doc),
-	); err != nil {
-		return fmt.Errorf("insert finding: %w", err)
-	}
-	if sourceCallID != nil {
-		if _, err := s.db.Exec(`UPDATE calls SET pinned=1 WHERE id=?`, *sourceCallID); err != nil {
-			return fmt.Errorf("pin source call: %w", err)
+
+	// Is this signature already known?
+	var existingDoc string
+	var existingOcc int
+	var existingFirst string
+	err := s.db.QueryRow(
+		`SELECT doc, occurrence_count, first_seen FROM findings WHERE signature=?`, f.Signature,
+	).Scan(&existingDoc, &existingOcc, &existingFirst)
+
+	switch {
+	case err == sql.ErrNoRows:
+		// First occurrence — create the finding.
+		f.OccurrenceCount = 1
+		if f.FirstSeen == "" {
+			f.FirstSeen = seen
 		}
+		if f.LastSeen == "" {
+			f.LastSeen = seen
+		}
+		doc, mErr := json.Marshal(f)
+		if mErr != nil {
+			return fmt.Errorf("marshal finding: %w", mErr)
+		}
+		if _, err := s.db.Exec(
+			`INSERT INTO findings
+			  (id, signature, kind, severity, integration, endpoint, rule, source_call_id, occurrence_count, first_seen, last_seen, detected_at, doc)
+			 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			f.ID, f.Signature, f.Kind, f.Severity, f.Integration, f.Endpoint, f.Rule,
+			nullPtr(sourceCallID), f.OccurrenceCount, f.FirstSeen, f.LastSeen, f.DetectedAt, string(doc),
+		); err != nil {
+			return fmt.Errorf("insert finding: %w", err)
+		}
+		if sourceCallID != nil {
+			// pin-on-finding: the representative call stays reproducible.
+			if _, err := s.db.Exec(`UPDATE calls SET pinned=1 WHERE id=?`, *sourceCallID); err != nil {
+				return fmt.Errorf("pin source call: %w", err)
+			}
+			// Attribute the drift to the source call's edge (one per signature).
+			if err := s.bumpEdgeDriftLocked(*sourceCallID); err != nil {
+				return err
+			}
+		}
+		return nil
+
+	case err != nil:
+		return fmt.Errorf("lookup finding by signature: %w", err)
+
+	default:
+		// Repeat occurrence — increment count + last_seen, no duplicate row.
+		var existing model.Finding
+		if uErr := json.Unmarshal([]byte(existingDoc), &existing); uErr != nil {
+			return fmt.Errorf("unmarshal existing finding: %w", uErr)
+		}
+		existing.OccurrenceCount = existingOcc + 1
+		if seen > existing.LastSeen {
+			existing.LastSeen = seen
+		}
+		doc, mErr := json.Marshal(existing)
+		if mErr != nil {
+			return fmt.Errorf("marshal finding: %w", mErr)
+		}
+		if _, err := s.db.Exec(
+			`UPDATE findings SET occurrence_count=?, last_seen=?, doc=? WHERE signature=?`,
+			existing.OccurrenceCount, existing.LastSeen, string(doc), f.Signature,
+		); err != nil {
+			return fmt.Errorf("increment finding occurrence: %w", err)
+		}
+		return nil
+	}
+}
+
+// bumpEdgeDriftLocked increments drift_count on the edge that owns the given
+// source call. Caller must hold s.mu.
+func (s *Store) bumpEdgeDriftLocked(sourceCallID string) error {
+	var peerHost, direction sql.NullString
+	err := s.db.QueryRow(`SELECT peer_host, direction FROM calls WHERE id=?`, sourceCallID).Scan(&peerHost, &direction)
+	if err == sql.ErrNoRows || !peerHost.Valid || peerHost.String == "" {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("lookup source call edge: %w", err)
+	}
+	if _, err := s.db.Exec(
+		`UPDATE edges SET drift_count = drift_count + 1 WHERE peer_host=? AND direction=?`,
+		peerHost.String, direction.String,
+	); err != nil {
+		return fmt.Errorf("bump edge drift: %w", err)
 	}
 	return nil
 }
@@ -257,6 +391,31 @@ func (s *Store) ListCalls(limit int) ([]model.RedactedCall, error) {
 // ListFindings returns up to limit most-recent findings, newest first.
 func (s *Store) ListFindings(limit int) ([]model.Finding, error) {
 	return listDocs[model.Finding](s, `SELECT doc FROM findings ORDER BY seq DESC LIMIT ?`, limit)
+}
+
+// ListEdges returns discovered edges. When externalOnly is true, internal
+// same-team edges are excluded (they are classified out of surfacing). Ordered
+// by direction then most-recently-seen so outbound/inbound group naturally.
+func (s *Store) ListEdges(externalOnly bool) ([]model.Edge, error) {
+	q := `SELECT peer_host, direction, role, class, first_seen, last_seen, call_count, drift_count FROM edges`
+	if externalOnly {
+		q += ` WHERE class = '` + edge.ClassExternal + `'`
+	}
+	q += ` ORDER BY direction ASC, last_seen DESC`
+	rows, err := s.db.Query(q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]model.Edge, 0)
+	for rows.Next() {
+		var e model.Edge
+		if err := rows.Scan(&e.PeerHost, &e.Direction, &e.Role, &e.Class, &e.FirstSeen, &e.LastSeen, &e.CallCount, &e.DriftCount); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
 }
 
 // listDocs is a package function (Go methods may not have type parameters).

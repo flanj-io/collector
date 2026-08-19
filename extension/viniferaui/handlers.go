@@ -13,6 +13,7 @@ import (
 func (e *uiExtension) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", e.handleHealth)
+	mux.HandleFunc("/api/edges", e.handleEdges)
 	mux.HandleFunc("/api/calls", e.handleCalls)
 	mux.HandleFunc("/api/findings", e.handleFindings)
 	mux.HandleFunc("/api/flag", e.handleFlag)
@@ -57,6 +58,34 @@ func (e *uiExtension) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"findings":          findings,
 		"cp_configured":     e.cp != nil,
 		"collector_version": collectorVersion,
+	})
+}
+
+// handleEdges returns the discovered EXTERNAL edges (inbound + outbound). Internal
+// same-team edges are classified out of surfacing and never returned here.
+func (e *uiExtension) handleEdges(w http.ResponseWriter, r *http.Request) {
+	st := e.storeOrError(w)
+	if st == nil {
+		return
+	}
+	edges, err := st.ListEdges(true) // externalOnly
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	outbound := make([]any, 0)
+	inbound := make([]any, 0)
+	for _, ed := range edges {
+		if ed.Direction == "server" {
+			inbound = append(inbound, ed)
+		} else {
+			outbound = append(outbound, ed)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"edges":    edges,
+		"outbound": outbound,
+		"inbound":  inbound,
 	})
 }
 

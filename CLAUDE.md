@@ -15,9 +15,14 @@ pipeline, the local store, and the local UI.
 ## Role in the system
 
 `SDK → OTLP :4318 → [otlp receiver → redaction processor → drift processor → store exporter] → SQLite`.
-The **UI extension** serves the embedded Vue SPA + a localhost read API (`/api/calls|findings|health`) and a
-`POST /api/flag` that promotes a redacted call to the control plane (`POST /api/v1/flags`). Headless and
-**outbound-only** except the localhost UI. Nothing inbound off-host.
+The **UI extension** serves the embedded Vue SPA + a localhost read API
+(`/api/edges|calls|findings|health`) and a `POST /api/flag` that promotes a redacted call to the control plane
+(`POST /api/v1/flags`). Headless and **outbound-only** except the localhost UI. Nothing inbound off-host.
+
+**No target list is configured.** Integration edges are auto-discovered from observed traffic, keyed by
+(`peer.host`, `direction`), classified external vs internal (external-only surfaced on `/api/edges`). Drift
+detection is an OPTIONAL enhancer matched to an edge by host. A drift is **per endpoint**: findings dedup by
+`signature`, so one drift = one finding (with an `occurrence_count`) = one flag.
 
 ## Stack & commands
 

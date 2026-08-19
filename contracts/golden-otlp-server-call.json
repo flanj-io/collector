@@ -1,0 +1,58 @@
+{
+  "_comment": "Server-direction (ingress) OTLP call: this org is the PROVIDER on the edge. vinifera.direction=server -> role=provider, INBOUND edge peer->org. The peer is an EXTERNAL consumer (partner.acme.test). Used to prove edge auto-discovery from server-direction records and that classification is carried through. Bodies present (external); redaction floor still applies.",
+  "resourceLogs": [
+    {
+      "resource": {
+        "attributes": [
+          { "key": "service.name", "value": { "stringValue": "our-api" } },
+          { "key": "telemetry.sdk.name", "value": { "stringValue": "@vinifera/sdk" } }
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": { "name": "@vinifera/sdk", "version": "0.0.1" },
+          "logRecords": [
+            {
+              "timeUnixNano": "1755504100000000000",
+              "observedTimeUnixNano": "1755504100031000000",
+              "severityNumber": 9,
+              "severityText": "INFO",
+              "body": { "stringValue": "" },
+              "traceId": "9a1efff798038103d269b633813fc60c",
+              "spanId": "aaa19b7ec3c1b174",
+              "attributes": [
+                { "key": "vinifera.capture.version", "value": { "stringValue": "1" } },
+                { "key": "vinifera.record.type", "value": { "stringValue": "call" } },
+                { "key": "vinifera.direction", "value": { "stringValue": "server" } },
+                { "key": "vinifera.peer.host", "value": { "stringValue": "partner.acme.test" } },
+                { "key": "vinifera.edge.class", "value": { "stringValue": "external" } },
+                { "key": "vinifera.capture.bodies", "value": { "boolValue": true } },
+                { "key": "vinifera.integration", "value": { "stringValue": "our-orders-api" } },
+                { "key": "vinifera.http.method", "value": { "stringValue": "GET" } },
+                { "key": "vinifera.http.route", "value": { "stringValue": "/v1/orders/{id}" } },
+                { "key": "vinifera.http.target", "value": { "stringValue": "/v1/orders/ord_123" } },
+                { "key": "vinifera.http.url.full", "value": { "stringValue": "https://our-api.test/v1/orders/ord_123" } },
+                { "key": "vinifera.http.status_code", "value": { "intValue": "200" } },
+                { "key": "vinifera.http.request.content_type", "value": { "stringValue": "application/json" } },
+                { "key": "vinifera.http.request.body", "value": { "stringValue": "" } },
+                { "key": "vinifera.http.request.body.truncated", "value": { "boolValue": false } },
+                { "key": "vinifera.http.request.headers", "value": { "stringValue": "{\"content-type\":\"application/json\",\"x-request-id\":\"req_inbound_77\"}" } },
+                { "key": "vinifera.http.response.content_type", "value": { "stringValue": "application/json" } },
+                { "key": "vinifera.http.response.body", "value": { "stringValue": "{\"id\":\"ord_123\",\"status\":\"shipped\",\"total\":4200}" } },
+                { "key": "vinifera.http.response.body.truncated", "value": { "boolValue": false } },
+                { "key": "vinifera.http.response.headers", "value": { "stringValue": "{\"content-type\":\"application/json\",\"x-request-id\":\"req_inbound_77\"}" } },
+                { "key": "vinifera.corr.request_id", "value": { "stringValue": "req_inbound_77" } },
+                { "key": "vinifera.corr.trace_id", "value": { "stringValue": "9a1efff798038103d269b633813fc60c" } },
+                { "key": "vinifera.corr.span_id", "value": { "stringValue": "aaa19b7ec3c1b174" } },
+                { "key": "vinifera.http.duration_ms", "value": { "intValue": "31" } },
+                { "key": "vinifera.redaction.applied", "value": { "boolValue": true } },
+                { "key": "vinifera.redaction.patterns", "value": { "stringValue": "[]" } },
+                { "key": "vinifera.redaction.spec_aware", "value": { "boolValue": false } }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

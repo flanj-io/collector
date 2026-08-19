@@ -130,22 +130,27 @@ func liveVsSpecFinding(se *openapi3.SchemaError, call model.RedactedCall, endpoi
 	if se.Reason == "" {
 		detail = fmt.Sprintf("Response field `%s` violates the spec (%s).", lastSegment(fieldPath), rule)
 	}
-	return model.Finding{
-		SchemaVersion: model.SchemaVersion,
-		ID:            otlpattr.NewID(),
-		Kind:          model.KindLiveVsSpec,
-		Severity:      model.SeverityBreaking,
-		Integration:   call.Integration,
-		Endpoint:      endpoint,
-		FieldPath:     model.Ptr(fieldPath),
-		Location:      model.Ptr(location),
-		Expected:      expected,
-		Actual:        actual,
-		Rule:          rule,
-		SourceCallID:  &sourceID,
-		DetectedAt:    now,
-		Detail:        detail,
+	f := model.Finding{
+		SchemaVersion:   model.SchemaVersion,
+		ID:              otlpattr.NewID(),
+		Kind:            model.KindLiveVsSpec,
+		Severity:        model.SeverityBreaking,
+		Integration:     call.Integration,
+		Endpoint:        endpoint,
+		FieldPath:       model.Ptr(fieldPath),
+		Location:        model.Ptr(location),
+		Expected:        expected,
+		Actual:          actual,
+		Rule:            rule,
+		SourceCallID:    &sourceID,
+		DetectedAt:      now,
+		Detail:          detail,
+		OccurrenceCount: 1,
+		FirstSeen:       now,
+		LastSeen:        now,
 	}
+	f.Signature = f.ComputeSignature()
+	return f
 }
 
 func expectedFromSchema(se *openapi3.SchemaError) string {
