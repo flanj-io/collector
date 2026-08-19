@@ -22,6 +22,7 @@ extensions:
     ui_endpoint: 127.0.0.1:5335 # loopback only — the collector is outbound-only
     integration_id: acme-payments
     consumer_display_name: Acme Consumer Ltd
+    provider_display_name: Acme Payments # who the flag is about; defaults to humanized integration_id
     cp_base_url: https://cp.vinifera.test
     cp_deploy_token: ${env:CP_DEPLOY_TOKEN} # the only outbound auth (Bearer)
 

@@ -8,6 +8,7 @@
   "properties": {
     "idempotency_key": { "type": "string", "minLength": 1 },
     "consumer_display_name": { "type": "string", "minLength": 1 },
+    "provider_display_name": { "type": "string" },
     "invitee_email": { "type": "string", "format": "email" },
     "message": { "type": "string" },
     "call": { "$ref": "https://vinifera.io/contracts/v1/redacted-call.schema.json" },

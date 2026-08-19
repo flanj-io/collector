@@ -11,6 +11,10 @@ type Config struct {
 	IntegrationID string `mapstructure:"integration_id"`
 	// ConsumerDisplayName is the "shared by <name>" identity on the peek screen.
 	ConsumerDisplayName string `mapstructure:"consumer_display_name"`
+	// ProviderDisplayName names the provider whose API is observed; sent on the
+	// flag so the peek/thread names BOTH sides (CONTRACTS §8). If empty it
+	// defaults to the humanized integration_id.
+	ProviderDisplayName string `mapstructure:"provider_display_name"`
 	// CPBaseURL is the control-plane base URL for the flag POST.
 	CPBaseURL string `mapstructure:"cp_base_url"`
 	// CPDeployToken is the static Bearer token (the only outbound auth).

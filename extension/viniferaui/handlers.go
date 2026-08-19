@@ -92,8 +92,14 @@ type flagRequestBody struct {
 	FindingID           string `json:"finding_id"`
 	InviteeEmail        string `json:"invitee_email"`
 	ConsumerDisplayName string `json:"consumer_display_name"`
+	ProviderDisplayName string `json:"provider_display_name"`
 	Message             string `json:"message"`
 }
+
+// humanizeIntegration turns an integration id into a human display name
+// ("acme-payments" -> "Acme Payments"). Shared humanize rule; delegates to the
+// canonical implementation in internal/promote.
+func humanizeIntegration(id string) string { return promote.HumanizeIntegration(id) }
 
 // handleFlag promotes the failing call + finding to the control plane, then marks
 // the call promoted (evict-after-promote) on success.
@@ -148,8 +154,19 @@ func (e *uiExtension) handleFlag(w http.ResponseWriter, r *http.Request) {
 	if consumerName == "" {
 		consumerName = e.cfg.ConsumerDisplayName
 	}
+	// Provider name names the flagged side on the peek/thread. Prefer the UI
+	// override, then the configured provider_display_name, then the humanized
+	// integration id (CONTRACTS §5/§8).
+	providerName := body.ProviderDisplayName
+	if providerName == "" {
+		providerName = e.cfg.ProviderDisplayName
+	}
+	if providerName == "" {
+		providerName = humanizeIntegration(e.cfg.IntegrationID)
+	}
 	req := promote.Build(promote.Input{
 		ConsumerDisplayName: consumerName,
+		ProviderDisplayName: providerName,
 		InviteeEmail:        body.InviteeEmail,
 		Message:             body.Message,
 		Call:                call,

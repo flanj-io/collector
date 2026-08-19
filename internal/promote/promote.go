@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/vinifera-io/collector/internal/model"
 	"github.com/vinifera-io/collector/internal/redact"
@@ -26,6 +27,7 @@ import (
 type FlagRequest struct {
 	IdempotencyKey      string             `json:"idempotency_key"`
 	ConsumerDisplayName string             `json:"consumer_display_name"`
+	ProviderDisplayName string             `json:"provider_display_name"`
 	InviteeEmail        string             `json:"invitee_email"`
 	Message             string             `json:"message"`
 	Call                model.RedactedCall `json:"call"`
@@ -43,6 +45,7 @@ type FlagResponse struct {
 // Input is what the UI hands the promoter for one flag click.
 type Input struct {
 	ConsumerDisplayName string
+	ProviderDisplayName string // optional; defaults to the humanized integration id
 	InviteeEmail        string
 	Message             string // optional; a default is derived from the finding
 	Call                model.RedactedCall
@@ -51,21 +54,43 @@ type Input struct {
 
 // Build assembles a schema-valid FlagRequest. The idempotency key is derived
 // from the finding id so re-flagging the same finding returns the existing
-// thread (CONTRACTS §5). The message is redacted defense-in-depth.
+// thread (CONTRACTS §5). The message is redacted defense-in-depth. When no
+// provider display name is supplied it defaults to the humanized integration id
+// (CONTRACTS §5/§8), so the peek/thread always names the provider side.
 func Build(in Input) FlagRequest {
 	msg := strings.TrimSpace(in.Message)
 	if msg == "" {
 		msg = defaultMessage(in.Finding)
 	}
 	msg = redact.New().Redact(msg).Text
+	provider := strings.TrimSpace(in.ProviderDisplayName)
+	if provider == "" {
+		provider = HumanizeIntegration(in.Call.Integration)
+	}
 	return FlagRequest{
 		IdempotencyKey:      "flag_" + in.Finding.ID,
 		ConsumerDisplayName: in.ConsumerDisplayName,
+		ProviderDisplayName: provider,
 		InviteeEmail:        in.InviteeEmail,
 		Message:             msg,
 		Call:                in.Call,
 		Finding:             in.Finding,
 	}
+}
+
+// HumanizeIntegration turns an integration id into a human display name: split
+// on '-', '_', or space and Title Case each word. e.g. "acme-payments" ->
+// "Acme Payments". Shared humanize rule across the stack.
+func HumanizeIntegration(id string) string {
+	fields := strings.FieldsFunc(id, func(r rune) bool {
+		return r == '-' || r == '_' || r == ' '
+	})
+	for i, f := range fields {
+		runes := []rune(strings.ToLower(f))
+		runes[0] = unicode.ToUpper(runes[0])
+		fields[i] = string(runes)
+	}
+	return strings.Join(fields, " ")
 }
 
 func defaultMessage(f model.Finding) string {

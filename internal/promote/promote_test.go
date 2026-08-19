@@ -134,6 +134,51 @@ func TestFlagBody_ConformsToSchema(t *testing.T) {
 	validate(t, sch, gotBody)
 }
 
+// TestHumanizeIntegration proves the shared humanize rule: split on -/_/space,
+// Title Case each word.
+func TestHumanizeIntegration(t *testing.T) {
+	cases := map[string]string{
+		"acme-payments":     "Acme Payments",
+		"acme_payments":     "Acme Payments",
+		"acme payments":     "Acme Payments",
+		"stripe":            "Stripe",
+		"ACME-PAYMENTS":     "Acme Payments",
+		"nilos-fx_gateway":  "Nilos Fx Gateway",
+		"":                  "",
+		"  acme--payments ": "Acme Payments",
+	}
+	for in, want := range cases {
+		if got := HumanizeIntegration(in); got != want {
+			t.Errorf("HumanizeIntegration(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestBuild_ProviderDisplayName proves the flag body carries provider_display_name:
+// the explicit value when given, else the humanized integration id.
+func TestBuild_ProviderDisplayName(t *testing.T) {
+	call := loadJSON[model.RedactedCall](t, "sample-redacted-call.json") // integration=acme-payments
+	finding := loadJSON[model.Finding](t, "sample-finding.json")
+
+	explicit := Build(Input{ConsumerDisplayName: "Acme Consumer Ltd", ProviderDisplayName: "Acme Payments Inc", Call: call, Finding: finding})
+	if explicit.ProviderDisplayName != "Acme Payments Inc" {
+		t.Errorf("explicit provider name = %q, want Acme Payments Inc", explicit.ProviderDisplayName)
+	}
+
+	defaulted := Build(Input{ConsumerDisplayName: "Acme Consumer Ltd", Call: call, Finding: finding})
+	if defaulted.ProviderDisplayName != "Acme Payments" {
+		t.Errorf("defaulted provider name = %q, want Acme Payments (humanized integration)", defaulted.ProviderDisplayName)
+	}
+
+	// The defaulted body must still conform to the frozen schema.
+	sch := flagSchema(t)
+	body, err := json.Marshal(defaulted)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	validate(t, sch, body)
+}
+
 // TestBuild_IdempotencyKeyFromFinding proves re-flagging the same finding yields
 // the same idempotency key (CP returns the existing thread).
 func TestBuild_IdempotencyKeyFromFinding(t *testing.T) {
