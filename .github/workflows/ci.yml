@@ -41,6 +41,17 @@ jobs:
         with: { go-version: '1.26' }
       - name: Unit + contract tests (custom components)
         run: go test ./... -count=1
+      - name: Net audit — the redaction floor must never link network-capable packages
+        # internal/redact runs on every captured body and must be pure: no HTTP, no
+        # subprocesses, no TLS dialing anywhere in its dependency graph. phonenumbers
+        # has no net at all; govalidator links bare `net` for its DNS helpers (the
+        # functions we call are pure — netban_test.go bans the impure ones by name),
+        # but nothing may pull in net/http, os/exec or crypto/tls.
+        run: |
+          if go list -deps ./internal/redact | grep -E '^(net/http|os/exec|crypto/tls)$'; then
+            echo "::error::internal/redact links a banned network-capable package"
+            exit 1
+          fi
 
   docker-build:
     # The single-binary artifact is built entirely in Docker (multi-stage: node builds the Vue UI ->

@@ -3,8 +3,10 @@ module github.com/vinifera-io/collector
 go 1.26.0
 
 require (
+	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2
 	github.com/getkin/kin-openapi v0.146.0
 	github.com/google/uuid v1.6.0
+	github.com/nyaruka/phonenumbers v1.8.1
 	github.com/oasdiff/oasdiff v1.29.1
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	go.opentelemetry.io/collector/pdata v1.65.0
@@ -38,6 +40,7 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
+	google.golang.org/protobuf v1.36.12 // indirect
 	modernc.org/libc v1.74.4 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect

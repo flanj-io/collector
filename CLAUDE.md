@@ -55,7 +55,8 @@ contracts/                         # vendored fixtures (golden OTLP, specs, vect
    **Pin on finding** (keeps the failing call reproducible); **evict-after-promote** (unpin + set `promoted_at`
    after a successful CP flag POST).
 3. **Redaction is defense-in-depth**: idempotent, add-only, never double-wraps the SDK's `⟦REDACTED:…⟧` tokens
-   (conform to `contracts/redaction-vectors.json`).
+   (conform to `contracts/redaction-vectors.json` AND the cross-language parity battery
+   `contracts/redaction-fixtures.json` — both language suites must produce those exact results).
 4. **Technical adherence only** in detection — types/shapes/enums; never business/economic correctness.
 5. **Outbound-only**, localhost UI only.
 

@@ -7,7 +7,7 @@ packages — so the acceptance oracles run without a running collector.
 
 | Package | Responsibility | Key test |
 |---|---|---|
-| `redact` | Redaction floor (idempotent, add-only). Governed by `contracts/redaction-vectors.json`. | `redact_test.go` (vectors + idempotency + add-only) |
+| `redact` | Redaction floor (idempotent, add-only): text path (`Redact`), structural path (`RedactValue` — maps/slices/structs, keys included, PAN-as-number), schema-aware `Enhance` (ADD-only layer above the floor). Governed by `contracts/redaction-vectors.json` + `contracts/redaction-fixtures.json` (cross-language parity with the TS SDK). | `redact_test.go` (vectors) + `fixtures_test.go` (parity battery, both entry points, idempotency, never-subtract law) + `recognizers_test.go` + `netban_test.go` (zero-I/O lint ban) |
 | `drift` | live-vs-spec (kin-openapi) + version-diff (oasdiff). Technical adherence only. | `drift_test.go` (golden call + two breaking findings) |
 | `store` | Single SQLite store: schema, WAL, ring-buffer eviction, pin-on-finding, evict-after-promote, **edge auto-discovery** (edges table keyed by peer_host+direction) + **per-signature finding dedup**. | `store_test.go` (stable fill, pinned survive, persistence, edge discovery, drift dedup) |
 | `edge` | Edge classification heuristic (external vs internal, identical to the SDK) + role/orientation from direction. | `edge_test.go` (classification + role) |
@@ -26,8 +26,9 @@ rule keeps it private to this repo. Putting the logic here means:
 
 ## Non-negotiables
 
-- **`redact` is the security floor.** The vector file, not the code, is the
-  contract. Never weaken idempotency or add-only.
+- **`redact` is the security floor.** The fixture files (`redaction-vectors.json` +
+  `redaction-fixtures.json`), not the code, are the contract. Never weaken
+  idempotency or add-only.
 - **`drift` is technical-only.** Never add business/economic checks.
 - **`store` is the single owner.** Only the `viniferastore` extension constructs
   a `*store.Store`.
