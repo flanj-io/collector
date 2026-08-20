@@ -16,6 +16,7 @@ import (
 
 	"github.com/vinifera-io/collector/internal/model"
 	"github.com/vinifera-io/collector/internal/otlpattr"
+	"github.com/vinifera-io/collector/internal/redact"
 )
 
 // LoadSpecFile reads and validates an OpenAPI document from disk.
@@ -111,9 +112,32 @@ func DetectLiveVsSpec(doc *openapi3.T, call model.RedactedCall) ([]model.Finding
 	findings := make([]model.Finding, 0, len(schemaErrs))
 	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00")
 	for _, se := range schemaErrs {
+		if redactedValue(se.Value) {
+			// Drift runs AFTER the redaction floor, so this constraint may have
+			// "failed" only because the floor replaced the value with a
+			// ⟦REDACTED:…⟧ token (a pattern the token can't match, a type the
+			// PAN-as-number rewrite changed, a length the token bytes corrupt).
+			// Redacted means UNKNOWN, not violated — skip, never report. The skip
+			// is one-directional: it cannot mask drift on a value the floor did
+			// not touch (those never carry a token). Restoring drift signal on
+			// redacted fields is the captured-value-properties enhancement.
+			continue
+		}
 		findings = append(findings, liveVsSpecFinding(se, call, endpoint, now))
 	}
 	return findings, nil
+}
+
+// redactedValue reports whether a schema error's offending value is a SCALAR that
+// carries a redaction token. Deliberately scalar-only: every constraint the floor can
+// directly break lands on the redacted scalar itself (pattern/format/enum/length on
+// the token string; type after the PAN-as-number number→string rewrite). Container-
+// level errors (required-missing, minItems, …) are NOT skipped even when a nested
+// field carries a token — the text-path floor never adds or removes keys/elements,
+// so those errors are the provider's, and skipping them would mask genuine drift.
+func redactedValue(v interface{}) bool {
+	s, ok := v.(string)
+	return ok && redact.ContainsToken(s)
 }
 
 func liveVsSpecFinding(se *openapi3.SchemaError, call model.RedactedCall, endpoint, now string) model.Finding {

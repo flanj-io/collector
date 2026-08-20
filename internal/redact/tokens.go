@@ -40,6 +40,13 @@ func Token(id string) string { return tokenOpen + "REDACTED:" + id + tokenClose 
 // protected and never re-scanned (mirrors scalar.ts TOKEN_RE: [A-Z0-9_]+).
 var tokenRe = regexp.MustCompile(`\x{27e6}REDACTED:[A-Z0-9_]+\x{27e7}`)
 
+// ContainsToken reports whether s carries any emitted ⟦REDACTED:…⟧ token. Consumers
+// (e.g. the drift detector) use it to recognise values this floor has transformed —
+// a redacted value can violate a spec constraint solely because of the token, and
+// "we redacted it" must never be reported as "the provider drifted". Never used to
+// un-redact.
+func ContainsToken(s string) bool { return tokenRe.MatchString(s) }
+
 // reportedTokenRe matches any already-emitted floor token, e.g. ⟦REDACTED:PAN⟧
 // (mirrors tokens.ts REDACTED_TOKEN_RE: [A-Z]+). Used by the enhancer to prove a
 // scalar already carries a token, and by the tests to assert the never-subtract law;
