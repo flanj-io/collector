@@ -27,6 +27,7 @@ package redact
 import (
 	"encoding/json"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -54,6 +55,8 @@ type frame struct {
 	// The original (un-redacted) current key, once read.
 	key    string
 	hasKey bool
+	// For arrays: the index of the value currently being read.
+	index int
 }
 
 // isJSONWS is the scanner's whitespace set (' ', \t, \n, \r).
@@ -69,10 +72,12 @@ func isStructural(c byte) bool {
 }
 
 // redactTextPath is the text entry point (see file comment). It returns the rewritten
-// text and marks every pattern id that fired in fired.
-func redactTextPath(text string, recognizers []Recognizer, fired map[string]bool) string {
+// text plus the whole-value redaction field records (JSON scanner + root scalar only;
+// unsorted — the caller sorts), and marks every pattern id that fired in fired.
+func redactTextPath(text string, recognizers []Recognizer, fired map[string]bool) (string, []RedactedField) {
+	var fields []RedactedField
 	if len(text) == 0 {
-		return text
+		return text, fields
 	}
 	i := 0
 	for i < len(text) && isJSONWS(text[i]) {
@@ -80,19 +85,28 @@ func redactTextPath(text string, recognizers []Recognizer, fired map[string]bool
 	}
 	first := byteAt(text, i)
 	if first == '{' || first == '[' {
-		return scanJSON(text, recognizers, fired)
+		out := scanJSON(text, recognizers, fired, &fields)
+		return out, fields
 	}
+	// Form pairs carry no fields (spec-addressable form bodies are a later enhancement).
 	if isFormBody(text) {
-		return scanForm(text, recognizers, fired)
+		return scanForm(text, recognizers, fired), fields
 	}
-	return redactScalar(text, Context{}, recognizers, fired)
+	out := redactScalar(text, Context{}, recognizers, fired)
+	// A top-level scalar body wholly redacted reports the RFC 6901 root path "".
+	if out != text {
+		if id, ok := WholeTokenID(out); ok {
+			fields = append(fields, RedactedField{Path: "", Pattern: id, Props: ComputeProps(text, "string", false)})
+		}
+	}
+	return out, fields
 }
 
 // --- JSON ----------------------------------------------------------------------------
 
 var numberLiteralRe = regexp.MustCompile(`^-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?`)
 
-func scanJSON(text string, recognizers []Recognizer, fired map[string]bool) string {
+func scanJSON(text string, recognizers []Recognizer, fired map[string]bool, fields *[]RedactedField) string {
 	n := len(text)
 	var stack []*frame
 	top := func() *frame {
@@ -109,6 +123,20 @@ func scanJSON(text string, recognizers []Recognizer, fired map[string]bool) stri
 		if t := top(); t != nil && t.kind == frameObj {
 			t.state = stateComma
 		}
+	}
+	// currentPath is the RFC 6901 pointer to the value currently being read (object
+	// keys from frames, array indices from each array frame's counter).
+	currentPath := func() string {
+		var b strings.Builder
+		for _, f := range stack {
+			b.WriteByte('/')
+			if f.kind == frameArr {
+				b.WriteString(strconv.Itoa(f.index))
+			} else {
+				b.WriteString(EscapePointerSegment(f.key))
+			}
+		}
+		return b.String()
 	}
 
 	var out strings.Builder
@@ -141,11 +169,15 @@ func scanJSON(text string, recognizers []Recognizer, fired map[string]bool) stri
 			continue
 		}
 		if c == ':' || c == ',' {
-			if t := top(); t != nil && t.kind == frameObj {
-				if c == ':' {
-					t.state = stateValue
-				} else {
-					t.state = stateKey
+			if t := top(); t != nil {
+				if t.kind == frameObj {
+					if c == ':' {
+						t.state = stateValue
+					} else {
+						t.state = stateKey
+					}
+				} else if c == ',' {
+					t.index++
 				}
 			}
 			out.WriteByte(c)
@@ -181,6 +213,8 @@ func scanJSON(text string, recognizers []Recognizer, fired map[string]bool) stri
 			t := top()
 			isKey := t != nil && t.kind == frameObj && t.state == stateKey
 			ctx := Context{}
+			valuePath := ""
+			isValue := false
 			if isKey {
 				t.key = decoded
 				t.hasKey = true
@@ -189,9 +223,19 @@ func scanJSON(text string, recognizers []Recognizer, fired map[string]bool) stri
 				if t != nil && t.kind == frameObj && t.hasKey {
 					ctx = Context{Key: t.key, HasKey: true}
 				}
+				// The pointer must be read BEFORE valueDone() (an array frame's index
+				// only moves on ',', but the obj state flip is part of the same step).
+				valuePath = currentPath()
+				isValue = true
 				valueDone()
 			}
 			redacted := redactScalar(decoded, ctx, recognizers, fired)
+			// Redacted KEYS carry no field record — a key is not a spec-addressable value.
+			if isValue && redacted != decoded {
+				if id, ok := WholeTokenID(redacted); ok {
+					*fields = append(*fields, RedactedField{Path: valuePath, Pattern: id, Props: ComputeProps(decoded, "string", false)})
+				}
+			}
 			if redacted == decoded {
 				out.WriteString(literal)
 			} else {
@@ -212,6 +256,7 @@ func scanJSON(text string, recognizers []Recognizer, fired map[string]bool) stri
 				}
 				if id != "" {
 					fired[id] = true
+					*fields = append(*fields, RedactedField{Path: currentPath(), Pattern: id, Props: ComputeProps(lit, "number", true)})
 					out.WriteString(encodeJSONString(Token(id)))
 				} else {
 					out.WriteString(lit)

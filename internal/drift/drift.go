@@ -117,15 +117,123 @@ func DetectLiveVsSpec(doc *openapi3.T, call model.RedactedCall) ([]model.Finding
 			// "failed" only because the floor replaced the value with a
 			// ⟦REDACTED:…⟧ token (a pattern the token can't match, a type the
 			// PAN-as-number rewrite changed, a length the token bytes corrupt).
-			// Redacted means UNKNOWN, not violated — skip, never report. The skip
-			// is one-directional: it cannot mask drift on a value the floor did
-			// not touch (those never carry a token). Restoring drift signal on
-			// redacted fields is the captured-value-properties enhancement.
+			// Redacted means UNKNOWN by default — but for a WHOLE-VALUE redaction
+			// the call carries the original's captured properties
+			// (redaction.fields, CONTRACTS §2/§6), which make the DECIDABLE
+			// constraints (type, min/maxLength) judgeable again. Undecidable
+			// constraints (pattern/format/enum/…) and token-carrying values with
+			// no matching record (span redactions; older SDKs that emit no
+			// fields) keep skipping — the skip stays one-directional: it cannot
+			// mask drift on a value the floor did not touch. Constraints the
+			// token accidentally SATISFIES are not re-checked against the props
+			// (kin-openapi produced no error to hang them on) — an accepted
+			// under-detection.
+			props, ok := responseFieldProps(call, se)
+			if !ok || evaluateRedactedConstraint(se, props) != propsViolated {
+				continue
+			}
+			findings = append(findings, liveVsSpecFinding(se, call, endpoint, now, actualFromProps(se.SchemaField, props)))
 			continue
 		}
-		findings = append(findings, liveVsSpecFinding(se, call, endpoint, now))
+		findings = append(findings, liveVsSpecFinding(se, call, endpoint, now, actualFromValue(se.Value)))
 	}
 	return findings, nil
+}
+
+// propsVerdict is the outcome of judging a redacted value's schema error against
+// its captured properties.
+type propsVerdict int
+
+const (
+	// propsUndecidable: the constraint cannot be judged from the props — skip.
+	propsUndecidable propsVerdict = iota
+	// propsSatisfied: the ORIGINAL satisfied the constraint (the token broke it) — skip.
+	propsSatisfied
+	// propsViolated: the ORIGINAL itself violated the constraint — a real finding.
+	propsViolated
+)
+
+// responseFieldProps finds the captured properties for the schema error's field in
+// the call's response-part redaction.fields records (the live-vs-spec detector
+// validates the RESPONSE body). The lookup key is the error's RFC 6901 pointer.
+func responseFieldProps(call model.RedactedCall, se *openapi3.SchemaError) (redact.ValueProps, bool) {
+	var b strings.Builder
+	for _, seg := range se.JSONPointer() {
+		b.WriteByte('/')
+		b.WriteString(redact.EscapePointerSegment(seg))
+	}
+	path := b.String() // "" = the root scalar
+	for _, f := range call.Redaction.Fields {
+		if f.Part == "response" && f.Path == path {
+			return f.Props, true
+		}
+	}
+	return redact.ValueProps{}, false
+}
+
+// evaluateRedactedConstraint judges the DECIDABLE constraint kinds against the
+// original's captured properties; everything else is undecidable.
+func evaluateRedactedConstraint(se *openapi3.SchemaError, props redact.ValueProps) propsVerdict {
+	if se.Schema == nil {
+		return propsUndecidable
+	}
+	switch se.SchemaField {
+	case "type":
+		if se.Schema.Type == nil {
+			return propsUndecidable
+		}
+		// A union type is satisfied when ANY member accepts the original. A
+		// captured scalar is a string or a number, so boolean/array/object/null
+		// spec types can never be satisfied by it.
+		for _, t := range se.Schema.Type.Slice() {
+			switch t {
+			case "string":
+				if props.Type == "string" {
+					return propsSatisfied
+				}
+			case "integer":
+				if props.Type == "number" && props.Integer != nil && *props.Integer {
+					return propsSatisfied
+				}
+			case "number":
+				if props.Type == "number" {
+					return propsSatisfied
+				}
+			}
+		}
+		return propsViolated
+	case "minLength":
+		// Length constraints are only decidable for an original STRING (a number's
+		// captured length is its literal's, which no string constraint governs).
+		if props.Type != "string" || props.Length < 0 {
+			return propsUndecidable
+		}
+		if uint64(props.Length) < se.Schema.MinLength {
+			return propsViolated
+		}
+		return propsSatisfied
+	case "maxLength":
+		if props.Type != "string" || props.Length < 0 || se.Schema.MaxLength == nil {
+			return propsUndecidable
+		}
+		if uint64(props.Length) > *se.Schema.MaxLength {
+			return propsViolated
+		}
+		return propsSatisfied
+	}
+	return propsUndecidable
+}
+
+// actualFromProps renders the finding's `actual` for a violation judged from the
+// captured properties of a redacted value (the value itself is gone by design).
+func actualFromProps(schemaField string, props redact.ValueProps) string {
+	if schemaField == "minLength" || schemaField == "maxLength" {
+		return fmt.Sprintf("length=%d (redacted)", props.Length)
+	}
+	if props.Type == "string" {
+		return fmt.Sprintf("type=string (redacted; length=%d)", props.Length)
+	}
+	return "type=number (redacted)"
 }
 
 // redactedValue reports whether a schema error's offending value is a SCALAR that
@@ -140,14 +248,13 @@ func redactedValue(v interface{}) bool {
 	return ok && redact.ContainsToken(s)
 }
 
-func liveVsSpecFinding(se *openapi3.SchemaError, call model.RedactedCall, endpoint, now string) model.Finding {
+func liveVsSpecFinding(se *openapi3.SchemaError, call model.RedactedCall, endpoint, now, actual string) model.Finding {
 	fieldPath := strings.Join(se.JSONPointer(), ".")
 	location := "$.response.body"
 	if fieldPath != "" {
 		location += "." + fieldPath
 	}
 	expected := expectedFromSchema(se)
-	actual := actualFromValue(se.Value)
 	rule := ruleFromSchemaField(se.SchemaField)
 	sourceID := call.ID
 	detail := fmt.Sprintf("Response field `%s` %s.", lastSegment(fieldPath), se.Reason)

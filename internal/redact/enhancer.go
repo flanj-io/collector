@@ -75,7 +75,10 @@ func isEnhanceableLeaf(v any) bool {
 // Enhance applies a spec to the floor's output (see file comment). It returns the
 // enhanced value — a clone-on-write: the input is never mutated, and untouched
 // subtrees are shared — plus the pattern ids the enhancer itself fired, in canonical
-// ReportOrder.
+// ReportOrder. The enhancer emits no captured-value fields (mirrors enhancer.ts): it
+// is spec-driven, so the spec already knows the declared shape of every field it
+// redacts (adding props here is a possible later additive extension, not needed for
+// drift).
 func Enhance(v any, spec []SensitiveField) (any, []string) {
 	known := map[string]bool{}
 	for _, id := range ReportOrder {

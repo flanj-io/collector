@@ -37,6 +37,10 @@ type Result struct {
 	// canonical ReportOrder (empty when nothing new was redacted — e.g.
 	// already-redacted input). It is the delta, not the running union.
 	Patterns []string
+	// Fields are the whole-value redactions with the original's captured properties,
+	// sorted by path (see props.go). Always non-nil: an empty slice when none — the
+	// nil/empty distinction matters to JSON consumers downstream.
+	Fields []RedactedField
 }
 
 // Redactor applies the floor behind one swappable interface (mirroring the TS
@@ -46,6 +50,12 @@ type Result struct {
 //     else is one scalar. Byte-identical to the TS package for the same input.
 //   - RedactValue(value) recurses ARBITRARY nested structures (maps, slices, structs,
 //     scalars) and returns a redacted clone plus the patterns that fired.
+//
+// Both entry points also report the whole-value redaction FIELD records (props.go):
+// for every scalar that became exactly one token, the RFC 6901 path, the pattern and
+// the original's non-reversible captured properties — so drift detection downstream
+// can still judge type/length of redacted fields. Span-in-text redactions, redacted
+// keys, form pairs and non-JSON text emit no fields.
 //
 // The zero value is not usable; use New.
 type Redactor struct {
@@ -93,76 +103,91 @@ func New(opts ...Option) *Redactor {
 // Redact applies the floor to s — the TEXT entry point (see textpath.go).
 func (r *Redactor) Redact(s string) Result {
 	fired := map[string]bool{}
-	out := redactTextPath(s, r.recognizers, fired)
-	return Result{Text: out, Patterns: inReportOrder(fired)}
+	out, fields := redactTextPath(s, r.recognizers, fired)
+	if fields == nil {
+		fields = []RedactedField{}
+	}
+	return Result{Text: out, Patterns: inReportOrder(fired), Fields: SortFields(fields)}
 }
 
 // RedactValue applies the floor to an arbitrary decoded value — the STRUCTURAL entry
-// point (mirrors the TS redact(value) walk). It returns a redacted deep clone and the
-// fired pattern ids in canonical ReportOrder; the input is never mutated. Untouched
-// values are returned as-is (a json.Number stays a json.Number), so a round-trip
-// through RedactValue of an already-clean value is identity.
-func (r *Redactor) RedactValue(v any) (any, []string) {
+// point (mirrors the TS redact(value) walk). It returns a redacted deep clone, the
+// fired pattern ids in canonical ReportOrder, and the whole-value redaction field
+// records sorted by path (always a non-nil slice); the input is never mutated.
+// Untouched values are returned as-is (a json.Number stays a json.Number), so a
+// round-trip through RedactValue of an already-clean value is identity.
+func (r *Redactor) RedactValue(v any) (any, []string, []RedactedField) {
 	fired := map[string]bool{}
-	redacted := r.walk(v, Context{}, fired)
-	return redacted, inReportOrder(fired)
+	fields := []RedactedField{}
+	redacted := r.walk(v, Context{}, "", fired, &fields)
+	return redacted, inReportOrder(fired), SortFields(fields)
 }
 
 // walk recurses one value. Strings go through the per-scalar engine; numbers through
 // the PAN-as-number / CVV-under-key gate; containers are cloned with every element
-// walked; everything else (bool, nil, chan, func, …) is untouched.
-func (r *Redactor) walk(v any, ctx Context, fired map[string]bool) any {
+// walked; everything else (bool, nil, chan, func, …) is untouched. path is the RFC
+// 6901 pointer to v; every WHOLE-VALUE redaction (the scalar became exactly one token)
+// appends a field record — keys never do (a key is not a spec-addressable value).
+func (r *Redactor) walk(v any, ctx Context, path string, fired map[string]bool, fields *[]RedactedField) any {
 	switch val := v.(type) {
 	case string:
-		return redactScalar(val, ctx, r.recognizers, fired)
+		out := redactScalar(val, ctx, r.recognizers, fired)
+		if out != val {
+			if id, ok := WholeTokenID(out); ok {
+				*fields = append(*fields, RedactedField{Path: path, Pattern: id, Props: ComputeProps(val, "string", false)})
+			}
+		}
+		return out
 	case json.Number:
 		// A json.Number carries the literal bytes: an integer is a literal with no
-		// '.', 'e' or 'E'; its digits are the literal without a leading '-'.
+		// '.', 'e' or 'E'; its digits are the literal without a leading '-'. The props
+		// text is the literal itself (the Go analogue of the TS String(value)).
 		if digits, ok := integerDigitsOfNumber(val); ok {
 			if id := classifyIntegerDigits(digits, ctx); id != "" {
 				fired[id] = true
+				*fields = append(*fields, RedactedField{Path: path, Pattern: id, Props: ComputeProps(string(val), "number", true)})
 				return Token(id)
 			}
 		}
 		return val
 	case float64:
-		return r.walkFloat(float64(val), val, ctx, fired)
+		return r.walkFloat(float64(val), val, ctx, path, fired, fields)
 	case float32:
-		return r.walkFloat(float64(val), val, ctx, fired)
+		return r.walkFloat(float64(val), val, ctx, path, fired, fields)
 	case int:
-		return r.walkInt(int64(val), val, ctx, fired)
+		return r.walkInt(int64(val), val, ctx, path, fired, fields)
 	case int8:
-		return r.walkInt(int64(val), val, ctx, fired)
+		return r.walkInt(int64(val), val, ctx, path, fired, fields)
 	case int16:
-		return r.walkInt(int64(val), val, ctx, fired)
+		return r.walkInt(int64(val), val, ctx, path, fired, fields)
 	case int32:
-		return r.walkInt(int64(val), val, ctx, fired)
+		return r.walkInt(int64(val), val, ctx, path, fired, fields)
 	case int64:
-		return r.walkInt(val, val, ctx, fired)
+		return r.walkInt(val, val, ctx, path, fired, fields)
 	case uint:
-		return r.walkUint(uint64(val), val, ctx, fired)
+		return r.walkUint(uint64(val), val, ctx, path, fired, fields)
 	case uint8:
-		return r.walkUint(uint64(val), val, ctx, fired)
+		return r.walkUint(uint64(val), val, ctx, path, fired, fields)
 	case uint16:
-		return r.walkUint(uint64(val), val, ctx, fired)
+		return r.walkUint(uint64(val), val, ctx, path, fired, fields)
 	case uint32:
-		return r.walkUint(uint64(val), val, ctx, fired)
+		return r.walkUint(uint64(val), val, ctx, path, fired, fields)
 	case uint64:
-		return r.walkUint(val, val, ctx, fired)
+		return r.walkUint(val, val, ctx, path, fired, fields)
 	case uintptr:
 		return val // an address, never data
 	case bool, nil:
 		return val
 	case map[string]any:
-		return r.walkMap(val, fired)
+		return r.walkMap(val, path, fired, fields)
 	case []any:
 		out := make([]any, len(val))
 		for i, e := range val {
-			out[i] = r.walk(e, Context{}, fired)
+			out[i] = r.walk(e, Context{}, path+"/"+formatUint(uint64(i)), fired, fields)
 		}
 		return out
 	}
-	return r.walkReflect(v, ctx, fired)
+	return r.walkReflect(v, ctx, path, fired, fields)
 }
 
 // walkMap clones a map with keys AND values redacted. Keys are iterated in SORTED
@@ -170,7 +195,7 @@ func (r *Redactor) walk(v any, ctx Context, fired map[string]bool) any {
 // redact to the SAME token (two PANs as keys) the last one written wins — sorting
 // makes that winner the last key in sorted order, deterministically, which is also
 // what the TS mirror produces for its (insertion-ordered) objects in the fixtures.
-func (r *Redactor) walkMap(m map[string]any, fired map[string]bool) map[string]any {
+func (r *Redactor) walkMap(m map[string]any, path string, fired map[string]bool, fields *[]RedactedField) map[string]any {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
@@ -178,8 +203,9 @@ func (r *Redactor) walkMap(m map[string]any, fired map[string]bool) map[string]a
 	sort.Strings(keys)
 	out := make(map[string]any, len(m))
 	for _, k := range keys {
+		// Redacted KEYS carry no field record — a key is not a spec-addressable value.
 		kr := redactScalar(k, Context{}, r.recognizers, fired)
-		out[kr] = r.walk(m[k], Context{Key: k, HasKey: true}, fired)
+		out[kr] = r.walk(m[k], Context{Key: k, HasKey: true}, path+"/"+EscapePointerSegment(k), fired, fields)
 	}
 	return out
 }
@@ -188,31 +214,44 @@ func (r *Redactor) walkMap(m map[string]any, fired map[string]bool) map[string]a
 // digits (mirrors the TS integerDigitsOf on a JS number); anything else — fractions,
 // exponent-form magnitudes, NaN/Inf — is untouched. orig preserves the value's
 // original Go type when nothing fires.
-func (r *Redactor) walkFloat(f float64, orig any, ctx Context, fired map[string]bool) any {
+func (r *Redactor) walkFloat(f float64, orig any, ctx Context, path string, fired map[string]bool, fields *[]RedactedField) any {
 	if digits, ok := integerDigitsOfFloat(f); ok {
 		if id := classifyIntegerDigits(digits, ctx); id != "" {
 			fired[id] = true
+			*fields = append(*fields, RedactedField{Path: path, Pattern: id, Props: ComputeProps(signedLiteral(f < 0, digits), "number", true)})
 			return Token(id)
 		}
 	}
 	return orig
 }
 
-func (r *Redactor) walkInt(i int64, orig any, ctx Context, fired map[string]bool) any {
+func (r *Redactor) walkInt(i int64, orig any, ctx Context, path string, fired map[string]bool, fields *[]RedactedField) any {
 	digits := formatUint(absInt(i))
 	if id := classifyIntegerDigits(digits, ctx); id != "" {
 		fired[id] = true
+		*fields = append(*fields, RedactedField{Path: path, Pattern: id, Props: ComputeProps(signedLiteral(i < 0, digits), "number", true)})
 		return Token(id)
 	}
 	return orig
 }
 
-func (r *Redactor) walkUint(u uint64, orig any, ctx Context, fired map[string]bool) any {
+func (r *Redactor) walkUint(u uint64, orig any, ctx Context, path string, fired map[string]bool, fields *[]RedactedField) any {
 	if id := classifyIntegerDigits(formatUint(u), ctx); id != "" {
 		fired[id] = true
+		*fields = append(*fields, RedactedField{Path: path, Pattern: id, Props: ComputeProps(formatUint(u), "number", true)})
 		return Token(id)
 	}
 	return orig
+}
+
+// signedLiteral rebuilds a fired number's decimal literal from its digit string —
+// the Go analogue of the TS String(value) the props are computed from (the sign is
+// part of the literal; the digits never are more than the abs value's).
+func signedLiteral(negative bool, digits string) string {
+	if negative {
+		return "-" + digits
+	}
+	return digits
 }
 
 // walkReflect handles the shapes the type switch cannot: pointers, named slice/array
@@ -223,27 +262,27 @@ func (r *Redactor) walkUint(u uint64, orig any, ctx Context, fired map[string]bo
 // field is its json tag name when present, else the field name — the same key its
 // serialized form would carry, so CVV-under-key behaves identically on both paths.
 // The input is never mutated.
-func (r *Redactor) walkReflect(v any, ctx Context, fired map[string]bool) any {
+func (r *Redactor) walkReflect(v any, ctx Context, path string, fired map[string]bool, fields *[]RedactedField) any {
 	rv := reflect.ValueOf(v)
 	switch rv.Kind() {
 	case reflect.Pointer, reflect.Interface:
 		if rv.IsNil() {
 			return v
 		}
-		return r.walk(rv.Elem().Interface(), ctx, fired)
+		return r.walk(rv.Elem().Interface(), ctx, path, fired, fields)
 	case reflect.Slice:
 		if rv.IsNil() {
 			return v
 		}
 		out := make([]any, rv.Len())
 		for i := 0; i < rv.Len(); i++ {
-			out[i] = r.walk(rv.Index(i).Interface(), Context{}, fired)
+			out[i] = r.walk(rv.Index(i).Interface(), Context{}, path+"/"+formatUint(uint64(i)), fired, fields)
 		}
 		return out
 	case reflect.Array:
 		out := make([]any, rv.Len())
 		for i := 0; i < rv.Len(); i++ {
-			out[i] = r.walk(rv.Index(i).Interface(), Context{}, fired)
+			out[i] = r.walk(rv.Index(i).Interface(), Context{}, path+"/"+formatUint(uint64(i)), fired, fields)
 		}
 		return out
 	case reflect.Map:
@@ -258,7 +297,7 @@ func (r *Redactor) walkReflect(v any, ctx Context, fired map[string]bool) any {
 		for iter.Next() {
 			m[iter.Key().String()] = iter.Value().Interface()
 		}
-		return r.walkMap(m, fired)
+		return r.walkMap(m, path, fired, fields)
 	case reflect.Struct:
 		t := rv.Type()
 		out := reflect.New(t).Elem()
@@ -274,7 +313,10 @@ func (r *Redactor) walkReflect(v any, ctx Context, fired map[string]bool) any {
 					key = name
 				}
 			}
-			walked := r.walk(rv.Field(i).Interface(), Context{Key: key, HasKey: true}, fired)
+			// The path segment is the same key the serialized form would carry (json
+			// tag name else field name) — identical to the ctx key, so a field record
+			// addresses the field the way a spec would.
+			walked := r.walk(rv.Field(i).Interface(), Context{Key: key, HasKey: true}, path+"/"+EscapePointerSegment(key), fired, fields)
 			fv := out.Field(i)
 			wv := reflect.ValueOf(walked)
 			if walked == nil || !wv.Type().AssignableTo(fv.Type()) {

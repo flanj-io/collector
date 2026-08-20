@@ -4,6 +4,8 @@
 // finding.schema.json). Readers are tolerant of unknown fields (§7).
 package model
 
+import "github.com/vinifera-io/collector/internal/redact"
+
 // SchemaVersion is the frozen contract version carried by every record.
 const SchemaVersion = 1
 
@@ -15,11 +17,24 @@ type Correlation struct {
 	SpanID         string `json:"span_id,omitempty"`
 }
 
-// Redaction records which floor patterns fired on a call.
+// RedactedFieldRecord is one whole-value body redaction with the ORIGINAL value's
+// captured, non-reversible properties (wire: redaction.fields[] — CONTRACTS §2/§6;
+// redacted-call.schema.json). Part names which body the RFC 6901 path points into;
+// the embedded redact.RedactedField contributes path/pattern/props.
+type RedactedFieldRecord struct {
+	// Part is "request" or "response".
+	Part string `json:"part"`
+	redact.RedactedField
+}
+
+// Redaction records which floor patterns fired on a call, and (optionally) the
+// whole-value field records the drift detector uses to validate the decidable
+// constraints of redacted fields (absent/empty when none fired).
 type Redaction struct {
-	Applied   bool     `json:"applied"`
-	Patterns  []string `json:"patterns"`
-	SpecAware bool     `json:"spec_aware"`
+	Applied   bool                  `json:"applied"`
+	Patterns  []string              `json:"patterns"`
+	SpecAware bool                  `json:"spec_aware"`
+	Fields    []RedactedFieldRecord `json:"fields,omitempty"`
 }
 
 // RedactedCall is the stored, always-redacted representation of one HTTP call.
@@ -36,8 +51,8 @@ type RedactedCall struct {
 	// RedactedCall surface but carried for edge attribution.
 	PeerHost string `json:"peer_host,omitempty"`
 	// EdgeClass is the SDK/heuristic classification of PeerHost: external|internal.
-	EdgeClass string `json:"edge_class,omitempty"`
-	Method    string `json:"method"`
+	EdgeClass             string            `json:"edge_class,omitempty"`
+	Method                string            `json:"method"`
 	URL                   string            `json:"url"`
 	Route                 string            `json:"route"`
 	StatusCode            int               `json:"status_code"`

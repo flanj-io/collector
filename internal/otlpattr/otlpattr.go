@@ -46,6 +46,10 @@ const (
 	AttrRedactApplied  = "vinifera.redaction.applied"
 	AttrRedactPatterns = "vinifera.redaction.patterns"
 	AttrRedactSpecAwr  = "vinifera.redaction.spec_aware"
+	// AttrRedactFields is the optional JSON array of whole-value body redactions
+	// with the original value's captured properties (CONTRACTS §2, entries
+	// {part,path,pattern,props}; sorted by part then path; omitted when empty).
+	AttrRedactFields = "vinifera.redaction.fields"
 
 	// Internal-only: the whole finding JSON carried on a finding log record.
 	AttrFindingJSON = "vinifera.finding.json"
@@ -112,6 +116,12 @@ func CallFromRecord(lr plog.LogRecord) model.RedactedCall {
 	if v, ok := m.Get(AttrRedactPatterns); ok {
 		_ = json.Unmarshal([]byte(v.Str()), &patterns)
 	}
+	// vinifera.redaction.fields is optional: absent = empty (older SDKs in the
+	// compatibility window emit none; drift then keeps token-skipping).
+	var fields []model.RedactedFieldRecord
+	if v, ok := m.Get(AttrRedactFields); ok {
+		_ = json.Unmarshal([]byte(v.Str()), &fields)
+	}
 	ts := lr.Timestamp()
 	if ts == 0 {
 		ts = lr.ObservedTimestamp()
@@ -159,6 +169,7 @@ func CallFromRecord(lr plog.LogRecord) model.RedactedCall {
 			Applied:   getBool(m, AttrRedactApplied),
 			Patterns:  patterns,
 			SpecAware: getBool(m, AttrRedactSpecAwr),
+			Fields:    fields,
 		},
 	}
 }

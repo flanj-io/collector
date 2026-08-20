@@ -5,47 +5,204 @@
   "type": "object",
   "additionalProperties": true,
   "required": [
-    "schema_version", "id", "captured_at", "integration", "direction",
-    "method", "url", "route", "status_code",
-    "request_body", "response_body", "correlation", "redaction"
+    "schema_version",
+    "id",
+    "captured_at",
+    "integration",
+    "direction",
+    "method",
+    "url",
+    "route",
+    "status_code",
+    "request_body",
+    "response_body",
+    "correlation",
+    "redaction"
   ],
   "properties": {
-    "schema_version": { "type": "integer", "const": 1 },
-    "id": { "type": "string", "format": "uuid" },
-    "captured_at": { "type": "string", "format": "date-time" },
-    "integration": { "type": "string" },
-    "direction": { "type": "string", "enum": ["client", "server"] },
-    "method": { "type": "string" },
-    "url": { "type": "string" },
-    "route": { "type": "string" },
-    "status_code": { "type": "integer" },
-    "request_headers": { "type": "object" },
-    "request_body": { "type": "string" },
-    "request_body_truncated": { "type": "boolean" },
-    "request_content_type": { "type": "string" },
-    "response_headers": { "type": "object" },
-    "response_body": { "type": "string" },
-    "response_body_truncated": { "type": "boolean" },
-    "response_content_type": { "type": "string" },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "captured_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "integration": {
+      "type": "string"
+    },
+    "direction": {
+      "type": "string",
+      "enum": [
+        "client",
+        "server"
+      ]
+    },
+    "method": {
+      "type": "string"
+    },
+    "url": {
+      "type": "string"
+    },
+    "route": {
+      "type": "string"
+    },
+    "status_code": {
+      "type": "integer"
+    },
+    "request_headers": {
+      "type": "object"
+    },
+    "request_body": {
+      "type": "string"
+    },
+    "request_body_truncated": {
+      "type": "boolean"
+    },
+    "request_content_type": {
+      "type": "string"
+    },
+    "response_headers": {
+      "type": "object"
+    },
+    "response_body": {
+      "type": "string"
+    },
+    "response_body_truncated": {
+      "type": "boolean"
+    },
+    "response_content_type": {
+      "type": "string"
+    },
     "correlation": {
       "type": "object",
       "additionalProperties": true,
       "properties": {
-        "request_id": { "type": ["string", "null"] },
-        "idempotency_key": { "type": ["string", "null"] },
-        "trace_id": { "type": ["string", "null"] },
-        "span_id": { "type": ["string", "null"] }
+        "request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "idempotency_key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "trace_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "span_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       }
     },
-    "duration_ms": { "type": "integer" },
+    "duration_ms": {
+      "type": "integer"
+    },
     "redaction": {
       "type": "object",
-      "required": ["applied", "patterns"],
+      "required": [
+        "applied",
+        "patterns"
+      ],
       "additionalProperties": true,
       "properties": {
-        "applied": { "type": "boolean" },
-        "patterns": { "type": "array", "items": { "type": "string" } },
-        "spec_aware": { "type": "boolean" }
+        "applied": {
+          "type": "boolean"
+        },
+        "patterns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "spec_aware": {
+          "type": "boolean"
+        },
+        "fields": {
+          "type": "array",
+          "description": "Whole-value body redactions with the original value's captured, non-reversible properties (CONTRACTS \u00a72/\u00a76). Optional; absent/empty when no whole-value redaction fired.",
+          "items": {
+            "type": "object",
+            "required": [
+              "part",
+              "path",
+              "pattern",
+              "props"
+            ],
+            "additionalProperties": true,
+            "properties": {
+              "part": {
+                "type": "string",
+                "enum": [
+                  "request",
+                  "response"
+                ]
+              },
+              "path": {
+                "type": "string",
+                "description": "RFC 6901 JSON Pointer into that body ('' = the whole body scalar)"
+              },
+              "pattern": {
+                "type": "string"
+              },
+              "props": {
+                "type": "object",
+                "required": [
+                  "type",
+                  "length"
+                ],
+                "additionalProperties": true,
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "string",
+                      "number"
+                    ]
+                  },
+                  "length": {
+                    "type": "integer",
+                    "description": "Unicode code points of the original scalar text"
+                  },
+                  "integer": {
+                    "type": "boolean"
+                  },
+                  "containsLowerCase": {
+                    "type": "boolean"
+                  },
+                  "containsUpperCase": {
+                    "type": "boolean"
+                  },
+                  "containsDigits": {
+                    "type": "boolean"
+                  },
+                  "containsASCIIControlChars": {
+                    "type": "boolean"
+                  },
+                  "containsASCIIPrintableChars": {
+                    "type": "boolean"
+                  },
+                  "containsASCIIExtendedChars": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     }
   }

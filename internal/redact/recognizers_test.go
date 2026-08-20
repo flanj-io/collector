@@ -89,14 +89,29 @@ func TestIPRecognizer(t *testing.T) {
 
 func TestIPOffByDefaultOnWithOption(t *testing.T) {
 	body := map[string]any{"peer": "203.0.113.7"}
-	red, hits := New().RedactValue(body)
-	if !reflect.DeepEqual(red, body) || len(hits) != 0 {
-		t.Errorf("IP redacted without WithIP: %v %v", red, hits)
+	red, hits, fields := New().RedactValue(body)
+	if !reflect.DeepEqual(red, body) || len(hits) != 0 || len(fields) != 0 {
+		t.Errorf("IP redacted without WithIP: %v %v %v", red, hits, fields)
 	}
-	red, hits = New(WithIP()).RedactValue(body)
+	red, hits, fields = New(WithIP()).RedactValue(body)
 	want := map[string]any{"peer": "⟦REDACTED:IP⟧"}
 	if !reflect.DeepEqual(red, want) || !reflect.DeepEqual(hits, []string{IP}) {
 		t.Errorf("WithIP did not redact: %v %v", red, hits)
+	}
+	// A whole-value IP redaction carries the original's captured props (the Go twin
+	// of the TS recognizers.spec expectation).
+	wantFields := []RedactedField{{
+		Path:    "/peer",
+		Pattern: IP,
+		Props: ValueProps{
+			Type:                        "string",
+			Length:                      11,
+			ContainsDigits:              true,
+			ContainsASCIIPrintableChars: true,
+		},
+	}}
+	if !reflect.DeepEqual(fields, wantFields) {
+		t.Errorf("WithIP fields mismatch\n got:  %+v\n want: %+v", fields, wantFields)
 	}
 }
 
@@ -119,7 +134,7 @@ func TestWithRecognizersSwapsEnginesNotTheFloor(t *testing.T) {
 		return nil
 	}}
 	r := New(WithRecognizers(shout))
-	red, hits := r.RedactValue(map[string]any{
+	red, hits, _ := r.RedactValue(map[string]any{
 		"a": []any{"secret", "plain"},
 		"b": map[string]any{"c": "secret"},
 	})
@@ -140,13 +155,17 @@ func TestWithRecognizersSwapsEnginesNotTheFloor(t *testing.T) {
 func TestKeyCollisionDeterminism(t *testing.T) {
 	// Keys are redacted too; when two keys collapse into the SAME token the map
 	// iterates in sorted order, so the LAST key in sorted order wins deterministically.
-	red, hits := New().RedactValue(map[string]any{
+	red, hits, fields := New().RedactValue(map[string]any{
 		"4111111111111111": "a",
 		"4242424242424242": "b",
 	})
 	want := map[string]any{"⟦REDACTED:PAN⟧": "b"}
 	if !reflect.DeepEqual(red, want) || !reflect.DeepEqual(hits, []string{PAN}) {
 		t.Errorf("key collision not deterministic: %v %v", red, hits)
+	}
+	// Redacted KEYS never carry field records.
+	if len(fields) != 0 {
+		t.Errorf("redacted keys emitted fields: %+v", fields)
 	}
 }
 
@@ -157,7 +176,7 @@ type cardHolder struct {
 
 func TestStructTraversalViaReflection(t *testing.T) {
 	in := cardHolder{Card: "4111111111111111", note: "keep"}
-	out, hits := New().RedactValue(in)
+	out, hits, fields := New().RedactValue(in)
 	got, ok := out.(cardHolder)
 	if !ok {
 		t.Fatalf("RedactValue changed the struct type: %T", out)
@@ -168,6 +187,21 @@ func TestStructTraversalViaReflection(t *testing.T) {
 	if !reflect.DeepEqual(hits, []string{PAN}) {
 		t.Errorf("hits: %v", hits)
 	}
+	// A struct field's record addresses it by its JSON-TAG path segment (the same
+	// key its serialized form would carry).
+	wantFields := []RedactedField{{
+		Path:    "/card",
+		Pattern: PAN,
+		Props: ValueProps{
+			Type:                        "string",
+			Length:                      16,
+			ContainsDigits:              true,
+			ContainsASCIIPrintableChars: true,
+		},
+	}}
+	if !reflect.DeepEqual(fields, wantFields) {
+		t.Errorf("struct fields mismatch\n got:  %+v\n want: %+v", fields, wantFields)
+	}
 	// The input is untouched (RedactValue works on a copy).
 	if in.Card != "4111111111111111" {
 		t.Errorf("input struct was mutated: %+v", in)
@@ -176,26 +210,26 @@ func TestStructTraversalViaReflection(t *testing.T) {
 
 func TestNumbers(t *testing.T) {
 	r := New()
-	if red, _ := r.RedactValue(float64(4111111111111111)); red != "⟦REDACTED:PAN⟧" {
+	if red, _, _ := r.RedactValue(float64(4111111111111111)); red != "⟦REDACTED:PAN⟧" {
 		t.Errorf("PAN-as-float64 not redacted: %v", red)
 	}
-	if red, _ := r.RedactValue(1200); red != 1200 {
+	if red, _, _ := r.RedactValue(1200); red != 1200 {
 		t.Errorf("1200 changed: %v", red)
 	}
-	if red, _ := r.RedactValue(1.5); red != 1.5 {
+	if red, _, _ := r.RedactValue(1.5); red != 1.5 {
 		t.Errorf("1.5 changed: %v", red)
 	}
-	if red, _ := r.RedactValue(json.Number("4111111111111111")); red != "⟦REDACTED:PAN⟧" {
+	if red, _, _ := r.RedactValue(json.Number("4111111111111111")); red != "⟦REDACTED:PAN⟧" {
 		t.Errorf("PAN-as-json.Number not redacted: %v", red)
 	}
-	if red, _ := r.RedactValue(json.Number("1200")); red != json.Number("1200") {
+	if red, _, _ := r.RedactValue(json.Number("1200")); red != json.Number("1200") {
 		t.Errorf("json.Number 1200 changed type or value: %#v", red)
 	}
 	// Non-string, non-number scalars are left alone.
-	if red, _ := r.RedactValue(true); red != true {
+	if red, _, _ := r.RedactValue(true); red != true {
 		t.Errorf("bool changed: %v", red)
 	}
-	if red, _ := r.RedactValue(nil); red != nil {
+	if red, _, _ := r.RedactValue(nil); red != nil {
 		t.Errorf("nil changed: %v", red)
 	}
 }

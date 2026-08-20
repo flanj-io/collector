@@ -33,14 +33,16 @@ type fixtureEnhancer struct {
 }
 
 type fixtureCase struct {
-	ID          string           `json:"id"`
-	Description string           `json:"description"`
-	Kind        string           `json:"kind"`
-	Direction   string           `json:"direction"`
-	Input       any              `json:"input"`
-	Expected    any              `json:"expected"`
-	Patterns    []string         `json:"patterns"`
-	Enhancer    *fixtureEnhancer `json:"enhancer"`
+	ID          string   `json:"id"`
+	Description string   `json:"description"`
+	Kind        string   `json:"kind"`
+	Direction   string   `json:"direction"`
+	Input       any      `json:"input"`
+	Expected    any      `json:"expected"`
+	Patterns    []string `json:"patterns"`
+	// Fields are the whole-value redaction property records; absent = MUST be empty.
+	Fields   []RedactedField  `json:"fields"`
+	Enhancer *fixtureEnhancer `json:"enhancer"`
 }
 
 type fixtureFile struct {
@@ -90,6 +92,20 @@ func equalPatterns(got, want []string) bool {
 	}
 	for i := range got {
 		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// equalFields compares field records EXACTLY (order included); nil and empty are
+// equal (an absent fixture `fields` key decodes to nil and means MUST be empty).
+func equalFields(got, want []RedactedField) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if !reflect.DeepEqual(got[i], want[i]) {
 			return false
 		}
 	}
@@ -147,14 +163,17 @@ func TestFixtures(t *testing.T) {
 		c := c
 		t.Run(c.ID, func(t *testing.T) {
 			if c.Kind == "json" {
-				// (a) structural RedactValue(input) deep-equals expected.
+				// (a) structural RedactValue(input) deep-equals expected (fields too).
 				before := marshal(t, c.Input)
-				redacted, hits := r.RedactValue(c.Input)
+				redacted, hits, fields := r.RedactValue(c.Input)
 				if !reflect.DeepEqual(redacted, c.Expected) {
 					t.Errorf("RedactValue mismatch\n got:  %s\n want: %s", marshal(t, redacted), marshal(t, c.Expected))
 				}
 				if !equalPatterns(hits, c.Patterns) {
 					t.Errorf("RedactValue hits mismatch\n got:  %v\n want: %v", hits, c.Patterns)
+				}
+				if !equalFields(fields, c.Fields) {
+					t.Errorf("RedactValue fields mismatch\n got:  %s\n want: %s", marshal(t, fields), marshal(t, c.Fields))
 				}
 
 				// (d) never mutates its input.
@@ -162,7 +181,8 @@ func TestFixtures(t *testing.T) {
 					t.Errorf("input was mutated\n before: %s\n after:  %s", before, after)
 				}
 
-				// (b) text path over the serialized input parses back to expected.
+				// (b) text path over the serialized input parses back to expected —
+				// with the SAME field records (deep-equal, both entry points).
 				res := r.Redact(before)
 				if got := decodeNumber(t, res.Text); !reflect.DeepEqual(got, c.Expected) {
 					t.Errorf("text path mismatch\n got:  %s\n want: %s", res.Text, marshal(t, c.Expected))
@@ -170,14 +190,20 @@ func TestFixtures(t *testing.T) {
 				if !equalPatterns(res.Patterns, c.Patterns) {
 					t.Errorf("text path patterns mismatch\n got:  %v\n want: %v", res.Patterns, c.Patterns)
 				}
+				if !equalFields(res.Fields, c.Fields) {
+					t.Errorf("text path fields mismatch\n got:  %s\n want: %s", marshal(t, res.Fields), marshal(t, c.Fields))
+				}
 
-				// (c) idempotent on the structural path.
-				again, againHits := r.RedactValue(c.Expected)
+				// (c) idempotent on the structural path (and emits no fields again).
+				again, againHits, againFields := r.RedactValue(c.Expected)
 				if !reflect.DeepEqual(again, c.Expected) {
 					t.Errorf("structural re-redaction changed the value\n got:  %s", marshal(t, again))
 				}
 				if len(againHits) != 0 {
 					t.Errorf("structural re-redaction fired %v (must be inert)", againHits)
+				}
+				if len(againFields) != 0 {
+					t.Errorf("structural re-redaction emitted fields %s (must be inert)", marshal(t, againFields))
 				}
 			} else {
 				input, ok := c.Input.(string)
@@ -194,6 +220,9 @@ func TestFixtures(t *testing.T) {
 				}
 				if !equalPatterns(res.Patterns, c.Patterns) {
 					t.Errorf("patterns mismatch\n got:  %v\n want: %v", res.Patterns, c.Patterns)
+				}
+				if !equalFields(res.Fields, c.Fields) {
+					t.Errorf("fields mismatch\n got:  %s\n want: %s", marshal(t, res.Fields), marshal(t, c.Fields))
 				}
 			}
 
@@ -214,10 +243,13 @@ func TestFixtures(t *testing.T) {
 			if len(again.Patterns) != 0 {
 				t.Errorf("text re-redaction fired %v (must be inert)", again.Patterns)
 			}
+			if len(again.Fields) != 0 {
+				t.Errorf("text re-redaction emitted fields %s (must be inert)", marshal(t, again.Fields))
+			}
 
 			// Enhancer expectations.
 			if c.Enhancer != nil {
-				floor, _ := r.RedactValue(c.Input)
+				floor, _, _ := r.RedactValue(c.Input)
 				enhanced, hits := Enhance(floor, c.Enhancer.Spec)
 				if !reflect.DeepEqual(enhanced, c.Enhancer.Expected) {
 					t.Errorf("enhancer mismatch\n got:  %s\n want: %s", marshal(t, enhanced), marshal(t, c.Enhancer.Expected))
@@ -259,7 +291,7 @@ func TestNeverSubtractLaw(t *testing.T) {
 		}
 		c := c
 		t.Run(c.ID, func(t *testing.T) {
-			floor, _ := r.RedactValue(c.Input)
+			floor, _, _ := r.RedactValue(c.Input)
 			before := allTokensByPath(floor)
 			for _, spec := range specs {
 				enhanced, _ := Enhance(floor, spec)
