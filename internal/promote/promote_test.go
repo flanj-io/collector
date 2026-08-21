@@ -106,7 +106,7 @@ func TestFlagBody_ConformsToSchema(t *testing.T) {
 		gotBody, _ = io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(`{"thread_id":"0191-t","peek_url":"https://cp.test/peek/abc","magic_token":"abc","status":"created"}`))
+		_, _ = w.Write([]byte(`{"thread_id":"0191-t","peek_url":"https://cp.test/t/pub#k=abc","magic_token":"abc","status":"created"}`))
 	}))
 	defer srv.Close()
 
