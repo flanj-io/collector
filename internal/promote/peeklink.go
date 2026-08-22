@@ -10,8 +10,8 @@ import (
 
 // Peek-link management against the CP thread endpoints (CONTRACTS §5). Copy-link mints a
 // channel-tagged token on the SAME per-thread link so the consumer can paste it into whatever
-// channel the two teams already share; revoke + regenerate is immediate. The channel is stored
-// on the CP token record, never in the URL.
+// channel the two teams already share; revoke + regenerate is immediate. The channel travels in the
+// §5 request body, never in the URL.
 
 // PeekLinkRequest mirrors POST /api/v1/threads/{id}/peek-links.
 type PeekLinkRequest struct {

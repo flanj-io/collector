@@ -289,7 +289,7 @@ type peekLinkRequestBody struct {
 }
 
 // handlePeekLink mints a channel-tagged token on the thread's per-thread link
-// (copy-link / regenerate). Channel attribution lives on the CP token record.
+// (copy-link / regenerate). The channel travels in the §5 request body, never the URL.
 func (e *uiExtension) handlePeekLink(w http.ResponseWriter, r *http.Request) {
 	body, ok := e.decodePeekLinkBody(w, r)
 	if !ok {

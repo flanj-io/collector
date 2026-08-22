@@ -7,7 +7,7 @@ contains only the engineering model — not product strategy.*
 
 Vinifera is an integration-reliability tool. It captures the real request/response traffic between a
 service and a third-party API it depends on, and validates that live traffic against the provider's
-published OpenAPI/AsyncAPI spec. When the live traffic diverges from the spec (a field changes type, an
+published OpenAPI spec. When the live traffic diverges from the spec (a field changes type, an
 enum gains an undocumented value, a webhook stops arriving), that **drift** is surfaced with the exact
 evidence — the redacted call that proves it.
 
@@ -32,9 +32,11 @@ evidence — the redacted call that proves it.
 
 ## Non-negotiables (why the code is shaped the way it is)
 
-1. **Redaction at source, before store or transmit.** A pattern floor (PAN via Luhn, PII regex) is
-   mandatory and runs before a body is ever attached to a span/log or written to disk. This is defense in
-   depth — the collector re-applies it too, idempotently.
+1. **Redaction at source, before store or transmit.** A redaction floor — composed, hardened validators
+   (Luhn-gated PAN, email, IBAN, phone) behind our own interface, with deep traversal of nested bodies and
+   base64 decode-then-scan; local, zero external calls — is mandatory and runs before a body is ever attached
+   to a span/log or written to disk. This is defense in depth — the collector re-applies the identical floor
+   in Go (`internal/redact`), idempotently, and a shared fixture suite keeps the two byte-for-byte in parity.
 2. **Raw calls never leave the local environment.** Only a *referenced* (redacted) call is promoted to the
    control plane, and only when a human flags it.
 3. **Outbound-only collector.** No inbound surface; the collector only pushes to the control plane.
@@ -44,6 +46,6 @@ evidence — the redacted call that proves it.
 ## The contract
 
 Cross-component wire formats (the OTLP attribute convention, the redacted-call record, the redaction floor)
-are pinned in `contracts/` (vendored from a canonical source). The redaction floor is governed by a
-golden-vector file that all implementations conform to. Changes to any wire format go through the contract
-first.
+are pinned in `contracts/` (vendored from a canonical source). The redaction floor is governed by golden
+fixture files (scalar vectors + the cross-language parity battery) that all implementations conform to.
+Changes to any wire format go through the contract first.

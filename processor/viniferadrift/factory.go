@@ -5,7 +5,7 @@
 // record (vinifera.record.type=finding) flowing to the store exporter.
 //
 // Technical adherence ONLY — fields/types/shapes/enums. Never business/economic
-// correctness (FX/fees/spreads), which would produce a false-positive storm.
+// correctness (pricing, quantities, business rules), which would produce a false-positive storm.
 package viniferadrift
 
 import (

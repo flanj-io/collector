@@ -18,7 +18,7 @@ API + the flag action.
   on success marks the call promoted (evict-after-promote).
 - Peek-link relay: `POST /api/peek-link` (+ `/api/peek-link/revoke`) → relays
   copy-link mint / regenerate / revoke to the CP thread peek-link endpoints
-  (channel attribution on the CP token record; the UI never holds the deploy
+  (the `channel` rides the §5 request body, never the URL; the UI never holds the deploy
   token). Backs the flag flow's channel picker + Copy link + Revoke controls.
 
 **Loopback only.** `ui_endpoint` is validated to a loopback address — the
@@ -39,7 +39,7 @@ collector is outbound-only; nothing serves off-host.
   at Docker build time (only the placeholder is tracked; `web/dist/assets/` is
   gitignored).
 - `config.go` — frozen keys `ui_endpoint`, `integration_id`,
-  `consumer_display_name`, `cp_base_url`, `cp_deploy_token` (CONTRACTS §8).
+  `consumer_display_name`, `provider_display_name`, `cp_base_url`, `cp_deploy_token` (CONTRACTS §8).
 
 ## Invariants
 

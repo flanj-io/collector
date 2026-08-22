@@ -5,14 +5,15 @@
 #     -> viniferaredaction  (defense-in-depth redaction floor)
 #     -> viniferadrift      (OPTIONAL live-vs-spec + version-diff findings)
 #     -> viniferastore      (writes calls + findings; auto-discovers edges)
-# The viniferastore EXTENSION owns the SQLite file; the exporter and UI share it.
+# The viniferastore EXTENSION owns the single store handle (sqlite file or postgres database);
+# the exporter and UI share it.
 # The viniferaui EXTENSION serves the localhost UI + the flag action.
 #
 # NO TARGET LIST IS CONFIGURED. Integration edges are auto-discovered from
 # observed traffic, keyed by (peer.host, direction), and classified external vs
 # internal — only external edges are surfaced on the UI Edges overview / GET
-# /api/edges. Drift detection is an OPTIONAL enhancer: it runs only on the edge a
-# locally-loaded spec is matched to (by host). With no spec the collector still
+# /api/edges. Drift detection is an OPTIONAL enhancer: a locally-loaded spec validates every
+# outbound call, or only one edge when `peer_host` scopes it. With no spec the collector still
 # captures, redacts, and discovers edges.
 #
 # Every key here is frozen in contracts/CONTRACTS.md §8.
@@ -49,12 +50,12 @@ receivers:
         endpoint: 0.0.0.0:4318
 
 processors:
-  # The floor is always on; no tuning in v0.
+  # The floor is always on; the only knob is `enable_ip: true` (optional IPv4/IPv6 rule, off by default).
   viniferaredaction: {}
 
   # OPTIONAL drift enhancer. Omit the whole block (or leave spec_path empty) to run
-  # capture + edge discovery with no detection. When a spec IS loaded it is matched
-  # to a discovered edge by host.
+  # capture + edge discovery with no detection. When a spec IS loaded it validates every
+  # outbound call, or only the edge named by peer_host.
   viniferadrift:
     integration_id: acme-payments # OPTIONAL — labels findings from this spec
     spec_path: /etc/vinifera/spec-v1.yaml # OPTIONAL — empty disables live-vs-spec (validates OUTBOUND calls)
