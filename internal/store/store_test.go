@@ -1,22 +1,80 @@
 package store
 
 import (
+	"database/sql"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/vinifera-io/collector/internal/model"
 )
 
-func openTemp(t *testing.T, maxRows int, maxBytes int64) *Store {
+// testBackend opens stores for one backend under test. open gives a FRESH
+// store (empty data); reopen reconnects to the SAME data after Close — the
+// restart simulation. The sqlite backend always runs; the postgres backend
+// runs when VINIFERA_TEST_PG_DSN points at a scratch database (see CI).
+type testBackend struct {
+	name  string
+	pgDSN string // "" = sqlite
+	path  string // sqlite file of the last open
+}
+
+func forEachBackend(t *testing.T, fn func(t *testing.T, b *testBackend)) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "vinifera.db")
-	s, err := Open(path, maxRows, maxBytes)
+	backends := []*testBackend{{name: "sqlite"}}
+	if dsn := os.Getenv("VINIFERA_TEST_PG_DSN"); dsn != "" {
+		backends = append(backends, &testBackend{name: "postgres", pgDSN: dsn})
+	}
+	for _, b := range backends {
+		t.Run(b.name, func(t *testing.T) { fn(t, b) })
+	}
+}
+
+func (b *testBackend) open(t *testing.T, maxRows int, maxBytes int64) Store {
+	t.Helper()
+	if b.pgDSN != "" {
+		resetPG(t, b.pgDSN)
+	} else {
+		b.path = filepath.Join(t.TempDir(), "vinifera.db")
+	}
+	return b.reopen(t, maxRows, maxBytes)
+}
+
+func (b *testBackend) reopen(t *testing.T, maxRows int, maxBytes int64) Store {
+	t.Helper()
+	var (
+		s   Store
+		err error
+	)
+	if b.pgDSN != "" {
+		s, err = OpenPostgres(b.pgDSN, maxRows, maxBytes)
+	} else {
+		s, err = OpenSQLite(b.path, maxRows, maxBytes)
+	}
 	if err != nil {
-		t.Fatalf("open store: %v", err)
+		t.Fatalf("open %s store: %v", b.name, err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	return s
+}
+
+// resetPG empties the shared scratch database between tests (the schema, if
+// present, survives — OpenPostgres re-applies it idempotently anyway).
+func resetPG(t *testing.T, dsn string) {
+	t.Helper()
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatalf("open pg for reset: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`DO $$ BEGIN
+		IF EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'calls') THEN
+			TRUNCATE calls, findings, edges, spec_infos RESTART IDENTITY;
+		END IF;
+	END $$;`); err != nil {
+		t.Fatalf("reset pg: %v", err)
+	}
 }
 
 func makeCall(i int) model.RedactedCall {
@@ -44,6 +102,37 @@ func makeEdgeCall(i int, peerHost, direction, class string) model.RedactedCall {
 	c.Direction = direction
 	c.EdgeClass = class
 	return c
+}
+
+// TestInsertCall_IdempotentReplay: re-inserting the same call id is a no-op —
+// one stored row, and the edge's call_count must not double-count the replay.
+func TestInsertCall_IdempotentReplay(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, b *testBackend) {
+		s := b.open(t, 0, 0)
+		c := makeEdgeCall(1, "api.acme.test", "client", "external")
+		for i := 0; i < 3; i++ {
+			if err := s.InsertCall(c); err != nil {
+				t.Fatalf("insert call (attempt %d): %v", i+1, err)
+			}
+		}
+		calls, _, err := s.Counts()
+		if err != nil {
+			t.Fatalf("counts: %v", err)
+		}
+		if calls != 1 {
+			t.Fatalf("stored calls = %d, want 1", calls)
+		}
+		edges, err := s.ListEdges(true)
+		if err != nil {
+			t.Fatalf("list edges: %v", err)
+		}
+		if len(edges) != 1 {
+			t.Fatalf("edges = %d, want 1", len(edges))
+		}
+		if edges[0].CallCount != 1 {
+			t.Fatalf("edge call_count = %d, want 1 (replays must not double-count)", edges[0].CallCount)
+		}
+	})
 }
 
 // driftFinding builds a live-vs-spec finding on one endpoint. Each carries the
@@ -74,278 +163,376 @@ func driftFinding(id, sourceCallID string) model.Finding {
 // direction, class carried through — with internal edges excluded from the
 // external listing (GET /api/edges).
 func TestEdgeDiscovery(t *testing.T) {
-	s := openTemp(t, 0, 0)
+	forEachBackend(t, func(t *testing.T, b *testBackend) {
+		s := b.open(t, 0, 0)
 
-	// Outbound: this org is the consumer calling an external provider (2 calls).
-	if err := s.InsertCall(makeEdgeCall(1, "api.acme.test", "client", "external")); err != nil {
-		t.Fatalf("insert client call 1: %v", err)
-	}
-	if err := s.InsertCall(makeEdgeCall(2, "api.acme.test", "client", "external")); err != nil {
-		t.Fatalf("insert client call 2: %v", err)
-	}
-	// Inbound: this org is the provider serving an external consumer (1 call).
-	if err := s.InsertCall(makeEdgeCall(3, "partner.acme.test", "server", "external")); err != nil {
-		t.Fatalf("insert server call: %v", err)
-	}
-	// Internal same-team edge — must be classified out of the external listing.
-	if err := s.InsertCall(makeEdgeCall(4, "billing.svc.cluster.local", "client", "internal")); err != nil {
-		t.Fatalf("insert internal call: %v", err)
-	}
-
-	all, err := s.ListEdges(false)
-	if err != nil {
-		t.Fatalf("list all edges: %v", err)
-	}
-	if len(all) != 3 {
-		t.Fatalf("discovered %d edges total, want 3 (2 external + 1 internal)", len(all))
-	}
-
-	ext, err := s.ListEdges(true)
-	if err != nil {
-		t.Fatalf("list external edges: %v", err)
-	}
-	if len(ext) != 2 {
-		t.Fatalf("external edges = %d, want 2 (internal excluded)", len(ext))
-	}
-
-	byKey := map[string]model.Edge{}
-	for _, e := range ext {
-		byKey[e.PeerHost+"/"+e.Direction] = e
-	}
-	out, ok := byKey["api.acme.test/client"]
-	if !ok {
-		t.Fatalf("missing outbound edge api.acme.test/client; got %+v", ext)
-	}
-	if out.Role != "consumer" {
-		t.Errorf("outbound role = %q, want consumer", out.Role)
-	}
-	if out.Class != "external" {
-		t.Errorf("outbound class = %q, want external", out.Class)
-	}
-	if out.CallCount != 2 {
-		t.Errorf("outbound call_count = %d, want 2", out.CallCount)
-	}
-	in, ok := byKey["partner.acme.test/server"]
-	if !ok {
-		t.Fatalf("missing inbound edge partner.acme.test/server; got %+v", ext)
-	}
-	if in.Role != "provider" {
-		t.Errorf("inbound role = %q, want provider", in.Role)
-	}
-	if in.CallCount != 1 {
-		t.Errorf("inbound call_count = %d, want 1", in.CallCount)
-	}
-
-	// A drift finding on the outbound edge's call bumps that edge's drift_count.
-	if err := s.InsertFinding(driftFinding("0191e8c4-ffff-7000-8000-00000000aa01", makeCall(1).ID)); err != nil {
-		t.Fatalf("insert finding: %v", err)
-	}
-	ext, _ = s.ListEdges(true)
-	for _, e := range ext {
-		if e.PeerHost == "api.acme.test" && e.DriftCount != 1 {
-			t.Errorf("outbound drift_count = %d, want 1", e.DriftCount)
+		// Outbound: this org is the consumer calling an external provider (2 calls).
+		if err := s.InsertCall(makeEdgeCall(1, "api.acme.test", "client", "external")); err != nil {
+			t.Fatalf("insert client call 1: %v", err)
 		}
-		if e.PeerHost == "partner.acme.test" && e.DriftCount != 0 {
-			t.Errorf("inbound drift_count = %d, want 0", e.DriftCount)
+		if err := s.InsertCall(makeEdgeCall(2, "api.acme.test", "client", "external")); err != nil {
+			t.Fatalf("insert client call 2: %v", err)
 		}
-	}
+		// Inbound: this org is the provider serving an external consumer (1 call).
+		if err := s.InsertCall(makeEdgeCall(3, "partner.acme.test", "server", "external")); err != nil {
+			t.Fatalf("insert server call: %v", err)
+		}
+		// Internal same-team edge — must be classified out of the external listing.
+		if err := s.InsertCall(makeEdgeCall(4, "billing.svc.cluster.local", "client", "internal")); err != nil {
+			t.Fatalf("insert internal call: %v", err)
+		}
+
+		all, err := s.ListEdges(false)
+		if err != nil {
+			t.Fatalf("list all edges: %v", err)
+		}
+		if len(all) != 3 {
+			t.Fatalf("discovered %d edges total, want 3 (2 external + 1 internal)", len(all))
+		}
+
+		ext, err := s.ListEdges(true)
+		if err != nil {
+			t.Fatalf("list external edges: %v", err)
+		}
+		if len(ext) != 2 {
+			t.Fatalf("external edges = %d, want 2 (internal excluded)", len(ext))
+		}
+
+		byKey := map[string]model.Edge{}
+		for _, e := range ext {
+			byKey[e.PeerHost+"/"+e.Direction] = e
+		}
+		out, ok := byKey["api.acme.test/client"]
+		if !ok {
+			t.Fatalf("missing outbound edge api.acme.test/client; got %+v", ext)
+		}
+		if out.Role != "consumer" {
+			t.Errorf("outbound role = %q, want consumer", out.Role)
+		}
+		if out.Class != "external" {
+			t.Errorf("outbound class = %q, want external", out.Class)
+		}
+		if out.CallCount != 2 {
+			t.Errorf("outbound call_count = %d, want 2", out.CallCount)
+		}
+		in, ok := byKey["partner.acme.test/server"]
+		if !ok {
+			t.Fatalf("missing inbound edge partner.acme.test/server; got %+v", ext)
+		}
+		if in.Role != "provider" {
+			t.Errorf("inbound role = %q, want provider", in.Role)
+		}
+		if in.CallCount != 1 {
+			t.Errorf("inbound call_count = %d, want 1", in.CallCount)
+		}
+
+		// A drift finding on the outbound edge's call bumps that edge's drift_count.
+		if err := s.InsertFinding(driftFinding("0191e8c4-ffff-7000-8000-00000000aa01", makeCall(1).ID)); err != nil {
+			t.Fatalf("insert finding: %v", err)
+		}
+		ext, _ = s.ListEdges(true)
+		for _, e := range ext {
+			if e.PeerHost == "api.acme.test" && e.DriftCount != 1 {
+				t.Errorf("outbound drift_count = %d, want 1", e.DriftCount)
+			}
+			if e.PeerHost == "partner.acme.test" && e.DriftCount != 0 {
+				t.Errorf("inbound drift_count = %d, want 0", e.DriftCount)
+			}
+		}
+	})
 }
 
 // TestDriftDedup is the acceptance oracle for per-endpoint dedup: N drifting
 // calls on ONE endpoint collapse into exactly ONE finding with occurrence_count=N
 // (CONTRACTS §4). The stored finding id stays stable (flag idempotency).
 func TestDriftDedup(t *testing.T) {
-	s := openTemp(t, 0, 0)
-	const N = 2000
+	forEachBackend(t, func(t *testing.T, b *testBackend) {
+		s := b.open(t, 0, 0)
+		const N = 2000
 
-	firstID := ""
-	for i := 0; i < N; i++ {
-		call := makeEdgeCall(i, "api.acme.test", "client", "external")
-		if err := s.InsertCall(call); err != nil {
-			t.Fatalf("insert call %d: %v", i, err)
+		firstID := ""
+		for i := 0; i < N; i++ {
+			call := makeEdgeCall(i, "api.acme.test", "client", "external")
+			if err := s.InsertCall(call); err != nil {
+				t.Fatalf("insert call %d: %v", i, err)
+			}
+			fid := fmt.Sprintf("0191e8c4-dddd-7000-8000-%012d", i)
+			if i == 0 {
+				firstID = fid
+			}
+			if err := s.InsertFinding(driftFinding(fid, call.ID)); err != nil {
+				t.Fatalf("insert finding %d: %v", i, err)
+			}
 		}
-		fid := fmt.Sprintf("0191e8c4-dddd-7000-8000-%012d", i)
-		if i == 0 {
-			firstID = fid
-		}
-		if err := s.InsertFinding(driftFinding(fid, call.ID)); err != nil {
-			t.Fatalf("insert finding %d: %v", i, err)
-		}
-	}
 
-	findings, err := s.ListFindings(100)
-	if err != nil {
-		t.Fatalf("list findings: %v", err)
-	}
-	if len(findings) != 1 {
-		t.Fatalf("dedup failed: %d findings, want exactly 1 for one endpoint", len(findings))
-	}
-	f := findings[0]
-	if f.OccurrenceCount != N {
-		t.Errorf("occurrence_count = %d, want %d", f.OccurrenceCount, N)
-	}
-	if f.ID != firstID {
-		t.Errorf("finding id = %q, want the FIRST call's finding id %q (stable across re-drift)", f.ID, firstID)
-	}
-	_, findingCount, err := s.Counts()
-	if err != nil {
-		t.Fatalf("counts: %v", err)
-	}
-	if findingCount != 1 {
-		t.Errorf("findings table holds %d rows, want 1", findingCount)
-	}
+		findings, err := s.ListFindings(100)
+		if err != nil {
+			t.Fatalf("list findings: %v", err)
+		}
+		if len(findings) != 1 {
+			t.Fatalf("dedup failed: %d findings, want exactly 1 for one endpoint", len(findings))
+		}
+		f := findings[0]
+		if f.OccurrenceCount != N {
+			t.Errorf("occurrence_count = %d, want %d", f.OccurrenceCount, N)
+		}
+		if f.ID != firstID {
+			t.Errorf("finding id = %q, want the FIRST call's finding id %q (stable across re-drift)", f.ID, firstID)
+		}
+		_, findingCount, err := s.Counts()
+		if err != nil {
+			t.Fatalf("counts: %v", err)
+		}
+		if findingCount != 1 {
+			t.Errorf("findings table holds %d rows, want 1", findingCount)
+		}
+	})
 }
 
 // TestRingBuffer_StableFill_RowCap fills far past the row cap and asserts the
 // window holds at the cap (oldest evicted first, FIFO).
 func TestRingBuffer_StableFill_RowCap(t *testing.T) {
-	const cap = 10
-	s := openTemp(t, cap, 0)
-	for i := 0; i < 100; i++ {
-		if err := s.InsertCall(makeCall(i)); err != nil {
-			t.Fatalf("insert %d: %v", i, err)
+	forEachBackend(t, func(t *testing.T, b *testBackend) {
+		const cap = 10
+		s := b.open(t, cap, 0)
+		for i := 0; i < 100; i++ {
+			if err := s.InsertCall(makeCall(i)); err != nil {
+				t.Fatalf("insert %d: %v", i, err)
+			}
 		}
-	}
-	rows, _, err := s.Stats()
-	if err != nil {
-		t.Fatalf("stats: %v", err)
-	}
-	if rows != cap {
-		t.Fatalf("row count = %d, want stable fill at %d", rows, cap)
-	}
-	// FIFO: the survivors must be the newest `cap` ids (90..99).
-	calls, err := s.ListCalls(cap)
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	if len(calls) != cap {
-		t.Fatalf("listed %d calls, want %d", len(calls), cap)
-	}
-	newest := makeCall(99).ID
-	if calls[0].ID != newest {
-		t.Errorf("newest survivor = %s, want %s", calls[0].ID, newest)
-	}
-	if _, ok, _ := s.GetCall(makeCall(0).ID); ok {
-		t.Errorf("oldest call (0) should have been evicted")
-	}
+		rows, _, err := s.Stats()
+		if err != nil {
+			t.Fatalf("stats: %v", err)
+		}
+		if rows != cap {
+			t.Fatalf("row count = %d, want stable fill at %d", rows, cap)
+		}
+		// FIFO: the survivors must be the newest `cap` ids (90..99).
+		calls, err := s.ListCalls(cap)
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if len(calls) != cap {
+			t.Fatalf("listed %d calls, want %d", len(calls), cap)
+		}
+		newest := makeCall(99).ID
+		if calls[0].ID != newest {
+			t.Errorf("newest survivor = %s, want %s", calls[0].ID, newest)
+		}
+		if _, ok, _ := s.GetCall(makeCall(0).ID); ok {
+			t.Errorf("oldest call (0) should have been evicted")
+		}
+	})
 }
 
 // TestRingBuffer_ByteCap evicts on the byte ceiling as well as the row ceiling.
 func TestRingBuffer_ByteCap(t *testing.T) {
-	// Each row's doc is a few hundred bytes; a 2KB cap keeps only a handful.
-	s := openTemp(t, 0, 2048)
-	for i := 0; i < 50; i++ {
-		if err := s.InsertCall(makeCall(i)); err != nil {
-			t.Fatalf("insert %d: %v", i, err)
+	forEachBackend(t, func(t *testing.T, b *testBackend) {
+		// Each row's doc is a few hundred bytes; a 2KB cap keeps only a handful.
+		s := b.open(t, 0, 2048)
+		for i := 0; i < 50; i++ {
+			if err := s.InsertCall(makeCall(i)); err != nil {
+				t.Fatalf("insert %d: %v", i, err)
+			}
 		}
-	}
-	rows, bytes, err := s.Stats()
-	if err != nil {
-		t.Fatalf("stats: %v", err)
-	}
-	if bytes > 2048 {
-		t.Fatalf("byte size = %d, exceeds cap 2048", bytes)
-	}
-	if rows == 0 || rows >= 50 {
-		t.Fatalf("expected a bounded but non-empty window, got %d rows", rows)
-	}
+		rows, bytes, err := s.Stats()
+		if err != nil {
+			t.Fatalf("stats: %v", err)
+		}
+		if bytes > 2048 {
+			t.Fatalf("byte size = %d, exceeds cap 2048", bytes)
+		}
+		if rows == 0 || rows >= 50 {
+			t.Fatalf("expected a bounded but non-empty window, got %d rows", rows)
+		}
+	})
 }
 
 // TestRingBuffer_PinnedSurvive is the evidence-preservation invariant: a pinned
 // call (pin-on-finding) is never evicted, even when the window is hammered far
 // past its caps by unpinned traffic.
 func TestRingBuffer_PinnedSurvive(t *testing.T) {
-	const cap = 5
-	s := openTemp(t, cap, 0)
+	forEachBackend(t, func(t *testing.T, b *testBackend) {
+		const cap = 5
+		s := b.open(t, cap, 0)
 
-	// Insert the call that a finding will reference.
-	pinned := makeCall(1000)
-	if err := s.InsertCall(pinned); err != nil {
-		t.Fatalf("insert pinned call: %v", err)
-	}
-	// A finding on it pins it.
-	src := pinned.ID
-	if err := s.InsertFinding(model.Finding{
-		SchemaVersion: model.SchemaVersion,
-		ID:            "0191e8c4-ffff-7000-8000-000000000001",
-		Kind:          model.KindLiveVsSpec,
-		Severity:      model.SeverityBreaking,
-		Integration:   "acme-payments",
-		Endpoint:      "POST /v1/charges",
-		Expected:      "type=integer",
-		Actual:        `type=string ("1200")`,
-		Rule:          "type-mismatch",
-		SourceCallID:  &src,
-		DetectedAt:    "2026-08-18T08:00:01.000Z",
-	}); err != nil {
-		t.Fatalf("insert finding: %v", err)
-	}
-
-	// Flood with unpinned traffic well past the cap.
-	for i := 0; i < 100; i++ {
-		if err := s.InsertCall(makeCall(i)); err != nil {
-			t.Fatalf("insert %d: %v", i, err)
+		// Insert the call that a finding will reference.
+		pinned := makeCall(1000)
+		if err := s.InsertCall(pinned); err != nil {
+			t.Fatalf("insert pinned call: %v", err)
 		}
-	}
-
-	if _, ok, _ := s.GetCall(pinned.ID); !ok {
-		t.Fatalf("pinned call was evicted — evidence lost")
-	}
-	// The row cap is a hard total ceiling and pinned rows count toward it, so the
-	// window holds at cap: 1 pinned survivor + (cap-1) newest unpinned.
-	rows, _, err := s.Stats()
-	if err != nil {
-		t.Fatalf("stats: %v", err)
-	}
-	if rows != cap {
-		t.Errorf("row count = %d, want stable fill at %d with the pinned row retained", rows, cap)
-	}
-
-	// evict-after-promote: unpin + stamp promoted_at, then the once-pinned call
-	// re-enters the pool and evicts on the next insert.
-	if err := s.MarkPromoted(pinned.ID); err != nil {
-		t.Fatalf("mark promoted: %v", err)
-	}
-	for i := 100; i < 110; i++ {
-		if err := s.InsertCall(makeCall(i)); err != nil {
-			t.Fatalf("insert %d: %v", i, err)
+		// A finding on it pins it.
+		src := pinned.ID
+		if err := s.InsertFinding(model.Finding{
+			SchemaVersion: model.SchemaVersion,
+			ID:            "0191e8c4-ffff-7000-8000-000000000001",
+			Kind:          model.KindLiveVsSpec,
+			Severity:      model.SeverityBreaking,
+			Integration:   "acme-payments",
+			Endpoint:      "POST /v1/charges",
+			Expected:      "type=integer",
+			Actual:        `type=string ("1200")`,
+			Rule:          "type-mismatch",
+			SourceCallID:  &src,
+			DetectedAt:    "2026-08-18T08:00:01.000Z",
+		}); err != nil {
+			t.Fatalf("insert finding: %v", err)
 		}
-	}
-	if _, ok, _ := s.GetCall(pinned.ID); ok {
-		t.Errorf("promoted call should re-enter the eviction pool and evict")
-	}
-	rows, _, _ = s.Stats()
-	if rows != cap {
-		t.Errorf("post-promote row count = %d, want %d", rows, cap)
-	}
+
+		// Flood with unpinned traffic well past the cap.
+		for i := 0; i < 100; i++ {
+			if err := s.InsertCall(makeCall(i)); err != nil {
+				t.Fatalf("insert %d: %v", i, err)
+			}
+		}
+
+		if _, ok, _ := s.GetCall(pinned.ID); !ok {
+			t.Fatalf("pinned call was evicted — evidence lost")
+		}
+		// The row cap is a hard total ceiling and pinned rows count toward it, so the
+		// window holds at cap: 1 pinned survivor + (cap-1) newest unpinned.
+		rows, _, err := s.Stats()
+		if err != nil {
+			t.Fatalf("stats: %v", err)
+		}
+		if rows != cap {
+			t.Errorf("row count = %d, want stable fill at %d with the pinned row retained", rows, cap)
+		}
+
+		// evict-after-promote: unpin + stamp promoted_at, then the once-pinned call
+		// re-enters the pool and evicts on the next insert.
+		if err := s.MarkPromoted(pinned.ID); err != nil {
+			t.Fatalf("mark promoted: %v", err)
+		}
+		for i := 100; i < 110; i++ {
+			if err := s.InsertCall(makeCall(i)); err != nil {
+				t.Fatalf("insert %d: %v", i, err)
+			}
+		}
+		if _, ok, _ := s.GetCall(pinned.ID); ok {
+			t.Errorf("promoted call should re-enter the eviction pool and evict")
+		}
+		rows, _, _ = s.Stats()
+		if rows != cap {
+			t.Errorf("post-promote row count = %d, want %d", rows, cap)
+		}
+	})
 }
 
 // TestPersistence_SurvivesReopen proves data survives a collector restart: close
-// the store and reopen the same file.
+// the store and reopen the same file / reconnect to the same database.
 func TestPersistence_SurvivesReopen(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "vinifera.db")
-	s, err := Open(path, 0, 0)
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	c := makeCall(7)
-	if err := s.InsertCall(c); err != nil {
-		t.Fatalf("insert: %v", err)
-	}
-	if err := s.Close(); err != nil {
-		t.Fatalf("close: %v", err)
-	}
+	forEachBackend(t, func(t *testing.T, b *testBackend) {
+		s := b.open(t, 0, 0)
+		c := makeCall(7)
+		if err := s.InsertCall(c); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+		if err := s.Close(); err != nil {
+			t.Fatalf("close: %v", err)
+		}
 
-	s2, err := Open(path, 0, 0)
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
-	defer s2.Close()
-	got, ok, err := s2.GetCall(c.ID)
-	if err != nil || !ok {
-		t.Fatalf("call did not survive reopen (ok=%v err=%v)", ok, err)
-	}
-	if got.Correlation.RequestID != c.Correlation.RequestID {
-		t.Errorf("reopened call corrupted: %q != %q", got.Correlation.RequestID, c.Correlation.RequestID)
-	}
+		s2 := b.reopen(t, 0, 0)
+		got, ok, err := s2.GetCall(c.ID)
+		if err != nil || !ok {
+			t.Fatalf("call did not survive reopen (ok=%v err=%v)", ok, err)
+		}
+		if got.Correlation.RequestID != c.Correlation.RequestID {
+			t.Errorf("reopened call corrupted: %q != %q", got.Correlation.RequestID, c.Correlation.RequestID)
+		}
+	})
+}
+
+// TestEdgeCallCountsSince proves the observed-RPM source query: only calls at or
+// after the threshold count, grouped per (peer_host, direction).
+func TestEdgeCallCountsSince(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, b *testBackend) {
+		s := b.open(t, 0, 0)
+		old := makeEdgeCall(1, "api.acme.test", "client", "external")
+		old.CapturedAt = "2026-08-18T07:00:00.000Z"
+		recentOut := makeEdgeCall(2, "api.acme.test", "client", "external")
+		recentOut.CapturedAt = "2026-08-18T08:00:30.000Z"
+		recentIn := makeEdgeCall(3, "api.consumer-a.test", "server", "external")
+		recentIn.CapturedAt = "2026-08-18T08:00:45.000Z"
+		for _, c := range []model.RedactedCall{old, recentOut, recentIn} {
+			if err := s.InsertCall(c); err != nil {
+				t.Fatalf("insert: %v", err)
+			}
+		}
+
+		counts, err := s.EdgeCallCountsSince("2026-08-18T08:00:00Z")
+		if err != nil {
+			t.Fatalf("counts: %v", err)
+		}
+		if got := counts["api.acme.test|client"]; got != 1 {
+			t.Errorf("outbound count: got %d want 1 (old call must not count)", got)
+		}
+		if got := counts["api.consumer-a.test|server"]; got != 1 {
+			t.Errorf("inbound count: got %d want 1", got)
+		}
+	})
+}
+
+// TestSpecInfo_RoundTrip proves the provider-contract record the drift processor
+// writes at Start: upsert by integration, list metadata, fetch the raw doc.
+func TestSpecInfo_RoundTrip(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, b *testBackend) {
+		s := b.open(t, 0, 0)
+		info := model.SpecInfo{
+			Integration: "acme-payments",
+			PeerHost:    "api.acme.test",
+			Format:      "openapi",
+			Title:       "Acme Payments API",
+			Version:     "1.4.0",
+			DocsURL:     "https://docs.acme.test/api",
+			Endpoints:   3,
+			LoadedAt:    "2026-08-18T08:00:00Z",
+		}
+		raw := []byte("openapi: 3.0.3\ninfo:\n  title: Acme Payments API\n")
+		if err := s.PutSpecInfo(info, raw); err != nil {
+			t.Fatalf("put: %v", err)
+		}
+		// Upsert: a reload replaces, never duplicates.
+		info.Version = "1.5.0"
+		if err := s.PutSpecInfo(info, raw); err != nil {
+			t.Fatalf("re-put: %v", err)
+		}
+		// A self contract (we-as-provider) lists alongside, self first.
+		if err := s.PutSpecInfo(model.SpecInfo{
+			Integration: "self", Role: model.SpecRoleSelf, Format: "openapi",
+			Title: "Org API", Version: "0.9.0", LoadedAt: "2026-08-18T08:00:00Z",
+		}, []byte("openapi: 3.0.3\ninfo:\n  title: Org API\n")); err != nil {
+			t.Fatalf("put self: %v", err)
+		}
+
+		infos, err := s.ListSpecInfos()
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if len(infos) != 2 {
+			t.Fatalf("want 2 spec infos, got %d", len(infos))
+		}
+		if infos[0].Role != model.SpecRoleSelf || infos[0].Title != "Org API" {
+			t.Errorf("self contract must list first: %+v", infos[0])
+		}
+		if infos[1].Version != "1.5.0" || infos[1].Title != "Acme Payments API" || infos[1].PeerHost != "api.acme.test" {
+			t.Errorf("listed info corrupted: %+v", infos[1])
+		}
+		// Role defaults to provider when the writer omitted it.
+		if infos[1].Role != model.SpecRoleProvider {
+			t.Errorf("role default: got %q want provider", infos[1].Role)
+		}
+
+		doc, format, ok, err := s.GetSpecDoc("acme-payments")
+		if err != nil || !ok {
+			t.Fatalf("get doc (ok=%v err=%v)", ok, err)
+		}
+		if format != "openapi" || string(doc) != string(raw) {
+			t.Errorf("doc round-trip corrupted: format=%q", format)
+		}
+
+		if _, _, ok, _ := s.GetSpecDoc("unknown"); ok {
+			t.Error("unknown integration must not resolve a spec doc")
+		}
+	})
 }

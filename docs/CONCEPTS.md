@@ -26,7 +26,9 @@ evidence — the redacted call that proves it.
   non-redundant evidence. Redaction happens here, at the call site, **before** anything is stored or sent.
 - **`collector`** — an OpenTelemetry Collector distribution (built with `ocb`): receives the SDK's OTLP,
   applies defense-in-depth redaction, runs drift detection near the source, stores redacted calls in a local
-  embedded store (rolling window), and serves a localhost UI. Headless and outbound-only apart from that UI.
+  local store (a rolling window; embedded by default, or a customer-provided Postgres so multiple
+  collector pods can share one store), and serves a localhost UI. Headless and outbound-only apart
+  from that UI. See `STORE.md` for backends, sizing, and migration.
 
 ## Non-negotiables (why the code is shaped the way it is)
 

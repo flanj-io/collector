@@ -35,12 +35,31 @@ jobs:
 
   go-test:
     runs-on: ubuntu-latest
+    services:
+      # Scratch database for the postgres store backend: the internal/store
+      # suite runs against BOTH backends when VINIFERA_TEST_PG_DSN is set, plus
+      # the multi-pod concurrency tests (several store handles on one database).
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vinifera_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      VINIFERA_TEST_PG_DSN: postgres://postgres:postgres@localhost:5432/vinifera_test?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: { go-version: '1.26' }
       - name: Unit + contract tests (custom components)
         run: go test ./... -count=1
+      - name: Store suite with the race detector (both backends + multi-pod concurrency)
+        run: go test ./internal/store/... -count=1 -race
       - name: Net audit — the redaction floor must never link network-capable packages
         # internal/redact runs on every captured body and must be pure: no HTTP, no
         # subprocesses, no TLS dialing anywhere in its dependency graph. phonenumbers

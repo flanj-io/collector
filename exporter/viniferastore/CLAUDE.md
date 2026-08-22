@@ -1,6 +1,6 @@
 # CLAUDE.md — exporter/viniferastore
 
-Store **exporter** — the WRITER side of the embedded store. Own Go module.
+Store **exporter** — the WRITER side of the store. Own Go module.
 
 ## Role
 
@@ -9,7 +9,7 @@ rows and `finding` records as `Finding` rows. It does **not** open the database 
 it discovers the single-owner `viniferastore` **extension** via
 `host.GetExtensions()` at Start and writes through it.
 
-`… → viniferadrift → [viniferastore exporter] → SQLite (owned by the extension)`
+`… → viniferadrift → [viniferastore exporter] → store: sqlite | postgres (owned by the extension)`
 
 ## Files
 
@@ -22,9 +22,11 @@ it discovers the single-owner `viniferastore` **extension** via
 
 ## Invariants
 
-- **Never open a second SQLite connection.** The extension is the single owner;
-  the exporter only holds the shared `*store.Store`. Extensions all start before
-  pipeline components, so the store is already open when `start` runs.
+- **Never open a second store handle.** The extension is the single in-process
+  owner; the exporter only holds the shared `store.Store` interface (backend —
+  embedded sqlite or shared postgres — is the extension's concern). Extensions
+  all start before pipeline components, so the store is already open when
+  `start` runs.
 - Findings before their call is fine (`InsertFinding` pins by id even if the row
   arrives moments later in the same batch — the drift processor appends findings
   after the calls in the same `plog.Logs`).

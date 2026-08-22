@@ -124,6 +124,37 @@ type Edge struct {
 	DriftCount int    `json:"drift_count"`
 }
 
+// SpecInfo roles: whose contract this is.
+const (
+	// SpecRoleProvider is a contract a provider we consume publishes — validated
+	// against our OUTBOUND (client-direction) traffic.
+	SpecRoleProvider = "provider"
+	// SpecRoleSelf is the contract WE publish as a provider — validated against
+	// our INBOUND (server-direction) responses.
+	SpecRoleSelf = "self"
+)
+
+// SpecInfo describes an API contract (spec) loaded by the drift processor,
+// surfaced on the local UI's Contracts tab. Local metadata only — not part of
+// the frozen contract surface.
+type SpecInfo struct {
+	Integration string `json:"integration"`
+	// Role is SpecRoleProvider (their API, our egress) or SpecRoleSelf (our
+	// API, our ingress).
+	Role string `json:"role"`
+	// PeerHost is the discovered edge this spec is matched to (empty when the
+	// spec applies to all captured calls).
+	PeerHost string `json:"peer_host,omitempty"`
+	// Format is the contract document type, e.g. "openapi" (future: "asyncapi").
+	Format  string `json:"format"`
+	Title   string `json:"title,omitempty"`
+	Version string `json:"version,omitempty"`
+	// DocsURL is the spec's externalDocs link when the provider publishes one.
+	DocsURL   string `json:"docs_url,omitempty"`
+	Endpoints int    `json:"endpoints,omitempty"`
+	LoadedAt  string `json:"loaded_at"`
+}
+
 // ComputeSignature returns the dedup key for a finding:
 // integration|endpoint|kind|rule|field_path (CONTRACTS §4). All calls carrying
 // the SAME drift share this signature and collapse into one finding.

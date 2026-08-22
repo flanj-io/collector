@@ -1,13 +1,16 @@
-// Package store is the collector's single embedded SQLite store. It is the ONE
-// owner of the database connection (CONTRACTS §3/§4): the store extension opens
-// it, the exporter writes through it, and the UI extension reads through it —
-// all sharing the same *Store via host.GetExtensions().
+// Package store is the collector's call/finding/edge store — the rolling
+// evidence window written by the store exporter, read by the UI extension, and
+// stamped with contract metadata by the drift processor. The viniferastore
+// extension owns the single in-process handle; every other component reaches it
+// via Provider over host.GetExtensions() (collector CLAUDE.md non-negotiable #1).
 //
-// Durability & shape:
-//   - modernc.org/sqlite (pure Go, CGO off), WAL journal, on a PVC so data
-//     survives a collector restart.
-//   - Two tables: calls (RedactedCall) and findings (Finding), each storing the
-//     canonical contract JSON plus indexed columns for querying and eviction.
+// Two backends implement Store:
+//   - sqlite (default): embedded modernc.org/sqlite (pure Go, CGO off), WAL
+//     journal, one file on a PVC. Exactly ONE collector pod may own a given
+//     file — cross-process access is not supported.
+//   - postgres: a shared external database. N collector pods may write to it
+//     concurrently; cross-pod safety (finding dedup, pinning, eviction) is
+//     this package's job, never the callers'.
 //
 // Rolling window (ring buffer): after every insert, FIFO-evict the oldest
 // pinned=0 rows until the row-count and byte-size caps are satisfied. This gives
@@ -21,338 +24,100 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
-	"fmt"
-	"sync"
-	"time"
-
-	_ "modernc.org/sqlite"
 
 	"github.com/vinifera-io/collector/internal/edge"
 	"github.com/vinifera-io/collector/internal/model"
 )
 
-// Provider is implemented by the store extension. The exporter and UI extension
-// discover the store by type-asserting a host extension to this interface — it
-// is the single sanctioned way to reach the shared connection.
+// evictBatchMax caps how many rows a single eviction DELETE may remove. Steady
+// state evicts 1 row per insert; the batch only matters when catching up on a
+// burst (lowered caps, post-migration fill, a pod resuming after another held
+// the eviction lock).
+const evictBatchMax = 256
+
+// Store is the backend-agnostic store surface. Both backends satisfy it; the
+// viniferastore extension picks the implementation from its config.
+type Store interface {
+	// InsertCall stores a RedactedCall (idempotent on id), discovers/updates the
+	// edge it belongs to, and then runs eviction.
+	InsertCall(c model.RedactedCall) error
+	// InsertFinding stores a Finding, deduped by signature (a drift is
+	// per-endpoint, not per-call — CONTRACTS §4). The first occurrence creates
+	// the finding and pins its source call; repeats only increment
+	// occurrence_count/last_seen. The finding id stays the FIRST occurrence's id
+	// (the flag idempotency key depends on it).
+	InsertFinding(f model.Finding) error
+	// MarkPromoted implements evict-after-promote: unpin + stamp promoted_at.
+	MarkPromoted(id string) error
+	GetCall(id string) (model.RedactedCall, bool, error)
+	GetFinding(id string) (model.Finding, bool, error)
+	ListCalls(limit int) ([]model.RedactedCall, error)
+	ListFindings(limit int) ([]model.Finding, error)
+	ListEdges(externalOnly bool) ([]model.Edge, error)
+	EdgeCallCountsSince(sinceISO string) (map[string]int, error)
+	PutSpecInfo(info model.SpecInfo, rawSpec []byte) error
+	ListSpecInfos() ([]model.SpecInfo, error)
+	GetSpecDoc(integration string) (raw []byte, format string, ok bool, err error)
+	Stats() (rows int, bytes int64, err error)
+	Counts() (calls int, findings int, err error)
+	Close() error
+}
+
+// Provider is implemented by the store extension. The exporter, UI extension,
+// and drift processor discover the store by type-asserting a host extension to
+// this interface — it is the single sanctioned way to reach the shared handle.
 type Provider interface {
-	Store() *Store
+	Store() Store
 }
 
-// Store owns one SQLite connection and enforces the rolling window.
-type Store struct {
-	db       *sql.DB
-	maxRows  int
-	maxBytes int64
-	mu       sync.Mutex // serialises insert+evict so the window stays consistent
+// base holds what both backends share: the connection pool and the read path.
+// Queries are written with `?` placeholders; rebind converts them to the
+// backend's native style ($1..$n for postgres, identity for sqlite).
+type base struct {
+	db     *sql.DB
+	rebind func(string) string
 }
 
-// Open opens (creating if needed) the SQLite database at path, applies the
-// schema, and returns the single owning Store. maxRows/maxBytes are the window
-// ceilings (<=0 disables that dimension). The connection pool is pinned to one
-// connection: with pure-Go SQLite this is the simplest correct concurrency model
-// and matches "single owner".
-func Open(path string, maxRows int, maxBytes int64) (*Store, error) {
-	dsn := "file:" + path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)"
-	db, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("open sqlite: %w", err)
+// rebindIdentity leaves `?` placeholders untouched (sqlite).
+func rebindIdentity(q string) string { return q }
+
+// rebindDollar rewrites `?` placeholders to `$1..$n` (postgres), skipping
+// quoted literals.
+func rebindDollar(q string) string {
+	var out []byte
+	n := 0
+	inStr := false
+	for i := 0; i < len(q); i++ {
+		c := q[i]
+		switch {
+		case c == '\'':
+			inStr = !inStr
+			out = append(out, c)
+		case c == '?' && !inStr:
+			n++
+			out = append(out, '$')
+			out = appendInt(out, n)
+		default:
+			out = append(out, c)
+		}
 	}
-	db.SetMaxOpenConns(1)
-	if err := db.Ping(); err != nil {
-		return nil, fmt.Errorf("ping sqlite: %w", err)
-	}
-	s := &Store{db: db, maxRows: maxRows, maxBytes: maxBytes}
-	if err := s.migrate(); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	return s, nil
+	return string(out)
 }
 
-// Store returns the receiver so *Store itself satisfies Provider (handy in tests
-// and when the extension embeds a *Store directly).
-func (s *Store) Store() *Store { return s }
-
-// Close closes the underlying connection.
-func (s *Store) Close() error { return s.db.Close() }
-
-func (s *Store) migrate() error {
-	const schema = `
-CREATE TABLE IF NOT EXISTS calls (
-  seq          INTEGER PRIMARY KEY AUTOINCREMENT,
-  id           TEXT NOT NULL UNIQUE,
-  captured_at  TEXT NOT NULL,
-  integration  TEXT NOT NULL,
-  peer_host    TEXT,
-  direction    TEXT,
-  edge_class   TEXT,
-  method       TEXT NOT NULL,
-  route        TEXT NOT NULL,
-  status_code  INTEGER NOT NULL,
-  request_id   TEXT,
-  idem_key     TEXT,
-  trace_id     TEXT,
-  byte_size    INTEGER NOT NULL,
-  pinned       INTEGER NOT NULL DEFAULT 0,
-  promoted_at  TEXT,
-  doc          TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS findings (
-  seq              INTEGER PRIMARY KEY AUTOINCREMENT,
-  id               TEXT NOT NULL UNIQUE,
-  signature        TEXT NOT NULL UNIQUE,
-  kind             TEXT NOT NULL,
-  severity         TEXT NOT NULL,
-  integration      TEXT NOT NULL,
-  endpoint         TEXT NOT NULL,
-  rule             TEXT NOT NULL,
-  source_call_id   TEXT,
-  occurrence_count INTEGER NOT NULL DEFAULT 1,
-  first_seen       TEXT NOT NULL,
-  last_seen        TEXT NOT NULL,
-  detected_at      TEXT NOT NULL,
-  doc              TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS edges (
-  peer_host    TEXT NOT NULL,
-  direction    TEXT NOT NULL,
-  role         TEXT NOT NULL,
-  class        TEXT NOT NULL,
-  first_seen   TEXT NOT NULL,
-  last_seen    TEXT NOT NULL,
-  call_count   INTEGER NOT NULL DEFAULT 0,
-  drift_count  INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (peer_host, direction)
-);
-CREATE INDEX IF NOT EXISTS idx_calls_pinned_seq ON calls(pinned, seq);
-CREATE INDEX IF NOT EXISTS idx_findings_source ON findings(source_call_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_findings_signature ON findings(signature);
-`
-	_, err := s.db.Exec(schema)
-	if err != nil {
-		return fmt.Errorf("migrate: %w", err)
+func appendInt(b []byte, n int) []byte {
+	if n >= 10 {
+		b = appendInt(b, n/10)
 	}
-	return nil
+	return append(b, byte('0'+n%10))
 }
 
-// InsertCall stores a RedactedCall (idempotent on id), discovers/updates the edge
-// it belongs to, and then runs eviction. Edge discovery is keyed by
-// (peer_host, direction) — no target list is configured.
-func (s *Store) InsertCall(c model.RedactedCall) error {
-	doc, err := json.Marshal(c)
-	if err != nil {
-		return fmt.Errorf("marshal call: %w", err)
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	res, err := s.db.Exec(
-		`INSERT OR IGNORE INTO calls
-		  (id, captured_at, integration, peer_host, direction, edge_class, method, route, status_code, request_id, idem_key, trace_id, byte_size, pinned, doc)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)`,
-		c.ID, c.CapturedAt, c.Integration, nullStr(c.PeerHost), nullStr(c.Direction), nullStr(c.EdgeClass),
-		c.Method, c.Route, c.StatusCode,
-		nullStr(c.Correlation.RequestID), nullStr(c.Correlation.IdempotencyKey), nullStr(c.Correlation.TraceID),
-		len(doc), string(doc),
-	)
-	if err != nil {
-		return fmt.Errorf("insert call: %w", err)
-	}
-	// Only fold a genuinely new row into the edge (idempotent replays of the same
-	// id must not double-count call_count).
-	if n, _ := res.RowsAffected(); n > 0 && c.PeerHost != "" {
-		if err := s.upsertEdgeLocked(c.PeerHost, c.Direction, c.EdgeClass, c.CapturedAt); err != nil {
-			return err
-		}
-	}
-	return s.evictLocked()
-}
-
-// upsertEdgeLocked records/updates the edge a call belongs to. role and class
-// fall out of direction / the call's edge.class. Caller must hold s.mu.
-func (s *Store) upsertEdgeLocked(peerHost, direction, class, at string) error {
-	if class == "" {
-		class = edge.Classify(peerHost)
-	}
-	role := edge.Role(direction)
-	_, err := s.db.Exec(
-		`INSERT INTO edges (peer_host, direction, role, class, first_seen, last_seen, call_count, drift_count)
-		   VALUES (?,?,?,?,?,?,1,0)
-		 ON CONFLICT(peer_host, direction) DO UPDATE SET
-		   last_seen  = MAX(edges.last_seen, excluded.last_seen),
-		   first_seen = MIN(edges.first_seen, excluded.first_seen),
-		   call_count = edges.call_count + 1,
-		   class      = excluded.class,
-		   role       = excluded.role`,
-		peerHost, direction, role, class, at, at,
-	)
-	if err != nil {
-		return fmt.Errorf("upsert edge: %w", err)
-	}
-	return nil
-}
-
-// InsertFinding stores a Finding, deduped by signature: a drift is per-endpoint,
-// not per-call (CONTRACTS §4). The FIRST call carrying a signature creates the
-// finding (occurrence_count=1, pinning its representative source call); every
-// subsequent matching call increments occurrence_count + last_seen and creates NO
-// duplicate row. The stored finding id (and thus the flag idempotency key) stays
-// stable across the drift's lifetime.
-func (s *Store) InsertFinding(f model.Finding) error {
-	if f.Signature == "" {
-		f.Signature = f.ComputeSignature()
-	}
-	var sourceCallID *string
-	if f.SourceCallID != nil && *f.SourceCallID != "" {
-		sourceCallID = f.SourceCallID
-	}
-	seen := f.DetectedAt
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Is this signature already known?
-	var existingDoc string
-	var existingOcc int
-	var existingFirst string
-	err := s.db.QueryRow(
-		`SELECT doc, occurrence_count, first_seen FROM findings WHERE signature=?`, f.Signature,
-	).Scan(&existingDoc, &existingOcc, &existingFirst)
-
-	switch {
-	case err == sql.ErrNoRows:
-		// First occurrence — create the finding.
-		f.OccurrenceCount = 1
-		if f.FirstSeen == "" {
-			f.FirstSeen = seen
-		}
-		if f.LastSeen == "" {
-			f.LastSeen = seen
-		}
-		doc, mErr := json.Marshal(f)
-		if mErr != nil {
-			return fmt.Errorf("marshal finding: %w", mErr)
-		}
-		if _, err := s.db.Exec(
-			`INSERT INTO findings
-			  (id, signature, kind, severity, integration, endpoint, rule, source_call_id, occurrence_count, first_seen, last_seen, detected_at, doc)
-			 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			f.ID, f.Signature, f.Kind, f.Severity, f.Integration, f.Endpoint, f.Rule,
-			nullPtr(sourceCallID), f.OccurrenceCount, f.FirstSeen, f.LastSeen, f.DetectedAt, string(doc),
-		); err != nil {
-			return fmt.Errorf("insert finding: %w", err)
-		}
-		if sourceCallID != nil {
-			// pin-on-finding: the representative call stays reproducible.
-			if _, err := s.db.Exec(`UPDATE calls SET pinned=1 WHERE id=?`, *sourceCallID); err != nil {
-				return fmt.Errorf("pin source call: %w", err)
-			}
-			// Attribute the drift to the source call's edge (one per signature).
-			if err := s.bumpEdgeDriftLocked(*sourceCallID); err != nil {
-				return err
-			}
-		}
-		return nil
-
-	case err != nil:
-		return fmt.Errorf("lookup finding by signature: %w", err)
-
-	default:
-		// Repeat occurrence — increment count + last_seen, no duplicate row.
-		var existing model.Finding
-		if uErr := json.Unmarshal([]byte(existingDoc), &existing); uErr != nil {
-			return fmt.Errorf("unmarshal existing finding: %w", uErr)
-		}
-		existing.OccurrenceCount = existingOcc + 1
-		if seen > existing.LastSeen {
-			existing.LastSeen = seen
-		}
-		doc, mErr := json.Marshal(existing)
-		if mErr != nil {
-			return fmt.Errorf("marshal finding: %w", mErr)
-		}
-		if _, err := s.db.Exec(
-			`UPDATE findings SET occurrence_count=?, last_seen=?, doc=? WHERE signature=?`,
-			existing.OccurrenceCount, existing.LastSeen, string(doc), f.Signature,
-		); err != nil {
-			return fmt.Errorf("increment finding occurrence: %w", err)
-		}
-		return nil
-	}
-}
-
-// bumpEdgeDriftLocked increments drift_count on the edge that owns the given
-// source call. Caller must hold s.mu.
-func (s *Store) bumpEdgeDriftLocked(sourceCallID string) error {
-	var peerHost, direction sql.NullString
-	err := s.db.QueryRow(`SELECT peer_host, direction FROM calls WHERE id=?`, sourceCallID).Scan(&peerHost, &direction)
-	if err == sql.ErrNoRows || !peerHost.Valid || peerHost.String == "" {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("lookup source call edge: %w", err)
-	}
-	if _, err := s.db.Exec(
-		`UPDATE edges SET drift_count = drift_count + 1 WHERE peer_host=? AND direction=?`,
-		peerHost.String, direction.String,
-	); err != nil {
-		return fmt.Errorf("bump edge drift: %w", err)
-	}
-	return nil
-}
-
-// PinCall marks a call pinned (kept out of the eviction pool).
-func (s *Store) PinCall(id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	_, err := s.db.Exec(`UPDATE calls SET pinned=1 WHERE id=?`, id)
-	return err
-}
-
-// MarkPromoted implements evict-after-promote: a flagged call is unpinned and
-// stamped promoted_at, returning it to the eviction pool.
-func (s *Store) MarkPromoted(id string) error {
-	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00")
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, err := s.db.Exec(`UPDATE calls SET pinned=0, promoted_at=? WHERE id=?`, now, id); err != nil {
-		return err
-	}
-	return s.evictLocked()
-}
-
-// evictLocked FIFO-evicts oldest pinned=0 rows until both caps are satisfied.
-// Caller must hold s.mu.
-func (s *Store) evictLocked() error {
-	for {
-		var rows int
-		var bytes sql.NullInt64
-		if err := s.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(byte_size),0) FROM calls`).Scan(&rows, &bytes); err != nil {
-			return fmt.Errorf("window stats: %w", err)
-		}
-		overRows := s.maxRows > 0 && rows > s.maxRows
-		overBytes := s.maxBytes > 0 && bytes.Int64 > s.maxBytes
-		if !overRows && !overBytes {
-			return nil
-		}
-		res, err := s.db.Exec(
-			`DELETE FROM calls WHERE seq = (SELECT seq FROM calls WHERE pinned=0 ORDER BY seq ASC LIMIT 1)`,
-		)
-		if err != nil {
-			return fmt.Errorf("evict: %w", err)
-		}
-		n, _ := res.RowsAffected()
-		if n == 0 {
-			// Everything left is pinned; the window can legitimately exceed the
-			// caps to preserve evidence. Stop rather than spin.
-			return nil
-		}
-	}
-}
+// Close closes the underlying connection pool.
+func (b *base) Close() error { return b.db.Close() }
 
 // GetCall returns the stored RedactedCall for id.
-func (s *Store) GetCall(id string) (model.RedactedCall, bool, error) {
+func (b *base) GetCall(id string) (model.RedactedCall, bool, error) {
 	var doc string
-	err := s.db.QueryRow(`SELECT doc FROM calls WHERE id=?`, id).Scan(&doc)
+	err := b.db.QueryRow(b.rebind(`SELECT doc FROM calls WHERE id=?`), id).Scan(&doc)
 	if err == sql.ErrNoRows {
 		return model.RedactedCall{}, false, nil
 	}
@@ -367,42 +132,69 @@ func (s *Store) GetCall(id string) (model.RedactedCall, bool, error) {
 }
 
 // GetFinding returns the stored Finding for id.
-func (s *Store) GetFinding(id string) (model.Finding, bool, error) {
-	var doc string
-	err := s.db.QueryRow(`SELECT doc FROM findings WHERE id=?`, id).Scan(&doc)
-	if err == sql.ErrNoRows {
-		return model.Finding{}, false, nil
-	}
+func (b *base) GetFinding(id string) (model.Finding, bool, error) {
+	fs, err := b.scanFindings(`SELECT doc, occurrence_count, last_seen FROM findings WHERE id=?`, id)
 	if err != nil {
 		return model.Finding{}, false, err
 	}
-	var f model.Finding
-	if err := json.Unmarshal([]byte(doc), &f); err != nil {
-		return model.Finding{}, false, err
+	if len(fs) == 0 {
+		return model.Finding{}, false, nil
 	}
-	return f, true, nil
+	return fs[0], true, nil
 }
 
 // ListCalls returns up to limit most-recent calls, newest first.
-func (s *Store) ListCalls(limit int) ([]model.RedactedCall, error) {
-	return listDocs[model.RedactedCall](s, `SELECT doc FROM calls ORDER BY seq DESC LIMIT ?`, limit)
+func (b *base) ListCalls(limit int) ([]model.RedactedCall, error) {
+	return listDocs[model.RedactedCall](b, `SELECT doc FROM calls ORDER BY seq DESC LIMIT ?`, limit)
 }
 
 // ListFindings returns up to limit most-recent findings, newest first.
-func (s *Store) ListFindings(limit int) ([]model.Finding, error) {
-	return listDocs[model.Finding](s, `SELECT doc FROM findings ORDER BY seq DESC LIMIT ?`, limit)
+func (b *base) ListFindings(limit int) ([]model.Finding, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	return b.scanFindings(`SELECT doc, occurrence_count, last_seen FROM findings ORDER BY seq DESC LIMIT ?`, limit)
+}
+
+// scanFindings runs a query selecting (doc, occurrence_count, last_seen) rows
+// and patches the two column-authoritative counters into the unmarshalled doc.
+// The doc stays frozen as the FIRST occurrence's JSON (keeping the finding id —
+// and thus the flag idempotency key — stable), while dedup advances the
+// counters atomically in their columns.
+func (b *base) scanFindings(query string, args ...any) ([]model.Finding, error) {
+	rows, err := b.db.Query(b.rebind(query), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]model.Finding, 0)
+	for rows.Next() {
+		var doc, lastSeen string
+		var occ int
+		if err := rows.Scan(&doc, &occ, &lastSeen); err != nil {
+			return nil, err
+		}
+		var f model.Finding
+		if err := json.Unmarshal([]byte(doc), &f); err != nil {
+			return nil, err
+		}
+		f.OccurrenceCount = occ
+		f.LastSeen = lastSeen
+		out = append(out, f)
+	}
+	return out, rows.Err()
 }
 
 // ListEdges returns discovered edges. When externalOnly is true, internal
 // same-team edges are excluded (they are classified out of surfacing). Ordered
 // by direction then most-recently-seen so outbound/inbound group naturally.
-func (s *Store) ListEdges(externalOnly bool) ([]model.Edge, error) {
+func (b *base) ListEdges(externalOnly bool) ([]model.Edge, error) {
 	q := `SELECT peer_host, direction, role, class, first_seen, last_seen, call_count, drift_count FROM edges`
 	if externalOnly {
 		q += ` WHERE class = '` + edge.ClassExternal + `'`
 	}
 	q += ` ORDER BY direction ASC, last_seen DESC`
-	rows, err := s.db.Query(q)
+	rows, err := b.db.Query(q)
 	if err != nil {
 		return nil, err
 	}
@@ -418,12 +210,75 @@ func (s *Store) ListEdges(externalOnly bool) ([]model.Edge, error) {
 	return out, rows.Err()
 }
 
+// EdgeCallCountsSince returns the number of stored calls per edge — keyed
+// "<peer_host>|<direction>" — captured at or after sinceISO. ISO-8601 UTC
+// timestamps compare lexically, so plain string comparison is correct. Used by
+// the UI's observed-RPM metric; bounded by the rolling window like everything
+// else here.
+func (b *base) EdgeCallCountsSince(sinceISO string) (map[string]int, error) {
+	rows, err := b.db.Query(b.rebind(
+		`SELECT peer_host, direction, COUNT(*) FROM calls
+		  WHERE captured_at >= ? AND peer_host IS NOT NULL
+		  GROUP BY peer_host, direction`), sinceISO,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]int)
+	for rows.Next() {
+		var host, dir string
+		var n int
+		if err := rows.Scan(&host, &dir, &n); err != nil {
+			return nil, err
+		}
+		out[host+"|"+dir] = n
+	}
+	return out, rows.Err()
+}
+
+// ListSpecInfos returns the loaded provider contracts (metadata only, no doc).
+func (b *base) ListSpecInfos() ([]model.SpecInfo, error) {
+	rows, err := b.db.Query(
+		`SELECT integration, role, COALESCE(peer_host,''), format, COALESCE(title,''),
+		        COALESCE(version,''), COALESCE(docs_url,''), endpoints, loaded_at
+		   FROM spec_infos ORDER BY role DESC, integration ASC`, // self first
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]model.SpecInfo, 0)
+	for rows.Next() {
+		var si model.SpecInfo
+		if err := rows.Scan(&si.Integration, &si.Role, &si.PeerHost, &si.Format, &si.Title,
+			&si.Version, &si.DocsURL, &si.Endpoints, &si.LoadedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, si)
+	}
+	return out, rows.Err()
+}
+
+// GetSpecDoc returns the raw contract document stored for an integration.
+func (b *base) GetSpecDoc(integration string) (raw []byte, format string, ok bool, err error) {
+	var doc string
+	err = b.db.QueryRow(b.rebind(`SELECT doc, format FROM spec_infos WHERE integration=?`), integration).Scan(&doc, &format)
+	if err == sql.ErrNoRows {
+		return nil, "", false, nil
+	}
+	if err != nil {
+		return nil, "", false, err
+	}
+	return []byte(doc), format, true, nil
+}
+
 // listDocs is a package function (Go methods may not have type parameters).
-func listDocs[T any](s *Store, query string, limit int) ([]T, error) {
+func listDocs[T any](b *base, query string, limit int) ([]T, error) {
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := s.db.Query(query, limit)
+	rows, err := b.db.Query(b.rebind(query), limit)
 	if err != nil {
 		return nil, err
 	}
@@ -444,18 +299,18 @@ func listDocs[T any](s *Store, query string, limit int) ([]T, error) {
 }
 
 // Stats reports the current window fill (row count and byte size of calls).
-func (s *Store) Stats() (rows int, bytes int64, err error) {
-	var b sql.NullInt64
-	err = s.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(byte_size),0) FROM calls`).Scan(&rows, &b)
-	return rows, b.Int64, err
+func (b *base) Stats() (rows int, bytes int64, err error) {
+	var bs sql.NullInt64
+	err = b.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(byte_size),0) FROM calls`).Scan(&rows, &bs)
+	return rows, bs.Int64, err
 }
 
 // Counts returns the number of calls and findings currently stored.
-func (s *Store) Counts() (calls int, findings int, err error) {
-	if err = s.db.QueryRow(`SELECT COUNT(*) FROM calls`).Scan(&calls); err != nil {
+func (b *base) Counts() (calls int, findings int, err error) {
+	if err = b.db.QueryRow(`SELECT COUNT(*) FROM calls`).Scan(&calls); err != nil {
 		return
 	}
-	err = s.db.QueryRow(`SELECT COUNT(*) FROM findings`).Scan(&findings)
+	err = b.db.QueryRow(`SELECT COUNT(*) FROM findings`).Scan(&findings)
 	return
 }
 

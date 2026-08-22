@@ -29,7 +29,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 // storeOrError resolves the shared store, writing a 503 and returning nil when
 // it cannot be found (e.g. the store extension is not configured).
-func (e *uiExtension) storeOrError(w http.ResponseWriter) *store.Store {
+func (e *uiExtension) storeOrError(w http.ResponseWriter) store.Store {
 	st := e.resolveStore()
 	if st == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "store extension not available"})

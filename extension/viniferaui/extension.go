@@ -22,7 +22,7 @@ type uiExtension struct {
 
 	host   component.Host
 	stOnce sync.Once
-	st     *store.Store
+	st     store.Store // interface-typed: the nil check in storeOrError must never see a typed-nil pointer
 	cp     *promote.Client
 	server *http.Server
 }
@@ -31,7 +31,7 @@ type uiExtension struct {
 // start in any order, so the store may not have opened its connection when the
 // UI's Start runs — but every extension has started by the time the first HTTP
 // request arrives, so resolving on first use is race-free.
-func (e *uiExtension) resolveStore() *store.Store {
+func (e *uiExtension) resolveStore() store.Store {
 	e.stOnce.Do(func() {
 		for _, ext := range e.host.GetExtensions() {
 			if p, ok := ext.(store.Provider); ok {

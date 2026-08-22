@@ -20,7 +20,7 @@ func consumerCaps() consumer.Capabilities {
 
 type storeExporter struct {
 	logger *zap.Logger
-	st     *store.Store
+	st     store.Store
 }
 
 // start locates the single-owner store extension via host.GetExtensions().

@@ -18,11 +18,20 @@
 # Every key here is frozen in contracts/CONTRACTS.md §8.
 
 extensions:
-  # Single SQLite owner. db_path MUST be on a persistent volume (PVC).
+  # The store extension owns the single in-process store handle. Two backends
+  # (docs/STORE.md): embedded sqlite (default — one pod per db file, db_path on
+  # a PVC) or a shared postgres database (multiple collector pods, no PVC).
   viniferastore:
-    db_path: /data/vinifera.db
+    backend: sqlite # default; may be omitted
+    db_path: /data/vinifera.db # required iff backend=sqlite — MUST be on a persistent volume (PVC)
     window_max_rows: 10000
     window_max_bytes: 268435456 # 256 MiB
+    # --- postgres variant (multi-pod / BYO-DB) --------------------------------
+    # backend: postgres
+    # dsn: ${env:VINIFERA_PG_DSN} # required iff backend=postgres; logged redacted only
+    # db_path: /data/vinifera.db  # OPTIONAL here: one-shot import of the legacy
+    #                             # sqlite file's evidence at start, then renamed
+    #                             # *.migrated (see docs/STORE.md)
 
   # localhost UI + read API + POST /api/flag -> control plane.
   viniferaui:
@@ -48,9 +57,13 @@ processors:
   # to a discovered edge by host.
   viniferadrift:
     integration_id: acme-payments # OPTIONAL — labels findings from this spec
-    spec_path: /etc/vinifera/spec-v1.yaml # OPTIONAL — empty disables live-vs-spec
+    spec_path: /etc/vinifera/spec-v1.yaml # OPTIONAL — empty disables live-vs-spec (validates OUTBOUND calls)
     spec_v2_path: /etc/vinifera/spec-v2.yaml # optional — enables the version-diff finding
     peer_host: api.acme.test # optional — scope this spec to one discovered edge by host
+    # The contract YOU publish as a provider: validates your INBOUND responses so
+    # providers see their own drift, not just their dependencies'.
+    self_spec_path: /etc/vinifera/self-spec.yaml # OPTIONAL — empty disables self validation
+    self_integration_id: self # optional — labels self findings (default "self"; must differ from integration_id)
 
 exporters:
   # Discovers the viniferastore extension via the collector host; nothing to tune.

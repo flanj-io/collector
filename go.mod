@@ -6,6 +6,7 @@ require (
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2
 	github.com/getkin/kin-openapi v0.146.0
 	github.com/google/uuid v1.6.0
+	github.com/jackc/pgx/v5 v5.10.0
 	github.com/nyaruka/phonenumbers v1.8.1
 	github.com/oasdiff/oasdiff v1.29.1
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
@@ -21,6 +22,9 @@ require (
 	github.com/go-openapi/swag/jsonname v0.25.5 // indirect
 	github.com/gorilla/mux v1.8.0 // indirect
 	github.com/hashicorp/go-version v1.9.0 // indirect
+	github.com/jackc/pgpassfile v1.0.0 // indirect
+	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
+	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
@@ -38,6 +42,7 @@ require (
 	github.com/yargevad/filepathx v1.0.0 // indirect
 	go.opentelemetry.io/collector/featuregate v1.65.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
+	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
