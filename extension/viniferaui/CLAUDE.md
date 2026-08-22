@@ -13,6 +13,10 @@ API + the flag action.
 - Flag action: `POST /api/flag` → assembles the CP flag body from the stored
   call + finding and POSTs `cp_base_url/api/v1/flags` (Bearer `cp_deploy_token`);
   on success marks the call promoted (evict-after-promote).
+- Peek-link relay: `POST /api/peek-link` (+ `/api/peek-link/revoke`) → relays
+  copy-link mint / regenerate / revoke to the CP thread peek-link endpoints
+  (channel attribution on the CP token record; the UI never holds the deploy
+  token). Backs the flag flow's channel picker + Copy link + Revoke controls.
 
 **Loopback only.** `ui_endpoint` is validated to a loopback address — the
 collector is outbound-only; nothing serves off-host.

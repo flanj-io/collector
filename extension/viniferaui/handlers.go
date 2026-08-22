@@ -17,6 +17,8 @@ func (e *uiExtension) routes() http.Handler {
 	mux.HandleFunc("/api/calls", e.handleCalls)
 	mux.HandleFunc("/api/findings", e.handleFindings)
 	mux.HandleFunc("/api/flag", e.handleFlag)
+	mux.HandleFunc("/api/peek-link", e.handlePeekLink)
+	mux.HandleFunc("/api/peek-link/revoke", e.handlePeekLinkRevoke)
 	mux.Handle("/", e.spaHandler())
 	return mux
 }
@@ -212,6 +214,70 @@ func (e *uiExtension) handleFlag(w http.ResponseWriter, r *http.Request) {
 		e.telemetry.Logger.Warn("flag succeeded but mark-promoted failed: " + err.Error())
 	}
 	writeJSON(w, code, resp)
+}
+
+// peekLinkRequestBody is the UI -> collector copy-link payload. The UI never holds
+// the deploy token; this relays to the CP thread peek-link endpoints.
+type peekLinkRequestBody struct {
+	ThreadID           string `json:"thread_id"`
+	Channel            string `json:"channel"`
+	RevokeExisting     bool   `json:"revoke_existing"`
+	CardEndpointDetail *bool  `json:"card_endpoint_detail"`
+}
+
+// handlePeekLink mints a channel-tagged token on the thread's per-thread link
+// (copy-link / regenerate). Channel attribution lives on the CP token record.
+func (e *uiExtension) handlePeekLink(w http.ResponseWriter, r *http.Request) {
+	body, ok := e.decodePeekLinkBody(w, r)
+	if !ok {
+		return
+	}
+	resp, code, err := e.cp.PostPeekLink(r.Context(), body.ThreadID, promote.PeekLinkRequest{
+		Channel:            body.Channel,
+		RevokeExisting:     body.RevokeExisting,
+		CardEndpointDetail: body.CardEndpointDetail,
+	})
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "control-plane peek-link failed: " + err.Error()})
+		return
+	}
+	writeJSON(w, code, resp)
+}
+
+// handlePeekLinkRevoke revokes every outstanding token on the thread (immediate).
+func (e *uiExtension) handlePeekLinkRevoke(w http.ResponseWriter, r *http.Request) {
+	body, ok := e.decodePeekLinkBody(w, r)
+	if !ok {
+		return
+	}
+	revoked, code, err := e.cp.RevokePeekLinks(r.Context(), body.ThreadID)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "control-plane revoke failed: " + err.Error()})
+		return
+	}
+	writeJSON(w, code, map[string]int{"revoked": revoked})
+}
+
+func (e *uiExtension) decodePeekLinkBody(w http.ResponseWriter, r *http.Request) (peekLinkRequestBody, bool) {
+	var body peekLinkRequestBody
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST only"})
+		return body, false
+	}
+	if e.cp == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "control plane not configured (set cp_base_url + cp_deploy_token)"})
+		return body, false
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return body, false
+	}
+	if body.ThreadID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "thread_id is required"})
+		return body, false
+	}
+	return body, true
 }
 
 // spaHandler serves the embedded Vue SPA, falling back to index.html so client
