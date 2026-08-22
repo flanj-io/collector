@@ -50,6 +50,10 @@ type RedactedCall struct {
 	// vinifera.peer.host). Local discovery metadata; not part of the frozen
 	// RedactedCall surface but carried for edge attribution.
 	PeerHost string `json:"peer_host,omitempty"`
+	// PeerAddr is the peer's socket address (IP) when the SDK captured one
+	// (CONTRACTS §2 vinifera.peer.addr, optional). Transport detail for display;
+	// never an identity or edge key.
+	PeerAddr string `json:"peer_addr,omitempty"`
 	// EdgeClass is the SDK/heuristic classification of PeerHost: external|internal.
 	EdgeClass             string            `json:"edge_class,omitempty"`
 	Method                string            `json:"method"`

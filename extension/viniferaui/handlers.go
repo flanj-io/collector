@@ -1,10 +1,13 @@
 package viniferaui
 
 import (
+	"bytes"
 	"encoding/json"
 	"io/fs"
 	"net/http"
+	"time"
 
+	"github.com/vinifera-io/collector/internal/model"
 	"github.com/vinifera-io/collector/internal/promote"
 	"github.com/vinifera-io/collector/internal/store"
 )
@@ -16,6 +19,8 @@ func (e *uiExtension) routes() http.Handler {
 	mux.HandleFunc("/api/edges", e.handleEdges)
 	mux.HandleFunc("/api/calls", e.handleCalls)
 	mux.HandleFunc("/api/findings", e.handleFindings)
+	mux.HandleFunc("/api/contracts", e.handleContracts)
+	mux.HandleFunc("/api/contracts/spec", e.handleContractSpec)
 	mux.HandleFunc("/api/flag", e.handleFlag)
 	mux.HandleFunc("/api/peek-link", e.handlePeekLink)
 	mux.HandleFunc("/api/peek-link/revoke", e.handlePeekLinkRevoke)
@@ -63,8 +68,16 @@ func (e *uiExtension) handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleEdges returns the discovered EXTERNAL edges (inbound + outbound). Internal
-// same-team edges are classified out of surfacing and never returned here.
+// edgeWithRPM decorates a discovered edge with its observed request rate:
+// calls captured over the trailing 60 seconds, i.e. calls/minute.
+type edgeWithRPM struct {
+	model.Edge
+	RPM float64 `json:"rpm"`
+}
+
+// handleEdges returns the discovered EXTERNAL edges (inbound + outbound), each
+// carrying an observed RPM over the trailing minute. Internal same-team edges
+// are classified out of surfacing and never returned here.
 func (e *uiExtension) handleEdges(w http.ResponseWriter, r *http.Request) {
 	st := e.storeOrError(w)
 	if st == nil {
@@ -75,20 +88,70 @@ func (e *uiExtension) handleEdges(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	outbound := make([]any, 0)
-	inbound := make([]any, 0)
+	since := time.Now().UTC().Add(-time.Minute).Format("2006-01-02T15:04:05Z")
+	counts, err := st.EdgeCallCountsSince(since)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	all := make([]edgeWithRPM, 0, len(edges))
+	outbound := make([]edgeWithRPM, 0)
+	inbound := make([]edgeWithRPM, 0)
 	for _, ed := range edges {
+		er := edgeWithRPM{Edge: ed, RPM: float64(counts[ed.PeerHost+"|"+ed.Direction])}
+		all = append(all, er)
 		if ed.Direction == "server" {
-			inbound = append(inbound, ed)
+			inbound = append(inbound, er)
 		} else {
-			outbound = append(outbound, ed)
+			outbound = append(outbound, er)
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"edges":    edges,
+		"edges":    all,
 		"outbound": outbound,
 		"inbound":  inbound,
 	})
+}
+
+// handleContracts returns the provider contracts (specs) the drift processor
+// has loaded — what the Contract tab renders per provider.
+func (e *uiExtension) handleContracts(w http.ResponseWriter, r *http.Request) {
+	st := e.storeOrError(w)
+	if st == nil {
+		return
+	}
+	infos, err := st.ListSpecInfos()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"contracts": infos})
+}
+
+// handleContractSpec serves the raw contract document for one integration
+// (?integration=...), exactly as the drift processor loaded it.
+func (e *uiExtension) handleContractSpec(w http.ResponseWriter, r *http.Request) {
+	st := e.storeOrError(w)
+	if st == nil {
+		return
+	}
+	integration := r.URL.Query().Get("integration")
+	raw, _, ok, err := st.GetSpecDoc(integration)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no contract loaded for integration"})
+		return
+	}
+	ct := "application/yaml"
+	if len(bytes.TrimSpace(raw)) > 0 && bytes.TrimSpace(raw)[0] == '{' {
+		ct = "application/json"
+	}
+	w.Header().Set("Content-Type", ct+"; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(raw)
 }
 
 func (e *uiExtension) handleCalls(w http.ResponseWriter, r *http.Request) {

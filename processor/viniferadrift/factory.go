@@ -11,6 +11,7 @@ package viniferadrift
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/consumer"
@@ -54,6 +55,11 @@ func createLogsProcessor(
 			return nil, fmt.Errorf("viniferadrift: load spec %q: %w", c.SpecPath, err)
 		}
 		dp.doc = doc
+		// Keep the raw document too: at Start it is recorded in the shared store
+		// so the local UI can link to the exact contract being validated.
+		if raw, err := os.ReadFile(c.SpecPath); err == nil {
+			dp.rawSpec = raw
+		}
 
 		// Compute the version-diff findings once, at load, if a v2 spec is provided.
 		if c.SpecV2Path != "" {
@@ -65,9 +71,23 @@ func createLogsProcessor(
 		}
 	}
 
+	// The org's OWN contract (we-as-provider): validates INBOUND responses so a
+	// provider sees its own drift, not just its dependencies'. Also optional.
+	if c.SelfSpecPath != "" {
+		doc, err := drift.LoadSpecFile(c.SelfSpecPath)
+		if err != nil {
+			return nil, fmt.Errorf("viniferadrift: load self spec %q: %w", c.SelfSpecPath, err)
+		}
+		dp.selfDoc = doc
+		if raw, err := os.ReadFile(c.SelfSpecPath); err == nil {
+			dp.rawSelfSpec = raw
+		}
+	}
+
 	return processorhelper.NewLogs(
 		ctx, set, cfg, next,
 		dp.processLogs,
 		processorhelper.WithCapabilities(consumer.Capabilities{MutatesData: true}),
+		processorhelper.WithStart(dp.start),
 	)
 }

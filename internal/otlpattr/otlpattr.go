@@ -22,7 +22,10 @@ const (
 	AttrRecordType     = "vinifera.record.type"
 	AttrDirection      = "vinifera.direction"
 	AttrPeerHost       = "vinifera.peer.host"
-	AttrEdgeClass      = "vinifera.edge.class"
+	// AttrPeerAddr is the optional socket address (IP) of the peer — transport
+	// detail alongside the peer.host identity; omitted when unknown.
+	AttrPeerAddr  = "vinifera.peer.addr"
+	AttrEdgeClass = "vinifera.edge.class"
 	AttrCaptureBodies  = "vinifera.capture.bodies"
 	AttrIntegration    = "vinifera.integration"
 	AttrMethod         = "vinifera.http.method"
@@ -145,6 +148,7 @@ func CallFromRecord(lr plog.LogRecord) model.RedactedCall {
 		Integration:           getStr(m, AttrIntegration),
 		Direction:             getStr(m, AttrDirection),
 		PeerHost:              peerHost,
+		PeerAddr:              getStr(m, AttrPeerAddr),
 		EdgeClass:             edgeClass,
 		Method:                getStr(m, AttrMethod),
 		URL:                   getStr(m, AttrURLFull),

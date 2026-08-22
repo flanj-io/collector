@@ -13,7 +13,8 @@ export default defineConfig({
   server: {
     port: 5336,
     proxy: {
-      '/api': 'http://127.0.0.1:5335'
+      // VINIFERA_API_PROXY lets dev point at a non-default collector (or a mock).
+      '/api': process.env.VINIFERA_API_PROXY || 'http://127.0.0.1:5335'
     }
   }
 });

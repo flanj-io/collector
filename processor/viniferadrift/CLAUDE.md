@@ -28,10 +28,18 @@ store dedups on it — the first call creates the finding, later calls increment
 
 - `factory.go` — loads `spec_path` at construction (bad spec fails the build
   fast); precomputes version-diff findings once if `spec_v2_path` is set.
-- `config.go` — frozen keys `integration_id`, `spec_path`, `spec_v2_path`
-  (CONTRACTS §8).
+- `config.go` — frozen keys `integration_id`, `spec_path`, `spec_v2_path`,
+  `self_spec_path`, `self_integration_id` (CONTRACTS §8). `spec_path` validates
+  OUTBOUND (client) calls; `self_spec_path` is the contract THIS org publishes
+  and validates INBOUND (server) responses — self findings are relabeled to
+  `self_integration_id` (default `self`, must differ from `integration_id`)
+  with their signature recomputed, so self and provider drift never merge.
 - `processor.go` — per-batch live-vs-spec detection + one-time version-diff
   injection; appends finding records under a fresh ResourceLogs/ScopeLogs.
+
+At Start the processor records each loaded contract (provider + self) into the
+shared store (`PutSpecInfo` via `store.Provider`) so the local UI's Contracts
+tab can link title/version/docs and serve the raw spec document.
 
 ## Detection lives in `internal/drift`
 

@@ -1,5 +1,7 @@
 package viniferadrift
 
+import "errors"
+
 // Config configures the drift detector. Keys are frozen in CONTRACTS §8.
 //
 // Everything here is OPTIONAL: the collector auto-discovers edges from observed
@@ -20,6 +22,15 @@ type Config struct {
 	// against the loaded spec.
 	PeerHost string `mapstructure:"peer_host"`
 
+	// SelfSpecPath is the org's OWN OpenAPI spec — the contract THIS org
+	// publishes as a provider. When set, INBOUND (server-direction) responses are
+	// validated against it, so providers see their own drift, not just their
+	// dependencies'. Empty disables self validation.
+	SelfSpecPath string `mapstructure:"self_spec_path"`
+	// SelfIntegrationID labels findings from the self spec (default "self").
+	// Must differ from integration_id so self and provider findings never merge.
+	SelfIntegrationID string `mapstructure:"self_integration_id"`
+
 	// prevent unkeyed literal initialization
 	_ struct{}
 }
@@ -27,5 +38,16 @@ type Config struct {
 // Validate implements component.ConfigValidator. Nothing is required — a bare
 // `viniferadrift: {}` is valid and makes the processor a pass-through.
 func (c *Config) Validate() error {
+	if c.SelfSpecPath != "" && c.selfIntegration() == c.IntegrationID {
+		return errors.New("viniferadrift: self_integration_id must differ from integration_id (self and provider findings must not merge)")
+	}
 	return nil
+}
+
+// selfIntegration returns the label for self-spec findings ("self" by default).
+func (c *Config) selfIntegration() string {
+	if c.SelfIntegrationID != "" {
+		return c.SelfIntegrationID
+	}
+	return "self"
 }

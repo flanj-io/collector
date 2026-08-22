@@ -6,6 +6,7 @@
   "description": "Vinifera Collector local UI — Health divergence + Contract drift, with a flag action. Served embedded by the viniferaui extension.",
   "scripts": {
     "dev": "vite",
+    "dev:mock": "VINIFERA_API_PROXY=http://127.0.0.1:5399 vite",
     "build": "vite build",
     "preview": "vite preview"
   },
