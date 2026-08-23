@@ -22,6 +22,18 @@ const (
 	pgLockMigrate int64 = 0x76696e6600000003 // serialises the one-shot sqlite import
 )
 
+// pgLockNSCallPin is the namespace (first int4 key) of the per-call advisory
+// xact lock pg_advisory_xact_lock(pgLockNSCallPin, hashtext(call_id)). The
+// two-int4 form is a separate keyspace from the int8 keys above. InsertCall
+// takes it as the first statement of its tx; InsertFinding takes it (first
+// occurrence only) before pinning the source call. That serialises the two
+// writers on one call id and closes the READ COMMITTED write-skew window where
+// the finding's pin UPDATE cannot see the uncommitted call AND the call's
+// late-pin EXISTS cannot see the uncommitted finding. Lock order on both sides
+// is lock(id) -> calls row -> edge row, and InsertCall never waits on the
+// findings unique index, so there is no cycle.
+const pgLockNSCallPin int32 = 0x76696e66 // "vinf"
+
 // postgresStore is the shared external backend: N collector pods write to one
 // database concurrently. There is no process-level mutex — every write path is
 // a single atomic statement or a short transaction, and eviction/DDL/migration
@@ -157,6 +169,11 @@ func (p *postgresStore) InsertCall(c model.RedactedCall) error {
 		return fmt.Errorf("insert call: begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	// Serialise against a concurrent InsertFinding on the same call id (see
+	// pgLockNSCallPin). Taken FIRST so this tx holds no row locks while waiting.
+	if _, err := tx.Exec(p.rebind(`SELECT pg_advisory_xact_lock(?, hashtext(?))`), pgLockNSCallPin, c.ID); err != nil {
+		return fmt.Errorf("insert call: lock: %w", err)
+	}
 	res, err := tx.Exec(p.rebind(
 		`INSERT INTO calls
 		  (id, captured_at, integration, peer_host, direction, edge_class, method, route, status_code, request_id, idem_key, trace_id, byte_size, pinned, doc)
@@ -172,15 +189,26 @@ func (p *postgresStore) InsertCall(c model.RedactedCall) error {
 	}
 	// Only fold a genuinely new row into the edge (idempotent replays of the same
 	// id must not double-count call_count).
-	if n, _ := res.RowsAffected(); n > 0 && c.PeerHost != "" {
-		if err := p.upsertEdgeTx(tx, c.PeerHost, c.Direction, c.EdgeClass, c.CapturedAt); err != nil {
+	if n, _ := res.RowsAffected(); n > 0 {
+		if c.PeerHost != "" {
+			if err := p.upsertEdgeTx(tx, c.PeerHost, c.Direction, c.EdgeClass, c.CapturedAt); err != nil {
+				return err
+			}
+		}
+		// A finding may already reference this call (it arrived first): pin it
+		// now, inside the tx, under the per-call lock.
+		if _, err := latePin(tx, p.rebind, c); err != nil {
 			return err
 		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("insert call: commit: %w", err)
 	}
-	return p.evict()
+	// Never let this insert's own eviction take the row it just wrote: the
+	// finding that pins it may be a record behind in the same batch (or in
+	// flight from a front collector). Costs at most one row over the cap in the
+	// degenerate all-pinned regime.
+	return p.evict(c.ID)
 }
 
 // upsertEdgeTx records/updates the edge a call belongs to. The single upsert
@@ -254,6 +282,11 @@ func (p *postgresStore) InsertFinding(f model.Finding) error {
 		// First occurrence — pin + drift attribution commit atomically with the
 		// finding so no pod ever sees a finding whose evidence isn't pinned.
 		if sourceCallID != nil {
+			// Serialise against a concurrent InsertCall of the source call (see
+			// pgLockNSCallPin) BEFORE touching the calls/edges rows.
+			if _, err := tx.Exec(p.rebind(`SELECT pg_advisory_xact_lock(?, hashtext(?))`), pgLockNSCallPin, *sourceCallID); err != nil {
+				return fmt.Errorf("insert finding: lock: %w", err)
+			}
 			if _, err := tx.Exec(p.rebind(`UPDATE calls SET pinned=1 WHERE id=?`), *sourceCallID); err != nil {
 				return fmt.Errorf("pin source call: %w", err)
 			}
@@ -308,14 +341,16 @@ func (p *postgresStore) MarkPromoted(id string) error {
 	if _, err := p.db.Exec(p.rebind(`UPDATE calls SET pinned=0, promoted_at=? WHERE id=?`), now, id); err != nil {
 		return err
 	}
-	return p.evict()
+	return p.evict("")
 }
 
 // evict FIFO-evicts oldest pinned=0 rows until both caps are satisfied — but
-// only on the pod holding the eviction advisory lock. If another pod holds it,
+// only on the pod holding the eviction advisory lock. keepID (may be "") is a
+// row that must survive this pass — the call the caller just inserted, whose
+// pinning finding may not have landed yet. If another pod holds it,
 // this is a no-op: eviction is best-effort, and the next insert on any pod
 // retries, so the window converges (it may transiently overshoot the caps).
-func (p *postgresStore) evict() error {
+func (p *postgresStore) evict(keepID string) error {
 	tx, err := p.db.Begin()
 	if err != nil {
 		return fmt.Errorf("evict: begin: %w", err)
@@ -349,15 +384,15 @@ func (p *postgresStore) evict() error {
 			}
 		}
 		res, err := tx.Exec(
-			`DELETE FROM calls WHERE seq IN (SELECT seq FROM calls WHERE pinned=0 ORDER BY seq ASC LIMIT $1)`, batch,
+			`DELETE FROM calls WHERE seq IN (SELECT seq FROM calls WHERE pinned=0 AND id<>$1 ORDER BY seq ASC LIMIT $2)`, keepID, batch,
 		)
 		if err != nil {
 			return fmt.Errorf("evict: %w", err)
 		}
 		n, _ := res.RowsAffected()
 		if n == 0 {
-			// Everything left is pinned; the window can legitimately exceed the
-			// caps to preserve evidence. Stop rather than spin.
+			// Everything left is pinned (or is keepID); the window can
+			// legitimately exceed the caps to preserve evidence. Stop rather than spin.
 			break
 		}
 	}

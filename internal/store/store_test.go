@@ -536,3 +536,106 @@ func TestSpecInfo_RoundTrip(t *testing.T) {
 		}
 	})
 }
+
+// edgeByKey returns the discovered edge for peer_host|direction (external only
+// are listed), failing the test if it is absent.
+func edgeByKey(t *testing.T, s Store, peerHost, direction string) model.Edge {
+	t.Helper()
+	edges, err := s.ListEdges(true)
+	if err != nil {
+		t.Fatalf("list edges: %v", err)
+	}
+	for _, e := range edges {
+		if e.PeerHost == peerHost && e.Direction == direction {
+			return e
+		}
+	}
+	t.Fatalf("edge %s|%s not discovered (have %d edges)", peerHost, direction, len(edges))
+	return model.Edge{}
+}
+
+// TestLatePin_FindingBeforeCall: a finding can reach the store BEFORE the call
+// it references (front→store hop reordering, a partially applied batch that is
+// re-delivered, a call re-sent after eviction). The store must be
+// order-independent for call/finding pairs: when the call lands it is pinned
+// (so it survives the rolling window) and the edge drift attribution that
+// InsertFinding could not perform is repaired — exactly once, and without
+// disturbing dedup counts, call_count idempotency, or evict-after-promote.
+func TestLatePin_FindingBeforeCall(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, b *testBackend) {
+		const cap = 5
+		s := b.open(t, cap, 0)
+
+		call := makeEdgeCall(1000, "api.acme.test", "client", "external")
+
+		// 1. The finding arrives first — its source call is not in the store yet.
+		if err := s.InsertFinding(driftFinding("0191e8c4-ffff-7000-8000-000000000001", call.ID)); err != nil {
+			t.Fatalf("insert finding (before call): %v", err)
+		}
+		// 2. Then the call lands.
+		if err := s.InsertCall(call); err != nil {
+			t.Fatalf("insert late call: %v", err)
+		}
+		// 3. Flood with unpinned traffic well past the cap.
+		for i := 0; i < 100; i++ {
+			if err := s.InsertCall(makeCall(i)); err != nil {
+				t.Fatalf("insert %d: %v", i, err)
+			}
+		}
+		if _, ok, _ := s.GetCall(call.ID); !ok {
+			t.Fatalf("late-arriving evidence call was evicted — late pin failed")
+		}
+		if rows, _, _ := s.Stats(); rows != cap {
+			t.Errorf("row count = %d, want stable fill at %d with the pinned row retained", rows, cap)
+		}
+
+		// Dedup state untouched: one finding, first occurrence.
+		fs, err := s.ListFindings(10)
+		if err != nil || len(fs) != 1 {
+			t.Fatalf("findings = %d (%v), want 1", len(fs), err)
+		}
+		if fs[0].OccurrenceCount != 1 {
+			t.Errorf("occurrence_count = %d, want 1", fs[0].OccurrenceCount)
+		}
+		// Edge attribution repaired: exactly one drift on the call's edge, and
+		// call_count counts the call once.
+		e := edgeByKey(t, s, "api.acme.test", "client")
+		if e.CallCount != 1 || e.DriftCount != 1 {
+			t.Errorf("edge after late pin: call_count=%d drift_count=%d, want 1/1", e.CallCount, e.DriftCount)
+		}
+
+		// 4. Idempotent replay of the same call: no double count, no double repair.
+		if err := s.InsertCall(call); err != nil {
+			t.Fatalf("replay call: %v", err)
+		}
+		e = edgeByKey(t, s, "api.acme.test", "client")
+		if e.CallCount != 1 || e.DriftCount != 1 {
+			t.Errorf("edge after replay: call_count=%d drift_count=%d, want 1/1", e.CallCount, e.DriftCount)
+		}
+
+		// 5. A repeat occurrence of the drift bumps the count only.
+		if err := s.InsertFinding(driftFinding("0191e8c4-ffff-7000-8000-000000000002", call.ID)); err != nil {
+			t.Fatalf("repeat finding: %v", err)
+		}
+		fs, _ = s.ListFindings(10)
+		if len(fs) != 1 || fs[0].OccurrenceCount != 2 {
+			t.Errorf("after repeat: findings=%d occurrence=%d, want 1/2", len(fs), fs[0].OccurrenceCount)
+		}
+		if e = edgeByKey(t, s, "api.acme.test", "client"); e.DriftCount != 1 {
+			t.Errorf("drift_count after repeat = %d, want 1 (one per signature)", e.DriftCount)
+		}
+
+		// 6. evict-after-promote still applies to a late-pinned call.
+		if err := s.MarkPromoted(call.ID); err != nil {
+			t.Fatalf("mark promoted: %v", err)
+		}
+		for i := 100; i < 110; i++ {
+			if err := s.InsertCall(makeCall(i)); err != nil {
+				t.Fatalf("insert %d: %v", i, err)
+			}
+		}
+		if _, ok, _ := s.GetCall(call.ID); ok {
+			t.Errorf("promoted call should re-enter the eviction pool and evict")
+		}
+	})
+}

@@ -24,6 +24,7 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 
 	"github.com/vinifera-io/collector/internal/edge"
 	"github.com/vinifera-io/collector/internal/model"
@@ -76,6 +77,54 @@ type Provider interface {
 type base struct {
 	db     *sql.DB
 	rebind func(string) string
+}
+
+// execer is the subset of *sql.DB / *sql.Tx the shared write helpers need.
+type execer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+// latePin closes the "finding before its call" gap. InsertFinding pins its
+// source call and attributes the drift to the call's edge only if the call row
+// exists at that moment; a finding that arrives first (cross-request reordering
+// between a front collector and the store pod, a partially applied batch that
+// is re-delivered, a call re-sent after eviction) would otherwise leave its
+// evidence unpinned forever, because repeat occurrences never re-pin. So when a
+// genuinely NEW call row lands (RowsAffected>0 — an existing row was pinned
+// when its finding came, or was promoted and must not be re-pinned), pin it now
+// if any finding already references it and repair the edge drift_count that
+// was silently skipped.
+//
+// Callers invoke it after the edge upsert and under their backend's
+// serialisation against InsertFinding: the store mutex on sqlite; the insert tx
+// holding the per-call advisory lock on postgres (see pgLockNSCallPin). The
+// store is thereby order-independent for call/finding pairs.
+func latePin(ex execer, rebind func(string) string, c model.RedactedCall) (pinned bool, err error) {
+	res, err := ex.Exec(rebind(
+		`UPDATE calls SET pinned=1
+		  WHERE id=? AND pinned=0
+		    AND EXISTS (SELECT 1 FROM findings WHERE source_call_id=?)`),
+		c.ID, c.ID,
+	)
+	if err != nil {
+		return false, fmt.Errorf("late pin: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return false, nil
+	}
+	if c.PeerHost != "" {
+		// One bump per finding that references this call — exactly what
+		// bumpEdgeDrift would have done had the call been present.
+		if _, err := ex.Exec(rebind(
+			`UPDATE edges
+			    SET drift_count = drift_count + (SELECT COUNT(*) FROM findings WHERE source_call_id=?)
+			  WHERE peer_host=? AND direction=?`),
+			c.ID, c.PeerHost, c.Direction,
+		); err != nil {
+			return false, fmt.Errorf("late pin: repair edge drift: %w", err)
+		}
+	}
+	return true, nil
 }
 
 // rebindIdentity leaves `?` placeholders untouched (sqlite).

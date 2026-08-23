@@ -105,11 +105,11 @@ func copyPinnedCalls(src *sql.DB, tx *sql.Tx) (int, error) {
 	n := 0
 	for rows.Next() {
 		var (
-			id, capturedAt, integration, method, route, doc      string
-			peerHost, direction, edgeClass                       sql.NullString
-			requestID, idemKey, traceID, promotedAt              sql.NullString
-			statusCode, pinned                                   int
-			byteSize                                             int64
+			id, capturedAt, integration, method, route, doc string
+			peerHost, direction, edgeClass                  sql.NullString
+			requestID, idemKey, traceID, promotedAt         sql.NullString
+			statusCode, pinned                              int
+			byteSize                                        int64
 		)
 		if err := rows.Scan(&id, &capturedAt, &integration, &peerHost, &direction, &edgeClass, &method, &route,
 			&statusCode, &requestID, &idemKey, &traceID, &byteSize, &pinned, &promotedAt, &doc); err != nil {

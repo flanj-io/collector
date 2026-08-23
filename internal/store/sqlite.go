@@ -146,12 +146,23 @@ func (s *sqliteStore) InsertCall(c model.RedactedCall) error {
 	}
 	// Only fold a genuinely new row into the edge (idempotent replays of the same
 	// id must not double-count call_count).
-	if n, _ := res.RowsAffected(); n > 0 && c.PeerHost != "" {
-		if err := s.upsertEdgeLocked(c.PeerHost, c.Direction, c.EdgeClass, c.CapturedAt); err != nil {
+	if n, _ := res.RowsAffected(); n > 0 {
+		if c.PeerHost != "" {
+			if err := s.upsertEdgeLocked(c.PeerHost, c.Direction, c.EdgeClass, c.CapturedAt); err != nil {
+				return err
+			}
+		}
+		// A finding may already reference this call (it arrived first): pin it
+		// now. Atomic vs InsertFinding because both hold s.mu.
+		if _, err := latePin(s.db, s.rebind, c); err != nil {
 			return err
 		}
 	}
-	return s.evictLocked()
+	// Never let this insert's own eviction take the row it just wrote: the
+	// finding that pins it may be a record behind in the same batch (or in
+	// flight from a front collector). Costs at most one row over the cap in the
+	// degenerate all-pinned regime.
+	return s.evictLocked(c.ID)
 }
 
 // upsertEdgeLocked records/updates the edge a call belongs to. role and class
@@ -277,15 +288,17 @@ func (s *sqliteStore) MarkPromoted(id string) error {
 	if _, err := s.db.Exec(`UPDATE calls SET pinned=0, promoted_at=? WHERE id=?`, now, id); err != nil {
 		return err
 	}
-	return s.evictLocked()
+	return s.evictLocked("")
 }
 
 // evictLocked FIFO-evicts oldest pinned=0 rows until both caps are satisfied.
+// keepID (may be "") is a row that must survive this pass — the call the
+// caller just inserted, whose pinning finding may not have landed yet.
 // Row overage is deleted in batches (steady state is a batch of 1; bursts —
 // e.g. a lowered cap — catch up 256 rows per statement); byte overage converges
 // one row at a time so the window is never cut below its cap. Caller must hold
 // s.mu.
-func (s *sqliteStore) evictLocked() error {
+func (s *sqliteStore) evictLocked(keepID string) error {
 	for {
 		var rows int
 		var bytes sql.NullInt64
@@ -307,15 +320,15 @@ func (s *sqliteStore) evictLocked() error {
 			}
 		}
 		res, err := s.db.Exec(
-			`DELETE FROM calls WHERE seq IN (SELECT seq FROM calls WHERE pinned=0 ORDER BY seq ASC LIMIT ?)`, batch,
+			`DELETE FROM calls WHERE seq IN (SELECT seq FROM calls WHERE pinned=0 AND id<>? ORDER BY seq ASC LIMIT ?)`, keepID, batch,
 		)
 		if err != nil {
 			return fmt.Errorf("evict: %w", err)
 		}
 		n, _ := res.RowsAffected()
 		if n == 0 {
-			// Everything left is pinned; the window can legitimately exceed the
-			// caps to preserve evidence. Stop rather than spin.
+			// Everything left is pinned (or is keepID); the window can
+			// legitimately exceed the caps to preserve evidence. Stop rather than spin.
 			return nil
 		}
 	}

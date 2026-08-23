@@ -12,6 +12,8 @@ import (
 	"os"
 	"sync"
 	"testing"
+
+	"github.com/vinifera-io/collector/internal/model"
 )
 
 // pgPods opens n independent store handles on one freshly reset database.
@@ -240,5 +242,73 @@ func TestPGMultiPod_CrossPodPromote(t *testing.T) {
 	}
 	if _, ok, _ := pods[0].GetCall(pinned.ID); ok {
 		t.Errorf("promoted call should re-enter the eviction pool and evict")
+	}
+}
+
+// TestPGMultiPod_LatePinRace: one pod inserts a call while another pod
+// concurrently inserts the finding that references it — many rounds, each with
+// a fresh call id and its own signature, so the two writers genuinely race on
+// the same id in both orders. Whatever the interleaving, the call must end up
+// pinned (it survives a flood past the cap) and the edge drift_count must be
+// bumped exactly once per finding — never zero (write-skew: neither side saw
+// the other's uncommitted row), never twice (both sides bumped). This is the
+// proof of the per-call advisory lock (pgLockNSCallPin) plus the late pin.
+func TestPGMultiPod_LatePinRace(t *testing.T) {
+	const (
+		rounds = 300
+		cap    = 10
+	)
+	pods := pgPods(t, 3, cap, 0)
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, 2*rounds)
+	ids := make([]string, rounds)
+	for r := 0; r < rounds; r++ {
+		call := makeEdgeCall(100000+r, "api.acme.test", "client", "external")
+		ids[r] = call.ID
+		f := driftFinding(fmt.Sprintf("0191e8c4-aaaa-7000-8000-%012d", r), call.ID)
+		f.Rule = fmt.Sprintf("type-mismatch-%d", r) // one signature per round
+		f.Signature = f.ComputeSignature()
+		wg.Add(2)
+		go func(c model.RedactedCall) {
+			defer wg.Done()
+			if err := pods[0].InsertCall(c); err != nil {
+				errCh <- fmt.Errorf("pod 0 insert call %s: %w", c.ID, err)
+			}
+		}(call)
+		go func(f model.Finding) {
+			defer wg.Done()
+			if err := pods[1].InsertFinding(f); err != nil {
+				errCh <- fmt.Errorf("pod 1 insert finding %s: %w", f.ID, err)
+			}
+		}(f)
+		wg.Wait() // race within a round; rounds sequential so the flood is meaningful
+	}
+	drain(t, errCh)
+
+	// Flood from a third pod: everything unpinned must leave; every raced call
+	// must stay (it is referenced by a finding, whichever side pinned it).
+	for i := 0; i < 5*cap; i++ {
+		if err := pods[2].InsertCall(makeCall(i)); err != nil {
+			t.Fatalf("flood insert %d: %v", i, err)
+		}
+	}
+	for r, id := range ids {
+		if _, ok, _ := pods[2].GetCall(id); !ok {
+			t.Fatalf("round %d: raced call %s was evicted — pin lost under concurrency", r, id)
+		}
+	}
+	if _, findings, err := pods[2].Counts(); err != nil || findings != rounds {
+		t.Fatalf("findings = %d (%v), want %d", findings, err, rounds)
+	}
+	edges, err := pods[2].ListEdges(true)
+	if err != nil || len(edges) != 1 {
+		t.Fatalf("edges = %d (%v), want 1", len(edges), err)
+	}
+	if edges[0].DriftCount != rounds {
+		t.Errorf("edge drift_count = %d, want exactly %d (one bump per finding, regardless of arrival order)", edges[0].DriftCount, rounds)
+	}
+	if edges[0].CallCount != rounds {
+		t.Errorf("edge call_count = %d, want %d", edges[0].CallCount, rounds)
 	}
 }

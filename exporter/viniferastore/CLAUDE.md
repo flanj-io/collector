@@ -28,9 +28,14 @@ it discovers the single-owner `viniferastore` **extension** via
   embedded sqlite or shared postgres — is the extension's concern). Extensions
   all start before pipeline components, so the store is already open when
   `start` runs.
-- Findings before their call is fine (`InsertFinding` pins by id even if the row
-  arrives moments later in the same batch — the drift processor appends findings
-  after the calls in the same `plog.Logs`).
+- **Record order is not load-bearing.** Within one batch the drift processor
+  appends findings AFTER the calls (trailing `ResourceLogs`), so calls insert
+  first; but across the front→store hop a finding can still outrun its call
+  (re-delivered partial batch, cross-request reordering, a call re-sent after
+  eviction). The store handles that itself: `InsertFinding` pins the source
+  call if it exists, and `InsertCall` late-pins a new row that a finding already
+  references (+ repairs the edge drift attribution) — see `internal/store`
+  `latePin`. The exporter never reorders or buffers to compensate.
 
 ## Tests
 
