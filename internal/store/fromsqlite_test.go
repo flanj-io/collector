@@ -41,6 +41,10 @@ func buildLegacyStore(t *testing.T) (path, pinnedID, findingID string) {
 			t.Fatalf("insert finding %d: %v", i, err)
 		}
 	}
+	// Per-deployment settings (e.g. the Connect key) must cross over too.
+	if err := s.PutSetting("connect.collector_key", "ck_legacy_01"); err != nil {
+		t.Fatalf("put legacy setting: %v", err)
+	}
 	return path, pinned.ID, findingID
 }
 
@@ -56,8 +60,11 @@ func TestMigrateFromSQLite_CopiesDurableEvidence(t *testing.T) {
 	if !sum.Ran {
 		t.Fatalf("migration did not run despite the legacy file existing")
 	}
-	if sum.PinnedCalls != 1 || sum.Findings != 1 || sum.Edges != 2 {
-		t.Errorf("summary = %+v, want 1 pinned call, 1 finding, 2 edges", sum)
+	if sum.PinnedCalls != 1 || sum.Findings != 1 || sum.Edges != 2 || sum.Settings != 1 {
+		t.Errorf("summary = %+v, want 1 pinned call, 1 finding, 2 edges, 1 setting", sum)
+	}
+	if v, ok, _ := pg.GetSetting("connect.collector_key"); !ok || v != "ck_legacy_01" {
+		t.Errorf("setting after migration = %q ok=%v, want ck_legacy_01", v, ok)
 	}
 
 	// Pinned evidence crossed over; unpinned window traffic did not.

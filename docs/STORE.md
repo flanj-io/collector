@@ -133,6 +133,18 @@ The e2e harness proves this shape end-to-end: `make gate-tiered` /
 `make stress-tiered` run the unchanged gate, the contracts check and the
 exact-count stress through two fronts into one store pod.
 
+## Settings (per-deployment key/value)
+
+The store also holds a tiny `settings` table — `GetSetting(key)` /
+`PutSetting(key, value)` on the `Store` interface — for collector-level state
+that must outlive a pod and be shared by every pod of a deployment (the Connect
+registration key and confirmed contact, for example). It lives **in the store,
+never in a per-pod file**, so it exists exactly where the evidence does: the
+single sqlite file, the shared postgres database, or the tiered store pod. Values
+are opaque strings (JSON-encode structs); keys are namespaced by convention
+(`connect.*`). The sqlite→postgres import carries it (existing postgres values
+win on conflict). Treat secret-bearing values like the DSN: never log them.
+
 ## Sizing the window
 
 `window_max_rows` / `window_max_bytes` cap the calls table; unpinned rows evict
@@ -158,7 +170,8 @@ extensions:
 At the next start, the collector runs a **one-shot import** of the file's
 durable evidence into postgres — pinned calls (evidence findings reference),
 all findings (stable ids + occurrence counts, so flag idempotency survives),
-and discovered edges — then renames the file to `/data/vinifera.db.migrated`.
+discovered edges, and the per-deployment settings — then renames the file to
+`/data/vinifera.db.migrated`.
 Unpinned window traffic is deliberately *not* copied: it is a rolling buffer
 and refills within minutes. Loaded contracts re-record themselves at start.
 

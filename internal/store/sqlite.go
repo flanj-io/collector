@@ -109,6 +109,11 @@ CREATE TABLE IF NOT EXISTS spec_infos (
   loaded_at    TEXT NOT NULL,
   doc          TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS settings (
+  key          TEXT PRIMARY KEY,
+  value        TEXT NOT NULL,
+  updated_at   TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_calls_pinned_seq ON calls(pinned, seq);
 CREATE INDEX IF NOT EXISTS idx_findings_source ON findings(source_call_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_findings_signature ON findings(signature);

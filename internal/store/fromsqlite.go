@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 )
 
 // MigrationSummary reports what the one-shot sqlite → postgres import did.
@@ -13,6 +14,7 @@ type MigrationSummary struct {
 	PinnedCalls int
 	Findings    int
 	Edges       int
+	Settings    int
 }
 
 // MigrateFromSQLite copies the durable-value rows of a legacy embedded sqlite
@@ -24,8 +26,10 @@ type MigrationSummary struct {
 // What is copied, in original seq order (relative age preserved under the new
 // identities): pinned calls (the evidence findings reference), ALL findings
 // (dedup state: stable ids, occurrence counts — the flag idempotency key
-// derives from the finding id), and edges (discovery history). spec_infos are
-// skipped — the drift processor re-records loaded contracts at every Start.
+// derives from the finding id), edges (discovery history), and settings (the
+// per-deployment KV — e.g. the Connect key — which must not be lost on a backend
+// switch). spec_infos are skipped — the drift processor re-records loaded
+// contracts at every Start.
 //
 // Every insert is ON CONFLICT DO NOTHING and the rename happens only after
 // commit, so the whole operation is retry-safe: any failure aborts the
@@ -72,6 +76,9 @@ func MigrateFromSQLite(dst Store, sqlitePath string) (MigrationSummary, error) {
 		return sum, err
 	}
 	if sum.Edges, err = copyEdges(src, tx); err != nil {
+		return sum, err
+	}
+	if sum.Settings, err = copySettings(src, tx); err != nil {
 		return sum, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -202,4 +209,42 @@ func copyEdges(src *sql.DB, tx *sql.Tx) (int, error) {
 		}
 	}
 	return n, rows.Err()
+}
+
+// copySettings carries the per-deployment KV. DO NOTHING on conflict: a value
+// already set on the postgres side (e.g. by a pod that Connected after the
+// switch) wins over the legacy file's.
+func copySettings(src *sql.DB, tx *sql.Tx) (int, error) {
+	rows, err := src.Query(`SELECT key, value, updated_at FROM settings`)
+	if err != nil {
+		// A legacy file from before the settings table existed has nothing to carry.
+		if isNoSuchTable(err) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("migrate-from-sqlite: read settings: %w", err)
+	}
+	defer rows.Close()
+	n := 0
+	for rows.Next() {
+		var key, value, updatedAt string
+		if err := rows.Scan(&key, &value, &updatedAt); err != nil {
+			return n, fmt.Errorf("migrate-from-sqlite: scan setting: %w", err)
+		}
+		res, err := tx.Exec(
+			`INSERT INTO settings (key, value, updated_at) VALUES ($1,$2,$3) ON CONFLICT (key) DO NOTHING`,
+			key, value, updatedAt,
+		)
+		if err != nil {
+			return n, fmt.Errorf("migrate-from-sqlite: insert setting %q: %w", key, err)
+		}
+		if c, _ := res.RowsAffected(); c > 0 {
+			n++
+		}
+	}
+	return n, rows.Err()
+}
+
+// isNoSuchTable reports sqlite's "no such table" error (older legacy files).
+func isNoSuchTable(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "no such table")
 }

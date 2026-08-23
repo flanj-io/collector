@@ -68,10 +68,14 @@ func resetPG(t *testing.T, dsn string) {
 		t.Fatalf("open pg for reset: %v", err)
 	}
 	defer db.Close()
-	if _, err := db.Exec(`DO $$ BEGIN
-		IF EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'calls') THEN
-			TRUNCATE calls, findings, edges, spec_infos RESTART IDENTITY;
-		END IF;
+	// Truncate whichever of the store's tables exist (a test database that predates
+	// a newer table must not break the reset; the schema is applied on open).
+	if _, err := db.Exec(`DO $$ DECLARE t text; BEGIN
+		FOR t IN SELECT table_name FROM information_schema.tables
+		          WHERE table_schema = 'public'
+		            AND table_name IN ('calls','findings','edges','spec_infos','settings') LOOP
+			EXECUTE format('TRUNCATE %I RESTART IDENTITY', t);
+		END LOOP;
 	END $$;`); err != nil {
 		t.Fatalf("reset pg: %v", err)
 	}
@@ -636,6 +640,46 @@ func TestLatePin_FindingBeforeCall(t *testing.T) {
 		}
 		if _, ok, _ := s.GetCall(call.ID); ok {
 			t.Errorf("promoted call should re-enter the eviction pool and evict")
+		}
+	})
+}
+
+// TestSettings_RoundTrip: the per-deployment KV — absent → ok=false; put/get;
+// overwrite wins; survives a reopen (restart); empty key rejected; values are
+// opaque (JSON passes through untouched).
+func TestSettings_RoundTrip(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, b *testBackend) {
+		s := b.open(t, 0, 0)
+		if _, ok, err := s.GetSetting("connect.collector_key"); err != nil || ok {
+			t.Fatalf("absent key: ok=%v err=%v, want ok=false", ok, err)
+		}
+		if err := s.PutSetting("connect.collector_key", "ck_live_01"); err != nil {
+			t.Fatalf("put: %v", err)
+		}
+		if v, ok, _ := s.GetSetting("connect.collector_key"); !ok || v != "ck_live_01" {
+			t.Fatalf("get = %q ok=%v, want ck_live_01", v, ok)
+		}
+		if err := s.PutSetting("connect.collector_key", "ck_live_02"); err != nil {
+			t.Fatalf("overwrite: %v", err)
+		}
+		if v, _, _ := s.GetSetting("connect.collector_key"); v != "ck_live_02" {
+			t.Fatalf("after overwrite = %q, want ck_live_02", v)
+		}
+		js := `{"email":"ops@acme.test","confirmed_at":"2026-08-23T12:00:00Z"}`
+		if err := s.PutSetting("connect.contact", js); err != nil {
+			t.Fatalf("put json: %v", err)
+		}
+		if err := s.PutSetting("", "x"); err == nil {
+			t.Errorf("empty key must be rejected")
+		}
+		// Restart.
+		_ = s.Close()
+		s2 := b.reopen(t, 0, 0)
+		if v, ok, _ := s2.GetSetting("connect.contact"); !ok || v != js {
+			t.Fatalf("after reopen: %q ok=%v", v, ok)
+		}
+		if v, _, _ := s2.GetSetting("connect.collector_key"); v != "ck_live_02" {
+			t.Fatalf("after reopen key = %q", v)
 		}
 	})
 }

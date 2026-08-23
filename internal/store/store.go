@@ -24,7 +24,9 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/vinifera-io/collector/internal/edge"
 	"github.com/vinifera-io/collector/internal/model"
@@ -61,6 +63,15 @@ type Store interface {
 	GetSpecDoc(integration string) (raw []byte, format string, ok bool, err error)
 	Stats() (rows int, bytes int64, err error)
 	Counts() (calls int, findings int, err error)
+	// GetSetting / PutSetting: a tiny per-DEPLOYMENT key/value store for
+	// collector-level state that must outlive a pod and be shared by every pod of
+	// a deployment (e.g. the Connect registration key + confirmed contact). Values
+	// are opaque strings (JSON-encode structs). Lives in the store — never a
+	// per-pod file — so it exists exactly where the evidence does: the single
+	// sqlite file, the shared postgres database, or the tiered store pod. Carried
+	// by the sqlite→postgres import.
+	GetSetting(key string) (value string, ok bool, err error)
+	PutSetting(key, value string) error
 	Close() error
 }
 
@@ -77,6 +88,35 @@ type Provider interface {
 type base struct {
 	db     *sql.DB
 	rebind func(string) string
+}
+
+// GetSetting returns the value stored under key, ok=false when absent.
+func (b *base) GetSetting(key string) (string, bool, error) {
+	var v string
+	err := b.db.QueryRow(b.rebind(`SELECT value FROM settings WHERE key=?`), key).Scan(&v)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("get setting %q: %w", key, err)
+	}
+	return v, true, nil
+}
+
+// PutSetting upserts key=value (single atomic statement on both backends).
+func (b *base) PutSetting(key, value string) error {
+	if key == "" {
+		return errors.New("put setting: empty key")
+	}
+	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00")
+	if _, err := b.db.Exec(b.rebind(
+		`INSERT INTO settings (key, value, updated_at) VALUES (?,?,?)
+		 ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`),
+		key, value, now,
+	); err != nil {
+		return fmt.Errorf("put setting %q: %w", key, err)
+	}
+	return nil
 }
 
 // execer is the subset of *sql.DB / *sql.Tx the shared write helpers need.
