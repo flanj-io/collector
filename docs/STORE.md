@@ -73,7 +73,8 @@ collectors at one database and:
 
 ## Topologies
 
-The same image runs in three shapes; pick per deployment. The store's semantics
+The same image runs in three shapes; pick per deployment (operator view — flows per
+shape and the Kubernetes objects each needs — in [DEPLOYMENT.md](DEPLOYMENT.md)). The store's semantics
 (dedup, pinning, eviction, the UI, the flag) are identical in all three.
 
 | | Single pod | N pods + shared postgres | Tiered: N fronts → 1 store |

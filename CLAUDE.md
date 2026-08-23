@@ -53,7 +53,7 @@ extension/viniferaui/              # localhost HTTP: embed.FS Vue SPA + read API
 ui/                                # Vue/Vite SPA (Overview, Traffic live-tail, provider Contracts, "flag this")
 internal/                          # redact | drift | store | edge | promote | model | otlpattr — the unit-tested logic (internal/CLAUDE.md)
 config/config.example.yaml         # annotated example config (every key frozen in CONTRACTS §8)
-docs/                              # CONCEPTS.md + STORE.md
+docs/                              # CONCEPTS.md + STORE.md (backends/topologies) + DEPLOYMENT.md (shapes, flows, k8s sketches)
 contracts/                         # vendored contract: CONTRACTS.md + fixtures, specs, vectors, schemas — see contracts/README.md
 ```
 

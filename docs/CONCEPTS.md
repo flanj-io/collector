@@ -28,7 +28,8 @@ evidence — the redacted call that proves it.
   applies defense-in-depth redaction, runs drift detection near the source, stores redacted calls in a local
   local store (a rolling window; embedded by default, or a customer-provided Postgres so multiple
   collector pods can share one store), and serves a localhost UI. Headless and outbound-only apart
-  from that UI. See `STORE.md` for backends, sizing, and migration.
+  from that UI. See `STORE.md` for backends, sizing, and migration, and `DEPLOYMENT.md` for the
+  deployment shapes (single pod · N pods + shared postgres · N front collectors → one store pod).
 
 ## Non-negotiables (why the code is shaped the way it is)
 
