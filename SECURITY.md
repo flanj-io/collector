@@ -2,8 +2,9 @@
 
 ## Reporting a Vulnerability
 
-We take the security of Vinifera seriously — this project handles payment-adjacent
-traffic and its whole reason for being is to keep sensitive data from leaking.
+We take the security of Vinifera seriously — this project sits in the path of real API traffic
+that routinely carries sensitive and regulated data, and its whole reason for being is to keep that data
+from leaking.
 
 **Please do not report security vulnerabilities through public GitHub issues.**
 

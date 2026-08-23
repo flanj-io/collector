@@ -12,12 +12,13 @@ emitted as a **Finding** log record (`vinifera.record.type=finding`) flowing
 downstream to the store exporter.
 
 **Technical adherence ONLY** — fields/types/shapes/enums. Never business/economic
-correctness (FX/fees/spreads) — that would be a false-positive storm.
+correctness (pricing, quantities, business rules) — that would be a false-positive storm.
 
 **Everything is OPTIONAL** — the collector auto-discovers edges from traffic and
 never requires a target/integration/spec. With no `spec_path` the processor is a
 pass-through (still stamps `vinifera.call.id`); capture + edge discovery work
-regardless. A loaded spec is matched to one discovered edge by `peer_host`.
+regardless. If `peer_host` is set, the loaded spec is scoped to that one discovered edge;
+otherwise every outbound call is validated against it.
 
 **A drift is per endpoint, not per call.** Each drifting call emits a finding
 record carrying a `signature` (integration|endpoint|kind|rule|field_path); the
@@ -28,7 +29,7 @@ store dedups on it — the first call creates the finding, later calls increment
 
 - `factory.go` — loads `spec_path` at construction (bad spec fails the build
   fast); precomputes version-diff findings once if `spec_v2_path` is set.
-- `config.go` — frozen keys `integration_id`, `spec_path`, `spec_v2_path`,
+- `config.go` — frozen keys `integration_id`, `spec_path`, `spec_v2_path`, `peer_host`,
   `self_spec_path`, `self_integration_id` (CONTRACTS §8). `spec_path` validates
   OUTBOUND (client) calls; `self_spec_path` is the contract THIS org publishes
   and validates INBOUND (server) responses — self findings are relabeled to

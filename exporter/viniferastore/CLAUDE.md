@@ -19,6 +19,7 @@ it discovers the single-owner `viniferastore` **extension** via
 - `exporter.go` — `start` resolves the store (`store.Provider`); `consumeLogs`
   dispatches by `vinifera.record.type`. `InsertFinding` pins the source call
   (pin-on-finding).
+- `config.go` — empty `Config` (nothing to tune; the extension owns the store).
 
 ## Invariants
 

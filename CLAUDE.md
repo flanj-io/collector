@@ -10,19 +10,21 @@ local store (rolling window; embedded SQLite on a PVC by default, or a shared po
 multi-pod deployments — `docs/STORE.md`), and serves a **localhost Vue UI** + a flag action.
 It ships and deploys as **one unit**. Public, **ELv2**.
 
-This one repo intentionally holds three concerns that deploy together (per the build spec): the collector
+This one repo intentionally holds three concerns that deploy together: the collector
 pipeline, the local store, and the local UI.
 
 ## Role in the system
 
 `SDK → OTLP :4318 → [otlp receiver → redaction processor → drift processor → store exporter] → store (sqlite | postgres)`.
 The **UI extension** serves the embedded Vue SPA + a localhost read API
-(`/api/edges|calls|findings|health|contracts`) and a `POST /api/flag` that promotes a redacted call to the control plane
-(`POST /api/v1/flags`). Headless and **outbound-only** except the localhost UI. Nothing inbound off-host.
+(`/api/edges|calls|findings|health|contracts|contracts/spec`), a `POST /api/flag` that promotes a redacted call to the
+control plane (`POST /api/v1/flags`), and `POST /api/peek-link` (+ `/revoke`) relaying peek-link mint/revoke to the CP
+(CONTRACTS §5). Headless and **outbound-only** except the localhost UI. Nothing inbound off-host.
 
 **No target list is configured.** Integration edges are auto-discovered from observed traffic, keyed by
 (`peer.host`, `direction`), classified external vs internal (external-only surfaced on `/api/edges`). Drift
-detection is an OPTIONAL enhancer matched to an edge by host. A drift is **per endpoint**: findings dedup by
+detection is an OPTIONAL enhancer (`peer_host` scopes a loaded spec to one edge; unset, every outbound call is
+validated against it). A drift is **per endpoint**: findings dedup by
 `signature`, so one drift = one finding (with an `occurrence_count`) = one flag.
 
 ## Stack & commands
@@ -30,11 +32,11 @@ detection is an OPTIONAL enhancer matched to an edge by host. A drift is **per e
 - Go (built in Docker — **no host Go required for the artifact**) + a Vue/Vite UI (built to static, embedded
   via `embed.FS`). Pure-Go store drivers, CGO off: `modernc.org/sqlite` + `jackc/pgx/v5`.
 - **The ocb version triad is the #1 build hazard** — keep identical: ocb `v0.159.0`, beta components
-  `v0.159.0`, stable components (`extension`, `config/confighttp`) `v1.65.0`. `otlpreceiver` is **core**, not contrib.
+  `v0.159.0`, stable components (`component`, `extension`, `pdata`) `v1.65.0`; `config/confighttp` is beta (`v0.159.0`). `otlpreceiver` is **core**, not contrib.
 - `docker build -t vinifera-collector .` (multi-stage: node builds UI → go builds binary embedding it).
-- `go test ./...` (unit + contract tests for the custom components). `cd ui && yarn dev` (UI dev server against a running collector).
+- `go test ./...` (unit + contract tests for the custom components). `cd ui && npm run dev` (UI dev server against a running collector).
 
-## Layout (target)
+## Layout
 
 ```
 builder-config.yaml                # the ocb manifest (pins the triad; binds core receiver + custom components)
@@ -45,7 +47,10 @@ exporter/viniferastore/            # writes call + finding records into the stor
 extension/viniferastore/           # SINGLE store owner (sqlite default | postgres for multi-pod); shared via host.GetExtensions()
 extension/viniferaui/              # localhost HTTP: embed.FS Vue SPA + read API + POST /api/flag -> CP
 ui/                                # Vue/Vite SPA (Overview, Traffic live-tail, provider Contracts, "flag this")
-contracts/                         # vendored fixtures (golden OTLP, specs, vectors, schemas)
+internal/                          # redact | drift | store | edge | promote | model | otlpattr — the unit-tested logic (internal/CLAUDE.md)
+config/config.example.yaml         # annotated example config (every key frozen in CONTRACTS §8)
+docs/                              # CONCEPTS.md + STORE.md
+contracts/                         # vendored contract: CONTRACTS.md + fixtures, specs, vectors, schemas — see contracts/README.md
 ```
 
 ## Non-negotiables (do not regress)

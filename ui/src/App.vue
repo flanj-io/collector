@@ -99,7 +99,7 @@ interface FlagShareState {
   peekUrl?: string;
   threadId?: string;
   error?: string;
-  // Copy-link / channel share (the same per-thread link, channel-tagged on the CP token record).
+  // Copy-link / channel share (the same per-thread link, channel-tagged via the §5 request body).
   channel?: string;
   cardDetail?: boolean;
   linkBusy?: boolean;
@@ -719,7 +719,7 @@ onUnmounted(() => timer && window.clearInterval(timer));
             </div>
 
             <!-- Copy-link into the teams' existing channel (email is the fallback above). The
-                 channel tag rides the CP token record, never the URL. -->
+                 channel tag rides the request body, never the URL. -->
             <div v-if="flagState[f.id]?.threadId" class="share">
               <div class="share-row">
                 <span class="share-label">Share into your existing channel:</span>

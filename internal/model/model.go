@@ -1,6 +1,6 @@
 // Package model holds the cross-component record types that travel the
 // collector pipeline and promote to the control plane. Field tags mirror the
-// frozen JSON Schemas in contracts/v1 (redacted-call.schema.json,
+// frozen JSON Schemas in contracts/ (redacted-call.schema.json,
 // finding.schema.json). Readers are tolerant of unknown fields (§7).
 package model
 
@@ -38,7 +38,7 @@ type Redaction struct {
 }
 
 // RedactedCall is the stored, always-redacted representation of one HTTP call.
-// Mirrors contracts/v1/redacted-call.schema.json (readers tolerate the extra
+// Mirrors contracts/redacted-call.schema.json (readers tolerate the extra
 // peer_host/edge_class local-discovery fields — additionalProperties:true).
 type RedactedCall struct {
 	SchemaVersion int    `json:"schema_version"`
@@ -84,7 +84,7 @@ const (
 )
 
 // Finding is a technical-adherence drift record. Mirrors
-// contracts/v1/finding.schema.json.
+// contracts/finding.schema.json.
 type Finding struct {
 	SchemaVersion   int     `json:"schema_version"`
 	ID              string  `json:"id"`
