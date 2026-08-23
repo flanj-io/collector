@@ -21,9 +21,15 @@ collectors `[otlp → redaction → drift → otlphttp]` → ONE **store pod** `
 store + UI` (`config/config.front.example.yaml` / `config.store.example.yaml`, baked as `/etc/vinifera/front.yaml`
 / `store.yaml`).
 The **UI extension** serves the embedded Vue SPA + a localhost read API
-(`/api/edges|calls|findings|health|contracts|contracts/spec`), a `POST /api/flag` that promotes a redacted call to the
-control plane (`POST /api/v1/flags`), and `POST /api/peek-link` (+ `/revoke`) relaying peek-link mint/revoke to the CP
-(CONTRACTS §5). Headless and **outbound-only** except the localhost UI. Nothing inbound off-host.
+(`/api/edges|calls|findings|health|contracts|contracts/spec`) and the **control-plane relay** (CONTRACTS §5, v0.1a):
+**Connect** (`/api/connect` — registers the deployment once with `cp_deploy_token`, persists the per-deployment
+**collector key** in the store settings KV, never logs it; the contact confirms their email with one click),
+`POST /api/flag` (Create thread — requires a Connected collector with a confirmed contact, `412 not_connected |
+contact_unconfirmed` otherwise; promotes the redacted call + finding with the collector key and returns the **thread
+link**) and `/api/threads…` (state summaries, owner handoff `open`, `close` / `reopen`, `replace-link`). Every
+mutating relay route needs `X-Vinifera-UI: 1` + JSON and rejects a foreign `Origin`. The conversation itself lives on
+the CP; the collector shows thread *state* only. Headless and **outbound-only** except the localhost UI. Nothing
+inbound off-host.
 
 **No target list is configured.** Integration edges are auto-discovered from observed traffic, keyed by
 (`peer.host`, `direction`), classified external vs internal (external-only surfaced on `/api/edges`). Drift
@@ -38,7 +44,7 @@ validated against it). A drift is **per endpoint**: findings dedup by
 - **The ocb version triad is the #1 build hazard** — keep identical: ocb `v0.159.0`, beta components
   `v0.159.0`, stable components (`component`, `extension`, `pdata`) `v1.65.0`; `config/confighttp` is beta (`v0.159.0`). `otlpreceiver` is **core**, not contrib.
 - `docker build -t vinifera-collector .` (multi-stage: node builds UI → go builds binary embedding it).
-- `go test ./...` (unit + contract tests for the custom components). `cd ui && npm run dev` (UI dev server against a running collector).
+- `go test ./...` (unit + contract tests for the custom components; the component modules — e.g. `extension/viniferaui` — are their own Go modules, run `go test ./...` inside them too). `cd ui && npm run dev` (UI dev server against a running collector); `npm test` (vitest, pure helpers); `npm run build`.
 
 ## Layout
 
@@ -49,8 +55,8 @@ processor/viniferaredaction/       # defense-in-depth redaction floor (Go; idemp
 processor/viniferadrift/           # live-vs-spec (kin-openapi) + version-diff (oasdiff); emits Finding records
 exporter/viniferastore/            # writes call + finding records into the store
 extension/viniferastore/           # SINGLE store owner (sqlite default | postgres for multi-pod); shared via host.GetExtensions()
-extension/viniferaui/              # localhost HTTP: embed.FS Vue SPA + read API + POST /api/flag -> CP
-ui/                                # Vue/Vite SPA (Overview, Traffic live-tail, provider Contracts, "flag this")
+extension/viniferaui/              # localhost HTTP: embed.FS Vue SPA + read API + CP relay (connect / flag / threads)
+ui/                                # Vue/Vite SPA (Overview, Traffic live-tail, Contracts + Flag sheet, Threads, Settings/Connect)
 internal/                          # redact | drift | store | edge | promote | model | otlpattr — the unit-tested logic (internal/CLAUDE.md)
 config/config.example.yaml         # annotated example config (every key frozen in CONTRACTS §8)
 docs/                              # CONCEPTS.md + STORE.md (backends/topologies) + DEPLOYMENT.md (shapes, flows, k8s sketches)

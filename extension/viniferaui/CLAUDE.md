@@ -13,13 +13,55 @@ API + the flag action.
   internal same-team edges are classified out and never returned.
   `GET /api/contracts` lists the provider contracts the drift processor loaded;
   `GET /api/contracts/spec?integration=...` serves the raw spec document.
-- Flag action: `POST /api/flag` → assembles the CP flag body from the stored
-  call + finding and POSTs `cp_base_url/api/v1/flags` (Bearer `cp_deploy_token`);
-  on success marks the call promoted (evict-after-promote).
-- Peek-link relay: `POST /api/peek-link` (+ `/api/peek-link/revoke`) → relays
-  copy-link mint / regenerate / revoke to the CP thread peek-link endpoints
-  (the `channel` rides the §5 request body, never the URL; the UI never holds the deploy
-  token). Backs the flag flow's channel picker + Copy link + Revoke controls.
+- **Control-plane relay (v0.1a — CONTRACTS §5, spec Step 4b).** The UI never
+  holds a bearer; the relay does, and every mutating route is guarded
+  (`guard.go`): POST only (405), `X-Vinifera-UI: 1` (403 `ui_header_required`),
+  `Content-Type: application/json` (415), no foreign `Origin` (403
+  `forbidden_origin`), never a CORS header. Errors are `{error, message}` with
+  the deck's copy (`messages.go`). Tokens, handoffs and the collector key never
+  reach a log line.
+  - `GET|POST /api/connect` (`connect.go`) — **Connect**: `POST {consumer_display_name,
+    contact_email, contact_display_name?, local_ui_url?}` registers the deployment
+    with the CP (`register`, Bearer `cp_deploy_token` — used ONLY for the first
+    Connect of a deployment), persists the once-returned **collector key** +
+    contact in the store settings KV (`connect.*`, per deployment, shared by
+    every pod; never returned to the UI) → `202 {status:"pending", …}` (`200`
+    when already connected). Display names pass the redaction floor
+    (`internal/redact`, like the flag message) before they are sent or stored.
+    Once a key exists EVERY later register (resend / change of contact) goes out
+    with Bearer **collector key** (`RegisterWithKey`, CONTRACTS-CP §5.1): the
+    same email = resend, key unchanged; a new email = a new pending contact on
+    the same collector, key unchanged — the previously confirmed contact stays
+    usable for threads (`confirmed_contact_email` from `me`) until the new one
+    confirms. `GET` → `{status: disconnected|pending|connected,
+    consumer_display_name, contact_email, contact_display_name,
+    confirmed_contact_email, collector_public_id, registered_at, confirmed_at,
+    local_ui_url}` refreshed from `me` (≤1 CP call / 10s per pod; the UI polls it
+    every 5s while pending).
+  - `POST /api/flag {finding_id, message?, provider_display_name?}` — **Create
+    thread**: `412 {error: not_connected | contact_unconfirmed}` before Connect /
+    the FIRST confirmation — the gate is "a confirmed contact exists"
+    (`confirmed_contact_email` non-null), so a new pending contact never blocks
+    it (a never-confirmed contact is re-checked against the CP right then, so it
+    unlocks the moment the click lands); otherwise assembles the CP
+    flag body from the stored call + finding (`internal/promote`), POSTs it with
+    the collector key, persists a per-finding thread record (`threads.go`,
+    settings KV `thread.finding.<id>` + `threads.index` — ids, endpoint,
+    provider, the current thread link; the index is a read-modify-write with a
+    re-read-before-write + verify retry ×3, residual lost-update race documented
+    on `saveThread`) and marks the call promoted →
+    `{thread_id, thread_public_id, thread_url, state, status, finding_id}`.
+    No email field; nothing is emailed.
+  - `GET /api/threads` — every thread this collector created, each with its CP
+    `summary` (fetched in parallel; CP failure → `summary:null` + `error`).
+    `GET /api/threads/{id}/summary`.
+  - `POST /api/threads/{id}/open` → `{owner_url, expires_at}` — a 10-minute
+    single-use owner handoff the UI opens in a new tab (never stored/logged);
+    `/close` · `/reopen` → the CP's `{state, closed_at, reopened_at}`;
+    `/replace-link` → `{thread_url, expires_at, revoked}` (revoke + mint; the
+    persisted link is updated).
+  - `GET /api/health` also carries `connect_status` (from the store only) and
+    the configured display names.
 
 **Loopback only.** `ui_endpoint` is validated to a loopback address — the
 collector is outbound-only; nothing serves off-host.
@@ -31,9 +73,13 @@ collector is outbound-only; nothing serves off-host.
 - `extension.go` — server lifecycle; **lazy** store resolution (`resolveStore`):
   extensions can start in any order, so the store handle is resolved on first
   use, not at Start.
-- `handlers.go` — the read API + flag handler. The flag body is built by
+- `handlers.go` — the read API + the flag handler. The flag body is built by
   `internal/promote` (which redacts the free-text message defense-in-depth) and
   must conform to `cp-flag-request.schema.json`.
+- `connect.go` — Connect state (store settings KV), `me` refresh cache, the
+  `/api/connect` handlers. `threads.go` — the per-finding thread records + the
+  `/api/threads…` handlers. `guard.go` — the mutating-route guard + CP error
+  mapping. `messages.go` — every user-facing relay string (deck copy).
 - `embed.go` — `//go:embed all:web/dist`.
 - `web/dist/index.html` — committed **placeholder**; the real SPA overwrites it
   at Docker build time (only the placeholder is tracked; `web/dist/assets/` is
@@ -48,8 +94,21 @@ collector is outbound-only; nothing serves off-host.
   `RedactedCall` — raw bodies never existed past redaction-at-source.
 - Flag idempotency key = `flag_<finding.id>` (re-flag returns the existing
   thread).
+- **Create thread needs Connect + a confirmed contact; viewing local data never
+  does.** The collector key is read from the store on every relay call (never
+  cached in a per-pod file) and never logged or returned to the UI.
+- **No user-facing "peek / peek link / magic link / minting / invite / invitee /
+  previewer"** — `naming_test.go` scans `ui/src/**/*.vue|ts` user-facing text +
+  the relay messages (wire identifiers like `peek_url`, `/api/peek/*`, `vpeek_`
+  are allowed).
 
 ## Tests
 
 The flag-body contract conformance + POST headers are tested in
 `internal/promote` against `cp-flag-request.schema.json` and a stub server.
+`handlers_test.go` drives the relay end to end against a stub CP + an in-memory
+store (`fakestore_test.go`): guards on every mutating route, the Connect →
+pending → confirm → flag → threads → open → close/reopen → replace-link walk,
+412/403 pass-through, CP-unreachable behaviour, and a log observer proving the
+key / handoff / thread-link tokens never hit a log line. `naming_test.go` is the
+denylist scan. Run: `go test ./...` in this directory (own module).

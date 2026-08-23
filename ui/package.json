@@ -3,18 +3,20 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "description": "Vinifera Collector local UI — Health divergence + Contract drift, with a flag action. Served embedded by the viniferaui extension.",
+  "description": "Vinifera Collector local UI — Health divergence + Contract drift, Connect + thread links. Served embedded by the viniferaui extension.",
   "scripts": {
     "dev": "vite",
     "dev:mock": "VINIFERA_API_PROXY=http://127.0.0.1:5399 vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run"
   },
   "dependencies": {
     "vue": "^3.5.13"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.2.1",
-    "vite": "^6.0.7"
+    "vite": "^6.0.7",
+    "vitest": "^3.2.7"
   }
 }

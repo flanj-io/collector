@@ -12,8 +12,11 @@ UI embedded in the binary).
 - OTLP receiver → redaction processor → drift detection → local store (rolling window; embedded SQLite on a PVC by default, or a shared Postgres database — see docs/STORE.md).
 - Scales as N stateless front collectors forwarding (OTLP) to one store pod — the same image in two roles, chosen by config (docs/STORE.md "Topologies"; deploy shapes + Kubernetes sketches in docs/DEPLOYMENT.md).
 - Local Vue UI: **Overview** (health + drift findings with the correlation keys that make a finding actionable),
-  **Traffic** (live tail of redacted calls), **Contracts** (the loaded specs), plus a **flag** action that promotes a
-  redacted call to the control plane and copy-link / revoke controls for the resulting peek link.
+  **Traffic** (live tail of redacted calls), **Contracts** (the loaded specs, each finding with **Flag this** → one
+  sheet → **Create thread** → a **thread link** you copy into the channel the two teams already share), **Threads**
+  (state of every thread you created: turn label, opens, Open / Close / Reopen / Replace link) and **Settings**
+  (**Connect** — org name + a one-click-confirmed contact email; required to create thread links, never to view
+  your own data).
 
 Open-source SDK (Apache-2.0) and source-available collector (ELv2); hosted network layer.
 

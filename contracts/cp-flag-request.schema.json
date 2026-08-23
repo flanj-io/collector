@@ -4,14 +4,38 @@
   "title": "CP POST /api/v1/flags request body",
   "type": "object",
   "additionalProperties": false,
-  "required": ["idempotency_key", "consumer_display_name", "invitee_email", "message", "call", "finding"],
+  "required": [
+    "idempotency_key",
+    "consumer_display_name",
+    "message",
+    "call",
+    "finding"
+  ],
   "properties": {
-    "idempotency_key": { "type": "string", "minLength": 1 },
-    "consumer_display_name": { "type": "string", "minLength": 1 },
-    "provider_display_name": { "type": "string" },
-    "invitee_email": { "type": "string", "format": "email" },
-    "message": { "type": "string" },
-    "call": { "$ref": "https://vinifera.io/contracts/v1/redacted-call.schema.json" },
-    "finding": { "$ref": "https://vinifera.io/contracts/v1/finding.schema.json" }
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1
+    },
+    "consumer_display_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "provider_display_name": {
+      "type": "string"
+    },
+    "invitee_email": {
+      "type": "string",
+      "format": "email",
+      "description": "DEPRECATED (v0.1a): optional and ignored \u2014 the CP sends no invite email; the consumer copies the thread link."
+    },
+    "message": {
+      "type": "string"
+    },
+    "call": {
+      "$ref": "https://vinifera.io/contracts/v1/redacted-call.schema.json"
+    },
+    "finding": {
+      "$ref": "https://vinifera.io/contracts/v1/finding.schema.json"
+    }
   }
 }

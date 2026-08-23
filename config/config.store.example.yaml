@@ -40,7 +40,7 @@ extensions:
     consumer_display_name: Acme Consumer Ltd
     provider_display_name: Acme Payments # who the flag is about; defaults to humanized integration_id
     cp_base_url: https://cp.vinifera.test
-    cp_deploy_token: ${env:CP_DEPLOY_TOKEN} # the only outbound auth (Bearer)
+    cp_deploy_token: ${env:CP_DEPLOY_TOKEN} # used once, for Connect (register); the per-deployment collector key it returns lives in the store
 
 receivers:
   otlp:

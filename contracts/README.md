@@ -4,15 +4,15 @@ Everything in this directory except `golden-otlp-server-call.json` is a **byte-i
 canonical contract that lives in the private `e2e` repo at `e2e/contracts/` (`CONTRACTS.md` + `v1/*`).
 It is the agreed language between the SDK, this collector and the control plane — the OTLP wire
 convention the collector ingests, the `RedactedCall`/`Finding` shapes it stores and emits, the redaction
-floor it must enforce bit-for-bit with the TypeScript implementation, the three control-plane endpoints it
-calls, and its frozen runtime config keys. The collector's own tests assert against these files so the
+floor it must enforce bit-for-bit with the TypeScript implementation, the control-plane endpoints it
+calls (Connect, flag, thread state), and its frozen runtime config keys. The collector's own tests assert against these files so the
 repo proves conformance standalone; the `e2e` integration gate is the cross-repo safety net.
 
 ## What is vendored here
 
 | File | Role | Consumed by |
 |---|---|---|
-| `CONTRACTS.md` | the human-readable contract — the **public half** (§2 OTLP ingest, §3/§4 `RedactedCall`/`Finding`, §5 the three CP endpoints this collector calls, §6 redaction floor, §7 versioning, §8 frozen config keys). The control plane's own contract is private and is not vendored here. | — |
+| `CONTRACTS.md` | the human-readable contract — the **public half** (§2 OTLP ingest, §3/§4 `RedactedCall`/`Finding`, §5 the CP endpoints this collector calls — register/me, flags, thread routes, §6 redaction floor, §7 versioning, §8 frozen config keys). The control plane's own contract is private and is not vendored here. | — |
 | `golden-otlp-call.json` | SDK → collector wire fixture: one drifting egress (client-direction) call; ingesting it must yield the expected Finding | `internal/drift/drift_test.go`, `internal/otlpattr/otlpattr_test.go`, CI |
 | `golden-otlp-server-call.json` | **collector-local** fixture (ingress / server-direction call) — *not* part of the canonical set | `internal/otlpattr/otlpattr_test.go` |
 | `spec-v1.yaml`, `spec-v2.yaml` | the mock provider's OpenAPI specs (live-vs-spec validation; v1→v2 version-diff) | `internal/drift/drift_test.go`; baked into the image at `/etc/vinifera/` by the `Dockerfile` |

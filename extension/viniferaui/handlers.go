@@ -12,7 +12,9 @@ import (
 	"github.com/vinifera-io/collector/internal/store"
 )
 
-// routes builds the UI handler: read API under /api/*, the embedded SPA elsewhere.
+// routes builds the UI handler: read API under /api/*, the Connect + thread
+// relay (every mutating route goes through guardMutating), the embedded SPA
+// elsewhere.
 func (e *uiExtension) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", e.handleHealth)
@@ -21,9 +23,14 @@ func (e *uiExtension) routes() http.Handler {
 	mux.HandleFunc("/api/findings", e.handleFindings)
 	mux.HandleFunc("/api/contracts", e.handleContracts)
 	mux.HandleFunc("/api/contracts/spec", e.handleContractSpec)
+	mux.HandleFunc("/api/connect", e.handleConnect)
 	mux.HandleFunc("/api/flag", e.handleFlag)
-	mux.HandleFunc("/api/peek-link", e.handlePeekLink)
-	mux.HandleFunc("/api/peek-link/revoke", e.handlePeekLinkRevoke)
+	mux.HandleFunc("/api/threads", e.handleThreads)
+	mux.HandleFunc("/api/threads/{id}/summary", e.handleThreadSummary)
+	mux.HandleFunc("/api/threads/{id}/open", e.handleThreadOpen)
+	mux.HandleFunc("/api/threads/{id}/close", e.handleThreadClose)
+	mux.HandleFunc("/api/threads/{id}/reopen", e.handleThreadReopen)
+	mux.HandleFunc("/api/threads/{id}/replace-link", e.handleThreadReplaceLink)
 	mux.Handle("/", e.spaHandler())
 	return mux
 }
@@ -56,6 +63,11 @@ func (e *uiExtension) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	calls, findings, _ := st.Counts()
+	// Connect status from the store only (no CP call on the health poll).
+	connect := "disconnected"
+	if cs, err := loadConnect(st); err == nil {
+		connect = cs.status()
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":            "ok",
 		"integration":       e.cfg.IntegrationID,
@@ -64,7 +76,12 @@ func (e *uiExtension) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"calls":             calls,
 		"findings":          findings,
 		"cp_configured":     e.cp != nil,
+		"connect_status":    connect,
 		"collector_version": collectorVersion,
+		// Display names from config: the UI prefills Connect's org field and
+		// names the provider on the Flag sheet with these.
+		"consumer_display_name": e.cfg.ConsumerDisplayName,
+		"provider_display_name": e.cfg.ProviderDisplayName,
 	})
 }
 
@@ -181,11 +198,11 @@ func (e *uiExtension) handleFindings(w http.ResponseWriter, r *http.Request) {
 }
 
 // flagRequestBody is the UI -> collector flag payload (not the CP contract body,
-// which the collector assembles from the stored call + finding).
+// which the collector assembles from the stored call + finding). v0.1a: no
+// email — the consumer copies the Thread link; an `invitee_email` from an old
+// UI build is accepted and ignored.
 type flagRequestBody struct {
 	FindingID           string `json:"finding_id"`
-	InviteeEmail        string `json:"invitee_email"`
-	ConsumerDisplayName string `json:"consumer_display_name"`
 	ProviderDisplayName string `json:"provider_display_name"`
 	Message             string `json:"message"`
 }
@@ -195,25 +212,22 @@ type flagRequestBody struct {
 // canonical implementation in internal/promote.
 func humanizeIntegration(id string) string { return promote.HumanizeIntegration(id) }
 
-// handleFlag promotes the failing call + finding to the control plane, then marks
-// the call promoted (evict-after-promote) on success.
+// handleFlag = Create thread: requires a Connected collector with a confirmed
+// contact (412 not_connected | contact_unconfirmed otherwise — viewing local data
+// never does), promotes the redacted failing call + finding to the control plane
+// with the collector key, persists the thread record (so the finding chip
+// survives reloads) and marks the call promoted (evict-after-promote).
 func (e *uiExtension) handleFlag(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST only"})
-		return
-	}
-	if e.cp == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "control plane not configured (set cp_base_url + cp_deploy_token)"})
+	if !e.guardMutating(w, r) {
 		return
 	}
 	var body flagRequestBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid_json", msgInvalidJSON)
 		return
 	}
-	if body.FindingID == "" || body.InviteeEmail == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "finding_id and invitee_email are required"})
+	if body.FindingID == "" {
+		writeErr(w, http.StatusBadRequest, "missing_fields", msgFindingRequired)
 		return
 	}
 	st := e.storeOrError(w)
@@ -221,39 +235,66 @@ func (e *uiExtension) handleFlag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Connect gate: a key AND a confirmed contact. The gate is "a confirmed
+	// contact exists" (`confirmed_contact_email` from `me`), not "the latest
+	// contact is confirmed" — while a NEW email is pending the previously
+	// confirmed one keeps Create thread available (CONTRACTS-CP §5.3). With
+	// none confirmed yet the CP is re-asked right now (bypassing the me-cache)
+	// so Create thread works the moment the confirmation click lands.
+	cs, err := loadConnect(st)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "store_error", msgStoreUnavailable)
+		return
+	}
+	if cs.CollectorKey == "" {
+		writeErr(w, http.StatusPreconditionFailed, "not_connected", msgNotConnected)
+		return
+	}
+	if !cs.hasConfirmedContact() {
+		cs, _ = e.refreshConnect(r.Context(), st, cs, true)
+		if !cs.hasConfirmedContact() {
+			writeErr(w, http.StatusPreconditionFailed, "contact_unconfirmed", contactUnconfirmedMessage(cs.ContactEmail))
+			return
+		}
+	}
+	cli := e.keyedClient(cs)
+
 	finding, ok, err := st.GetFinding(body.FindingID)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, "store_error", msgStoreUnavailable)
 		return
 	}
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "finding not found"})
+		writeErr(w, http.StatusNotFound, "finding_not_found", msgFindingNotFound)
 		return
 	}
 	if finding.SourceCallID == nil || *finding.SourceCallID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "finding has no source call to flag (version-diff findings are informational)"})
+		writeErr(w, http.StatusBadRequest, "finding_has_no_call", msgFindingNoCall)
 		return
 	}
 	call, ok, err := st.GetCall(*finding.SourceCallID)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, "store_error", msgStoreUnavailable)
 		return
 	}
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "source call not found (may have been evicted)"})
+		writeErr(w, http.StatusNotFound, "call_not_found", msgCallEvicted)
 		return
 	}
 
-	consumerName := body.ConsumerDisplayName
+	// The consumer org is the Connected one (config is the fallback for display
+	// only). Provider name: UI override, then provider_display_name, then the
+	// humanized integration id (CONTRACTS §5/§8).
+	consumerName := cs.ConsumerDisplayName
 	if consumerName == "" {
 		consumerName = e.cfg.ConsumerDisplayName
 	}
-	// Provider name names the flagged side on the peek/thread. Prefer the UI
-	// override, then the configured provider_display_name, then the humanized
-	// integration id (CONTRACTS §5/§8).
 	providerName := body.ProviderDisplayName
 	if providerName == "" {
 		providerName = e.cfg.ProviderDisplayName
+	}
+	if providerName == "" {
+		providerName = humanizeIntegration(call.Integration)
 	}
 	if providerName == "" {
 		providerName = humanizeIntegration(e.cfg.IntegrationID)
@@ -261,86 +302,65 @@ func (e *uiExtension) handleFlag(w http.ResponseWriter, r *http.Request) {
 	req := promote.Build(promote.Input{
 		ConsumerDisplayName: consumerName,
 		ProviderDisplayName: providerName,
-		InviteeEmail:        body.InviteeEmail,
 		Message:             body.Message,
 		Call:                call,
 		Finding:             finding,
 	})
 
-	resp, code, err := e.cp.Post(r.Context(), req)
+	resp, code, err := cli.Post(r.Context(), req)
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "control-plane flag failed: " + err.Error()})
+		if ce := promote.AsCPError(err); ce != nil && ce.Status == http.StatusPreconditionFailed {
+			// The CP disagrees with our cached state — fold it back in.
+			if ce.Code == "contact_unconfirmed" {
+				cs.ContactStatus, cs.ConfirmedAt, cs.ConfirmedContactEmail = contactPending, "", ""
+				_ = saveConnect(st, cs)
+				writeErr(w, http.StatusPreconditionFailed, ce.Code, contactUnconfirmedMessage(cs.ContactEmail))
+				return
+			}
+			writeErr(w, http.StatusPreconditionFailed, "not_connected", msgNotConnected)
+			return
+		}
+		writeCPError(w, err, msgCPUnreachableFlag)
 		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	rec, existed, _ := loadThread(st, finding.ID)
+	if !existed {
+		rec = threadRecord{FindingID: finding.ID, CreatedAt: now}
+	}
+	rec.ThreadID = resp.ThreadID
+	rec.ThreadPublicID = resp.ThreadPublicID
+	rec.Endpoint = finding.Endpoint
+	rec.Provider = providerName
+	rec.Integration = finding.Integration
+	if resp.ThreadURL != "" {
+		rec.ThreadURL = resp.ThreadURL
+	}
+	rec.UpdatedAt = now
+	if err := saveThread(st, rec); err != nil {
+		e.telemetry.Logger.Warn("flag succeeded but persisting the thread record failed: " + err.Error())
 	}
 	// evict-after-promote: unpin + stamp promoted_at so the call re-enters the pool.
 	if err := st.MarkPromoted(call.ID); err != nil {
 		e.telemetry.Logger.Warn("flag succeeded but mark-promoted failed: " + err.Error())
 	}
-	writeJSON(w, code, resp)
-}
-
-// peekLinkRequestBody is the UI -> collector copy-link payload. The UI never holds
-// the deploy token; this relays to the CP thread peek-link endpoints.
-type peekLinkRequestBody struct {
-	ThreadID           string `json:"thread_id"`
-	Channel            string `json:"channel"`
-	RevokeExisting     bool   `json:"revoke_existing"`
-	CardEndpointDetail *bool  `json:"card_endpoint_detail"`
-}
-
-// handlePeekLink mints a channel-tagged token on the thread's per-thread link
-// (copy-link / regenerate). The channel travels in the §5 request body, never the URL.
-func (e *uiExtension) handlePeekLink(w http.ResponseWriter, r *http.Request) {
-	body, ok := e.decodePeekLinkBody(w, r)
-	if !ok {
-		return
-	}
-	resp, code, err := e.cp.PostPeekLink(r.Context(), body.ThreadID, promote.PeekLinkRequest{
-		Channel:            body.Channel,
-		RevokeExisting:     body.RevokeExisting,
-		CardEndpointDetail: body.CardEndpointDetail,
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, code, map[string]any{
+		"thread_id":        resp.ThreadID,
+		"thread_public_id": resp.ThreadPublicID,
+		"thread_url":       resp.ThreadURL,
+		"state":            resp.State,
+		"status":           resp.Status,
+		"finding_id":       finding.ID,
 	})
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "control-plane peek-link failed: " + err.Error()})
-		return
-	}
-	writeJSON(w, code, resp)
 }
 
-// handlePeekLinkRevoke revokes every outstanding token on the thread (immediate).
-func (e *uiExtension) handlePeekLinkRevoke(w http.ResponseWriter, r *http.Request) {
-	body, ok := e.decodePeekLinkBody(w, r)
-	if !ok {
-		return
+// contactUnconfirmedMessage is the deck's 412 line, naming the pending address.
+func contactUnconfirmedMessage(email string) string {
+	if email == "" {
+		return msgContactUnconfirmed
 	}
-	revoked, code, err := e.cp.RevokePeekLinks(r.Context(), body.ThreadID)
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "control-plane revoke failed: " + err.Error()})
-		return
-	}
-	writeJSON(w, code, map[string]int{"revoked": revoked})
-}
-
-func (e *uiExtension) decodePeekLinkBody(w http.ResponseWriter, r *http.Request) (peekLinkRequestBody, bool) {
-	var body peekLinkRequestBody
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST only"})
-		return body, false
-	}
-	if e.cp == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "control plane not configured (set cp_base_url + cp_deploy_token)"})
-		return body, false
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
-		return body, false
-	}
-	if body.ThreadID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "thread_id is required"})
-		return body, false
-	}
-	return body, true
+	return "Confirm " + email + " first — we sent \"Confirm your Vinifera contact\"."
 }
 
 // spaHandler serves the embedded Vue SPA, falling back to index.html so client

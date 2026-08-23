@@ -1,54 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { ApiError, apiGet, openThreadInNewTab } from './api';
+import ConnectPanel from './ConnectPanel.vue';
+import FlagSheet from './FlagSheet.vue';
+import ThreadsTab from './ThreadsTab.vue';
+import { chipLabel, threadIdFromHash, type ConnectState, type ThreadRow } from './threads';
+import type { Correlation, Finding, FlagResult, Health, RedactedCall } from './types';
 
-interface Correlation {
-  request_id?: string | null;
-  idempotency_key?: string | null;
-  trace_id?: string | null;
-  span_id?: string | null;
-}
-interface RedactedCall {
-  id: string;
-  captured_at: string;
-  integration: string;
-  method: string;
-  route: string;
-  url?: string;
-  status_code: number;
-  request_headers?: Record<string, string>;
-  request_body: string;
-  request_content_type?: string;
-  response_headers?: Record<string, string>;
-  response_body: string;
-  response_content_type?: string;
-  correlation: Correlation;
-  duration_ms?: number;
-  redaction: { applied: boolean; patterns: string[]; spec_aware: boolean };
-  direction?: 'client' | 'server';
-  peer_host?: string;
-  peer_addr?: string;
-  edge_class?: string;
-}
-interface Finding {
-  id: string;
-  kind: 'live-vs-spec' | 'version-diff';
-  severity: string;
-  integration: string;
-  endpoint: string;
-  field_path?: string | null;
-  location?: string | null;
-  expected: string;
-  actual: string;
-  rule: string;
-  spec_version_from?: string | null;
-  spec_version_to?: string | null;
-  source_call_id?: string | null;
-  detail?: string;
-  signature?: string;
-  occurrence_count?: number;
-  first_seen?: string;
-  last_seen?: string;
-}
 interface Edge {
   peer_host: string;
   direction: 'client' | 'server';
@@ -73,17 +31,8 @@ interface SpecInfo {
   endpoints?: number;
   loaded_at: string;
 }
-interface Health {
-  status: string;
-  integration: string;
-  window_rows: number;
-  calls: number;
-  findings: number;
-  cp_configured: boolean;
-  collector_version: string;
-}
 
-type Tab = 'overview' | 'traffic' | 'contract';
+type Tab = 'overview' | 'traffic' | 'contract' | 'threads' | 'settings';
 
 const health = ref<Health | null>(null);
 const findings = ref<Finding[]>([]);
@@ -94,36 +43,123 @@ const contracts = ref<SpecInfo[]>([]);
 // and only a real answer lets us assert "no contract loaded" per provider.
 const contractsKnown = ref(false);
 const loadError = ref('');
-interface FlagShareState {
-  busy?: boolean;
-  peekUrl?: string;
-  threadId?: string;
-  error?: string;
-  // Copy-link / channel share (the same per-thread link, channel-tagged via the §5 request body).
-  channel?: string;
-  cardDetail?: boolean;
-  linkBusy?: boolean;
-  linkUrl?: string;
-  copied?: boolean;
-  revokedNote?: string;
-}
-const flagState = ref<Record<string, FlagShareState>>({});
+// ─── Connect + threads (v0.1a) ───────────────────────────────────────────
+// Connect state comes from the relay (`GET /api/connect`, refreshed from the CP);
+// polled every 5s while a confirmation is pending (or the Settings tab / a Flag
+// sheet is open) and on focus, so "Create thread" unlocks the moment the
+// contact clicks the confirmation. Threads come from `GET /api/threads` (every
+// row with its CP summary) and feed both the Threads tab and the finding chips.
+const connect = ref<ConnectState | null>(null);
+const threads = ref<ThreadRow[]>([]);
+const threadsLoaded = ref(false);
+const threadsError = ref('');
+const sheetFinding = ref<Finding | null>(null);
+const highlightThreadId = ref<string | null>(null);
+const connectBannerDismissed = ref(localStorage.getItem('vinifera.connect.banner.dismissed') === '1');
 
-// Copy-time channel picker: where the consumer is about to paste the link. Email stays the
-// fallback (the Flag action itself); Slack/Telegram apps are a v4 integration seam — for now the
-// human carries the link into the channel the two teams already share.
-const SHARE_CHANNELS = [
-  { value: 'link', label: 'Just copy' },
-  { value: 'slack', label: 'Slack' },
-  { value: 'whatsapp', label: 'WhatsApp' },
-  { value: 'telegram', label: 'Telegram' },
-  { value: 'teams', label: 'Teams' },
-  { value: 'other', label: 'Other' }
-];
+const connectStatus = computed(() => connect.value?.status ?? 'disconnected');
+const connectPill = computed(() => {
+  switch (connectStatus.value) {
+    case 'connected':
+      return 'Connected';
+    case 'pending':
+      return 'Confirm your contact';
+    default:
+      return 'Not connected';
+  }
+});
+const threadsByFinding = computed(() => {
+  const m: Record<string, ThreadRow> = {};
+  for (const t of threads.value) m[t.finding_id] = t;
+  return m;
+});
+const consumerName = computed(() => connect.value?.consumer_display_name || health.value?.consumer_display_name || 'Your organization');
 
-function patchFlag(id: string, patch: Partial<FlagShareState>) {
-  flagState.value = { ...flagState.value, [id]: { ...flagState.value[id], ...patch } };
+async function loadConnect() {
+  try {
+    connect.value = await apiGet<ConnectState>('/api/connect');
+  } catch {
+    /* keep the last known state; the health poll still reports the store's view */
+  }
 }
+
+async function loadThreads() {
+  try {
+    threads.value = (await apiGet<ThreadRow[]>('/api/threads')) || [];
+    threadsError.value = '';
+  } catch (e) {
+    threadsError.value = 'Could not load threads from this collector.';
+  } finally {
+    threadsLoaded.value = true;
+  }
+}
+
+function onConnectUpdated(s: ConnectState) {
+  connect.value = s;
+  if (s.status !== 'connected') loadConnect();
+}
+
+function dismissConnectBanner() {
+  connectBannerDismissed.value = true;
+  localStorage.setItem('vinifera.connect.banner.dismissed', '1');
+}
+
+// Provider name shown on the sheet and sent on the flag: the configured
+// provider_display_name for the observed integration, else a humanized id
+// (the same rule the relay applies server-side).
+function providerNameFor(f: Finding): string {
+  if (health.value?.provider_display_name && (!health.value.integration || f.integration === health.value.integration)) {
+    return health.value.provider_display_name;
+  }
+  return humanize(f.integration) || f.integration || 'the provider';
+}
+
+function openSheet(f: Finding) {
+  sheetFinding.value = f;
+  if (connectStatus.value !== 'connected') loadConnect();
+}
+
+function onThreadCreated(_r: FlagResult) {
+  loadThreads();
+  refresh();
+}
+
+const openingThread = ref<string | null>(null);
+const chipError = ref<Record<string, string>>({});
+
+// "Open thread" on a finding chip = the owner handoff in a new tab (same as the
+// success state); "Threads ›" deep-links to the row for Close / Reopen / Replace.
+async function openChipThread(threadId: string) {
+  openingThread.value = threadId;
+  chipError.value = { ...chipError.value, [threadId]: '' };
+  try {
+    const out = await openThreadInNewTab(threadId);
+    if (!out.opened) chipError.value = { ...chipError.value, [threadId]: 'Your browser blocked the new tab — use Open on the Threads tab.' };
+  } catch (e) {
+    chipError.value = { ...chipError.value, [threadId]: e instanceof ApiError ? e.message : "Couldn't reach the control plane." };
+  } finally {
+    openingThread.value = null;
+  }
+}
+
+function goToThread(threadId: string) {
+  highlightThreadId.value = threadId;
+  tab.value = 'threads';
+  if (window.location.hash !== '#threads/' + threadId) history.replaceState(null, '', '#threads/' + encodeURIComponent(threadId));
+}
+
+function applyHash() {
+  const id = threadIdFromHash(window.location.hash);
+  if (id) {
+    highlightThreadId.value = id;
+    tab.value = 'threads';
+  } else if (window.location.hash === '#threads') {
+    tab.value = 'threads';
+  } else if (window.location.hash === '#settings') {
+    tab.value = 'settings';
+  }
+}
+
 const tab = ref<Tab>('overview');
 const expanded = ref<Record<string, boolean>>({});
 
@@ -462,78 +498,50 @@ function headerRows(h?: Record<string, string>): [string, string][] {
   return Object.entries(h);
 }
 
-async function flag(f: Finding) {
-  const email = window.prompt('Provider engineer email to invite to this thread:');
-  if (!email) return;
-  flagState.value = { ...flagState.value, [f.id]: { busy: true } };
-  try {
-    const resp = await fetch('/api/flag', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ finding_id: f.id, invitee_email: email })
-    });
-    const body = await resp.json();
-    if (!resp.ok) {
-      flagState.value = { ...flagState.value, [f.id]: { error: body.error || `HTTP ${resp.status}` } };
-      return;
-    }
-    flagState.value = {
-      ...flagState.value,
-      [f.id]: { peekUrl: body.peek_url, threadId: body.thread_id, channel: 'link', cardDetail: false }
-    };
-    await refresh();
-  } catch (e) {
-    flagState.value = { ...flagState.value, [f.id]: { error: String(e) } };
-  }
-}
-
-// Copy link (and regenerate): mint a fresh channel-tagged token on the SAME per-thread link via
-// the collector relay, then put the URL on the clipboard. `revoke` kills every outstanding link
-// first — revocation is immediate, including live peek sessions.
-async function shareLink(f: Finding, revoke: boolean) {
-  const st = flagState.value[f.id];
-  if (!st?.threadId) return;
-  patchFlag(f.id, { linkBusy: true, error: undefined, revokedNote: undefined });
-  try {
-    const resp = await fetch('/api/peek-link', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        thread_id: st.threadId,
-        channel: st.channel || 'link',
-        revoke_existing: revoke,
-        card_endpoint_detail: st.cardDetail ?? false
-      })
-    });
-    const body = await resp.json();
-    if (!resp.ok) {
-      patchFlag(f.id, { error: body.error || `HTTP ${resp.status}` });
-      return;
-    }
-    patchFlag(f.id, {
-      linkUrl: body.peek_url,
-      revokedNote: revoke && body.revoked > 0 ? `${body.revoked} previous link${body.revoked === 1 ? '' : 's'} revoked` : undefined
-    });
-    try {
-      await navigator.clipboard.writeText(body.peek_url);
-      patchFlag(f.id, { copied: true });
-      setTimeout(() => patchFlag(f.id, { copied: false }), 2000);
-    } catch {
-      // Clipboard may be unavailable; the minted link is rendered for manual copy.
-    }
-  } catch (e) {
-    patchFlag(f.id, { error: String(e) });
-  } finally {
-    patchFlag(f.id, { linkBusy: false });
-  }
-}
-
 let timer: number | undefined;
+let connectTimer: number | undefined;
+let threadsTimer: number | undefined;
+
+function connectPollWanted(): boolean {
+  return connectStatus.value === 'pending' || tab.value === 'settings' || sheetFinding.value !== null;
+}
+
+function onFocus() {
+  if (document.visibilityState === 'hidden') return;
+  loadConnect();
+  if (tab.value === 'threads' || tab.value === 'contract') loadThreads();
+}
+
 onMounted(() => {
+  applyHash();
   refresh();
+  loadConnect();
+  loadThreads();
   timer = window.setInterval(refresh, 5000);
+  connectTimer = window.setInterval(() => {
+    if (connectPollWanted()) loadConnect();
+  }, 5000);
+  threadsTimer = window.setInterval(() => {
+    if (document.visibilityState !== 'hidden' && (tab.value === 'threads' || tab.value === 'contract')) loadThreads();
+  }, 15000);
+  window.addEventListener('focus', onFocus);
+  document.addEventListener('visibilitychange', onFocus);
+  window.addEventListener('hashchange', applyHash);
 });
-onUnmounted(() => timer && window.clearInterval(timer));
+onUnmounted(() => {
+  timer && window.clearInterval(timer);
+  connectTimer && window.clearInterval(connectTimer);
+  threadsTimer && window.clearInterval(threadsTimer);
+  window.removeEventListener('focus', onFocus);
+  document.removeEventListener('visibilitychange', onFocus);
+  window.removeEventListener('hashchange', applyHash);
+});
+
+watch(tab, (t) => {
+  if (t === 'threads' || t === 'contract') loadThreads();
+  if (t === 'settings') loadConnect();
+  if (t !== 'threads' && threadIdFromHash(window.location.hash)) history.replaceState(null, '', window.location.pathname);
+});
 </script>
 
 <template>
@@ -542,9 +550,17 @@ onUnmounted(() => timer && window.clearInterval(timer));
       <div class="brand">Vinifera<span>Collector</span></div>
       <div class="meta" v-if="health">
         <span class="pill">{{ health.integration }}</span>
-        <span class="pill" :class="{ warn: !health.cp_configured }">
-          {{ health.cp_configured ? 'control plane linked' : 'control plane not configured' }}
-        </span>
+        <span v-if="!health.cp_configured" class="pill warn">control plane not configured</span>
+        <button
+          v-else
+          type="button"
+          class="pill pill-btn"
+          :class="{ ok: connectStatus === 'connected', warn: connectStatus === 'pending' }"
+          title="Connect settings"
+          @click="tab = 'settings'"
+        >
+          {{ connectPill }}
+        </button>
       </div>
     </header>
 
@@ -561,12 +577,20 @@ onUnmounted(() => timer && window.clearInterval(timer));
         Contracts
         <span v-if="liveFindings.length" class="tab-count bad">{{ liveFindings.length }}</span>
       </button>
+      <button role="tab" :class="{ active: tab === 'threads' }" @click="tab = 'threads'">
+        Threads
+        <span v-if="threads.length" class="tab-count">{{ threads.length }}</span>
+      </button>
+      <button role="tab" class="tab-right" :class="{ active: tab === 'settings' }" @click="tab = 'settings'">
+        Settings
+        <span v-if="health?.cp_configured && connectStatus !== 'connected'" class="tab-dot" :class="connectStatus"></span>
+      </button>
     </nav>
 
     <!-- ───────────────────────── OVERVIEW ───────────────────────── -->
     <div v-show="tab === 'overview'">
       <section class="headline" :class="{ ok: headline.ok, drift: !headline.ok }">
-        <div class="hl-provider">Provider: <strong>operational</strong></div>
+        <!-- Observed state only — the collector does not measure provider health. -->
         <div class="hl-you">
           You: <strong>{{ headline.you }}</strong>
         </div>
@@ -632,6 +656,16 @@ onUnmounted(() => timer && window.clearInterval(timer));
 
     <!-- ───────────────────────── CONTRACTS ───────────────────────── -->
     <div v-show="tab === 'contract'">
+      <div v-if="health?.cp_configured && connectStatus !== 'connected' && !connectBannerDismissed" class="connect-banner">
+        <span>
+          <strong>{{ connectStatus === 'pending' ? 'Confirm your contact' : 'Not connected' }}</strong> —
+          thread links need a Connected collector. Viewing your own traffic and findings never does.
+        </span>
+        <span class="connect-banner-actions">
+          <button type="button" class="btn small" @click="tab = 'settings'">{{ connectStatus === 'pending' ? 'Check status' : 'Connect' }}</button>
+          <button type="button" class="btn ghost small" aria-label="Dismiss" @click="dismissConnectBanner">Dismiss</button>
+        </span>
+      </div>
       <section v-for="g in cardGroups" v-show="g.cards.length || g.emptyText" :key="g.key">
         <h2>
           {{ g.title }}
@@ -708,52 +742,44 @@ onUnmounted(() => timer && window.clearInterval(timer));
             </div>
 
             <div class="actions">
-              <button class="flag" :disabled="flagState[f.id]?.busy" @click="flag(f)">
-                {{ flagState[f.id]?.busy ? 'Flagging…' : 'Flag this' }}
-              </button>
-              <span v-if="flagState[f.id]?.peekUrl" class="flagged">
-                Flagged — invite emailed. Peek link:
-                <a :href="flagState[f.id]!.peekUrl" target="_blank" rel="noopener">{{ flagState[f.id]!.peekUrl }}</a>
-              </span>
-              <span v-if="flagState[f.id]?.error" class="error">{{ flagState[f.id]!.error }}</span>
-            </div>
-
-            <!-- Copy-link into the teams' existing channel (email is the fallback above). The
-                 channel tag rides the request body, never the URL. -->
-            <div v-if="flagState[f.id]?.threadId" class="share">
-              <div class="share-row">
-                <span class="share-label">Share into your existing channel:</span>
-                <select
-                  class="share-channel"
-                  :value="flagState[f.id]!.channel || 'link'"
-                  @change="patchFlag(f.id, { channel: ($event.target as HTMLSelectElement).value })"
-                >
-                  <option v-for="c in SHARE_CHANNELS" :key="c.value" :value="c.value">{{ c.label }}</option>
-                </select>
-                <button class="share-copy" :disabled="flagState[f.id]?.linkBusy" @click="shareLink(f, false)">
-                  {{ flagState[f.id]?.copied ? 'Copied' : flagState[f.id]?.linkBusy ? 'Minting…' : 'Copy link' }}
+              <template v-if="threadsByFinding[f.id]">
+                <span class="chip" :class="{ attention: threadsByFinding[f.id].summary?.turn === 'fix_reported' || threadsByFinding[f.id].summary?.turn === 'replied_while_closed' }">
+                  {{ chipLabel(threadsByFinding[f.id]) }}
+                </span>
+                <button type="button" class="btn small" :disabled="openingThread === threadsByFinding[f.id].thread_id" @click="openChipThread(threadsByFinding[f.id].thread_id)">
+                  {{ openingThread === threadsByFinding[f.id].thread_id ? 'Opening…' : 'Open thread' }}
                 </button>
-                <button class="share-revoke" :disabled="flagState[f.id]?.linkBusy" @click="shareLink(f, true)">
-                  Revoke &amp; regenerate
-                </button>
-              </div>
-              <label class="share-detail">
-                <input
-                  type="checkbox"
-                  :checked="flagState[f.id]!.cardDetail ?? false"
-                  @change="patchFlag(f.id, { cardDetail: ($event.target as HTMLInputElement).checked })"
-                />
-                Include endpoint + finding type in the link's preview card (off = low-information card)
-              </label>
-              <p class="share-warning">
-                Anyone with this link can view this thread's redacted evidence and reply. Share it only
-                where you'd paste the logs.
-              </p>
-              <p v-if="flagState[f.id]?.linkUrl" class="share-minted mono">{{ flagState[f.id]!.linkUrl }}</p>
-              <p v-if="flagState[f.id]?.revokedNote" class="share-revoked">{{ flagState[f.id]!.revokedNote }}</p>
+                <button type="button" class="btn ghost small" @click="goToThread(threadsByFinding[f.id].thread_id)">Threads ›</button>
+                <span v-if="chipError[threadsByFinding[f.id].thread_id]" class="error small-err">{{ chipError[threadsByFinding[f.id].thread_id] }}</span>
+              </template>
+              <button v-else-if="f.source_call_id" type="button" class="btn primary flag" @click="openSheet(f)">Flag this</button>
+              <span v-else class="hint-inline">Informational — spec-version findings have no failing call to share.</span>
             </div>
           </article>
         </article>
+      </section>
+    </div>
+
+    <!-- ───────────────────────── THREADS ───────────────────────── -->
+    <div v-show="tab === 'threads'">
+      <ThreadsTab
+        :rows="threads"
+        :loaded="threadsLoaded"
+        :connected="connectStatus === 'connected'"
+        :highlight-id="highlightThreadId"
+        :load-error="threadsError"
+        @refresh="loadThreads"
+      />
+    </div>
+
+    <!-- ───────────────────────── SETTINGS ───────────────────────── -->
+    <div v-show="tab === 'settings'">
+      <section>
+        <h2>Settings <small>this collector · {{ health?.collector_version }}</small></h2>
+        <p v-if="health && !health.cp_configured" class="empty">
+          The control plane is not configured on this collector (set <code>cp_base_url</code> and <code>cp_deploy_token</code>). Local capture, detection and this UI work without it.
+        </p>
+        <ConnectPanel v-else :state="connect" :default-org="health?.consumer_display_name" @update:state="onConnectUpdated" />
       </section>
     </div>
 
@@ -922,6 +948,19 @@ onUnmounted(() => timer && window.clearInterval(timer));
         </template>
       </section>
     </div>
+    <FlagSheet
+      v-if="sheetFinding"
+      :key="sheetFinding.id"
+      :finding="sheetFinding"
+      :correlation="correlationFor(sheetFinding)"
+      :provider="providerNameFor(sheetFinding)"
+      :consumer="consumerName"
+      :connect="connect"
+      :default-org="health?.consumer_display_name"
+      @close="sheetFinding = null"
+      @created="onThreadCreated"
+      @update:connect="onConnectUpdated"
+    />
   </div>
 </template>
 
@@ -961,8 +1000,7 @@ body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 syste
 /* Health */
 .headline { margin: 1rem 0; padding: 1rem 1.15rem; border-radius: 12px; border: 1px solid var(--line); background: var(--panel); }
 .headline.drift { border-color: var(--danger); background: var(--danger-bg); }
-.hl-provider { color: var(--muted); }
-.hl-you { font-size: 1.15rem; margin-top: 0.25rem; }
+.hl-you { font-size: 1.15rem; }
 .hl-sub { color: var(--muted); font-size: 0.85rem; margin-top: 0.3rem; }
 .headline.drift .hl-you strong { color: var(--danger); }
 .headline.ok .hl-you strong { color: var(--ok); }
@@ -997,22 +1035,27 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .corr-k { font-size: 0.82rem; color: var(--muted); }
 .corr-k code { color: var(--accent); background: var(--panel2); padding: 0.1rem 0.35rem; border-radius: 4px; }
 .actions { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.9rem; }
-button.flag { background: var(--accent); color: #04122e; border: 0; border-radius: 8px; padding: 0.45rem 0.9rem; font-weight: 700; cursor: pointer; }
-button.flag:disabled { opacity: 0.6; cursor: default; }
-.flagged { color: var(--ok); font-size: 0.85rem; }
-.flagged a { color: var(--accent); }
-.share { margin-top: 0.6rem; padding: 0.6rem 0.75rem; border: 1px dashed var(--line, #2a3550); border-radius: 8px; display: flex; flex-direction: column; gap: 0.4rem; }
-.share-row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
-.share-label { font-size: 0.82rem; opacity: 0.85; }
-.share-channel { background: transparent; color: inherit; border: 1px solid var(--line, #2a3550); border-radius: 6px; padding: 0.25rem 0.4rem; font: inherit; font-size: 0.82rem; }
-.share-copy { background: var(--accent); color: #04122e; border: 0; border-radius: 6px; padding: 0.3rem 0.7rem; font-weight: 700; cursor: pointer; font-size: 0.82rem; }
-.share-copy:disabled { opacity: 0.6; cursor: default; }
-.share-revoke { background: transparent; color: var(--warn, #e0a34a); border: 1px solid currentColor; border-radius: 6px; padding: 0.3rem 0.7rem; cursor: pointer; font-size: 0.82rem; }
-.share-revoke:disabled { opacity: 0.6; cursor: default; }
-.share-detail { font-size: 0.78rem; opacity: 0.8; display: flex; align-items: center; gap: 0.4rem; }
-.share-warning { margin: 0; font-size: 0.78rem; color: var(--warn, #e0a34a); }
-.share-minted { margin: 0; font-size: 0.78rem; word-break: break-all; opacity: 0.9; }
-.share-revoked { margin: 0; font-size: 0.78rem; color: var(--ok); }
+/* Buttons (shared by the Connect panel, Flag sheet and Threads tab) */
+.btn { background: var(--panel2); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 0.42rem 0.85rem; font: inherit; font-size: 0.88rem; font-weight: 600; cursor: pointer; }
+.btn:hover { border-color: var(--muted); }
+.btn.primary { background: var(--accent); color: #04122e; border-color: var(--accent); }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn.ghost { background: transparent; color: var(--muted); }
+.btn.ghost:hover { color: var(--ink); }
+.btn.small { padding: 0.28rem 0.65rem; font-size: 0.8rem; }
+.btn.attention { color: var(--warn); border-color: var(--warn); }
+.btn:disabled { opacity: 0.6; cursor: default; }
+.chip { display: inline-flex; align-items: center; font-size: 0.8rem; font-weight: 600; color: var(--ok); border: 1px solid var(--ok); border-radius: 999px; padding: 0.15rem 0.6rem; }
+.chip.attention { color: var(--warn); border-color: var(--warn); }
+.hint-inline { color: var(--muted); font-size: 0.82rem; }
+.small-err { font-size: 0.82rem; }
+.pill-btn { cursor: pointer; font: inherit; font-size: 0.8rem; }
+.pill.ok { color: var(--ok); border-color: var(--ok); }
+.tab-right { margin-left: auto; }
+.tab-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); display: inline-block; }
+.tab-dot.disconnected { background: var(--muted); }
+.connect-banner { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin: 0.75rem 0 0; padding: 0.6rem 0.9rem; border: 1px solid var(--warn); border-radius: 10px; background: var(--panel); font-size: 0.88rem; }
+.connect-banner-actions { display: flex; gap: 0.5rem; }
 .error { color: var(--danger); }
 
 /* Traffic toolbar: search + facet filters + live/pause control */

@@ -22,8 +22,9 @@ type uiExtension struct {
 
 	host   component.Host
 	stOnce sync.Once
-	st     store.Store // interface-typed: the nil check in storeOrError must never see a typed-nil pointer
-	cp     *promote.Client
+	st     store.Store     // interface-typed: the nil check in storeOrError must never see a typed-nil pointer
+	cp     *promote.Client // deploy-token client; per-request copies carry the collector key (keyedClient)
+	me     meCache
 	server *http.Server
 }
 

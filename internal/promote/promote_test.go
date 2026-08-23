@@ -78,7 +78,6 @@ func TestFlagBody_ConformsToSchema(t *testing.T) {
 
 	req := Build(Input{
 		ConsumerDisplayName: "Acme Consumer Ltd",
-		InviteeEmail:        "api-support@provider.test",
 		Message:             "", // exercise the derived default
 		Call:                call,
 		Finding:             finding,
@@ -106,11 +105,11 @@ func TestFlagBody_ConformsToSchema(t *testing.T) {
 		gotBody, _ = io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(`{"thread_id":"0191-t","peek_url":"https://cp.test/t/pub#k=abc","magic_token":"abc","status":"created"}`))
+		_, _ = w.Write([]byte(`{"thread_id":"0191-t","thread_public_id":"pub","thread_url":"https://cp.test/t/pub#k=abc","peek_url":"https://cp.test/t/pub#k=abc","magic_token":"abc","state":"open","status":"created"}`))
 	}))
 	defer srv.Close()
 
-	client := NewClient(srv.URL, "deploy_tok_123", "v0.0.0-test")
+	client := NewClient(srv.URL, "deploy_tok_123", "v0.0.0-test").WithCollectorKey("ckey_abc")
 	resp, code, err := client.Post(context.Background(), req)
 	if err != nil {
 		t.Fatalf("post: %v", err)
@@ -118,11 +117,11 @@ func TestFlagBody_ConformsToSchema(t *testing.T) {
 	if code != http.StatusCreated {
 		t.Errorf("status = %d, want 201", code)
 	}
-	if resp.Status != "created" || resp.ThreadID == "" || resp.PeekURL == "" {
+	if resp.Status != "created" || resp.ThreadID == "" || resp.ThreadURL == "" || resp.ThreadPublicID != "pub" || resp.State != "open" {
 		t.Errorf("unexpected flag response: %+v", resp)
 	}
-	if gotAuth != "Bearer deploy_tok_123" {
-		t.Errorf("Authorization = %q, want Bearer deploy_tok_123", gotAuth)
+	if gotAuth != "Bearer ckey_abc" {
+		t.Errorf("Authorization = %q, want Bearer <collector key> (never the deploy token once Connected)", gotAuth)
 	}
 	if gotColVer != "v0.0.0-test" {
 		t.Errorf("collector version header = %q", gotColVer)

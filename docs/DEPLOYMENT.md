@@ -32,10 +32,10 @@ stage runs differs.
                               tiered:     [otlphttp exporter] ─► store pod :4318
                                             └─► [otlp receiver] → [viniferaredaction] → [viniferastore exporter] ─► store
                                                             │
-                                    viniferaui (127.0.0.1:5335): Overview / Traffic / Contracts, POST /api/flag
-                                                            │  outbound only
+                                    viniferaui (127.0.0.1:5335): Overview / Traffic / Contracts / Threads / Settings
+                                                            │  relay: connect · flag · threads — outbound only
                                                             ▼
-                                                control plane  POST /api/v1/flags  →  thread + peek link
+                                                control plane  register (once) · POST /api/v1/flags → thread + thread link · thread state
 ```
 
 Record types on the wire (CONTRACTS §2): `call` (from the SDK), `finding`
@@ -94,7 +94,12 @@ Flow specifics:
 - Contracts: fronts emit `spec_info`; the store pod's Contracts tab fills within
   the first batch after a front starts (and every 10 min after).
 - The flag action runs on the store pod (it holds the evidence); its outbound
-  call to the control plane is the only off-cluster egress.
+  calls to the control plane (Connect, flag, thread state) are the only
+  off-cluster egress. **Connect** is per deployment, not per pod: the collector
+  key it returns lives in the store's settings KV (sqlite file / shared
+  postgres) next to the evidence — nothing to mount or copy, and a replaced pod
+  is still Connected. `cp_deploy_token` is only used for that first
+  registration.
 - UI: `kubectl port-forward sts/vinifera-store 5335:5335`.
 - Store pod `:4318` is intra-cluster ingest; keep it ClusterIP (optionally a
   NetworkPolicy allowing only the front pods).

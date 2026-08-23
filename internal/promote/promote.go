@@ -9,9 +9,7 @@
 package promote
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -24,29 +22,34 @@ import (
 
 // FlagRequest is the POST /api/v1/flags body. It matches
 // contracts/cp-flag-request.schema.json exactly (additionalProperties:false).
+// v0.1a retired invitee_email: the CP sends no invite email — the consumer
+// copies the Thread link into the channel the two teams already share.
 type FlagRequest struct {
 	IdempotencyKey      string             `json:"idempotency_key"`
 	ConsumerDisplayName string             `json:"consumer_display_name"`
 	ProviderDisplayName string             `json:"provider_display_name"`
-	InviteeEmail        string             `json:"invitee_email"`
 	Message             string             `json:"message"`
 	Call                model.RedactedCall `json:"call"`
 	Finding             model.Finding      `json:"finding"`
 }
 
-// FlagResponse is the CP reply (201 created | 200 existing).
+// FlagResponse is the CP reply (201 created | 200 existing). ThreadURL is the
+// Thread link the consumer copies; PeekURL/MagicToken are the deprecated v0
+// aliases an older CP still sends (ThreadURL falls back to PeekURL on decode).
 type FlagResponse struct {
-	ThreadID   string `json:"thread_id"`
-	PeekURL    string `json:"peek_url"`
-	MagicToken string `json:"magic_token"`
-	Status     string `json:"status"`
+	ThreadID       string `json:"thread_id"`
+	ThreadPublicID string `json:"thread_public_id"`
+	ThreadURL      string `json:"thread_url"`
+	PeekURL        string `json:"peek_url,omitempty"`
+	MagicToken     string `json:"magic_token,omitempty"`
+	State          string `json:"state"`
+	Status         string `json:"status"`
 }
 
 // Input is what the UI hands the promoter for one flag click.
 type Input struct {
 	ConsumerDisplayName string
 	ProviderDisplayName string // optional; defaults to the humanized integration id
-	InviteeEmail        string
 	Message             string // optional; a default is derived from the finding
 	Call                model.RedactedCall
 	Finding             model.Finding
@@ -71,7 +74,6 @@ func Build(in Input) FlagRequest {
 		IdempotencyKey:      "flag_" + in.Finding.ID,
 		ConsumerDisplayName: in.ConsumerDisplayName,
 		ProviderDisplayName: provider,
-		InviteeEmail:        in.InviteeEmail,
 		Message:             msg,
 		Call:                in.Call,
 		Finding:             in.Finding,
@@ -107,10 +109,14 @@ func drift(f model.Finding) string {
 	return "Contract drift"
 }
 
-// Client posts flags to the control plane.
+// Client talks to the control plane. DeployToken is the install-time
+// cp_deploy_token (Bearer for register only, pre-Connect); CollectorKey is the
+// per-deployment key register returned (Bearer for everything else). Neither is
+// ever logged.
 type Client struct {
 	BaseURL          string
 	DeployToken      string
+	CollectorKey     string
 	CollectorVersion string
 	HTTP             *http.Client
 }
@@ -125,37 +131,18 @@ func NewClient(baseURL, deployToken, collectorVersion string) *Client {
 	}
 }
 
-// Post sends one flag. Bearer <cp_deploy_token> is the only outbound auth
-// (CONTRACTS §5/§8); the schema + collector versions travel as headers.
+// Post sends one flag (POST /api/v1/flags). Bearer = the collector key once
+// Connected (CONTRACTS §5; the CP answers 412 not_connected |
+// contact_unconfirmed otherwise); the schema + collector versions travel as
+// headers. 201 created | 200 existing (idempotent replay).
 func (c *Client) Post(ctx context.Context, req FlagRequest) (FlagResponse, int, error) {
-	body, err := json.Marshal(req)
-	if err != nil {
-		return FlagResponse{}, 0, fmt.Errorf("marshal flag: %w", err)
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/api/v1/flags", bytes.NewReader(body))
-	if err != nil {
-		return FlagResponse{}, 0, err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+c.DeployToken)
-	httpReq.Header.Set("X-Vinifera-Collector-Version", c.CollectorVersion)
-	httpReq.Header.Set("X-Vinifera-Schema-Version", fmt.Sprintf("%d", model.SchemaVersion))
-
-	client := c.HTTP
-	if client == nil {
-		client = http.DefaultClient
-	}
-	resp, err := client.Do(httpReq)
-	if err != nil {
-		return FlagResponse{}, 0, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return FlagResponse{}, resp.StatusCode, fmt.Errorf("flag POST returned %d", resp.StatusCode)
-	}
 	var out FlagResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return FlagResponse{}, resp.StatusCode, fmt.Errorf("decode flag response: %w", err)
+	status, err := c.do(ctx, http.MethodPost, "/api/v1/flags", c.bearer(), req, &out, http.StatusCreated, http.StatusOK)
+	if err != nil {
+		return FlagResponse{}, status, err
 	}
-	return out, resp.StatusCode, nil
+	if out.ThreadURL == "" {
+		out.ThreadURL = out.PeekURL // older CP: peek_url was the only name
+	}
+	return out, status, nil
 }
