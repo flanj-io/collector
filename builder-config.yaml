@@ -28,8 +28,13 @@ processors:
   - gomod: github.com/vinifera-io/collector/processor/viniferadrift v0.0.0
 
 exporters:
-  # Writes call + finding records into the shared embedded store.
+  # Writes call + finding (+ spec_info) records into the shared store. Used by the
+  # single-pod collector AND by the store pod of the tiered topology.
   - gomod: github.com/vinifera-io/collector/exporter/viniferastore v0.0.0
+  # Core OTLP/HTTP exporter — the FRONT collectors of the tiered topology forward
+  # their (redacted, drift-detected) records to the store pod with it. Same beta
+  # pin as the receiver (the version triad must not move). docs/STORE.md.
+  - gomod: go.opentelemetry.io/collector/exporter/otlphttpexporter v0.159.0
 
 extensions:
   # SINGLE SQLite owner (WAL, ring-buffer). Shared via host.GetExtensions().

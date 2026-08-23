@@ -17,6 +17,13 @@
 # captures, redacts, and discovers edges.
 #
 # Every key here is frozen in contracts/CONTRACTS.md §8.
+#
+# This is the SINGLE-POD config: one collector does it all. To run N collector
+# pods behind ONE store (the tiered topology — docs/STORE.md "Topologies"), use
+# the role configs instead: config.front.example.yaml (stateless front: otlp ->
+# redaction -> drift -> otlphttp to the store pod) and config.store.example.yaml
+# (the one store pod: otlp -> redaction -> store + UI). Baked into the image as
+# /etc/vinifera/front.yaml and /etc/vinifera/store.yaml.
 
 extensions:
   # The store extension owns the single in-process store handle. Two backends
@@ -63,8 +70,9 @@ processors:
     peer_host: api.acme.test # optional — scope this spec to one discovered edge by host
     # The contract YOU publish as a provider: validates your INBOUND responses so
     # providers see their own drift, not just their dependencies'.
-    self_spec_path: /etc/vinifera/self-spec.yaml # OPTIONAL — empty disables self validation
-    self_integration_id: self # optional — labels self findings (default "self"; must differ from integration_id)
+    # self_spec_path: /etc/vinifera/self-spec.yaml # OPTIONAL — empty disables self validation
+    #                                               # (mount your own spec; the image bakes none)
+    # self_integration_id: self # optional — labels self findings (default "self"; must differ from integration_id)
 
 exporters:
   # Discovers the viniferastore extension via the collector host; nothing to tune.

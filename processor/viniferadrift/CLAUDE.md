@@ -36,11 +36,19 @@ store dedups on it — the first call creates the finding, later calls increment
   `self_integration_id` (default `self`, must differ from `integration_id`)
   with their signature recomputed, so self and provider drift never merge.
 - `processor.go` — per-batch live-vs-spec detection + one-time version-diff
-  injection; appends finding records under a fresh ResourceLogs/ScopeLogs.
+  injection + rate-limited spec_info emission; appends finding + spec_info
+  records under a fresh trailing ResourceLogs/ScopeLogs (calls stay ahead).
 
-At Start the processor records each loaded contract (provider + self) into the
-shared store (`PutSpecInfo` via `store.Provider`) so the local UI's Contracts
-tab can link title/version/docs and serve the raw spec document.
+The loaded contracts (provider + self) are precomputed once as `spec_info`
+records (`specInfos`, stable `loaded_at`) and reach the store two ways:
+directly at Start (`PutSpecInfo` via `store.Provider`, when a store extension is
+co-located — single-pod topology), AND emitted INTO the pipeline as
+`vinifera.record.type=spec_info` log records (metadata JSON attribute + raw
+document in the Body) in the same trailing scope as findings — on the first
+batch after Start, then at most every `specInfoRefresh` (10 min). That is how a
+store pod behind an `otlphttp` hop (tiered topology) populates its Contracts
+tab; in single-pod mode the double write is a harmless upsert. A front
+collector without a store extension is therefore never "spec-blind".
 
 ## Detection lives in `internal/drift`
 

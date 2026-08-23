@@ -57,6 +57,18 @@ func (e *storeExporter) consumeLogs(_ context.Context, ld plog.Logs) error {
 					if err := e.st.InsertFinding(f); err != nil {
 						return err
 					}
+				case otlpattr.RecordTypeSpecInfo:
+					// Contract metadata from a front collector (tiered topology);
+					// PutSpecInfo is an upsert, so the single-pod double write
+					// (direct at Start + this record) is harmless.
+					info, raw, err := otlpattr.SpecInfoFromRecord(lr)
+					if err != nil {
+						e.logger.Warn("drop malformed spec_info record", zap.Error(err))
+						continue
+					}
+					if err := e.st.PutSpecInfo(info, raw); err != nil {
+						return err
+					}
 				default:
 					call := otlpattr.CallFromRecord(lr)
 					if !validCall(call) {

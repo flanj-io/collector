@@ -24,8 +24,8 @@ const (
 	AttrPeerHost       = "vinifera.peer.host"
 	// AttrPeerAddr is the optional socket address (IP) of the peer — transport
 	// detail alongside the peer.host identity; omitted when unknown.
-	AttrPeerAddr  = "vinifera.peer.addr"
-	AttrEdgeClass = "vinifera.edge.class"
+	AttrPeerAddr       = "vinifera.peer.addr"
+	AttrEdgeClass      = "vinifera.edge.class"
 	AttrCaptureBodies  = "vinifera.capture.bodies"
 	AttrIntegration    = "vinifera.integration"
 	AttrMethod         = "vinifera.http.method"
@@ -57,13 +57,20 @@ const (
 	// Internal-only: the whole finding JSON carried on a finding log record.
 	AttrFindingJSON = "vinifera.finding.json"
 
+	// Internal-only: the contract metadata (model.SpecInfo) JSON carried on a
+	// spec_info log record; the raw spec document travels in the record Body
+	// as bytes. Emitted by the drift processor so a store pod behind an
+	// otlphttp hop learns which contracts the front collectors loaded.
+	AttrSpecInfoJSON = "vinifera.spec_info.json"
+
 	// Internal-only: the canonical store id for a call, stamped once by the drift
 	// processor so the finding's source_call_id and the exporter's stored call
 	// share the same id (they each reconstruct the call independently).
 	AttrCallID = "vinifera.call.id"
 
-	RecordTypeCall    = "call"
-	RecordTypeFinding = "finding"
+	RecordTypeCall     = "call"
+	RecordTypeFinding  = "finding"
+	RecordTypeSpecInfo = "spec_info"
 )
 
 // bodyAttrs are the redactable string attributes the defense-in-depth pass
@@ -214,6 +221,39 @@ func FindingFromRecord(lr plog.LogRecord) (model.Finding, error) {
 	return f, err
 }
 
+// SpecInfoToRecord writes a loaded contract into a fresh log record as
+// record.type=spec_info: the SpecInfo metadata as one JSON attribute and the
+// raw spec document (may be empty) in the Body as bytes — OTLP's opaque
+// payload slot, round-tripped losslessly by the otlphttp exporter.
+func SpecInfoToRecord(lr plog.LogRecord, info model.SpecInfo, raw []byte) error {
+	b, err := json.Marshal(info)
+	if err != nil {
+		return err
+	}
+	lr.Attributes().PutStr(AttrRecordType, RecordTypeSpecInfo)
+	lr.Attributes().PutStr(AttrSpecInfoJSON, string(b))
+	lr.Body().SetEmptyBytes().FromRaw(raw)
+	return nil
+}
+
+// SpecInfoFromRecord reconstructs the SpecInfo + raw document from a
+// "spec_info" log record.
+func SpecInfoFromRecord(lr plog.LogRecord) (model.SpecInfo, []byte, error) {
+	var info model.SpecInfo
+	v, ok := lr.Attributes().Get(AttrSpecInfoJSON)
+	if !ok {
+		return info, nil, errNoSpecInfo
+	}
+	if err := json.Unmarshal([]byte(v.Str()), &info); err != nil {
+		return info, nil, err
+	}
+	var raw []byte
+	if lr.Body().Type() == pcommon.ValueTypeBytes {
+		raw = lr.Body().Bytes().AsRaw()
+	}
+	return info, raw, nil
+}
+
 // NewID returns a fresh uuidv7 string (time-ordered — good for FIFO windows).
 func NewID() string {
 	id, err := uuid.NewV7()
@@ -228,3 +268,4 @@ type sentinel string
 func (s sentinel) Error() string { return string(s) }
 
 const errNoFinding = sentinel("record carries no vinifera.finding.json attribute")
+const errNoSpecInfo = sentinel("record carries no vinifera.spec_info.json attribute")

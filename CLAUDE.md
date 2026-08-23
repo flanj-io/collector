@@ -16,6 +16,10 @@ pipeline, the local store, and the local UI.
 ## Role in the system
 
 `SDK → OTLP :4318 → [otlp receiver → redaction processor → drift processor → store exporter] → store (sqlite | postgres)`.
+**Tiered topology** (same image, role by config — `docs/STORE.md` "Topologies"): N stateless **front**
+collectors `[otlp → redaction → drift → otlphttp]` → ONE **store pod** `[otlp → redaction → store exporter] →
+store + UI` (`config/config.front.example.yaml` / `config.store.example.yaml`, baked as `/etc/vinifera/front.yaml`
+/ `store.yaml`).
 The **UI extension** serves the embedded Vue SPA + a localhost read API
 (`/api/edges|calls|findings|health|contracts|contracts/spec`), a `POST /api/flag` that promotes a redacted call to the
 control plane (`POST /api/v1/flags`), and `POST /api/peek-link` (+ `/revoke`) relaying peek-link mint/revoke to the CP
@@ -67,7 +71,11 @@ contracts/                         # vendored contract: CONTRACTS.md + fixtures,
    (conform to `contracts/redaction-vectors.json` AND the cross-language parity battery
    `contracts/redaction-fixtures.json` — both language suites must produce those exact results).
 4. **Technical adherence only** in detection — types/shapes/enums; never business/economic correctness.
-5. **Outbound-only**, localhost UI only.
+5. **Outbound-only**, localhost UI only (the store pod's `:4318` is an intra-cluster ingest for fronts).
+6. **Drift runs exactly once per call, on the front.** The store pod of the tiered topology never runs
+   `viniferadrift` (it would double `occurrence_count`); fronts always run it (call-id stamping). The
+   store is order-independent for call/finding pairs (late pin) — nothing upstream may rely on or
+   compensate for record order.
 
 ## Contract
 

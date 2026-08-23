@@ -19,6 +19,7 @@ import (
 	"go.opentelemetry.io/collector/processor/processorhelper"
 
 	"github.com/vinifera-io/collector/internal/drift"
+	"github.com/vinifera-io/collector/internal/model"
 )
 
 var typeStr = component.MustNewType("viniferadrift")
@@ -82,6 +83,22 @@ func createLogsProcessor(
 		if raw, err := os.ReadFile(c.SelfSpecPath); err == nil {
 			dp.rawSelfSpec = raw
 		}
+	}
+
+	// Precompute the contract metadata records once (stable loaded_at): used
+	// for the direct store write at Start AND emitted into the pipeline for a
+	// store pod behind an otlphttp hop.
+	if dp.doc != nil {
+		dp.specInfos = append(dp.specInfos, specInfoRecord{
+			info: specInfoFor(dp.doc, model.SpecRoleProvider, c.IntegrationID, c.PeerHost),
+			raw:  dp.rawSpec,
+		})
+	}
+	if dp.selfDoc != nil {
+		dp.specInfos = append(dp.specInfos, specInfoRecord{
+			info: specInfoFor(dp.selfDoc, model.SpecRoleSelf, c.selfIntegration(), ""),
+			raw:  dp.rawSelfSpec,
+		})
 	}
 
 	return processorhelper.NewLogs(

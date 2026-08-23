@@ -71,6 +71,67 @@ collectors at one database and:
 - **The UI on any pod shows the same data** (it reads the shared store). The UI
   stays loopback-only on every pod; flag from whichever pod you port-forward.
 
+## Topologies
+
+The same image runs in three shapes; pick per deployment. The store's semantics
+(dedup, pinning, eviction, the UI, the flag) are identical in all three.
+
+| | Single pod | N pods + shared postgres | Tiered: N fronts → 1 store |
+|---|---|---|---|
+| Pipeline | one collector: otlp → redaction → drift → store + UI | N identical collectors, each the full pipeline, `backend: postgres` | **fronts**: otlp → redaction → drift → `otlphttp`; **store pod**: otlp → redaction → store + UI |
+| Config | `/etc/vinifera/config.yaml` | same, `backend: postgres` | `/etc/vinifera/front.yaml` + `/etc/vinifera/store.yaml` (`config/config.*.example.yaml`) |
+| State | sqlite on a PVC (or postgres) | postgres only | store pod: sqlite on ONE PVC (or postgres); fronts: none |
+| Scale | 1 | N writers (postgres) | N stateless fronts (HPA on cpu/memory); store = 1 on sqlite, may scale on postgres |
+| UI | the pod | any pod (shared data) | the store pod |
+| Fits | eval, small prod | BYO-DB, scale | "one helm install, many collectors, one store" with the zero-ops sqlite default |
+
+### Tiered: how it works
+
+Front collectors do everything that must happen near the traffic — redaction,
+drift detection, edge/call-id stamping — and forward the resulting records
+(calls, findings, contract metadata) to the store pod with the core
+OpenTelemetry `otlphttp` exporter. The store pod is the single writer, so
+dedup/pin/evict need no cross-pod coordination at all; it serves the UI and
+the flag from the one window. Because the records are plain OTLP log records,
+no custom protocol exists between the tiers.
+
+- **Fronts are stateless** — no store extension, no UI, no PVC — so they scale
+  with replicas or an HPA. Their `otlphttp` sending queue (in-memory) rides out
+  a store-pod restart; a front crash loses what was in its queue (at-most-once
+  across a front crash, which is fine for a rolling evidence window).
+- **The store pod is one process** on `backend: sqlite` (one PVC, total). On
+  `backend: postgres` the store tier may itself scale, since the postgres
+  backend is multi-writer safe.
+- **Order across the hop is not load-bearing.** Within a request calls precede
+  the findings they produced; if a finding ever arrives first (re-delivered
+  partial batch, cross-request reordering, a call re-sent after eviction) the
+  store's *late pin* pins the call when it lands and repairs the edge drift
+  attribution. An insert's own eviction also never evicts the row it just wrote.
+- **Contract metadata crosses the hop too**: each front emits its loaded specs
+  as `spec_info` records (first batch after start, then every 10 minutes) so
+  the store pod's Contracts tab is populated; a freshly wiped store converges
+  within one interval.
+
+### Tiered: invariants
+
+1. **The store pod never runs `viniferadrift`** — it would re-detect every
+   forwarded call and double the findings' `occurrence_count`. Drift runs
+   exactly once per call, on the front.
+2. **Fronts always run `viniferadrift`**, even with no spec: it stamps the
+   canonical `vinifera.call.id`, which makes front→store retries idempotent and
+   ties each finding to its call across the hop.
+3. The store pod keeps `viniferaredaction` on (idempotent, add-only, skips
+   non-call records): the floor on the last hop before persistence.
+4. All SDK traffic enters via fronts; the store pod's `:4318` is for fronts
+   (ClusterIP, intra-cluster). The UI stays loopback on the store pod —
+   `kubectl port-forward` to it.
+5. **Upgrade the store pod first**, then fronts (an older store drops a newer
+   front's `spec_info` records harmlessly; an older front simply sends none).
+
+The e2e harness proves this shape end-to-end: `make gate-tiered` /
+`make stress-tiered` run the unchanged gate, the contracts check and the
+exact-count stress through two fronts into one store pod.
+
 ## Sizing the window
 
 `window_max_rows` / `window_max_bytes` cap the calls table; unpinned rows evict
@@ -119,3 +180,9 @@ and refills within minutes. Loaded contracts re-record themselves at start.
    both backends, enforced by the shared test suite
    (`internal/store/store_test.go` runs per backend; `concurrency_pg_test.go`
    proves the multi-pod races).
+4. **Order-independent call/finding pairs.** A finding that arrives before its
+   call still ends up with pinned evidence (late pin on insert; postgres
+   serialises the two writers per call id with an advisory lock), and an
+   insert's own eviction never evicts the row it just wrote. Callers — the
+   exporter, a front collector, the OTLP hop — never reorder or buffer to
+   compensate.

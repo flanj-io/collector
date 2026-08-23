@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"go.opentelemetry.io/collector/pdata/plog"
+
+	"github.com/vinifera-io/collector/internal/model"
 )
 
 func contractsDir() string { return filepath.Join("..", "..", "contracts") }
@@ -101,5 +103,57 @@ func TestCallFromRecord_ClassFallback(t *testing.T) {
 	call := CallFromRecord(lr)
 	if call.EdgeClass != "internal" {
 		t.Errorf("edge_class fallback = %q, want internal (RFC1918)", call.EdgeClass)
+	}
+}
+
+// TestSpecInfoRecord_RoundTrip: contract metadata + raw document survive the
+// record encoding (this is what crosses the front→store hop), and the record is
+// typed so the redaction/drift processors skip it and the store exporter routes
+// it to PutSpecInfo.
+func TestSpecInfoRecord_RoundTrip(t *testing.T) {
+	info := model.SpecInfo{
+		Integration: "acme-payments",
+		Role:        model.SpecRoleProvider,
+		PeerHost:    "api.acme.test",
+		Format:      "openapi",
+		Title:       "Acme Payments",
+		Version:     "1.4.0",
+		DocsURL:     "https://docs.acme.test",
+		Endpoints:   3,
+		LoadedAt:    "2026-08-23T10:00:00Z",
+	}
+	raw := []byte("openapi: 3.0.3\ninfo:\n  title: Acme Payments\n")
+
+	lr := plog.NewLogs().ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
+	if err := SpecInfoToRecord(lr, info, raw); err != nil {
+		t.Fatalf("to record: %v", err)
+	}
+	if got := RecordType(lr); got != RecordTypeSpecInfo {
+		t.Fatalf("record type = %q, want %q", got, RecordTypeSpecInfo)
+	}
+	gotInfo, gotRaw, err := SpecInfoFromRecord(lr)
+	if err != nil {
+		t.Fatalf("from record: %v", err)
+	}
+	if gotInfo != info {
+		t.Errorf("spec info round trip mismatch:\n got %+v\nwant %+v", gotInfo, info)
+	}
+	if string(gotRaw) != string(raw) {
+		t.Errorf("raw doc round trip mismatch: got %q", gotRaw)
+	}
+
+	// Empty document is allowed (metadata still flows); a record without the
+	// JSON attribute is rejected, never mistaken for a call.
+	lr2 := plog.NewLogs().ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
+	if err := SpecInfoToRecord(lr2, info, nil); err != nil {
+		t.Fatalf("to record (no raw): %v", err)
+	}
+	if _, gotRaw, err := SpecInfoFromRecord(lr2); err != nil || len(gotRaw) != 0 {
+		t.Errorf("empty raw: raw=%q err=%v", gotRaw, err)
+	}
+	lr3 := plog.NewLogs().ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
+	lr3.Attributes().PutStr(AttrRecordType, RecordTypeSpecInfo)
+	if _, _, err := SpecInfoFromRecord(lr3); err == nil {
+		t.Errorf("record without %s should be rejected", AttrSpecInfoJSON)
 	}
 }

@@ -9,7 +9,8 @@ detect **drift**, stores redacted calls in an embedded rolling-window store, and
 Headless and **outbound-only** apart from the localhost UI. Ships and deploys as one unit (collector + store +
 UI embedded in the binary).
 
-- OTLP receiver → redaction processor → drift detection → local store (rolling window; embedded SQLite on a PVC by default, or a shared Postgres database for multi-pod deployments — see docs/STORE.md).
+- OTLP receiver → redaction processor → drift detection → local store (rolling window; embedded SQLite on a PVC by default, or a shared Postgres database — see docs/STORE.md).
+- Scales as N stateless front collectors forwarding (OTLP) to one store pod — the same image in two roles, chosen by config (docs/STORE.md "Topologies").
 - Local Vue UI: **Overview** (health + drift findings with the correlation keys that make a finding actionable),
   **Traffic** (live tail of redacted calls), **Contracts** (the loaded specs), plus a **flag** action that promotes a
   redacted call to the control plane and copy-link / revoke controls for the resulting peek link.

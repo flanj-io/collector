@@ -44,6 +44,12 @@ RUN builder --config builder-config.yaml
 FROM gcr.io/distroless/static-debian12:nonroot AS runtime
 COPY --from=build /src/_build/vinifera-collector /vinifera-collector
 COPY --from=build /src/config/config.example.yaml /etc/vinifera/config.yaml
+# Tiered-topology role configs (docs/STORE.md "Topologies"): select a role with
+# `--config /etc/vinifera/front.yaml` (N stateless fronts: otlp -> redaction ->
+# drift -> otlphttp) or `--config /etc/vinifera/store.yaml` (the ONE store pod:
+# otlp -> redaction -> store + UI). The default CMD stays the single-pod config.
+COPY --from=build /src/config/config.front.example.yaml /etc/vinifera/front.yaml
+COPY --from=build /src/config/config.store.example.yaml /etc/vinifera/store.yaml
 COPY --from=build /src/contracts/spec-v1.yaml /etc/vinifera/spec-v1.yaml
 COPY --from=build /src/contracts/spec-v2.yaml /etc/vinifera/spec-v2.yaml
 

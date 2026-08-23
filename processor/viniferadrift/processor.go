@@ -28,14 +28,33 @@ type driftProcessor struct {
 
 	versionFindings []model.Finding
 	emitVersionOnce sync.Once
+
+	// The loaded contracts as spec_info records — precomputed at construction
+	// (stable loaded_at) and used both for the direct PutSpecInfo at Start
+	// (single-pod topology) and for emission INTO the pipeline, so a store pod
+	// behind an otlphttp hop learns what this front loaded (docs/STORE.md,
+	// "Topologies"). Emitted on the first batch after Start and then at most
+	// every specInfoRefresh, so a fresh store converges without a front restart.
+	specInfos    []specInfoRecord
+	specEmitMu   sync.Mutex
+	nextSpecEmit time.Time
 }
+
+// specInfoRecord pairs a contract's metadata with its raw document.
+type specInfoRecord struct {
+	info model.SpecInfo
+	raw  []byte
+}
+
+// specInfoRefresh bounds how often a front re-emits its spec_info records.
+const specInfoRefresh = 10 * time.Minute
 
 // start records the loaded contracts in the shared store so the local UI can
 // surface them (title/version/docs link + the raw spec documents). Best effort:
 // a collector without the store extension still detects drift, and a collector
 // without specs records nothing.
 func (p *driftProcessor) start(_ context.Context, host component.Host) error {
-	if p.doc == nil && p.selfDoc == nil {
+	if len(p.specInfos) == 0 {
 		return nil
 	}
 	for _, ext := range host.GetExtensions() {
@@ -43,20 +62,15 @@ func (p *driftProcessor) start(_ context.Context, host component.Host) error {
 		if !ok {
 			continue
 		}
-		if p.doc != nil {
-			info := specInfoFor(p.doc, model.SpecRoleProvider, p.cfg.IntegrationID, p.cfg.PeerHost)
-			if err := prov.Store().PutSpecInfo(info, p.rawSpec); err != nil && p.logger != nil {
-				p.logger.Warn("record provider spec info failed", zap.Error(err))
-			}
-		}
-		if p.selfDoc != nil {
-			info := specInfoFor(p.selfDoc, model.SpecRoleSelf, p.cfg.selfIntegration(), "")
-			if err := prov.Store().PutSpecInfo(info, p.rawSelfSpec); err != nil && p.logger != nil {
-				p.logger.Warn("record self spec info failed", zap.Error(err))
+		for _, si := range p.specInfos {
+			if err := prov.Store().PutSpecInfo(si.info, si.raw); err != nil && p.logger != nil {
+				p.logger.Warn("record spec info failed", zap.String("role", si.info.Role), zap.Error(err))
 			}
 		}
 		return nil
 	}
+	// No co-located store (a front collector in the tiered topology): the
+	// spec_info records emitted into the pipeline carry the contracts instead.
 	return nil
 }
 
@@ -159,19 +173,41 @@ func (p *driftProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.Logs
 		findings = append(findings, p.versionFindings...)
 	})
 
-	if len(findings) > 0 {
-		appendFindings(ld, findings)
+	specs := p.dueSpecInfos(time.Now())
+	if len(findings) > 0 || len(specs) > 0 {
+		appendRecords(ld, findings, specs)
 	}
 	return ld, nil
 }
 
-// appendFindings writes each Finding as its own log record under a fresh
-// ResourceLogs/ScopeLogs so it never collides with the in-flight call records.
-func appendFindings(ld plog.Logs, findings []model.Finding) {
+// dueSpecInfos returns the spec_info records to emit with this batch: all of
+// them on the first batch after Start and then at most once per
+// specInfoRefresh; nil otherwise. Safe for concurrent processLogs calls.
+func (p *driftProcessor) dueSpecInfos(now time.Time) []specInfoRecord {
+	if len(p.specInfos) == 0 {
+		return nil
+	}
+	p.specEmitMu.Lock()
+	defer p.specEmitMu.Unlock()
+	if now.Before(p.nextSpecEmit) {
+		return nil
+	}
+	p.nextSpecEmit = now.Add(specInfoRefresh)
+	return p.specInfos
+}
+
+// appendRecords writes each Finding and spec_info as its own log record under a
+// fresh trailing ResourceLogs/ScopeLogs so they never collide with the in-flight
+// call records (and calls stay ahead of findings within the batch).
+func appendRecords(ld plog.Logs, findings []model.Finding, specs []specInfoRecord) {
 	sl := ld.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty()
 	sl.Scope().SetName("viniferadrift")
 	for _, f := range findings {
 		lr := sl.LogRecords().AppendEmpty()
 		_ = otlpattr.FindingToRecord(lr, f)
+	}
+	for _, si := range specs {
+		lr := sl.LogRecords().AppendEmpty()
+		_ = otlpattr.SpecInfoToRecord(lr, si.info, si.raw)
 	}
 }
