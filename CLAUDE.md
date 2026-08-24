@@ -34,8 +34,13 @@ inbound off-host.
 **No target list is configured.** Integration edges are auto-discovered from observed traffic, keyed by
 (`peer.host`, `direction`), classified external vs internal (external-only surfaced on `/api/edges`). Drift
 detection is an OPTIONAL enhancer (`peer_host` scopes a loaded spec to one edge; unset, every outbound call is
-validated against it). A drift is **per endpoint**: findings dedup by
-`signature`, so one drift = one finding (with an `occurrence_count`) = one flag.
+validated against it). **MCP edges (v0.5) need no spec at all**: the SDK's observed `tools/list` arrives as a
+`contract_snapshot` record — the self-delivering local spec — versioned by content hash in the drift processor
+(previous snapshot kept for diffing; persisted as a `spec_infos` row, format `"mcp"`, so the Contracts tab lists
+the server and restarts re-seed). MCP findings: `output_mismatch` + `definition_change` (flaggable — DESCRIPTION-only
+changes are a local warning) and the local-only `stale_client`; the flag relay REFUSES local-only kinds server-side
+(`403 not_flaggable` — CONTRACTS §4). A drift is **per endpoint** (HTTP: method+route; MCP: the tool name): findings
+dedup by `signature`, so one drift = one finding (with an `occurrence_count`) = one flag.
 
 ## Stack & commands
 
@@ -51,8 +56,9 @@ validated against it). A drift is **per endpoint**: findings dedup by
 ```
 builder-config.yaml                # the ocb manifest (pins the triad; binds core receiver + custom components)
 Dockerfile                         # multi-stage: ui (node) -> build (go+ocb) -> distroless
-processor/viniferaredaction/       # defense-in-depth redaction floor (Go; idempotent, add-only)
-processor/viniferadrift/           # live-vs-spec (kin-openapi) + version-diff (oasdiff); emits Finding records
+processor/viniferaredaction/       # defense-in-depth redaction floor (Go; idempotent, add-only; also re-scans MCP contract snapshots)
+processor/viniferadrift/           # live-vs-spec (kin-openapi) + version-diff (oasdiff) + the v0.5 MCP path
+                                   # (contract_snapshot loader → output_mismatch / definition_change / stale_client); emits Finding records
 exporter/viniferastore/            # writes call + finding records into the store
 extension/viniferastore/           # SINGLE store owner (sqlite default | postgres for multi-pod); shared via host.GetExtensions()
 extension/viniferaui/              # localhost HTTP: embed.FS Vue SPA + read API + CP relay (connect / flag / threads)
@@ -91,7 +97,8 @@ contracts/                         # vendored contract: CONTRACTS.md + fixtures,
 ## Contract
 
 Ingest wire = `contracts/CONTRACTS.md` §2 (`vinifera.*` OTLP). Ingesting `contracts/golden-otlp-call.json`
-must deterministically produce the expected live-vs-spec Finding. Flag POST body must satisfy
+must deterministically produce the expected live-vs-spec Finding; ingesting `golden-otlp-mcp-snapshot.json`
+then `golden-otlp-mcp-call.json` must produce exactly one `output_mismatch` (v0.5). Flag POST body must satisfy
 `contracts/cp-flag-request.schema.json`. Runtime config keys are frozen in CONTRACTS.md §8.
 
 ## Docs & conventions

@@ -133,6 +133,51 @@ func TestFlagBody_ConformsToSchema(t *testing.T) {
 	validate(t, sch, gotBody)
 }
 
+// TestFlagBody_MCPOutputMismatchConforms (v0.5 Step C): a flag body built from
+// an MCP tools/call (transport/mcp_* fields, client-generated correlation id in
+// its own slot, no status code) and an output_mismatch finding conforms to the
+// frozen contract — the flaggable MCP kinds are part of the promoted surface.
+func TestFlagBody_MCPOutputMismatchConforms(t *testing.T) {
+	callID := "01920000-0000-7000-8000-000000000001"
+	call := model.RedactedCall{
+		SchemaVersion: 1, ID: callID, CapturedAt: "2026-08-24T10:00:00.000Z",
+		Integration: "acme-payments", Direction: "client", PeerHost: "mcp.acme.test", EdgeClass: "external",
+		Method: "tools/call", URL: "mcp://mcp.acme.test/create_refund", Route: "/create_refund",
+		RequestBody: `{"amount":1200,"card_number":"⟦REDACTED:PAN⟧","currency":"usd"}`, RequestContentType: "application/json",
+		ResponseBody: `{"refund":{"id":"re_71","amount":"1200","status":"succeeded"}}`, ResponseContentType: "application/json",
+		Correlation: model.Correlation{ClientRequestID: "4"},
+		Redaction:   model.Redaction{Applied: true, Patterns: []string{"PAN"}},
+		Transport:   "mcp", MCPToolName: "create_refund",
+		MCPServerName: "acme-payments-mcp", MCPServerVersion: "3.2.0", MCPProtocolVersion: "2025-06-18",
+	}
+	finding := model.Finding{
+		SchemaVersion: 1, ID: "01920000-0000-7000-8000-000000000002",
+		Kind: model.KindOutputMismatch, Severity: model.SeverityBreaking,
+		Integration: "acme-payments", Endpoint: "create_refund",
+		FieldPath: model.Ptr("refund.amount"), Location: model.Ptr("$.response.structuredContent.refund.amount"),
+		Expected: "type=integer", Actual: `type=string ("1200")`, Rule: "type-mismatch",
+		SourceCallID: &callID, DetectedAt: "2026-08-24T10:00:01.000Z",
+		Signature: "acme-payments|create_refund|output_mismatch|type-mismatch|refund.amount", OccurrenceCount: 12,
+	}
+	req := Build(Input{ConsumerDisplayName: "Acme Consumer Ltd", Call: call, Finding: finding})
+	body, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	validate(t, flagSchema(t), body)
+
+	// definition_change (the other flaggable v0.5 kind) is accepted by the
+	// frozen schema too — its artifact has no source call.
+	finding.Kind = model.KindDefinitionChange
+	finding.SourceCallID = nil
+	finding.SpecVersionFrom, finding.SpecVersionTo = model.Ptr("sha256:aaaaaaaaaaaa"), model.Ptr("sha256:bbbbbbbbbbbb")
+	req = Build(Input{ConsumerDisplayName: "Acme Consumer Ltd", Call: call, Finding: finding})
+	if body, err = json.Marshal(req); err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	validate(t, flagSchema(t), body)
+}
+
 // TestHumanizeIntegration proves the shared humanize rule: split on -/_/space,
 // Title Case each word.
 func TestHumanizeIntegration(t *testing.T) {

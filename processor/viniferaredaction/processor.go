@@ -26,7 +26,10 @@ func newRedactionProcessor(cfg *Config) *redactionProcessor {
 }
 
 // processLogs re-runs the redaction floor over the redactable attributes of every
-// "call" record. Finding records carry no free text and are passed through.
+// "call" record and over the snapshot document of every "contract_snapshot"
+// record (v0.5 — the snapshot is STORED as the edge's local spec, so the same
+// defense-in-depth applies before storage). Finding records carry no free text
+// and are passed through.
 func (p *redactionProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.Logs, error) {
 	rls := ld.ResourceLogs()
 	for i := 0; i < rls.Len(); i++ {
@@ -35,14 +38,41 @@ func (p *redactionProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.
 			recs := sls.At(j).LogRecords()
 			for k := 0; k < recs.Len(); k++ {
 				lr := recs.At(k)
-				if otlpattr.RecordType(lr) != otlpattr.RecordTypeCall {
-					continue
+				switch otlpattr.RecordType(lr) {
+				case otlpattr.RecordTypeCall:
+					p.redactRecord(lr)
+				case otlpattr.RecordTypeContractSnapshot:
+					p.redactSnapshot(lr)
 				}
-				p.redactRecord(lr)
 			}
 		}
 	}
 	return ld, nil
+}
+
+// redactSnapshot re-runs the floor over the observed tools/list document (the
+// SDK already floor-redacted it at source; this pass is idempotent and
+// add-only, like redactRecord). No field records: the snapshot is a contract
+// document, not a call body.
+func (p *redactionProcessor) redactSnapshot(lr plog.LogRecord) {
+	attrs := lr.Attributes()
+	v, ok := attrs.Get(otlpattr.AttrMCPContractSnapshot)
+	if !ok {
+		return
+	}
+	res := p.r.Redact(v.Str())
+	if res.Text != v.Str() {
+		attrs.PutStr(otlpattr.AttrMCPContractSnapshot, res.Text)
+	}
+	if len(res.Patterns) == 0 {
+		return
+	}
+	fired := map[string]bool{}
+	for _, id := range res.Patterns {
+		fired[id] = true
+	}
+	attrs.PutBool(otlpattr.AttrRedactApplied, true)
+	mergePatterns(attrs, fired)
 }
 
 // redactRecord redacts each body attribute in place and, if anything new fired,

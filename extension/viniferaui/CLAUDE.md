@@ -39,7 +39,12 @@ API + the flag action.
     local_ui_url}` refreshed from `me` (≤1 CP call / 10s per pod; the UI polls it
     every 5s while pending).
   - `POST /api/flag {finding_id, message?, provider_display_name?}` — **Create
-    thread**: `412 {error: not_connected | contact_unconfirmed}` before Connect /
+    thread**: `403 {error: not_flaggable}` for LOCAL-ONLY finding kinds
+    (`model.Finding.Flaggable()` — `stale_client` always; `definition_change`
+    when the change is DESCRIPTION-only): the v0.5 evidence rule is enforced
+    server-side in the relay, never just by UI absence, so a hand-crafted
+    request cannot promote a local notice. `412 {error: not_connected |
+    contact_unconfirmed}` before Connect /
     the FIRST confirmation — the gate is "a confirmed contact exists"
     (`confirmed_contact_email` non-null), so a new pending contact never blocks
     it (a never-confirmed contact is re-checked against the CP right then, so it

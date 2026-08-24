@@ -145,6 +145,12 @@ const (
 // the call's response-part redaction.fields records (the live-vs-spec detector
 // validates the RESPONSE body). The lookup key is the error's RFC 6901 pointer.
 func responseFieldProps(call model.RedactedCall, se *openapi3.SchemaError) (redact.ValueProps, bool) {
+	return capturedFieldProps(call, "response", se)
+}
+
+// capturedFieldProps is the part-aware lookup behind responseFieldProps: the MCP
+// detector also judges REQUEST-part (tools/call arguments) redactions with it.
+func capturedFieldProps(call model.RedactedCall, part string, se *openapi3.SchemaError) (redact.ValueProps, bool) {
 	var b strings.Builder
 	for _, seg := range se.JSONPointer() {
 		b.WriteByte('/')
@@ -152,7 +158,7 @@ func responseFieldProps(call model.RedactedCall, se *openapi3.SchemaError) (reda
 	}
 	path := b.String() // "" = the root scalar
 	for _, f := range call.Redaction.Fields {
-		if f.Part == "response" && f.Path == path {
+		if f.Part == part && f.Path == path {
 			return f.Props, true
 		}
 	}

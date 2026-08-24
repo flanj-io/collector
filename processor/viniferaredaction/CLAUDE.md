@@ -26,11 +26,16 @@ re-applies the Vinifera floor to every `call` record's free-text attributes
   `internal/redact` and is governed by `contracts/redaction-vectors.json`. This
   processor must never double-wrap an existing `⟦REDACTED:…⟧` token — that
   property comes from `internal/redact`, so route all matching through it.
-- **Only `call` records** carry free text; `finding` records pass through
-  untouched.
+- **Only `call` and `contract_snapshot` records** carry free text; `finding` /
+  `spec_info` records pass through untouched. The v0.5 `contract_snapshot`
+  pass re-scans `vinifera.mcp.contract_snapshot` (the observed tools/list is
+  STORED as the edge's local spec, so the same defense-in-depth applies) —
+  add-only, idempotent, no field records (a contract document, not a call
+  body).
 
 ## Tests
 
 The redaction oracle is `internal/redact` (`go test ./internal/redact`). This
 wrapper is exercised by the ocb build + the runtime smoke (POST the golden call,
-confirm the stored body is redacted).
+confirm the stored body is redacted). `processor_test.go` covers the v0.5
+snapshot pass (leaked PAN tokenised, idempotent, clean snapshot untouched).

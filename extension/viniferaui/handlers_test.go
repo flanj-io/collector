@@ -740,6 +740,62 @@ func TestFlagGateBeforeFirstConfirmation(t *testing.T) {
 	}
 }
 
+// TestFlagRefusesLocalOnlyKinds (v0.5 §4.C.4): the relay REFUSES to flag
+// local-only finding kinds SERVER-SIDE — stale_client always, and
+// definition_change when the change is DESCRIPTION-only — even for a fully
+// Connected collector. Nothing reaches the CP. Flaggable MCP kinds
+// (output_mismatch; BREAKING definition changes ride the same path) still flag.
+func TestFlagRefusesLocalOnlyKinds(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	// Connected with a confirmed contact — the refusal is about the KIND, not the gate.
+	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, ConsumerDisplayName: "Acme",
+		ContactEmail: "ops@acme.test", ContactStatus: "confirmed", ConfirmedContactEmail: "ops@acme.test"})
+	r.cp.mu.Lock()
+	r.cp.contactEmail, r.cp.contactStatus, r.cp.confirmedEmail = "ops@acme.test", "confirmed", "ops@acme.test"
+	r.cp.mu.Unlock()
+
+	callID := "call_mcp_1"
+	_ = r.st.InsertCall(model.RedactedCall{SchemaVersion: 1, ID: callID, CapturedAt: "2026-08-24T10:00:00Z",
+		Integration: "acme-payments", Direction: "client", Method: "tools/call", Route: "/old_refund",
+		URL: "mcp://mcp.acme.test/old_refund", RequestBody: "{}", ResponseBody: "{}",
+		Transport: "mcp", MCPToolName: "old_refund", Redaction: model.Redaction{Patterns: []string{}}})
+	_ = r.st.InsertFinding(model.Finding{SchemaVersion: 1, ID: "fnd_stale", Kind: model.KindStaleClient,
+		Severity: model.SeverityWarning, Integration: "acme-payments", Endpoint: "old_refund",
+		Expected: "a tool declared in the current tools/list", Actual: "tools/call to `old_refund` (not listed)",
+		Rule: "tool-not-listed", SourceCallID: &callID, DetectedAt: "2026-08-24T10:00:01Z"})
+	_ = r.st.InsertFinding(model.Finding{SchemaVersion: 1, ID: "fnd_desc", Kind: model.KindDefinitionChange,
+		Severity: model.SeverityWarning, Integration: "acme-payments", Endpoint: "create_refund",
+		Expected: "\"Refund a charge.\"", Actual: "\"Refund a charge, with fees.\"",
+		Rule: model.RuleDescriptionChanged, DetectedAt: "2026-08-24T10:00:01Z"})
+	_ = r.st.InsertFinding(model.Finding{SchemaVersion: 1, ID: "fnd_mismatch", Kind: model.KindOutputMismatch,
+		Severity: model.SeverityBreaking, Integration: "acme-payments", Endpoint: "create_refund",
+		Expected: "type=integer", Actual: `type=string ("1200")`, Rule: "type-mismatch",
+		SourceCallID: &callID, DetectedAt: "2026-08-24T10:00:01Z"})
+
+	for _, id := range []string{"fnd_stale", "fnd_desc"} {
+		resp, out, _ := r.do(t, http.MethodPost, "/api/flag", map[string]string{"finding_id": id})
+		if resp.StatusCode != 403 || out["error"] != "not_flaggable" {
+			t.Errorf("flag %s = %d %v, want 403 not_flaggable", id, resp.StatusCode, out)
+		}
+	}
+	if r.cp.flagCalls != 0 {
+		t.Fatalf("a local-only finding reached the CP (%d flag calls)", r.cp.flagCalls)
+	}
+
+	// The flaggable MCP kind goes through unchanged.
+	resp, out, raw := r.do(t, http.MethodPost, "/api/flag", map[string]string{"finding_id": "fnd_mismatch"})
+	if resp.StatusCode != 201 || out["thread_url"] == "" {
+		t.Fatalf("flag output_mismatch: %d %s", resp.StatusCode, raw)
+	}
+	if r.cp.flagCalls != 1 {
+		t.Errorf("flag calls = %d, want 1", r.cp.flagCalls)
+	}
+	if kind, _ := r.cp.lastFlagBody["finding"].(map[string]any)["kind"].(string); kind != model.KindOutputMismatch {
+		t.Errorf("promoted finding kind = %q", kind)
+	}
+}
+
 // TestConnectRedactsDisplayNames: display names are free text that leaves the
 // collector — they pass the redaction floor (like the flag message) before they
 // are sent to the CP or persisted. A PAN in a display name is tokenised.

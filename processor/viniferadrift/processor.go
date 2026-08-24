@@ -26,6 +26,16 @@ type driftProcessor struct {
 	selfDoc     *openapi3.T
 	rawSelfSpec []byte
 
+	// The MCP side (v0.5 Step C): per-edge tools/list snapshots + the three MCP
+	// findings. Needs NO configuration — MCP contracts are self-delivering
+	// (contract_snapshot records observed in the traffic).
+	mcp *drift.MCPDetector
+	// st is the co-located store (nil on a front collector of the tiered
+	// topology). Used to persist MCP snapshots as spec_infos directly and to
+	// seed the MCP baseline across restarts; the spec_info records emitted
+	// into the pipeline cover the tiered store pod either way.
+	st store.Store
+
 	versionFindings []model.Finding
 	emitVersionOnce sync.Once
 
@@ -50,27 +60,53 @@ type specInfoRecord struct {
 const specInfoRefresh = 10 * time.Minute
 
 // start records the loaded contracts in the shared store so the local UI can
-// surface them (title/version/docs link + the raw spec documents). Best effort:
-// a collector without the store extension still detects drift, and a collector
-// without specs records nothing.
+// surface them (title/version/docs link + the raw spec documents) and seeds the
+// MCP detector from the persisted snapshots. Best effort: a collector without
+// the store extension still detects drift (a front collector in the tiered
+// topology — the spec_info records emitted into the pipeline carry the
+// contracts instead, and the MCP baseline re-establishes from the next
+// observed tools/list).
 func (p *driftProcessor) start(_ context.Context, host component.Host) error {
-	if len(p.specInfos) == 0 {
-		return nil
-	}
 	for _, ext := range host.GetExtensions() {
 		prov, ok := ext.(store.Provider)
 		if !ok {
 			continue
 		}
-		for _, si := range p.specInfos {
-			if err := prov.Store().PutSpecInfo(si.info, si.raw); err != nil && p.logger != nil {
-				p.logger.Warn("record spec info failed", zap.String("role", si.info.Role), zap.Error(err))
-			}
-		}
+		p.st = prov.Store()
+		break
+	}
+	if p.st == nil {
 		return nil
 	}
-	// No co-located store (a front collector in the tiered topology): the
-	// spec_info records emitted into the pipeline carry the contracts instead.
+	for _, si := range p.specInfos {
+		if err := p.st.PutSpecInfo(si.info, si.raw); err != nil && p.logger != nil {
+			p.logger.Warn("record spec info failed", zap.String("role", si.info.Role), zap.Error(err))
+		}
+	}
+	// Seed the MCP baseline from the persisted snapshots (spec_infos rows with
+	// format "mcp"), so a restart diffs the next observed tools/list against
+	// the last persisted one instead of silently re-baselining.
+	if p.mcp != nil {
+		infos, err := p.st.ListSpecInfos()
+		if err != nil {
+			if p.logger != nil {
+				p.logger.Warn("list spec infos for mcp seed failed", zap.Error(err))
+			}
+			return nil
+		}
+		for _, info := range infos {
+			if info.Format != model.SpecFormatMCP {
+				continue
+			}
+			raw, _, ok, err := p.st.GetSpecDoc(info.Integration)
+			if err != nil || !ok {
+				continue
+			}
+			if err := p.mcp.Seed(info, raw); err != nil && p.logger != nil {
+				p.logger.Warn("seed mcp contract failed", zap.String("integration", info.Integration), zap.Error(err))
+			}
+		}
+	}
 	return nil
 }
 
@@ -101,6 +137,7 @@ func specInfoFor(doc *openapi3.T, role, integration, peerHost string) model.Spec
 // on the first batch that flows through.
 func (p *driftProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.Logs, error) {
 	var findings []model.Finding
+	var mcpSpecs []specInfoRecord
 
 	rls := ld.ResourceLogs()
 	for i := 0; i < rls.Len(); i++ {
@@ -110,10 +147,51 @@ func (p *driftProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.Logs
 			n := recs.Len() // snapshot: we append finding records below
 			for k := 0; k < n; k++ {
 				lr := recs.At(k)
+				// contract_snapshot (v0.5): an observed MCP tools/list — the
+				// self-delivering local spec. Load it (versioned, diffed) and
+				// carry its SpecInfo downstream like a loaded contract.
+				if otlpattr.RecordType(lr) == otlpattr.RecordTypeContractSnapshot {
+					if p.mcp == nil {
+						continue
+					}
+					snap, err := otlpattr.ContractSnapshotFromRecord(lr)
+					if err != nil {
+						if p.logger != nil {
+							p.logger.Warn("drop malformed contract_snapshot record", zap.Error(err))
+						}
+						continue
+					}
+					fs, info, raw, err := p.mcp.LoadSnapshot(snap)
+					if err != nil {
+						if p.logger != nil {
+							p.logger.Warn("load mcp contract snapshot failed", zap.String("peer", snap.PeerHost), zap.Error(err))
+						}
+						continue
+					}
+					findings = append(findings, fs...)
+					mcpSpecs = append(mcpSpecs, specInfoRecord{info: info, raw: raw})
+					// Direct persist when a store is co-located (single-pod /
+					// store pod); the emitted spec_info record covers the
+					// tiered hop — the double write is a harmless upsert.
+					if p.st != nil {
+						if err := p.st.PutSpecInfo(info, raw); err != nil && p.logger != nil {
+							p.logger.Warn("persist mcp contract snapshot failed", zap.Error(err))
+						}
+					}
+					continue
+				}
 				if otlpattr.RecordType(lr) != otlpattr.RecordTypeCall {
 					continue
 				}
 				otlpattr.EnsureCallID(lr) // stamp the shared id before reconstruct
+				// MCP tools/call records take the MCP detection path (validated
+				// against the observed snapshot), NEVER the OpenAPI one.
+				if otlpattr.Transport(lr) == otlpattr.TransportMCP {
+					if p.mcp != nil {
+						findings = append(findings, p.mcp.DetectCall(otlpattr.CallFromRecord(lr))...)
+					}
+					continue
+				}
 				// No spec loaded → pass-through (capture + edge discovery only).
 				if p.doc == nil && p.selfDoc == nil {
 					continue
@@ -173,7 +251,14 @@ func (p *driftProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.Logs
 		findings = append(findings, p.versionFindings...)
 	})
 
-	specs := p.dueSpecInfos(time.Now())
+	// MCP snapshots observed in THIS batch ride along un-rate-limited: each is
+	// already at most one per observed tools/list, and the store's PutSpecInfo
+	// is an idempotent upsert. Copy-append: dueSpecInfos returns the shared
+	// p.specInfos slice, which must never be appended into.
+	due := p.dueSpecInfos(time.Now())
+	specs := make([]specInfoRecord, 0, len(due)+len(mcpSpecs))
+	specs = append(specs, due...)
+	specs = append(specs, mcpSpecs...)
 	if len(findings) > 0 || len(specs) > 0 {
 		appendRecords(ld, findings, specs)
 	}

@@ -54,6 +54,34 @@ const (
 	// {part,path,pattern,props}; sorted by part then path; omitted when empty).
 	AttrRedactFields = "vinifera.redaction.fields"
 
+	// v0.5 MCP attributes (CONTRACTS §2 "MCP tool-call records" +
+	// "`contract_snapshot` records", Step B — parsed here since Step C).
+	// AttrTransport is "mcp" on MCP records; absent = HTTP.
+	AttrTransport = "vinifera.transport"
+	// AttrMCPToolName is the called tool — the operation id detection matches
+	// against the contract (Operation.ID / Match.ToolName).
+	AttrMCPToolName = "vinifera.mcp.tool.name"
+	// AttrMCPIsError is the CallToolResult's isError (also true when the call
+	// itself rejected). Feeds the error-rate metric; never a finding on its own.
+	AttrMCPIsError = "vinifera.mcp.is_error"
+	// AttrMCPServerName / AttrMCPServerVersion / AttrMCPProtocolVersion carry
+	// the server identity from initialize, when the client surfaces it.
+	AttrMCPServerName      = "vinifera.mcp.server.name"
+	AttrMCPServerVersion   = "vinifera.mcp.server.version"
+	AttrMCPProtocolVersion = "vinifera.mcp.protocol.version"
+	// AttrMCPSessionID is the Mcp-Session-Id when the transport exposes one.
+	AttrMCPSessionID = "vinifera.mcp.session.id"
+	// AttrCorrClientRequestID is the JSON-RPC id observed on the client's OWN
+	// outgoing message — CLIENT-generated, labeled as such, never merged into
+	// AttrCorrRequestID (which stays provider-issued only).
+	AttrCorrClientRequestID = "vinifera.corr.client_request_id"
+	// AttrMCPContractSnapshot is the floor-redacted JSON of one COMPLETE
+	// observed tools/list ({"tools":[…], "serverInfo"?, "protocolVersion"?,
+	// "capabilities"?}; tools decodable by contract.ParseToolsList).
+	AttrMCPContractSnapshot = "vinifera.mcp.contract_snapshot"
+	// AttrMCPToolCount is the number of tools in the snapshot.
+	AttrMCPToolCount = "vinifera.mcp.tool.count"
+
 	// Internal-only: the whole finding JSON carried on a finding log record.
 	AttrFindingJSON = "vinifera.finding.json"
 
@@ -71,6 +99,13 @@ const (
 	RecordTypeCall     = "call"
 	RecordTypeFinding  = "finding"
 	RecordTypeSpecInfo = "spec_info"
+	// RecordTypeContractSnapshot is one complete observed MCP tools/list —
+	// the self-delivering local spec (v0.5; emitted by the SDK, loaded by the
+	// drift processor, never stored as a call).
+	RecordTypeContractSnapshot = "contract_snapshot"
+
+	// TransportMCP is AttrTransport's value on MCP records.
+	TransportMCP = "mcp"
 )
 
 // bodyAttrs are the redactable string attributes the defense-in-depth pass
@@ -86,6 +121,24 @@ func RecordType(lr plog.LogRecord) string {
 		return v.Str()
 	}
 	return RecordTypeCall
+}
+
+// Transport reads vinifera.transport ("" = HTTP, TransportMCP = MCP).
+func Transport(lr plog.LogRecord) string {
+	if v, ok := lr.Attributes().Get(AttrTransport); ok {
+		return v.Str()
+	}
+	return ""
+}
+
+// recordTime derives the record's capture time (Timestamp, falling back to
+// ObservedTimestamp) as the store's ISO-8601 UTC format.
+func recordTime(lr plog.LogRecord) string {
+	ts := lr.Timestamp()
+	if ts == 0 {
+		ts = lr.ObservedTimestamp()
+	}
+	return time.Unix(0, int64(ts)).UTC().Format("2006-01-02T15:04:05.000Z07:00")
 }
 
 func getStr(m pcommon.Map, k string) string {
@@ -132,11 +185,7 @@ func CallFromRecord(lr plog.LogRecord) model.RedactedCall {
 	if v, ok := m.Get(AttrRedactFields); ok {
 		_ = json.Unmarshal([]byte(v.Str()), &fields)
 	}
-	ts := lr.Timestamp()
-	if ts == 0 {
-		ts = lr.ObservedTimestamp()
-	}
-	capturedAt := time.Unix(0, int64(ts)).UTC().Format("2006-01-02T15:04:05.000Z07:00")
+	capturedAt := recordTime(lr)
 	id := getStr(m, AttrCallID)
 	if id == "" {
 		id = NewID()
@@ -174,6 +223,9 @@ func CallFromRecord(lr plog.LogRecord) model.RedactedCall {
 			IdempotencyKey: getStr(m, AttrCorrIdemKey),
 			TraceID:        getStr(m, AttrCorrTraceID),
 			SpanID:         getStr(m, AttrCorrSpanID),
+			// Client-generated (MCP): kept in its own slot, never folded into
+			// the provider-issued RequestID.
+			ClientRequestID: getStr(m, AttrCorrClientRequestID),
 		},
 		DurationMS: getInt(m, AttrDurationMS),
 		Redaction: model.Redaction{
@@ -182,7 +234,56 @@ func CallFromRecord(lr plog.LogRecord) model.RedactedCall {
 			SpecAware: getBool(m, AttrRedactSpecAwr),
 			Fields:    fields,
 		},
+		Transport:          getStr(m, AttrTransport),
+		MCPToolName:        getStr(m, AttrMCPToolName),
+		MCPIsError:         getBool(m, AttrMCPIsError),
+		MCPServerName:      getStr(m, AttrMCPServerName),
+		MCPServerVersion:   getStr(m, AttrMCPServerVersion),
+		MCPProtocolVersion: getStr(m, AttrMCPProtocolVersion),
+		MCPSessionID:       getStr(m, AttrMCPSessionID),
 	}
+}
+
+// ContractSnapshot is one decoded contract_snapshot record: a COMPLETE observed
+// MCP tools/list plus the edge + server identity it was observed on (CONTRACTS
+// §2, v0.5). SnapshotJSON is the floor-redacted snapshot document verbatim —
+// the server's own words; contract.ParseToolsList decodes its tools.
+type ContractSnapshot struct {
+	Integration     string
+	Direction       string
+	PeerHost        string
+	EdgeClass       string
+	ServerName      string
+	ServerVersion   string
+	ProtocolVersion string
+	ToolCount       int
+	SnapshotJSON    string
+	// ObservedAt is the record's own timestamp (the spec's "<ts>" in
+	// provenance "observed tools/list at <ts>").
+	ObservedAt string
+}
+
+// ContractSnapshotFromRecord reconstructs a ContractSnapshot from a
+// "contract_snapshot" log record. A record without the snapshot payload is
+// rejected (never mistaken for an empty list).
+func ContractSnapshotFromRecord(lr plog.LogRecord) (ContractSnapshot, error) {
+	m := lr.Attributes()
+	raw := getStr(m, AttrMCPContractSnapshot)
+	if raw == "" {
+		return ContractSnapshot{}, errNoSnapshot
+	}
+	return ContractSnapshot{
+		Integration:     getStr(m, AttrIntegration),
+		Direction:       getStr(m, AttrDirection),
+		PeerHost:        getStr(m, AttrPeerHost),
+		EdgeClass:       getStr(m, AttrEdgeClass),
+		ServerName:      getStr(m, AttrMCPServerName),
+		ServerVersion:   getStr(m, AttrMCPServerVersion),
+		ProtocolVersion: getStr(m, AttrMCPProtocolVersion),
+		ToolCount:       getInt(m, AttrMCPToolCount),
+		SnapshotJSON:    raw,
+		ObservedAt:      recordTime(lr),
+	}, nil
 }
 
 // EnsureCallID returns the record's stable call id, generating and stamping one
@@ -269,3 +370,4 @@ func (s sentinel) Error() string { return string(s) }
 
 const errNoFinding = sentinel("record carries no vinifera.finding.json attribute")
 const errNoSpecInfo = sentinel("record carries no vinifera.spec_info.json attribute")
+const errNoSnapshot = sentinel("record carries no vinifera.mcp.contract_snapshot attribute")

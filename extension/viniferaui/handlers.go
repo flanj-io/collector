@@ -268,6 +268,13 @@ func (e *uiExtension) handleFlag(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "finding_not_found", msgFindingNotFound)
 		return
 	}
+	// Evidence rule (v0.5 §6), enforced SERVER-SIDE — not just by UI absence:
+	// local-only kinds (stale_client; DESCRIPTION-only definition changes) are
+	// consumer-side or subjective and never leave this collector as a flag.
+	if !finding.Flaggable() {
+		writeErr(w, http.StatusForbidden, "not_flaggable", msgNotFlaggable)
+		return
+	}
 	if finding.SourceCallID == nil || *finding.SourceCallID == "" {
 		writeErr(w, http.StatusBadRequest, "finding_has_no_call", msgFindingNoCall)
 		return

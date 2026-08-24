@@ -10,10 +10,11 @@ import (
 // annotations). Schemas stay raw JSON here — the server's own words — and are
 // canonicalized only when normalized into an Operation.
 //
-// This is the Step C seam: today callers hand this package an already-decoded
-// tool list (mcp-drift-watch's stored snapshots, fixtures); Step C's event
-// loader will decode `contract_snapshot` events into the same []ToolDef and
-// call FromToolsList — the normalization below is final either way.
+// Two callers share this seam: mcp-drift-watch hands it already-decoded tool
+// lists (stored snapshots, fixtures), and the collector's Step C event loader
+// (internal/drift MCPDetector.LoadSnapshot) decodes `contract_snapshot`
+// records through ParseToolsList into the same []ToolDef — the normalization
+// below is final either way.
 type ToolDef struct {
 	Name         string          `json:"name"`
 	Description  string          `json:"description,omitempty"`

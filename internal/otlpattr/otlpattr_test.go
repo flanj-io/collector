@@ -8,6 +8,7 @@ import (
 
 	"go.opentelemetry.io/collector/pdata/plog"
 
+	"github.com/vinifera-io/collector/contract"
 	"github.com/vinifera-io/collector/internal/model"
 )
 
@@ -89,6 +90,83 @@ func TestCallFromRecord_ServerDirection(t *testing.T) {
 	}
 	if call.EdgeClass != "external" {
 		t.Errorf("edge_class = %q, want external", call.EdgeClass)
+	}
+}
+
+// TestCallFromRecord_MCPGolden asserts the v0.5 MCP tools/call golden maps its
+// additive attributes into the record — transport, tool, isError, server
+// identity — and keeps the client-generated JSON-RPC id in its OWN correlation
+// slot, never folded into the provider-issued request_id.
+func TestCallFromRecord_MCPGolden(t *testing.T) {
+	call := CallFromRecord(recordFromFixture(t, "golden-otlp-mcp-call.json"))
+	if call.Transport != TransportMCP {
+		t.Errorf("transport = %q, want mcp", call.Transport)
+	}
+	if call.MCPToolName != "create_refund" {
+		t.Errorf("tool = %q", call.MCPToolName)
+	}
+	if call.MCPIsError {
+		t.Errorf("is_error = true, want false")
+	}
+	if call.MCPServerName != "acme-payments-mcp" || call.MCPServerVersion != "3.2.0" ||
+		call.MCPProtocolVersion != "2025-06-18" || call.MCPSessionID != "sess_9f3c1a" {
+		t.Errorf("server identity = %q %q %q %q", call.MCPServerName, call.MCPServerVersion, call.MCPProtocolVersion, call.MCPSessionID)
+	}
+	if call.Correlation.ClientRequestID != "4" {
+		t.Errorf("client_request_id = %q, want the JSON-RPC id", call.Correlation.ClientRequestID)
+	}
+	if call.Correlation.RequestID != "" {
+		t.Errorf("request_id = %q — the client-generated id must NEVER land in the provider-issued slot", call.Correlation.RequestID)
+	}
+	if call.Method != "tools/call" || call.Route != "/create_refund" || call.PeerHost != "mcp.acme.test" {
+		t.Errorf("method/route/peer = %q %q %q", call.Method, call.Route, call.PeerHost)
+	}
+	if call.StatusCode != 0 {
+		t.Errorf("status_code = %d, want 0 (MCP has none)", call.StatusCode)
+	}
+	if len(call.Redaction.Fields) != 1 || call.Redaction.Fields[0].Part != "request" || call.Redaction.Fields[0].Path != "/card_number" {
+		t.Errorf("redaction.fields = %+v", call.Redaction.Fields)
+	}
+}
+
+// TestContractSnapshotFromRecord_Golden asserts the v0.5 contract_snapshot
+// golden decodes into the snapshot the MCP loader consumes, tools decodable by
+// contract.ParseToolsList.
+func TestContractSnapshotFromRecord_Golden(t *testing.T) {
+	lr := recordFromFixture(t, "golden-otlp-mcp-snapshot.json")
+	if got := RecordType(lr); got != RecordTypeContractSnapshot {
+		t.Fatalf("record type = %q, want %q", got, RecordTypeContractSnapshot)
+	}
+	snap, err := ContractSnapshotFromRecord(lr)
+	if err != nil {
+		t.Fatalf("from record: %v", err)
+	}
+	if snap.Integration != "acme-payments" || snap.PeerHost != "mcp.acme.test" || snap.Direction != "client" || snap.EdgeClass != "external" {
+		t.Errorf("edge identity = %+v", snap)
+	}
+	if snap.ServerName != "acme-payments-mcp" || snap.ServerVersion != "3.2.0" || snap.ProtocolVersion != "2025-06-18" {
+		t.Errorf("server identity = %q %q %q", snap.ServerName, snap.ServerVersion, snap.ProtocolVersion)
+	}
+	if snap.ToolCount != 3 {
+		t.Errorf("tool count = %d, want 3", snap.ToolCount)
+	}
+	tools, err := contract.ParseToolsList([]byte(snap.SnapshotJSON))
+	if err != nil {
+		t.Fatalf("snapshot tools must decode via contract.ParseToolsList: %v", err)
+	}
+	if len(tools) != 3 || tools[0].Name != "get_balance" {
+		t.Errorf("tools = %d (%v)", len(tools), tools)
+	}
+	// list_transactions declares NO outputSchema — the honest state survives.
+	if len(tools[2].OutputSchema) != 0 {
+		t.Errorf("list_transactions outputSchema = %s, want none", tools[2].OutputSchema)
+	}
+
+	// A snapshot-typed record WITHOUT the payload is rejected, never an empty list.
+	lr2 := plog.NewLogRecord()
+	lr2.Attributes().PutStr(AttrRecordType, RecordTypeContractSnapshot)
+	if _, err := ContractSnapshotFromRecord(lr2); err == nil {
+		t.Errorf("record without %s must be rejected", AttrMCPContractSnapshot)
 	}
 }
 

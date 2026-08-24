@@ -45,7 +45,9 @@ func createLogsProcessor(
 ) (processor.Logs, error) {
 	c := cfg.(*Config)
 
-	dp := &driftProcessor{cfg: c, logger: set.Logger}
+	// The MCP detector is ALWAYS on (no config): MCP contracts are
+	// self-delivering — an observed tools/list snapshot is the local spec.
+	dp := &driftProcessor{cfg: c, logger: set.Logger, mcp: drift.NewMCPDetector()}
 
 	// The spec is OPTIONAL: with no spec_path the processor is a pass-through that
 	// still stamps call ids so capture + edge discovery work. When a spec IS

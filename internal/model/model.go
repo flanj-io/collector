@@ -15,6 +15,12 @@ type Correlation struct {
 	IdempotencyKey string `json:"idempotency_key,omitempty"`
 	TraceID        string `json:"trace_id,omitempty"`
 	SpanID         string `json:"span_id,omitempty"`
+	// ClientRequestID is the JSON-RPC id observed on the client's OWN outgoing
+	// MCP message (CONTRACTS §2 vinifera.corr.client_request_id, v0.5). It is
+	// CLIENT-generated: it appears in the provider's logs only if they log it.
+	// Rendered as "JSON-RPC id (client-generated)" and NEVER merged into
+	// RequestID, which stays provider-issued only.
+	ClientRequestID string `json:"client_request_id,omitempty"`
 }
 
 // RedactedFieldRecord is one whole-value body redaction with the ORIGINAL value's
@@ -71,6 +77,25 @@ type RedactedCall struct {
 	Correlation           Correlation       `json:"correlation"`
 	DurationMS            int               `json:"duration_ms,omitempty"`
 	Redaction             Redaction         `json:"redaction"`
+
+	// v0.5 MCP fields (CONTRACTS §2 "MCP tool-call records"; additive — absent
+	// on HTTP records, tolerated by every reader via additionalProperties:true).
+	// Transport is "mcp" for an MCP tools/call record; empty means HTTP.
+	Transport string `json:"transport,omitempty"`
+	// MCPToolName is the called tool — the operation id detection matches
+	// against the contract (Operation.ID / Match.ToolName).
+	MCPToolName string `json:"mcp_tool_name,omitempty"`
+	// MCPIsError mirrors the CallToolResult's isError (also true when the call
+	// itself rejected). Feeds the error-rate metric; never a finding on its own.
+	MCPIsError bool `json:"mcp_is_error,omitempty"`
+	// MCPServerName / MCPServerVersion carry serverInfo when the client
+	// surfaced it (never guessed).
+	MCPServerName    string `json:"mcp_server_name,omitempty"`
+	MCPServerVersion string `json:"mcp_server_version,omitempty"`
+	// MCPProtocolVersion is the negotiated MCP protocol version, when surfaced.
+	MCPProtocolVersion string `json:"mcp_protocol_version,omitempty"`
+	// MCPSessionID is the Mcp-Session-Id when the transport exposes one.
+	MCPSessionID string `json:"mcp_session_id,omitempty"`
 }
 
 // Finding kinds and severities (contracts §4).
@@ -78,10 +103,45 @@ const (
 	KindLiveVsSpec  = "live-vs-spec"
 	KindVersionDiff = "version-diff"
 
+	// v0.5 MCP finding kinds (spec §1/§4.C).
+	// KindOutputMismatch: a tool call's structuredContent violates the tool's
+	// declared outputSchema. FLAGGABLE — the purest evidence-rule case: their
+	// schema vs their own response.
+	KindOutputMismatch = "output_mismatch"
+	// KindDefinitionChange: two consecutive observed tools/list snapshots
+	// differ; one finding per (edge, operation, rule, fieldPath) with the
+	// classifier's class. FLAGGABLE for BREAKING and NON_BREAKING; a
+	// DESCRIPTION-only change (rule = RuleDescriptionChanged) is a LOCAL
+	// warning, never flaggable.
+	KindDefinitionChange = "definition_change"
+	// KindStaleClient: the consumer's agent called a tool absent from the
+	// CURRENT tools/list, or with args violating the current inputSchema.
+	// Consumer-side, LOCAL ONLY — never flaggable, no flag control anywhere.
+	KindStaleClient = "stale_client"
+
 	SeverityBreaking = "breaking"
 	SeverityWarning  = "warning"
 	SeverityInfo     = "info"
 )
+
+// RuleDescriptionChanged mirrors contract/diff.RuleDescriptionChanged (a test
+// in internal/drift pins the equality). Kept as a mirror so this package —
+// plain record types — does not import the classifier.
+const RuleDescriptionChanged = "description-changed"
+
+// Flaggable reports whether this finding may be flagged cross-org (v0.5 spec
+// §6 evidence rule): stale_client and DESCRIPTION-only definition changes are
+// local-only — the relay REFUSES them server-side, the UI shows no flag
+// control, and they never reach the control plane.
+func (f Finding) Flaggable() bool {
+	switch f.Kind {
+	case KindStaleClient:
+		return false
+	case KindDefinitionChange:
+		return f.Rule != RuleDescriptionChanged
+	}
+	return true
+}
 
 // Finding is a technical-adherence drift record. Mirrors
 // contracts/finding.schema.json.
@@ -136,6 +196,15 @@ const (
 	// SpecRoleSelf is the contract WE publish as a provider — validated against
 	// our INBOUND (server-direction) responses.
 	SpecRoleSelf = "self"
+)
+
+// SpecInfo formats: the contract document type behind a spec_infos row.
+const (
+	SpecFormatOpenAPI = "openapi"
+	// SpecFormatMCP marks an observed MCP tools/list snapshot (v0.5 Step C) —
+	// the raw doc stored alongside is the snapshot JSON exactly as captured
+	// ({"tools":[…], "serverInfo"?, …}), decodable by contract.ParseToolsList.
+	SpecFormatMCP = "mcp"
 )
 
 // SpecInfo describes an API contract (spec) loaded by the drift processor,

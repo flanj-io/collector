@@ -9,6 +9,12 @@ rows and `finding` records as `Finding` rows. It does **not** open the database 
 it discovers the single-owner `viniferastore` **extension** via
 `host.GetExtensions()` at Start and writes through it.
 
+`contract_snapshot` records (v0.5) are consumed UPSTREAM by the drift
+processor, which re-emits them as `spec_info` records (format `"mcp"`) —
+this exporter routes those to `PutSpecInfo` like any spec_info; a raw
+`contract_snapshot` reaching the default branch is dropped by `validCall`
+(no method/route), per the §2 unknown-record rule.
+
 `… → viniferadrift → [viniferastore exporter] → store: sqlite | postgres (owned by the extension)`
 
 ## Files

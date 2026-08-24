@@ -11,7 +11,7 @@
   "properties": {
     "schema_version": { "type": "integer", "const": 1 },
     "id": { "type": "string", "format": "uuid" },
-    "kind": { "type": "string", "enum": ["live-vs-spec", "version-diff"] },
+    "kind": { "type": "string", "enum": ["live-vs-spec", "version-diff", "output_mismatch", "definition_change", "stale_client"] },
     "severity": { "type": "string", "enum": ["breaking", "warning", "info"] },
     "integration": { "type": "string" },
     "endpoint": { "type": "string" },
