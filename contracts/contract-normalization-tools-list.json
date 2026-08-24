@@ -1,0 +1,66 @@
+{
+  "_comment": "Step A normalization fixture — MCP side (v0.5 spec §4.A acceptance (1)). The SAME logical contract as contract-normalization-openapi.yaml, expressed as an MCP tools/list result. COLLECTOR-OWNED for now; promote to the canonical e2e/contracts set when another repo consumes it.",
+  "tools": [
+    {
+      "name": "get_balance",
+      "description": "Get the current balance for an account.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": ["account_id"]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "amount": {
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string",
+            "enum": ["USD", "EUR", "GBP"]
+          }
+        },
+        "required": ["amount", "currency"]
+      }
+    },
+    {
+      "name": "create_refund",
+      "description": "Create a refund for a charge.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "charge_id": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "enum": ["duplicate", "fraudulent", "requested_by_customer"]
+          }
+        },
+        "required": ["charge_id", "amount"]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "refund_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["pending", "succeeded", "failed"]
+          }
+        },
+        "required": ["refund_id", "status"]
+      }
+    }
+  ]
+}

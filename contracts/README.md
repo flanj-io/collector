@@ -1,6 +1,7 @@
 # `contracts/` — vendored cross-repo contract (do not hand-edit)
 
-Everything in this directory except `golden-otlp-server-call.json` is a **byte-identical copy** of the
+Everything in this directory except `golden-otlp-server-call.json` and the three
+`contract-*` Step A fixtures (see the table) is a **byte-identical copy** of the
 canonical contract that lives in the private `e2e` repo at `e2e/contracts/` (`CONTRACTS.md` + `v1/*`).
 It is the agreed language between the SDK, this collector and the control plane — the OTLP wire
 convention the collector ingests, the `RedactedCall`/`Finding` shapes it stores and emits, the redaction
@@ -20,6 +21,8 @@ repo proves conformance standalone; the `e2e` integration gate is the cross-repo
 | `redaction-fixtures.json` | the structured cross-language PARITY battery (the TypeScript SDK and control-plane DLP run the same file) | `internal/redact/fixtures_test.go` |
 | `redacted-call.schema.json`, `finding.schema.json`, `cp-flag-request.schema.json` | JSON Schemas for `RedactedCall`, `Finding`, and the flag request body | `internal/promote/promote_test.go` (compiles all three); `internal/model` mirrors the first two |
 | `sample-redacted-call.json`, `sample-finding.json` | sample payloads used to build a conforming flag | `internal/promote/promote_test.go` |
+| `contract-normalization-openapi.yaml`, `contract-normalization-tools-list.json` | **collector-owned** (v0.5 Step A, like `golden-otlp-server-call.json`) — the SAME logical contract expressed as OpenAPI and as an MCP `tools/list`; normalizing both must yield deep-equal Operations | `contract/normalize_test.go` |
+| `contract-diff-cases.json` | **collector-owned** (v0.5 Step A) — the definition-diff classifier battery (≥2 cases per class BREAKING / NON_BREAKING / DESCRIPTION, incl. a rename) | `contract/diff/diff_test.go` |
 
 ## Layout note
 
@@ -32,5 +35,7 @@ not this file.
 
 Edit the canonical file in `e2e/contracts/`, bump `schema_version` if the change is breaking, re-vendor
 byte-identically to `sdk/`, `collector/`, `control-plane/`, and make every repo's suite green. See
-`e2e/contracts/README.md` (governance). `golden-otlp-server-call.json` is the one exception: it is owned
-here; promote it to the canonical set if another repo ever needs it.
+`e2e/contracts/README.md` (governance). `golden-otlp-server-call.json` and the three `contract-*`
+Step A fixtures are the exceptions: they are owned here; promote them to the canonical set if another
+repo ever needs them (the `contract-*` files are candidates once `mcp-drift-watch` or `e2e` consumes
+them — flagged as an open item in the v0.5 Step A handoff).

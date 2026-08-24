@@ -57,6 +57,11 @@ exporter/viniferastore/            # writes call + finding records into the stor
 extension/viniferastore/           # SINGLE store owner (sqlite default | postgres for multi-pod); shared via host.GetExtensions()
 extension/viniferaui/              # localhost HTTP: embed.FS Vue SPA + read API + CP relay (connect / flag / threads)
 ui/                                # Vue/Vite SPA (Overview, Traffic live-tail, Contracts + Flag sheet, Threads, Settings/Connect)
+contract/                          # PUBLIC transport-neutral Contract model + MCP tools/list loader;
+                                   # contract/openapi — the OpenAPI loader (kin-openapi stays OUT of package contract, so an
+                                   # MCP-only importer links none of it); contract/diff — the definition-diff classifier
+                                   # (BREAKING/NON_BREAKING/DESCRIPTION).
+                                   # v0.5 Step A; deliberately NOT internal/ — imported by mcp-drift-watch (one classifier, ever)
 internal/                          # redact | drift | store | edge | promote | model | otlpattr — the unit-tested logic (internal/CLAUDE.md)
 config/config.example.yaml         # annotated example config (every key frozen in CONTRACTS §8)
 docs/                              # CONCEPTS.md + STORE.md (backends/topologies) + DEPLOYMENT.md (shapes, flows, k8s sketches)

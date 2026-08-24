@@ -14,36 +14,24 @@ import (
 	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/getkin/kin-openapi/routers/gorillamux"
 
+	contractopenapi "github.com/vinifera-io/collector/contract/openapi"
 	"github.com/vinifera-io/collector/internal/model"
 	"github.com/vinifera-io/collector/internal/otlpattr"
 	"github.com/vinifera-io/collector/internal/redact"
 )
 
-// LoadSpecFile reads and validates an OpenAPI document from disk.
+// LoadSpecFile reads and validates an OpenAPI document from disk. The OpenAPI
+// loading lines moved to the public contract/openapi loader subpackage
+// (v0.5 Step A; kin-openapi deliberately stays out of package contract) —
+// this delegation keeps the drift API and behavior identical.
 func LoadSpecFile(path string) (*openapi3.T, error) {
-	loader := openapi3.NewLoader()
-	loader.IsExternalRefsAllowed = true
-	doc, err := loader.LoadFromFile(path)
-	if err != nil {
-		return nil, err
-	}
-	if err := doc.Validate(loader.Context); err != nil {
-		return nil, fmt.Errorf("spec invalid: %w", err)
-	}
-	return doc, nil
+	return contractopenapi.LoadFile(path)
 }
 
-// LoadSpecData parses an OpenAPI document from bytes.
+// LoadSpecData parses an OpenAPI document from bytes (delegates to the public
+// contract/openapi loader; behavior identical).
 func LoadSpecData(b []byte) (*openapi3.T, error) {
-	loader := openapi3.NewLoader()
-	doc, err := loader.LoadFromData(b)
-	if err != nil {
-		return nil, err
-	}
-	if err := doc.Validate(loader.Context); err != nil {
-		return nil, fmt.Errorf("spec invalid: %w", err)
-	}
-	return doc, nil
+	return contractopenapi.LoadData(b)
 }
 
 // DetectLiveVsSpec reconstructs the request from the stored call and validates

@@ -28,6 +28,7 @@ COPY processor ./processor
 COPY exporter ./exporter
 COPY extension ./extension
 COPY internal ./internal
+COPY contract ./contract
 COPY contracts ./contracts
 COPY config ./config
 COPY builder-config.yaml ./
