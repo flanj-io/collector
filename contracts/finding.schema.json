@@ -24,6 +24,7 @@
     "spec_version_to": { "type": ["string", "null"] },
     "source_call_id": { "type": ["string", "null"] },
     "detected_at": { "type": "string", "format": "date-time" },
-    "detail": { "type": "string" }
+    "detail": { "type": "string" },
+    "snapshot_observed_at": { "type": "string", "format": "date-time" }
   }
 }

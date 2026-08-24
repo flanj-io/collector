@@ -20,11 +20,21 @@ import {
   shortDate,
   type ConnectState
 } from './threads';
-import type { Correlation, Finding, FlagResult } from './types';
+import {
+  isMcpFinding,
+  mcpDefaultMessage,
+  mcpDisclosureLead,
+  mcpDisclosureTail,
+  mcpEvidenceLine,
+  mcpIdsLineFor
+} from './mcp';
+import type { Correlation, Finding, FlagResult, RedactedCall } from './types';
 
 const props = defineProps<{
   finding: Finding;
   correlation: Correlation | null;
+  /** The finding's representative source call (MCP server identity rides on it). */
+  call?: RedactedCall | null;
   provider: string;
   consumer: string;
   connect: ConnectState | null;
@@ -38,7 +48,17 @@ const emit = defineEmits<{
 
 const DISCLOSURE_KEY = 'vinifera.flag.disclosure.seen';
 
-const message = ref(defaultFlagMessage(props.finding, props.correlation?.request_id, shortDate));
+// v0.5: MCP findings carry the deck's MCP evidence / IDs / disclosure / prefill
+// copy; HTTP findings keep the v0.1a strings unchanged.
+const isMcp = computed(() => isMcpFinding(props.finding));
+const mcpServer = computed(() => props.call?.mcp_server_name || props.provider);
+const mcpTool = computed(() => props.finding.endpoint);
+
+const message = ref(
+  isMcpFinding(props.finding)
+    ? mcpDefaultMessage(props.finding, shortDate)
+    : defaultFlagMessage(props.finding, props.correlation?.request_id, shortDate)
+);
 const disclosureOpen = ref(localStorage.getItem(DISCLOSURE_KEY) !== '1');
 const busy = ref(false);
 const errorMsg = ref('');
@@ -58,8 +78,24 @@ let copiedTimer: number | undefined;
 // the contact threads are actually created with.
 const connected = computed(() => canCreateThread(props.connect));
 const contactEmail = computed(() => props.connect?.confirmed_contact_email || props.connect?.contact_email || '');
-const evidence = computed(() => evidenceLine(props.finding));
-const idCount = computed(() => correlationCount(props.correlation));
+const evidence = computed(() =>
+  isMcp.value ? mcpEvidenceLine(props.finding, mcpServer.value) : evidenceLine(props.finding)
+);
+// The IDs line: an MCP flag uses the deck's JSON-RPC line ONLY while the
+// client-generated id is the sole correlation key — mixed keys fall back to
+// the standard count line with an honest note for the client-generated one
+// (deck §5). HTTP keeps the existing line.
+const idsLine = computed(() =>
+  isMcp.value
+    ? mcpIdsLineFor(props.correlation, props.provider)
+    : requestIdsLine(correlationCount(props.correlation))
+);
+const disclosureLead = computed(() =>
+  isMcp.value
+    ? mcpDisclosureLead(props.finding, mcpTool.value)
+    : 'This redacted request/response, the finding, the correlation keys, the endpoint, your message, and'
+);
+const disclosureTail = computed(() => (isMcp.value ? mcpDisclosureTail(props.finding) : 'Raw calls never leave.'));
 const since = computed(() => shortDate(props.finding.first_seen || props.finding.last_seen || ''));
 const paste = computed(() =>
   result.value
@@ -191,14 +227,14 @@ watch(result, (r) => {
       <template v-else-if="!result">
         <h2 id="sheet-title" class="sheet-title">New thread with {{ provider }}</h2>
         <p class="evidence"><span class="k">Evidence (1):</span> {{ evidence }}</p>
-        <p class="ids">{{ requestIdsLine(idCount) }}</p>
+        <p class="ids">{{ idsLine }}</p>
 
         <button type="button" class="disclosure" :aria-expanded="disclosureOpen" @click="toggleDisclosure">
           {{ disclosureOpen ? '▾' : '▸' }} What leaves this collector
         </button>
         <p v-if="disclosureOpen" class="disclosure-body">
-          This redacted request/response, the finding, the correlation keys, the endpoint, your message, and
-          <strong>{{ consumer }}</strong> · <strong>{{ contactEmail }}</strong>. Raw calls never leave.
+          {{ disclosureLead }}
+          <strong>{{ consumer }}</strong> · <strong>{{ contactEmail }}</strong>. {{ disclosureTail }}
         </p>
 
         <label class="field">

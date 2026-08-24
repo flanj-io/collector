@@ -62,7 +62,9 @@ processor/viniferadrift/           # live-vs-spec (kin-openapi) + version-diff (
 exporter/viniferastore/            # writes call + finding records into the store
 extension/viniferastore/           # SINGLE store owner (sqlite default | postgres for multi-pod); shared via host.GetExtensions()
 extension/viniferaui/              # localhost HTTP: embed.FS Vue SPA + read API + CP relay (connect / flag / threads)
-ui/                                # Vue/Vite SPA (Overview, Traffic live-tail, Contracts + Flag sheet, Threads, Settings/Connect)
+ui/                                # Vue/Vite SPA (Overview incl. MCP server health + local notices, Traffic live-tail incl.
+                                   # MCP TOOL rows/facets, Contracts + Flag sheet — HTTP and MCP, Threads, Settings/Connect;
+                                   # ui/src/mcp.ts = the v0.5 MCP deck copy, pure + vitest-covered)
 contract/                          # PUBLIC transport-neutral Contract model + MCP tools/list loader;
                                    # contract/openapi — the OpenAPI loader (kin-openapi stays OUT of package contract, so an
                                    # MCP-only importer links none of it); contract/diff — the definition-diff classifier

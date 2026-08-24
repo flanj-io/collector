@@ -13,6 +13,13 @@ API + the flag action.
   internal same-team edges are classified out and never returned.
   `GET /api/contracts` lists the provider contracts the drift processor loaded;
   `GET /api/contracts/spec?integration=...` serves the raw spec document.
+  **v0.5 MCP (Step D): no new routes.** `/api/contracts` rows may carry format
+  `"mcp"` (an observed `tools/list` snapshot — `…/spec` then serves the raw
+  snapshot JSON verbatim, which the SPA parses into per-tool rows); `/api/calls`
+  rows pass the additive `transport` / `mcp_*` fields and
+  `correlation.client_request_id` through untouched; `/api/findings` carries the
+  three MCP kinds plus the optional `snapshot_observed_at` (CONTRACTS §4). All
+  MCP rendering lives in the SPA (`ui/src/mcp.ts`).
 - **Control-plane relay (v0.1a — CONTRACTS §5, spec Step 4b).** The UI never
   holds a bearer; the relay does, and every mutating route is guarded
   (`guard.go`): POST only (405), `X-Vinifera-UI: 1` (403 `ui_header_required`),

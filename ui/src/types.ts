@@ -5,6 +5,9 @@ export interface Correlation {
   idempotency_key?: string | null;
   trace_id?: string | null;
   span_id?: string | null;
+  /** v0.5 MCP: the JSON-RPC id observed on the client's OWN outgoing message —
+   *  CLIENT-generated, never presented as a provider-issued id. */
+  client_request_id?: string | null;
 }
 
 export interface RedactedCall {
@@ -28,11 +31,27 @@ export interface RedactedCall {
   peer_host?: string;
   peer_addr?: string;
   edge_class?: string;
+  // v0.5 MCP call fields (additive; absent on HTTP calls).
+  transport?: 'mcp' | string;
+  mcp_tool_name?: string;
+  mcp_is_error?: boolean;
+  mcp_server_name?: string;
+  mcp_server_version?: string;
+  mcp_protocol_version?: string;
+  mcp_session_id?: string;
 }
+
+export type FindingKind =
+  | 'live-vs-spec'
+  | 'version-diff'
+  // v0.5 MCP finding kinds (spec §1/§4.C).
+  | 'output_mismatch'
+  | 'definition_change'
+  | 'stale_client';
 
 export interface Finding {
   id: string;
-  kind: 'live-vs-spec' | 'version-diff';
+  kind: FindingKind;
   severity: string;
   integration: string;
   endpoint: string;
@@ -44,11 +63,16 @@ export interface Finding {
   spec_version_from?: string | null;
   spec_version_to?: string | null;
   source_call_id?: string | null;
+  detected_at?: string;
   detail?: string;
   signature?: string;
   occurrence_count?: number;
   first_seen?: string;
   last_seen?: string;
+  /** v0.5 MCP (additive, optional): the ObservedAt of the tools/list snapshot
+   *  backing the finding — the CURRENT one for output_mismatch, the AFTER one
+   *  for definition_change. Absent on other kinds and older collectors. */
+  snapshot_observed_at?: string;
 }
 
 export interface Health {

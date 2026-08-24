@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -180,6 +181,14 @@ func TestMCPGolden_OutputMismatch(t *testing.T) {
 	if !f.Flaggable() {
 		t.Errorf("output_mismatch must be flaggable")
 	}
+	// snapshot_observed_at (additive, optional — CONTRACTS §4): the CURRENT
+	// snapshot the call was validated against, under the frozen wire key.
+	if f.SnapshotObservedAt != snap.ObservedAt {
+		t.Errorf("snapshot_observed_at = %q, want the current snapshot's ObservedAt %q", f.SnapshotObservedAt, snap.ObservedAt)
+	}
+	if doc, err := json.Marshal(f); err != nil || !strings.Contains(string(doc), `"snapshot_observed_at":"`+snap.ObservedAt+`"`) {
+		t.Errorf("marshalled finding must carry snapshot_observed_at (err=%v): %s", err, doc)
+	}
 
 	// A second drifting call carries the SAME signature — the store collapses
 	// it into one finding with occurrence_count 2 (per-signature dedup).
@@ -335,6 +344,9 @@ func TestStaleClient_ToolNotListed(t *testing.T) {
 	if f.Flaggable() {
 		t.Errorf("stale_client must NEVER be flaggable")
 	}
+	if f.SnapshotObservedAt != "" {
+		t.Errorf("stale_client must not carry snapshot_observed_at, got %q", f.SnapshotObservedAt)
+	}
 }
 
 // TestStaleClient_ArgsViolation: arguments violating the CURRENT inputSchema
@@ -439,6 +451,10 @@ func TestDefinitionChange_Classes(t *testing.T) {
 	if !strings.Contains(br.Detail, v1.ObservedAt) || !strings.Contains(br.Detail, v2.ObservedAt) {
 		t.Errorf("detail %q must carry both snapshot timestamps", br.Detail)
 	}
+	// snapshot_observed_at (additive, optional — CONTRACTS §4): the AFTER snapshot's.
+	if br.SnapshotObservedAt != v2.ObservedAt {
+		t.Errorf("snapshot_observed_at = %q, want the after snapshot's ObservedAt %q", br.SnapshotObservedAt, v2.ObservedAt)
+	}
 
 	check("create_refund", diff.RuleInputRequiredPropertyAdded, "input.reason", model.SeverityBreaking, true)
 	check("list_transactions", diff.RuleOutputSchemaDeclared, "output", model.SeverityInfo, true)
@@ -454,6 +470,51 @@ func sigs(fs []model.Finding) []string {
 		out = append(out, f.Signature)
 	}
 	return out
+}
+
+// TestDefinitionChangeDetailTail_UIRegex pins the definition_change Detail
+// TAIL against the exact regex BOTH UIs parse the snapshot timestamps out of:
+//
+//	/tools\/list observed (\S+) → (\S+?)\.?$/
+//
+// collector ui/src/mcp.ts `snapshotTimes` and control-plane
+// apps/api/src/peek-web/assets/app.js `snapshotTimesOf` both rely on this
+// shape (the detector is the only producer, so the shape is ours to freeze).
+// Reword the Detail and those parsers silently return empty timestamps —
+// change all three together or not at all.
+func TestDefinitionChangeDetailTail_UIRegex(t *testing.T) {
+	uiTailRE := regexp.MustCompile(`tools/list observed (\S+) → (\S+?)\.?$`)
+
+	d := NewMCPDetector()
+	v1 := goldenSnapshot(t)
+	if _, _, _, err := d.LoadSnapshot(v1); err != nil {
+		t.Fatal(err)
+	}
+	v2 := v1
+	v2.ObservedAt = "2026-08-24T12:00:00.000Z"
+	v2.SnapshotJSON = mutateSnapshotJSON(t, v1.SnapshotJSON, func(doc map[string]any) {
+		// One change with a fieldPath, one without a whole-schema fragment —
+		// the tail must parse regardless of what precedes it.
+		gb := tool(t, doc, "get_balance")["outputSchema"].(map[string]any)
+		gb["properties"].(map[string]any)["amount"].(map[string]any)["type"] = "string"
+		tool(t, doc, "create_refund")["description"] = "Refund a charge, reworded."
+	})
+	findings, _, _, err := d.LoadSnapshot(v2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) == 0 {
+		t.Fatal("no definition_change findings to pin the Detail tail on")
+	}
+	for _, f := range findings {
+		m := uiTailRE.FindStringSubmatch(f.Detail)
+		if m == nil {
+			t.Fatalf("detail %q does not match the UI parsers' regex — ui/src/mcp.ts snapshotTimes and peek-web app.js snapshotTimesOf would render empty timestamps", f.Detail)
+		}
+		if m[1] != v1.ObservedAt || m[2] != v2.ObservedAt {
+			t.Errorf("parsed timestamps = %q → %q, want %q → %q (what the UIs will display)", m[1], m[2], v1.ObservedAt, v2.ObservedAt)
+		}
+	}
 }
 
 // TestSnapshotVersioning: identical snapshots never re-baseline or emit;

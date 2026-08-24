@@ -5,6 +5,37 @@ import ConnectPanel from './ConnectPanel.vue';
 import FlagSheet from './FlagSheet.vue';
 import ThreadsTab from './ThreadsTab.vue';
 import { chipLabel, needsCollectorAddress, threadIdFromHash, type ConnectState, type ThreadRow } from './threads';
+import {
+  JSONRPC_ID_TITLE,
+  LOCAL_NOTE_NOT_FLAGGABLE,
+  LOCAL_NOTICES_TITLE,
+  MCP_BADGE_TOOLTIP,
+  MCP_ERROR_TOOLTIP,
+  MCP_NO_SPEC_NEEDED,
+  MCP_TOOL_CHIP,
+  afterColLabel,
+  beforeColLabel,
+  defChangeDetail,
+  defChangeNoCallSub,
+  definitionClass,
+  isFlaggableMcp,
+  isLocalNotice,
+  isMcpFinding,
+  localNoticesSubFor,
+  mcpBadgeLabel,
+  mcpContractMeta,
+  mcpHeadline,
+  mcpStatusLabel,
+  methodFacetOf,
+  noOutputContractNote,
+  noticeLine,
+  parseToolRows,
+  snapshotTimes,
+  statusFilterMatches,
+  toolContractLabel,
+  toolNameOf,
+  type McpToolRow
+} from './mcp';
 import type { Correlation, Finding, FlagResult, Health, RedactedCall } from './types';
 
 interface Edge {
@@ -231,6 +262,7 @@ const driftedEndpoints = computed(() => {
 });
 
 function isDrifted(c: RedactedCall): boolean {
+  if (c.transport === 'mcp') return mcpDriftedTools.value.has(`${c.integration} ${toolNameOf(c)}`);
   if (c.direction === 'server') return driftedEndpoints.value.self.has(`${c.method} ${c.route}`);
   return driftedEndpoints.value.provider.has(`${c.integration} ${c.method} ${c.route}`);
 }
@@ -268,8 +300,9 @@ function resumeLive() {
 
 const HEALTH_RE = /(^|\/)(_?health[a-z-]*|livez?|readyz?|ping)(\/|$|\?)/i;
 
+// Method facets: MCP rows list (and match) as TOOL, never as `tools/call`.
 const methodOptions = computed(() =>
-  Array.from(new Set(calls.value.map((c) => c.method.toUpperCase()))).sort()
+  Array.from(new Set(calls.value.map((c) => methodFacetOf(c)))).sort()
 );
 
 const peerOptions = computed(() =>
@@ -294,14 +327,10 @@ const filteredCalls = computed(() => {
   const include = tokens.filter((t) => !t.startsWith('-'));
   const exclude = tokens.filter((t) => t.startsWith('-') && t.length > 1).map((t) => t.slice(1));
   return displayCalls.value.filter((c) => {
-    if (fMethod.value && c.method.toUpperCase() !== fMethod.value) return false;
-    if (fStatus.value) {
-      if (fStatus.value === 'err') {
-        if (c.status_code < 400) return false;
-      } else if (`${Math.floor(c.status_code / 100)}xx` !== fStatus.value) {
-        return false;
-      }
-    }
+    if (fMethod.value && methodFacetOf(c) !== fMethod.value) return false;
+    // Status: HTTP rows by status class; MCP rows are ok/error from isError
+    // ('err' matches mcp_is_error, '2xx' matches ok — see statusFilterMatches).
+    if (!statusFilterMatches(fStatus.value, c)) return false;
     if (fContract.value === 'drifted' && !isDrifted(c)) return false;
     if (fContract.value === 'conforming' && isDrifted(c)) return false;
     if (fDirection.value && c.direction !== fDirection.value) return false;
@@ -318,7 +347,10 @@ const filteredCalls = computed(() => {
         c.direction === 'server' ? 'inbound' : c.direction === 'client' ? 'outbound' : '',
         c.correlation?.request_id,
         c.correlation?.idempotency_key,
-        c.correlation?.trace_id
+        c.correlation?.trace_id,
+        c.transport === 'mcp' ? 'mcp' : '',
+        c.mcp_tool_name,
+        c.correlation?.client_request_id
       ]
         .filter(Boolean)
         .join(' ')
@@ -376,7 +408,7 @@ interface ContractCard {
 
 const contractCards = computed<{ self: ContractCard[]; providers: ContractCard[] }>(() => {
   const byIntegration = new Map<string, Finding[]>();
-  for (const f of liveFindings.value) {
+  for (const f of [...liveFindings.value, ...mcpContractFindings.value]) {
     const list = byIntegration.get(f.integration) || [];
     list.push(f);
     byIntegration.set(f.integration, list);
@@ -438,6 +470,100 @@ const cardGroups = computed(() => [
 
 const liveFindings = computed(() => findings.value.filter((f) => f.kind === 'live-vs-spec'));
 
+// ─── MCP (v0.5 Step D) ───────────────────────────────────────────────────
+// The MCP contract surface is SELF-DELIVERING: the server's observed
+// tools/list arrives as a spec_infos row (format "mcp"), so the Contracts tab
+// lists the server (title = serverInfo.name) and this UI needs no spec file.
+const mcpContracts = computed(() => contracts.value.filter((s) => s.format === 'mcp'));
+
+const mcpFindings = computed(() => findings.value.filter((f) => isMcpFinding(f)));
+
+// Per-server tool rows, parsed from the stored tools/list snapshot document
+// (refetched only when the contract's loaded_at moves).
+const mcpTools = ref<Record<string, { key: string; rows: McpToolRow[] }>>({});
+async function loadMcpTools() {
+  for (const s of mcpContracts.value) {
+    const key = s.integration + '|' + s.loaded_at;
+    if (mcpTools.value[s.integration]?.key === key) continue;
+    try {
+      const resp = await fetch(specHref(s));
+      if (!resp.ok) continue;
+      mcpTools.value = { ...mcpTools.value, [s.integration]: { key, rows: parseToolRows(await resp.text()) } };
+    } catch {
+      /* keep the last parsed rows */
+    }
+  }
+}
+
+function mcpToolRows(integration: string): McpToolRow[] {
+  return mcpTools.value[integration]?.rows || [];
+}
+
+/** serverInfo.name for an integration (spec title), else the integration id. */
+function mcpServerName(integration: string): string {
+  const s = mcpContracts.value.find((c) => c.integration === integration);
+  return s?.title || integration;
+}
+
+// Hosts that are MCP edges: known from mcp contracts and from observed MCP
+// calls — drives the transport badge on the Edges overview.
+const mcpHosts = computed(() => {
+  const hosts = new Set<string>();
+  for (const s of mcpContracts.value) if (s.peer_host) hosts.add(s.peer_host);
+  for (const c of calls.value) if (c.transport === 'mcp' && c.peer_host) hosts.add(c.peer_host);
+  return hosts;
+});
+
+// Per-server MCP health headline (deck §2): output mismatch → definition
+// change (breaking, no calls affected yet) → clean.
+const mcpOverview = computed(() =>
+  mcpContracts.value.map((s) => ({
+    key: s.integration,
+    headline: mcpHeadline(
+      { name: s.title || s.integration, version: s.version },
+      mcpFindings.value.filter((f) => f.integration === s.integration),
+      humanTime
+    )
+  }))
+);
+
+// Local notices (deck §2): stale_client + DESCRIPTION-only definition changes.
+// Visible to you only; these items NEVER carry a flag control.
+const localNotices = computed(() =>
+  mcpFindings.value
+    .filter((f) => isLocalNotice(f))
+    .map((f) => ({ id: f.id, line: noticeLine(f, mcpServerName(f.integration), providerNameFor(f)) }))
+);
+// The band's sub-line: named only while every notice points at ONE provider;
+// notices spanning several providers fall back to the neutral copy.
+const localNoticesProviders = computed(() =>
+  mcpFindings.value.filter((f) => isLocalNotice(f)).map((f) => providerNameFor(f))
+);
+
+// MCP contract findings shown on the Contracts tab: output_mismatch +
+// definition_change (stale_client stays a Health-band notice only).
+const mcpContractFindings = computed(() =>
+  mcpFindings.value.filter((f) => f.kind === 'output_mismatch' || f.kind === 'definition_change')
+);
+
+// Contracts tab badge: live HTTP drift + flaggable MCP findings.
+const contractTabCount = computed(
+  () => liveFindings.value.length + mcpFindings.value.filter((f) => isFlaggableMcp(f)).length
+);
+
+// Drifted MCP tools: "<integration> <tool>" for every output_mismatch.
+const mcpDriftedTools = computed(() => {
+  const s = new Set<string>();
+  for (const f of mcpFindings.value) if (f.kind === 'output_mismatch') s.add(`${f.integration} ${f.endpoint}`);
+  return s;
+});
+
+// The finding the sheet is open for rides with its representative source call
+// (MCP server identity + JSON-RPC id live on the call).
+const sheetCall = computed(() =>
+  sheetFinding.value?.source_call_id ? callsById.value[sheetFinding.value.source_call_id] || null : null
+);
+
 // Headline counts LIVE drift only — spec-version diffs are informational and
 // intentionally excluded from the divergence status.
 const headline = computed(() => {
@@ -474,6 +600,9 @@ async function refresh() {
     if (resp.ok) {
       contracts.value = (await resp.json()).contracts || [];
       contractsKnown.value = true;
+      // MCP contracts carry their tool list in the stored snapshot document —
+      // fetch it (only when a snapshot moved) for the per-tool rows.
+      loadMcpTools();
     }
   } catch {
     /* keep last known contracts */
@@ -595,7 +724,7 @@ watch(tab, (t) => {
       </button>
       <button role="tab" :class="{ active: tab === 'contract' }" @click="tab = 'contract'">
         Contracts
-        <span v-if="liveFindings.length" class="tab-count bad">{{ liveFindings.length }}</span>
+        <span v-if="contractTabCount" class="tab-count bad">{{ contractTabCount }}</span>
       </button>
       <button role="tab" :class="{ active: tab === 'threads' }" @click="tab = 'threads'">
         Threads
@@ -615,6 +744,31 @@ watch(tab, (t) => {
           You: <strong>{{ headline.you }}</strong>
         </div>
         <div class="hl-sub">on integration <code>{{ headline.integration }}</code></div>
+      </section>
+
+      <!-- MCP servers (v0.5): one headline per observed server (deck §2). -->
+      <section
+        v-for="m in mcpOverview"
+        :key="'mcp-hl-' + m.key"
+        class="headline mcp-headline"
+        :class="{ ok: m.headline.ok, drift: !m.headline.ok }"
+      >
+        <div class="hl-you">
+          <span class="mcp-badge" :title="MCP_BADGE_TOOLTIP">MCP</span>
+          <strong>{{ m.headline.text }}</strong>
+        </div>
+      </section>
+
+      <!-- Local notices band (deck §2): stale-client + description-only items.
+           Visible to you only; NO flag control here, ever. -->
+      <section v-if="localNotices.length" class="local-notices">
+        <div class="ln-head">
+          <span class="ln-title">{{ LOCAL_NOTICES_TITLE }}</span>
+          <span class="ln-sub">{{ localNoticesSubFor(localNoticesProviders) }}</span>
+        </div>
+        <ul class="ln-list">
+          <li v-for="n in localNotices" :key="n.id" class="ln-item">{{ n.line }}</li>
+        </ul>
       </section>
 
       <section>
@@ -638,7 +792,10 @@ watch(tab, (t) => {
                 <span>peer host</span><span>observed RPM</span>
               </div>
               <div v-for="e in inboundEdges" :key="'i-' + e.peer_host" class="edge-row" :class="{ drift: e.drift_count > 0 }">
-                <span class="peer mono">{{ e.peer_host }}</span>
+                <span class="peer mono">
+                  {{ e.peer_host }}
+                  <span v-if="mcpHosts.has(e.peer_host)" class="mcp-badge" :title="MCP_BADGE_TOOLTIP">{{ mcpBadgeLabel(e.class) }}</span>
+                </span>
                 <span class="num">{{ fmtRPM(e.rpm) }}<span class="unit">/min</span></span>
               </div>
             </div>
@@ -655,7 +812,10 @@ watch(tab, (t) => {
                 <span>peer host</span><span>observed RPM</span>
               </div>
               <div v-for="e in outboundEdges" :key="'o-' + e.peer_host" class="edge-row" :class="{ drift: e.drift_count > 0 }">
-                <span class="peer mono">{{ e.peer_host }}</span>
+                <span class="peer mono">
+                  {{ e.peer_host }}
+                  <span v-if="mcpHosts.has(e.peer_host)" class="mcp-badge" :title="MCP_BADGE_TOOLTIP">{{ mcpBadgeLabel(e.class) }}</span>
+                </span>
                 <span class="num">{{ fmtRPM(e.rpm) }}<span class="unit">/min</span></span>
               </div>
             </div>
@@ -709,36 +869,77 @@ watch(tab, (t) => {
           </div>
 
           <div v-if="p.spec" class="prov-links">
-            <a class="doc-link" :href="specHref(p.spec)" target="_blank" rel="noopener">View OpenAPI spec</a>
+            <a class="doc-link" :href="specHref(p.spec)" target="_blank" rel="noopener">
+              {{ p.spec.format === 'mcp' ? 'View tools/list snapshot' : 'View OpenAPI spec' }}
+            </a>
             <a v-if="p.spec.docs_url" class="doc-link" :href="p.spec.docs_url" target="_blank" rel="noopener">
               API docs ↗
             </a>
-            <span v-if="p.spec.endpoints" class="prov-meta">{{ p.spec.endpoints }} endpoints</span>
-            <span class="prov-meta">loaded {{ humanTime(p.spec.loaded_at) }}</span>
+            <template v-if="p.spec.format === 'mcp'">
+              <span class="prov-meta">{{ mcpContractMeta(p.spec.endpoints || 0, humanTime(p.spec.loaded_at)) }}</span>
+            </template>
+            <template v-else>
+              <span v-if="p.spec.endpoints" class="prov-meta">{{ p.spec.endpoints }} endpoints</span>
+              <span class="prov-meta">loaded {{ humanTime(p.spec.loaded_at) }}</span>
+            </template>
           </div>
+          <p v-else-if="mcpHosts.has(p.peerHost)" class="prov-nospec">{{ MCP_NO_SPEC_NEEDED }}</p>
           <p v-else class="prov-nospec">
             No spec loaded for this provider — point <code>viniferadrift.spec_path</code> at its
             OpenAPI document to validate live traffic against it.
           </p>
 
+          <!-- MCP per-tool rows (deck §3): the server's tools ARE the contract surface. -->
+          <div v-if="p.spec?.format === 'mcp' && mcpToolRows(p.spec.integration).length" class="tool-rows">
+            <div v-for="t in mcpToolRows(p.spec.integration)" :key="t.name" class="tool-row">
+              <div class="tool-line">
+                <span class="tool-name mono">{{ t.name }}</span>
+                <span class="tool-tag" :class="{ partial: !t.hasOutputSchema }">{{ toolContractLabel(t.hasOutputSchema) }}</span>
+              </div>
+              <p v-if="!t.hasOutputSchema" class="tool-note">
+                {{ noOutputContractNote(p.spec.title || p.spec.integration, t.name) }}
+              </p>
+            </div>
+          </div>
+
           <article v-for="f in p.findings" :key="f.id" class="finding nested">
             <div class="finding-head">
-              <span class="badge" :class="f.severity">{{ f.severity }}</span>
+              <!-- definition_change rows carry the classifier's class badge (deck §3). -->
+              <span
+                v-if="f.kind === 'definition_change'"
+                class="badge"
+                :class="{ breaking: definitionClass(f) === 'BREAKING', info: definitionClass(f) === 'NON-BREAKING', warning: definitionClass(f) === 'DESCRIPTION' }"
+              >{{ definitionClass(f) }}</span>
+              <span v-else class="badge" :class="f.severity">{{ f.severity }}</span>
               <span class="endpoint">{{ f.endpoint }}</span>
               <span class="rule">{{ f.rule }}</span>
-              <span v-if="f.occurrence_count && f.occurrence_count > 1" class="occ" title="calls carrying this same drift">
-                ×{{ f.occurrence_count }} calls
-              </span>
-              <span v-else class="occ single">1 call</span>
+              <template v-if="f.kind !== 'definition_change'">
+                <span v-if="f.occurrence_count && f.occurrence_count > 1" class="occ" title="calls carrying this same drift">
+                  ×{{ f.occurrence_count }} calls
+                </span>
+                <span v-else class="occ single">1 call</span>
+              </template>
             </div>
-            <div class="drift-row">
+            <!-- definition_change: their tools/list at T1 vs at T2 (deck §3). -->
+            <div v-if="f.kind === 'definition_change'" class="drift-row">
               <div class="col">
-                <div class="k">expected (per spec)</div>
+                <div class="k">{{ beforeColLabel(f.spec_version_from || '', snapshotTimes(f.detail).from) }}</div>
                 <div class="v expected">{{ f.expected }}</div>
               </div>
               <div class="arrow">≠</div>
               <div class="col">
-                <div class="k">actual (live)</div>
+                <div class="k">{{ afterColLabel(f.spec_version_to || '', snapshotTimes(f.detail).to) }}</div>
+                <div class="v actual">{{ f.actual }}</div>
+              </div>
+            </div>
+            <div v-else class="drift-row">
+              <div class="col">
+                <div class="k">{{ f.kind === 'output_mismatch' ? 'declared (their outputSchema)' : 'expected (per spec)' }}</div>
+                <div class="v expected">{{ f.expected }}</div>
+              </div>
+              <div class="arrow">≠</div>
+              <div class="col">
+                <div class="k">{{ f.kind === 'output_mismatch' ? 'got (structuredContent)' : 'actual (live)' }}</div>
                 <div class="v actual">{{ f.actual }}</div>
               </div>
               <div class="col loc">
@@ -746,12 +947,18 @@ watch(tab, (t) => {
                 <div class="v mono">{{ f.location }}</div>
               </div>
             </div>
-            <p class="detail" v-if="f.detail">{{ f.detail }}</p>
+            <p class="detail" v-if="f.kind === 'definition_change'">
+              {{ defChangeDetail(snapshotTimes(f.detail).from, snapshotTimes(f.detail).to, providerNameFor(f)) }}
+            </p>
+            <p class="detail" v-else-if="f.detail">{{ f.detail }}</p>
 
             <div class="corr" v-if="correlationFor(f)">
               <span class="corr-title">correlation keys</span>
               <span v-if="correlationFor(f)!.request_id" class="corr-k">
                 request-id <code>{{ correlationFor(f)!.request_id }}</code>
+              </span>
+              <span v-if="correlationFor(f)!.client_request_id" class="corr-k" :title="JSONRPC_ID_TITLE">
+                {{ JSONRPC_ID_TITLE }} <code>{{ correlationFor(f)!.client_request_id }}</code>
               </span>
               <span v-if="correlationFor(f)!.idempotency_key" class="corr-k">
                 idempotency-key <code>{{ correlationFor(f)!.idempotency_key }}</code>
@@ -771,6 +978,15 @@ watch(tab, (t) => {
                 </button>
                 <button type="button" class="btn ghost small" @click="goToThread(threadsByFinding[f.id].thread_id)">Threads ›</button>
                 <span v-if="chipError[threadsByFinding[f.id].thread_id]" class="error small-err">{{ chipError[threadsByFinding[f.id].thread_id] }}</span>
+              </template>
+              <!-- Evidence rule (v0.5 §6): local notices NEVER carry a flag control. -->
+              <span v-else-if="isLocalNotice(f)" class="hint-inline">{{ LOCAL_NOTE_NOT_FLAGGABLE }}</span>
+              <!-- Flaggable definition_change: call-less — the flag POST refuses a
+                   finding without a call (KNOWN v0.5 limitation), so the control
+                   stays disabled with the honest reason instead of failing late. -->
+              <template v-else-if="f.kind === 'definition_change'">
+                <button type="button" class="btn primary flag" disabled title="Flagging this needs a failing call — not available yet for definition changes.">Flag this</button>
+                <span class="hint-inline">{{ defChangeNoCallSub(providerNameFor(f)) }}</span>
               </template>
               <button v-else-if="f.source_call_id" type="button" class="btn primary flag" @click="openSheet(f)">Flag this</button>
               <span v-else class="hint-inline">Informational — spec-version findings have no failing call to share.</span>
@@ -907,22 +1123,37 @@ watch(tab, (t) => {
                 {{ humanTime(c.captured_at) }}
               </span>
               <span class="c-call">
-                <span class="method" :class="c.method.toLowerCase()">{{ c.method }}</span>
-                <span class="route mono">{{ c.route || c.url }}</span>
+                <!-- MCP tool calls: the tool rides the method/path slot (deck §4). -->
+                <template v-if="c.transport === 'mcp'">
+                  <span class="method tool" :title="MCP_BADGE_TOOLTIP">{{ MCP_TOOL_CHIP }}</span>
+                  <span class="route mono">{{ toolNameOf(c) }}</span>
+                </template>
+                <template v-else>
+                  <span class="method" :class="c.method.toLowerCase()">{{ c.method }}</span>
+                  <span class="route mono">{{ c.route || c.url }}</span>
+                </template>
               </span>
               <span class="c-peer" :title="c.peer_addr ? 'peer address ' + c.peer_addr : undefined">
                 <span class="dir-chip" :class="c.direction === 'server' ? 'in' : 'out'">{{ dirLabel(c.direction) }}</span>
                 <span class="peer-host mono">{{ c.peer_host || c.peer_addr || '—' }}</span>
               </span>
               <span class="c-status">
-                <span class="status-code" :class="{ err: c.status_code >= 400 }">{{ c.status_code }}</span>
+                <!-- MCP: ok / error from isError — an execution failure, not contract drift. -->
+                <span
+                  v-if="c.transport === 'mcp'"
+                  class="status-code"
+                  :class="{ err: c.mcp_is_error }"
+                  :title="c.mcp_is_error ? MCP_ERROR_TOOLTIP : undefined"
+                >{{ mcpStatusLabel(c) }}</span>
+                <span v-else class="status-code" :class="{ err: c.status_code >= 400 }">{{ c.status_code }}</span>
               </span>
               <span class="c-corr mono">
                 <span v-if="c.correlation?.request_id" title="request-id">{{ c.correlation.request_id }}</span>
+                <span v-if="c.correlation?.client_request_id" :title="JSONRPC_ID_TITLE">{{ c.correlation.client_request_id }}</span>
                 <span v-if="c.correlation?.idempotency_key" class="dim" title="idempotency-key">
                   {{ c.correlation.idempotency_key }}
                 </span>
-                <span v-if="!c.correlation?.request_id && !c.correlation?.idempotency_key" class="dim">—</span>
+                <span v-if="!c.correlation?.request_id && !c.correlation?.client_request_id && !c.correlation?.idempotency_key" class="dim">—</span>
               </span>
               <span class="c-mark">
                 <span v-if="isDrifted(c)" class="tag drift">drifted</span>
@@ -988,6 +1219,7 @@ watch(tab, (t) => {
       :key="sheetFinding.id"
       :finding="sheetFinding"
       :correlation="correlationFor(sheetFinding)"
+      :call="sheetCall"
       :provider="providerNameFor(sheetFinding)"
       :consumer="consumerName"
       :connect="connect"
@@ -1205,6 +1437,27 @@ pre.body { background: var(--panel2); border: 1px solid var(--line); border-radi
 .empty.small { font-size: 0.85rem; }
 .occ { font-size: 0.72rem; color: var(--warn); font-weight: 700; border: 1px solid var(--warn); border-radius: 999px; padding: 0.05rem 0.45rem; }
 .occ.single { color: var(--muted); border-color: var(--line); font-weight: 500; }
+
+/* ─── MCP surfaces (v0.5) ─── */
+.mcp-badge { font-size: 0.64rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--accent); border: 1px solid var(--accent); border-radius: 4px; padding: 0.08rem 0.35rem; margin-left: 0.4rem; vertical-align: middle; white-space: nowrap; }
+.mcp-headline { margin-top: -0.35rem; }
+.mcp-headline .hl-you { font-size: 1rem; display: flex; align-items: center; gap: 0.55rem; }
+.mcp-headline .mcp-badge { margin-left: 0; }
+.local-notices { margin: 1rem 0; padding: 0.85rem 1.1rem; border-radius: 12px; border: 1px dashed var(--line); background: var(--panel); }
+.ln-head { display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap; }
+.ln-title { font-weight: 700; font-size: 0.9rem; }
+.ln-sub { color: var(--muted); font-size: 0.82rem; }
+.ln-list { margin: 0.55rem 0 0; padding-left: 1.1rem; }
+.ln-item { color: var(--muted); font-size: 0.88rem; margin-top: 0.25rem; }
+.method.tool { color: var(--accent); border-color: var(--accent); }
+.tool-rows { margin-top: 0.65rem; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.tool-row { padding: 0.42rem 0.7rem; border-top: 1px solid var(--line); }
+.tool-row:first-child { border-top: 0; }
+.tool-line { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.tool-name { font-size: 0.85rem; }
+.tool-tag { font-size: 0.72rem; color: var(--ok); border: 1px solid var(--ok); border-radius: 999px; padding: 0.05rem 0.45rem; }
+.tool-tag.partial { color: var(--muted); border-color: var(--line); }
+.tool-note { color: var(--muted); font-size: 0.8rem; margin: 0.3rem 0 0; }
 
 @media (max-width: 720px) {
   .tr-head { display: none; }

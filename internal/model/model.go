@@ -162,6 +162,12 @@ type Finding struct {
 	SourceCallID    *string `json:"source_call_id"`
 	DetectedAt      string  `json:"detected_at"`
 	Detail          string  `json:"detail,omitempty"`
+	// SnapshotObservedAt (v0.5, additive, optional — CONTRACTS §4 MCP block) is
+	// the ObservedAt of the tools/list snapshot backing an MCP finding: the
+	// CURRENT snapshot the call was validated against for output_mismatch, the
+	// AFTER snapshot for definition_change. Empty on every other kind (and on
+	// findings from older collectors) — readers must tolerate its absence.
+	SnapshotObservedAt string `json:"snapshot_observed_at,omitempty"`
 
 	// Dedup fields (CONTRACTS §4): a drift is per-endpoint, not per-call. The
 	// Signature (integration|endpoint|kind|rule|field_path) collapses every call

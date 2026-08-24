@@ -225,6 +225,9 @@ func (d *MCPDetector) DetectCall(call model.RedactedCall) []model.Finding {
 				severity:       model.SeverityBreaking,
 				locationPrefix: "$.response.structuredContent",
 				detailNoun:     "result field",
+				// The optional snapshot_observed_at (CONTRACTS §4): the CURRENT
+				// snapshot this call was validated against.
+				snapshotObservedAt: cur.Version.ObservedAt,
 			}, v, call, toolName, now))
 		}
 	}
@@ -290,6 +293,9 @@ type mcpFindingSpec struct {
 	severity       string
 	locationPrefix string
 	detailNoun     string
+	// snapshotObservedAt is set for output_mismatch only (the CURRENT
+	// snapshot's ObservedAt); stale_client stays a local notice without it.
+	snapshotObservedAt string
 }
 
 // mcpFinding builds one call-scoped MCP finding in the EXISTING contract-drift
@@ -313,23 +319,24 @@ func mcpFinding(spec mcpFindingSpec, v schemaViolation, call model.RedactedCall,
 		detail = fmt.Sprintf("Your client is calling `%s` against a stale definition — %s", toolName, detail)
 	}
 	f := model.Finding{
-		SchemaVersion:   model.SchemaVersion,
-		ID:              otlpattr.NewID(),
-		Kind:            spec.kind,
-		Severity:        spec.severity,
-		Integration:     call.Integration,
-		Endpoint:        toolName,
-		FieldPath:       model.Ptr(fieldPath),
-		Location:        model.Ptr(location),
-		Expected:        expectedFromSchema(v.se),
-		Actual:          v.actual,
-		Rule:            rule,
-		SourceCallID:    &sourceID,
-		DetectedAt:      now,
-		Detail:          detail,
-		OccurrenceCount: 1,
-		FirstSeen:       now,
-		LastSeen:        now,
+		SchemaVersion:      model.SchemaVersion,
+		ID:                 otlpattr.NewID(),
+		Kind:               spec.kind,
+		Severity:           spec.severity,
+		Integration:        call.Integration,
+		Endpoint:           toolName,
+		FieldPath:          model.Ptr(fieldPath),
+		Location:           model.Ptr(location),
+		Expected:           expectedFromSchema(v.se),
+		Actual:             v.actual,
+		Rule:               rule,
+		SourceCallID:       &sourceID,
+		DetectedAt:         now,
+		Detail:             detail,
+		SnapshotObservedAt: spec.snapshotObservedAt,
+		OccurrenceCount:    1,
+		FirstSeen:          now,
+		LastSeen:           now,
 	}
 	f.Signature = f.ComputeSignature()
 	return f
@@ -396,9 +403,11 @@ func definitionChangeFinding(integration string, ch diff.Change, prev, cur *cont
 		Detail: fmt.Sprintf("Definition change (%s): %s on `%s`%s — tools/list observed %s → %s.",
 			ch.Class, ch.Rule, ch.OperationID, atFieldPath(ch.FieldPath),
 			prev.Version.ObservedAt, cur.Version.ObservedAt),
-		OccurrenceCount: 1,
-		FirstSeen:       now,
-		LastSeen:        now,
+		// The optional snapshot_observed_at (CONTRACTS §4): the AFTER snapshot.
+		SnapshotObservedAt: cur.Version.ObservedAt,
+		OccurrenceCount:    1,
+		FirstSeen:          now,
+		LastSeen:           now,
 	}
 	f.Signature = f.ComputeSignature()
 	return f
