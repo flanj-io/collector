@@ -123,7 +123,7 @@ function cancelEdit() {
   <div class="connect" :class="{ inline }">
     <template v-if="!inline">
       <h3 class="connect-title">Connect to Vinifera network</h3>
-      <p class="connect-sub">Required to create thread links. Viewing your own traffic and findings never needs it.</p>
+      <p class="connect-sub">We turn a detection into something you can act on with your vendor. Required to create thread links. Viewing your own traffic and findings never needs it.</p>
     </template>
 
     <!-- connected -->

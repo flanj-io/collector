@@ -18,6 +18,7 @@ UI embedded in the binary).
   (**Connect** — org name + a one-click-confirmed contact email; required to create thread links, never to view
   your own data).
 
+**We turn a detection into something you can act on with your vendor.**
 Open-source SDK (Apache-2.0) and source-available collector (ELv2); hosted network layer.
 
 ## Status
