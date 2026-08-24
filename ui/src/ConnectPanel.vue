@@ -6,6 +6,7 @@
 import { computed, nextTick, ref, watch } from 'vue';
 import { ApiError, apiPost } from './api';
 import { needsCollectorAddress, type ConnectState } from './threads';
+import { applySeed, seededValues, untouched, type ConnectFormTouched } from './connect-form';
 
 const props = defineProps<{
   state: ConnectState | null;
@@ -28,18 +29,34 @@ const resent = ref(false);
 const errorMsg = ref('');
 const validation = ref('');
 
-function seedForm() {
-  const s = props.state;
-  org.value = s?.consumer_display_name || props.defaultOrg || '';
-  name.value = s?.contact_display_name || '';
-  email.value = s?.contact_email || '';
-  localUrl.value = s?.local_ui_url || (typeof window !== 'undefined' ? window.location.origin : '');
+const touched = ref<ConnectFormTouched>(untouched());
+const focusedField = ref<keyof ConnectFormTouched | null>(null);
+const fieldRefs = { org, name, email, localUrl } as const;
+function markTouched(k: keyof ConnectFormTouched) {
+  // Typing marks the field as the user's; clearing it back to empty releases it for
+  // prefill again (applySeed still never touches the focused field).
+  touched.value[k] = fieldRefs[k].value !== '';
 }
-seedForm();
+function setFocus(k: keyof ConnectFormTouched | null) {
+  focusedField.value = k;
+}
+
+/** force = an explicit user action (open edit / cancel / after submit) — background polls never force. */
+function seedForm(force = false) {
+  const seeded = seededValues(props.state, props.defaultOrg, typeof window !== 'undefined' ? window.location.origin : '');
+  const next = applySeed({ org: org.value, name: name.value, email: email.value, localUrl: localUrl.value }, seeded, touched.value, force, focusedField.value);
+  org.value = next.org;
+  name.value = next.name;
+  email.value = next.email;
+  localUrl.value = next.localUrl;
+  if (force) touched.value = untouched();
+}
+seedForm(true);
 watch(
   () => [props.state?.status, props.state?.contact_email, props.defaultOrg],
   () => {
-    if (!editing.value) seedForm();
+    // Background refresh: fill only pristine fields — never clobber typed text.
+    if (!editing.value) seedForm(false);
   }
 );
 
@@ -53,7 +70,7 @@ const showAddressNudge = computed(
  *  the same contact goes out with the collector key — an idempotent replay that
  *  only updates local_ui_url). */
 async function addAddress() {
-  seedForm();
+  seedForm(true);
   editing.value = true;
   resent.value = false;
   validation.value = '';
@@ -95,6 +112,7 @@ async function submit(resend = false) {
     });
     editing.value = false;
     resent.value = resend;
+    touched.value = untouched(); // the server state is now the truth; future seeds may fill every field
     emit('update:state', s);
   } catch (e) {
     errorMsg.value = e instanceof ApiError ? e.message : "Couldn't reach the control plane — nothing was sent.";
@@ -104,7 +122,7 @@ async function submit(resend = false) {
 }
 
 function changeEmail() {
-  seedForm();
+  seedForm(true);
   editing.value = true;
   resent.value = false;
   errorMsg.value = '';
@@ -114,7 +132,7 @@ function cancelEdit() {
   editing.value = false;
   validation.value = '';
   errorMsg.value = '';
-  seedForm();
+  seedForm(true);
   emit('cancel');
 }
 </script>
@@ -163,22 +181,22 @@ function cancelEdit() {
     <form v-else class="connect-form" @submit.prevent="submit(false)">
       <label class="field">
         <span class="field-label">Your organization</span>
-        <input v-model="org" type="text" autocomplete="organization" :disabled="busy" />
+        <input v-model="org" type="text" autocomplete="organization" :disabled="busy" @input="markTouched('org')" @focus="setFocus('org')" @blur="setFocus(null)" />
         <span class="field-help">Shown to the provider on every thread.</span>
       </label>
       <label class="field">
         <span class="field-label">Your name <span class="dim">(optional)</span></span>
-        <input v-model="name" type="text" autocomplete="name" :placeholder="org ? 'e.g. Dana (' + org + ')' : 'e.g. Dana'" :disabled="busy" />
+        <input v-model="name" type="text" autocomplete="name" :placeholder="org ? 'e.g. Dana (' + org + ')' : 'e.g. Dana'" :disabled="busy" @input="markTouched('name')" @focus="setFocus('name')" @blur="setFocus(null)" />
         <span class="field-help">Shown next to your messages on the thread. Defaults to your organization.</span>
       </label>
       <label class="field">
         <span class="field-label">Contact email</span>
-        <input v-model="email" type="email" autocomplete="email" :disabled="busy" />
+        <input v-model="email" type="email" autocomplete="email" :disabled="busy" @input="markTouched('email')" @focus="setFocus('email')" @blur="setFocus(null)" />
         <span class="field-help">Gets a one-time confirmation now and reply notifications later. Shown on your messages.</span>
       </label>
       <label class="field">
         <span class="field-label">This collector's address <span class="dim">(optional)</span></span>
-        <input ref="localUrlEl" v-model="localUrl" type="url" :disabled="busy" />
+        <input ref="localUrlEl" v-model="localUrl" type="url" :disabled="busy" @input="markTouched('localUrl')" @focus="setFocus('localUrl')" @blur="setFocus(null)" />
         <span class="field-help">Used for the "Open in collector" link in your notification emails. Vinifera never calls it.</span>
       </label>
       <p v-if="validation" class="error">{{ validation }}</p>
