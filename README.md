@@ -25,7 +25,7 @@ Open-source SDK (Apache-2.0) and source-available collector (ELv2); hosted netwo
 Pre-release (v0). See [docs/CONCEPTS.md](docs/CONCEPTS.md) and [CLAUDE.md](CLAUDE.md).
 
 **Supported:** REST/HTTP integrations — live request/response validated against the provider's OpenAPI.
-**v0.5 (in build):** MCP tools — tool-definition drift and result-vs-`outputSchema` mismatch, flagged to
+**Supported:** MCP tools — tool-definition drift and result-vs-`outputSchema` mismatch, flagged to
 the server operator with evidence. (The transport-neutral `Contract` model and definition-diff
 classifier live in the public [`contract`](contract/) package.)
 **Roadmap:** webhooks (received-webhook contract drift; missing-webhook detection under design).
