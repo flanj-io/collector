@@ -3,16 +3,20 @@
 // org name + a contact email the control plane confirms with one click. Shown
 // on the Settings tab and inline in the Flag sheet. Local data viewing is never
 // gated on it; only creating a thread link is.
-import { computed, ref, watch } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import { ApiError, apiPost } from './api';
-import type { ConnectState } from './threads';
+import { needsCollectorAddress, type ConnectState } from './threads';
 
 const props = defineProps<{
   state: ConnectState | null;
   defaultOrg?: string;
   inline?: boolean;
+  /** Post-Connect address nudge: shared "remembered dismissal" flag (App owns storage). */
+  addressNudgeDismissed?: boolean;
+  /** Bumped by App when "Add address" is clicked elsewhere (Threads tab) — opens the form and focuses the address field. */
+  focusAddressTick?: number;
 }>();
-const emit = defineEmits<{ (e: 'update:state', s: ConnectState): void; (e: 'cancel'): void }>();
+const emit = defineEmits<{ (e: 'update:state', s: ConnectState): void; (e: 'cancel'): void; (e: 'dismiss-address-nudge'): void }>();
 
 const org = ref('');
 const name = ref('');
@@ -40,6 +44,30 @@ watch(
 );
 
 const status = computed(() => props.state?.status ?? 'disconnected');
+const localUrlEl = ref<HTMLInputElement | null>(null);
+const showAddressNudge = computed(
+  () => !props.inline && !editing.value && needsCollectorAddress(props.state) && !props.addressNudgeDismissed
+);
+
+/** "Add address": open the form with the address field focused (re-register with
+ *  the same contact goes out with the collector key — an idempotent replay that
+ *  only updates local_ui_url). */
+async function addAddress() {
+  seedForm();
+  editing.value = true;
+  resent.value = false;
+  validation.value = '';
+  errorMsg.value = '';
+  await nextTick();
+  localUrlEl.value?.focus();
+}
+
+watch(
+  () => props.focusAddressTick,
+  (tick) => {
+    if (tick) addAddress();
+  }
+);
 
 function validEmail(v: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim());
@@ -109,6 +137,13 @@ function cancelEdit() {
       <div class="connect-actions">
         <button type="button" class="btn ghost" @click="changeEmail">Change contact</button>
       </div>
+      <p v-if="showAddressNudge" class="connect-nudge">
+        <span>Add this collector's address so email links can deep-link back here.</span>
+        <span class="connect-nudge-actions">
+          <button type="button" class="btn small" @click="addAddress">Add address</button>
+          <button type="button" class="btn ghost small" aria-label="Dismiss" @click="emit('dismiss-address-nudge')">Dismiss</button>
+        </span>
+      </p>
     </div>
 
     <!-- pending -->
@@ -143,7 +178,7 @@ function cancelEdit() {
       </label>
       <label class="field">
         <span class="field-label">This collector's address <span class="dim">(optional)</span></span>
-        <input v-model="localUrl" type="url" :disabled="busy" />
+        <input ref="localUrlEl" v-model="localUrl" type="url" :disabled="busy" />
         <span class="field-help">Used for the "Open in collector" link in your notification emails. Vinifera never calls it.</span>
       </label>
       <p v-if="validation" class="error">{{ validation }}</p>
@@ -168,6 +203,8 @@ function cancelEdit() {
 .connect-state.pending { border-color: var(--warn); }
 .connect-line { margin: 0; }
 .connect-note { margin: 0.35rem 0 0; color: var(--ok); font-size: 0.85rem; }
+.connect-nudge { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin: 0.6rem 0 0; padding-top: 0.6rem; border-top: 1px dashed var(--line); color: var(--muted); font-size: 0.88rem; }
+.connect-nudge-actions { display: flex; gap: 0.5rem; }
 .connect-form { display: flex; flex-direction: column; gap: 0.7rem; background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 0.9rem 1rem; }
 .connect.inline .connect-form { background: transparent; border: 0; padding: 0; }
 .field { display: flex; flex-direction: column; gap: 0.2rem; }

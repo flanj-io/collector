@@ -674,6 +674,56 @@ func TestChangeContactKeepsKeyAndThreads(t *testing.T) {
 	r.assertNeverLogged(t, r.cp.collectorKey, r.cp.deployToken)
 }
 
+// TestConnectedAddressUpdate (v0.1b post-Connect nudge): a Connected collector
+// that registered without local_ui_url adds it later by re-POSTing /api/connect
+// with the SAME contact — the re-register goes out with the collector key
+// (idempotent replay: no new pending contact, status stays connected), carries
+// local_ui_url, and the address is persisted and returned to the UI.
+func TestConnectedAddressUpdate(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	// Connect without an address + confirm
+	resp, out, _ := r.do(t, http.MethodPost, "/api/connect", map[string]string{"consumer_display_name": "Acme Consumer Ltd", "contact_email": "ops@acme.test"})
+	if resp.StatusCode != 202 {
+		t.Fatalf("connect: %d %v", resp.StatusCode, out)
+	}
+	r.cp.mu.Lock()
+	r.cp.contactStatus = "confirmed"
+	r.cp.mu.Unlock()
+	r.ext.me.mu.Lock()
+	r.ext.me.at = r.ext.me.at.Add(-meCacheTTL * 2)
+	r.ext.me.mu.Unlock()
+	_, out, _ = r.do(t, http.MethodGet, "/api/connect", nil)
+	if out["status"] != "connected" || out["local_ui_url"] != nil {
+		t.Fatalf("connected without an address, got %v", out)
+	}
+
+	// Add the address: same contact + local_ui_url → 200 connected, key bearer
+	resp, out, raw := r.do(t, http.MethodPost, "/api/connect", map[string]string{"consumer_display_name": "Acme Consumer Ltd", "contact_email": "ops@acme.test", "local_ui_url": "http://collector.internal:5335"})
+	if resp.StatusCode != 200 || out["status"] != "connected" || out["local_ui_url"] != "http://collector.internal:5335" {
+		t.Fatalf("address update: %d %s", resp.StatusCode, raw)
+	}
+	if got := r.cp.registerAuths; len(got) != 2 || got[1] != "Bearer "+r.cp.collectorKey {
+		t.Fatalf("address update must re-register with the collector key, bearers = %v", got)
+	}
+	if r.cp.lastRegisterBody["local_ui_url"] != "http://collector.internal:5335" {
+		t.Errorf("register body must carry the address: %v", r.cp.lastRegisterBody)
+	}
+	if r.st.settings[settingLocalUIURL] != "http://collector.internal:5335" {
+		t.Errorf("address not persisted: %v", r.st.settings)
+	}
+	if r.st.settings[settingCollectorKey] != r.cp.collectorKey || r.st.settings[settingContactStatus] != "confirmed" {
+		t.Errorf("key/status must be unchanged by an address update: %v", r.st.settings)
+	}
+
+	// GET keeps reporting it (store-backed; me has no say over a locally set address)
+	_, out, _ = r.do(t, http.MethodGet, "/api/connect", nil)
+	if out["status"] != "connected" || out["local_ui_url"] != "http://collector.internal:5335" {
+		t.Fatalf("GET after address update: %v", out)
+	}
+	r.assertNeverLogged(t, r.cp.collectorKey, r.cp.deployToken)
+}
+
 // TestFlagGateBeforeFirstConfirmation: with a key but NO confirmed contact ever,
 // Create thread still 412s (the change-of-contact relaxation must not open the
 // gate before the first confirmation).

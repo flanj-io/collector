@@ -8,6 +8,7 @@ import {
   fieldName,
   linkLabel,
   linkNeedsAttention,
+  needsCollectorAddress,
   pasteText,
   requestIdsLine,
   threadIdFromHash,
@@ -145,6 +146,13 @@ describe('misc', () => {
     expect(threadIdFromHash('#threads/0191-abc')).toBe('0191-abc');
     expect(threadIdFromHash('#threads')).toBeNull();
     expect(threadIdFromHash('')).toBeNull();
+  });
+  it('needsCollectorAddress: only when Connected with no local_ui_url', () => {
+    expect(needsCollectorAddress(null)).toBe(false);
+    expect(needsCollectorAddress({ status: 'disconnected' })).toBe(false);
+    expect(needsCollectorAddress({ status: 'pending', contact_email: 'a@b.c' })).toBe(false);
+    expect(needsCollectorAddress({ status: 'connected', confirmed_contact_email: 'a@b.c' })).toBe(true);
+    expect(needsCollectorAddress({ status: 'connected', local_ui_url: 'http://collector.internal:5335' })).toBe(false);
   });
   it('canCreateThread: connected, or a confirmed contact exists while a new one is pending', () => {
     expect(canCreateThread(null)).toBe(false);

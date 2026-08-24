@@ -46,6 +46,12 @@ export function canCreateThread(state: ConnectState | null | undefined): boolean
   return !!state && (state.status === 'connected' || !!state.confirmed_contact_email);
 }
 
+/** Post-Connect nudge (v0.1b): Connected but no collector address on file —
+ *  notification emails cannot deep-link back to this UI until it is set. */
+export function needsCollectorAddress(state: ConnectState | null | undefined): boolean {
+  return !!state && state.status === 'connected' && !state.local_ui_url;
+}
+
 export interface ConnectState {
   status: ConnectStatus;
   consumer_display_name?: string;

@@ -4,7 +4,7 @@ import { ApiError, apiGet, openThreadInNewTab } from './api';
 import ConnectPanel from './ConnectPanel.vue';
 import FlagSheet from './FlagSheet.vue';
 import ThreadsTab from './ThreadsTab.vue';
-import { chipLabel, threadIdFromHash, type ConnectState, type ThreadRow } from './threads';
+import { chipLabel, needsCollectorAddress, threadIdFromHash, type ConnectState, type ThreadRow } from './threads';
 import type { Correlation, Finding, FlagResult, Health, RedactedCall } from './types';
 
 interface Edge {
@@ -56,6 +56,11 @@ const threadsError = ref('');
 const sheetFinding = ref<Finding | null>(null);
 const highlightThreadId = ref<string | null>(null);
 const connectBannerDismissed = ref(localStorage.getItem('vinifera.connect.banner.dismissed') === '1');
+// Post-Connect nudge (v0.1b): Connected but no collector address yet — email
+// links can't deep-link back here. One dismissible line on the Connect panel
+// and the Threads tab; the dismissal is remembered (shared by both).
+const addressNudgeDismissed = ref(localStorage.getItem('vinifera.address.nudge.dismissed') === '1');
+const focusAddressTick = ref(0);
 
 const connectStatus = computed(() => connect.value?.status ?? 'disconnected');
 const connectPill = computed(() => {
@@ -102,6 +107,21 @@ function onConnectUpdated(s: ConnectState) {
 function dismissConnectBanner() {
   connectBannerDismissed.value = true;
   localStorage.setItem('vinifera.connect.banner.dismissed', '1');
+}
+
+const showAddressNudge = computed(
+  () => !!health.value?.cp_configured && needsCollectorAddress(connect.value) && !addressNudgeDismissed.value
+);
+
+function dismissAddressNudge() {
+  addressNudgeDismissed.value = true;
+  localStorage.setItem('vinifera.address.nudge.dismissed', '1');
+}
+
+// "Add address" from the Threads tab: jump to Settings with the address field focused.
+function addCollectorAddress() {
+  tab.value = 'settings';
+  focusAddressTick.value++;
 }
 
 // Provider name shown on the sheet and sent on the flag: the configured
@@ -762,6 +782,13 @@ watch(tab, (t) => {
 
     <!-- ───────────────────────── THREADS ───────────────────────── -->
     <div v-show="tab === 'threads'">
+      <div v-if="showAddressNudge" class="connect-banner info">
+        <span>Add this collector's address so email links can deep-link back here.</span>
+        <span class="connect-banner-actions">
+          <button type="button" class="btn small" @click="addCollectorAddress">Add address</button>
+          <button type="button" class="btn ghost small" aria-label="Dismiss" @click="dismissAddressNudge">Dismiss</button>
+        </span>
+      </div>
       <ThreadsTab
         :rows="threads"
         :loaded="threadsLoaded"
@@ -779,7 +806,15 @@ watch(tab, (t) => {
         <p v-if="health && !health.cp_configured" class="empty">
           The control plane is not configured on this collector (set <code>cp_base_url</code> and <code>cp_deploy_token</code>). Local capture, detection and this UI work without it.
         </p>
-        <ConnectPanel v-else :state="connect" :default-org="health?.consumer_display_name" @update:state="onConnectUpdated" />
+        <ConnectPanel
+          v-else
+          :state="connect"
+          :default-org="health?.consumer_display_name"
+          :address-nudge-dismissed="addressNudgeDismissed"
+          :focus-address-tick="focusAddressTick"
+          @update:state="onConnectUpdated"
+          @dismiss-address-nudge="dismissAddressNudge"
+        />
       </section>
     </div>
 
@@ -1056,6 +1091,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .tab-dot.disconnected { background: var(--muted); }
 .connect-banner { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin: 0.75rem 0 0; padding: 0.6rem 0.9rem; border: 1px solid var(--warn); border-radius: 10px; background: var(--panel); font-size: 0.88rem; }
 .connect-banner-actions { display: flex; gap: 0.5rem; }
+.connect-banner.info { border-color: var(--line); color: var(--muted); }
 .error { color: var(--danger); }
 
 /* Traffic toolbar: search + facet filters + live/pause control */
