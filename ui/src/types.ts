@@ -73,6 +73,15 @@ export interface Finding {
    *  backing the finding — the CURRENT one for output_mismatch, the AFTER one
    *  for definition_change. Absent on other kinds and older collectors. */
   snapshot_observed_at?: string;
+  /** Additive, optional: the PREVIOUS snapshot's ObservedAt on a
+   *  definition_change — the structured sibling of snapshot_observed_at.
+   *  Absent on other kinds and older collectors. */
+  snapshot_observed_from?: string;
+  /** Local acknowledge state (read-API join, never part of the wire contract):
+   *  true when this finding's signature is acknowledged on this collector. */
+  acked?: boolean;
+  /** When the acknowledge landed (RFC3339); set only with acked. */
+  acked_at?: string;
 }
 
 export interface Health {

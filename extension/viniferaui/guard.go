@@ -14,14 +14,15 @@ func writeErr(w http.ResponseWriter, status int, code, message string) {
 	writeJSON(w, status, map[string]string{"error": code, "message": message})
 }
 
-// guardMutating enforces the relay's rules for every state-changing route
-// (CONTRACTS / spec Step 4b): POST only (405), the `X-Vinifera-UI: 1` header
-// (a custom header forces a CORS preflight the relay never answers — no CORS
-// headers are ever set — so a foreign page cannot drive it), a JSON content
-// type, and no foreign `Origin` (when a browser sends one it must name this
-// very host). It also requires the control plane to be configured. Returns
-// false after writing the error.
-func (e *uiExtension) guardMutating(w http.ResponseWriter, r *http.Request) bool {
+// guardLocalMutating enforces the browser-facing rules for every state-changing
+// route (CONTRACTS / spec Step 4b): POST only (405), the `X-Vinifera-UI: 1`
+// header (a custom header forces a CORS preflight this server never answers —
+// no CORS headers are ever set — so a foreign page cannot drive it), a JSON
+// content type, and no foreign `Origin` (when a browser sends one it must name
+// this very host). It does NOT require the control plane: LOCAL-ONLY mutations
+// (finding acknowledge) work on an unconfigured or disconnected collector.
+// Returns false after writing the error.
+func (e *uiExtension) guardLocalMutating(w http.ResponseWriter, r *http.Request) bool {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", msgPostOnly)
@@ -41,6 +42,16 @@ func (e *uiExtension) guardMutating(w http.ResponseWriter, r *http.Request) bool
 			writeErr(w, http.StatusForbidden, "forbidden_origin", msgForeignOrigin)
 			return false
 		}
+	}
+	return true
+}
+
+// guardMutating is guardLocalMutating plus the control-plane requirement —
+// every RELAY route (connect / flag / threads) needs a configured CP. Returns
+// false after writing the error.
+func (e *uiExtension) guardMutating(w http.ResponseWriter, r *http.Request) bool {
+	if !e.guardLocalMutating(w, r) {
+		return false
 	}
 	if e.cp == nil {
 		writeErr(w, http.StatusServiceUnavailable, "cp_not_configured", msgCPNotConfigured)

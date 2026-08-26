@@ -50,7 +50,7 @@ export async function apiPost<T>(path: string, body: unknown = {}): Promise<T> {
 }
 
 /**
- * "Open thread": fetch a 10-minute single-use owner handoff from the relay and
+ * "View thread": fetch a 10-minute single-use owner handoff from the relay and
  * open it in a new tab. The tab is opened synchronously on the click (so popup
  * blockers allow it) and pointed at the handoff once it arrives; the URL is
  * never stored or logged. When the popup was blocked, `opened` is false and the

@@ -25,6 +25,7 @@
     "source_call_id": { "type": ["string", "null"] },
     "detected_at": { "type": "string", "format": "date-time" },
     "detail": { "type": "string" },
-    "snapshot_observed_at": { "type": "string", "format": "date-time" }
+    "snapshot_observed_at": { "type": "string", "format": "date-time" },
+    "snapshot_observed_from": { "type": "string", "format": "date-time" }
   }
 }

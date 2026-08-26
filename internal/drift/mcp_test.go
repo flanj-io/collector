@@ -189,6 +189,11 @@ func TestMCPGolden_OutputMismatch(t *testing.T) {
 	if doc, err := json.Marshal(f); err != nil || !strings.Contains(string(doc), `"snapshot_observed_at":"`+snap.ObservedAt+`"`) {
 		t.Errorf("marshalled finding must carry snapshot_observed_at (err=%v): %s", err, doc)
 	}
+	// snapshot_observed_from is a definition_change-only field: an
+	// output_mismatch has no BEFORE snapshot to name.
+	if f.SnapshotObservedFrom != "" {
+		t.Errorf("output_mismatch must not carry snapshot_observed_from, got %q", f.SnapshotObservedFrom)
+	}
 
 	// A second drifting call carries the SAME signature — the store collapses
 	// it into one finding with occurrence_count 2 (per-signature dedup).
@@ -347,6 +352,9 @@ func TestStaleClient_ToolNotListed(t *testing.T) {
 	if f.SnapshotObservedAt != "" {
 		t.Errorf("stale_client must not carry snapshot_observed_at, got %q", f.SnapshotObservedAt)
 	}
+	if f.SnapshotObservedFrom != "" {
+		t.Errorf("stale_client must not carry snapshot_observed_from, got %q", f.SnapshotObservedFrom)
+	}
 }
 
 // TestStaleClient_ArgsViolation: arguments violating the CURRENT inputSchema
@@ -454,6 +462,14 @@ func TestDefinitionChange_Classes(t *testing.T) {
 	// snapshot_observed_at (additive, optional — CONTRACTS §4): the AFTER snapshot's.
 	if br.SnapshotObservedAt != v2.ObservedAt {
 		t.Errorf("snapshot_observed_at = %q, want the after snapshot's ObservedAt %q", br.SnapshotObservedAt, v2.ObservedAt)
+	}
+	// snapshot_observed_from (additive, optional — CONTRACTS §4): the BEFORE
+	// snapshot's — the structured sibling that replaces regexing the Detail.
+	if br.SnapshotObservedFrom != v1.ObservedAt {
+		t.Errorf("snapshot_observed_from = %q, want the before snapshot's ObservedAt %q", br.SnapshotObservedFrom, v1.ObservedAt)
+	}
+	if doc, err := json.Marshal(br); err != nil || !strings.Contains(string(doc), `"snapshot_observed_from":"`+v1.ObservedAt+`"`) {
+		t.Errorf("marshalled definition_change must carry snapshot_observed_from (err=%v): %s", err, doc)
 	}
 
 	check("create_refund", diff.RuleInputRequiredPropertyAdded, "input.reason", model.SeverityBreaking, true)

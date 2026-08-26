@@ -23,6 +23,7 @@ const (
 	msgInvalidEmail       = "Enter a valid email."
 	msgFindingRequired    = "finding_id is required."
 	msgNotFlaggable       = "This finding is a local notice — stale-client calls and description-only changes stay on this collector and can't be flagged to the provider."
+	msgNotAckable         = "Only non-breaking informational findings can be acknowledged — breaking findings need a fix or a thread."
 	msgFindingNotFound    = "That finding is no longer in the local store."
 	msgFindingNoCall      = "This finding has no failing call to share (spec-version findings are informational)."
 	msgCallEvicted        = "The failing call is no longer in the local store (it was evicted from the rolling window)."

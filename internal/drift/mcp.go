@@ -405,9 +405,12 @@ func definitionChangeFinding(integration string, ch diff.Change, prev, cur *cont
 			prev.Version.ObservedAt, cur.Version.ObservedAt),
 		// The optional snapshot_observed_at (CONTRACTS §4): the AFTER snapshot.
 		SnapshotObservedAt: cur.Version.ObservedAt,
-		OccurrenceCount:    1,
-		FirstSeen:          now,
-		LastSeen:           now,
+		// The optional snapshot_observed_from (CONTRACTS §4): the BEFORE
+		// snapshot — structured, so readers never regex the Detail prose.
+		SnapshotObservedFrom: prev.Version.ObservedAt,
+		OccurrenceCount:      1,
+		FirstSeen:            now,
+		LastSeen:             now,
 	}
 	f.Signature = f.ComputeSignature()
 	return f

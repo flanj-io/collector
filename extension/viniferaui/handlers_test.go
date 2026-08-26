@@ -264,7 +264,7 @@ func (r *testRig) assertNeverLogged(t *testing.T, secrets ...string) {
 func TestGuards(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
-	for _, path := range []string{"/api/flag", "/api/connect", "/api/threads/x/open", "/api/threads/x/close", "/api/threads/x/reopen", "/api/threads/x/replace-link"} {
+	for _, path := range []string{"/api/flag", "/api/connect", "/api/threads/x/open", "/api/threads/x/close", "/api/threads/x/reopen", "/api/threads/x/replace-link", "/api/findings/x/ack", "/api/findings/x/unack"} {
 		t.Run(path, func(t *testing.T) {
 			// GET (or any non-POST) → 405 with Allow
 			resp, _, _ := r.do(t, http.MethodPut, path, nil)
@@ -892,5 +892,137 @@ func TestSaveThreadIndex(t *testing.T) {
 	}
 	if _, ok, _ := loadThread(st3, "fnd_a"); !ok {
 		t.Fatalf("record must be persisted even when the index write loses")
+	}
+}
+
+// TestFindingAckFlow (qfix-2026-08-25): local acknowledge for INFORMATIONAL
+// findings only — definition_change with class DESCRIPTION or NON-BREAKING —
+// keyed by SIGNATURE in the settings KV, joined onto GET /api/findings, and
+// guarded WITHOUT the control-plane check (it works with cp unconfigured, and
+// nothing ever reaches the CP). Breaking rows, output_mismatch, stale_client
+// and live-vs-spec are never ackable; Flaggable() / 403 not_flaggable are
+// untouched by any of this.
+func TestFindingAckFlow(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	// LOCAL-ONLY: the ack routes must work with NO control plane configured.
+	r.ext.cp = nil
+
+	callID := "call_mcp_1"
+	_ = r.st.InsertCall(model.RedactedCall{SchemaVersion: 1, ID: callID, CapturedAt: "2026-08-25T10:00:00Z",
+		Integration: "acme-payments", Direction: "client", Method: "tools/call", Route: "/get_balance",
+		Transport: "mcp", MCPToolName: "get_balance", RequestBody: "{}", ResponseBody: "{}",
+		Redaction: model.Redaction{Patterns: []string{}}})
+	mk := func(id, kind, severity, endpoint, rule string, src *string) model.Finding {
+		f := model.Finding{SchemaVersion: 1, ID: id, Kind: kind, Severity: severity, Integration: "acme-payments",
+			Endpoint: endpoint, Expected: "x", Actual: "y", Rule: rule, SourceCallID: src, DetectedAt: "2026-08-25T10:00:01Z"}
+		f.Signature = f.ComputeSignature()
+		return f
+	}
+	desc := mk("fnd_desc", model.KindDefinitionChange, model.SeverityWarning, "create_refund", model.RuleDescriptionChanged, nil)
+	nonbr := mk("fnd_nonbr", model.KindDefinitionChange, model.SeverityInfo, "list_transactions", "output-schema-declared", nil)
+	brk := mk("fnd_brk", model.KindDefinitionChange, model.SeverityBreaking, "get_balance", "output-property-type-changed", nil)
+	stale := mk("fnd_stale", model.KindStaleClient, model.SeverityWarning, "old_refund", "tool-not-listed", &callID)
+	mism := mk("fnd_mism", model.KindOutputMismatch, model.SeverityBreaking, "get_balance", "type-mismatch", &callID)
+	for _, f := range []model.Finding{desc, nonbr, brk, stale, mism} {
+		_ = r.st.InsertFinding(f)
+	}
+
+	ackedOf := func(raw []byte) map[string]map[string]any {
+		t.Helper()
+		var body struct {
+			Findings []map[string]any `json:"findings"`
+		}
+		if err := json.Unmarshal(raw, &body); err != nil {
+			t.Fatalf("findings: %v (%s)", err, raw)
+		}
+		out := map[string]map[string]any{}
+		for _, f := range body.Findings {
+			out[f["id"].(string)] = f
+		}
+		return out
+	}
+
+	// 1. ack the DESCRIPTION row → 200, KV keyed by signature, index updated
+	resp, out, _ := r.do(t, http.MethodPost, "/api/findings/fnd_desc/ack", map[string]string{})
+	if resp.StatusCode != 200 || out["acked"] != true || out["acked_at"] == "" || out["acked_at"] == nil {
+		t.Fatalf("ack: %d %v", resp.StatusCode, out)
+	}
+	if raw, ok := r.st.settings[settingAckPrefix+desc.Signature]; !ok || !strings.Contains(raw, desc.Signature) {
+		t.Errorf("ack record not persisted by signature: %v", r.st.settings)
+	}
+	if sigs, _ := loadAckIndex(r.st); len(sigs) != 1 || sigs[0] != desc.Signature {
+		t.Errorf("acks index = %v", sigs)
+	}
+	// re-ack is idempotent
+	if resp, _, _ = r.do(t, http.MethodPost, "/api/findings/fnd_desc/ack", map[string]string{}); resp.StatusCode != 200 {
+		t.Errorf("re-ack: %d", resp.StatusCode)
+	}
+
+	// 2. GET /api/findings joins the ack state (and only for the acked row)
+	_, _, raw := r.do(t, http.MethodGet, "/api/findings", nil)
+	rows := ackedOf(raw)
+	if rows["fnd_desc"]["acked"] != true || rows["fnd_desc"]["acked_at"] == nil {
+		t.Errorf("fnd_desc not acked in the join: %v", rows["fnd_desc"])
+	}
+	for _, id := range []string{"fnd_nonbr", "fnd_brk", "fnd_stale", "fnd_mism"} {
+		if _, has := rows[id]["acked"]; has {
+			t.Errorf("%s must not carry acked: %v", id, rows[id])
+		}
+	}
+
+	// 3. NON-BREAKING is ackable too
+	if resp, out, _ = r.do(t, http.MethodPost, "/api/findings/fnd_nonbr/ack", map[string]string{}); resp.StatusCode != 200 || out["acked"] != true {
+		t.Fatalf("ack non-breaking: %d %v", resp.StatusCode, out)
+	}
+
+	// 4. never ackable: BREAKING, stale_client, output_mismatch, live-vs-spec
+	for _, id := range []string{"fnd_brk", "fnd_stale", "fnd_mism", "fnd_1"} {
+		resp, out, _ = r.do(t, http.MethodPost, "/api/findings/"+id+"/ack", map[string]string{})
+		if resp.StatusCode != 403 || out["error"] != "not_ackable" {
+			t.Errorf("ack %s = %d %v, want 403 not_ackable", id, resp.StatusCode, out)
+		}
+	}
+	// unknown finding → 404
+	if resp, out, _ = r.do(t, http.MethodPost, "/api/findings/nope/ack", map[string]string{}); resp.StatusCode != 404 || out["error"] != "finding_not_found" {
+		t.Errorf("ack unknown: %d %v", resp.StatusCode, out)
+	}
+
+	// 5. signature-keyed: a NEW finding id with the SAME signature (store reset)
+	// arrives already acked; a different signature arrives un-acked.
+	desc2 := desc
+	desc2.ID = "fnd_desc_reborn"
+	_ = r.st.InsertFinding(desc2)
+	_, _, raw = r.do(t, http.MethodGet, "/api/findings", nil)
+	rows = ackedOf(raw)
+	if rows["fnd_desc_reborn"]["acked"] != true {
+		t.Errorf("same signature must stay acked across ids: %v", rows["fnd_desc_reborn"])
+	}
+
+	// 6. unack puts it back → index cleared, join drops the mark
+	if resp, out, _ = r.do(t, http.MethodPost, "/api/findings/fnd_desc/unack", map[string]string{}); resp.StatusCode != 200 || out["acked"] != false {
+		t.Fatalf("unack: %d %v", resp.StatusCode, out)
+	}
+	if sigs, _ := loadAckIndex(r.st); len(sigs) != 1 || sigs[0] != nonbr.Signature {
+		t.Errorf("index after unack = %v", sigs)
+	}
+	_, _, raw = r.do(t, http.MethodGet, "/api/findings", nil)
+	rows = ackedOf(raw)
+	if _, has := rows["fnd_desc"]["acked"]; has {
+		t.Errorf("fnd_desc still acked after unack: %v", rows["fnd_desc"])
+	}
+	// unack when not acked is idempotent
+	if resp, _, _ = r.do(t, http.MethodPost, "/api/findings/fnd_desc/unack", map[string]string{}); resp.StatusCode != 200 {
+		t.Errorf("re-unack: %d", resp.StatusCode)
+	}
+
+	// 7. with cp unconfigured the RELAY routes still 503 — the local guard
+	// relaxation applies to ack/unack only.
+	if resp, out, _ = r.do(t, http.MethodPost, "/api/flag", map[string]string{"finding_id": "fnd_mism"}); resp.StatusCode != 503 || out["error"] != "cp_not_configured" {
+		t.Errorf("flag with no cp: %d %v", resp.StatusCode, out)
+	}
+	// and nothing ever reached the CP from the ack flow
+	if r.cp.flagCalls != 0 || r.cp.registerCalls != 0 {
+		t.Errorf("ack flow must never touch the CP (flags=%d registers=%d)", r.cp.flagCalls, r.cp.registerCalls)
 	}
 }

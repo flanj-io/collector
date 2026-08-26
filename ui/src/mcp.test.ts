@@ -1,16 +1,29 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ACK_LABEL,
+  ACK_TITLE,
   JSONRPC_ID_TITLE,
   LOCAL_NOTE_NOT_FLAGGABLE,
   LOCAL_NOTICES_TITLE,
   MCP_BADGE_TOOLTIP,
   MCP_ERROR_TOOLTIP,
   MCP_NO_SPEC_NEEDED,
+  UNDO_LABEL,
+  UNDO_TITLE,
+  ackedLine,
   afterColLabel,
   beforeColLabel,
+  breakingChipLabel,
+  breakingCountTitle,
   defChangeDetail,
   defChangeNoCallSub,
   definitionClass,
+  informationalChipLabel,
+  informationalChipTitle,
+  informationalCountTitle,
+  isAckable,
+  isAcked,
+  isBreakingFinding,
   isFlaggableMcp,
   isLocalNotice,
   isMcpCall,
@@ -101,6 +114,56 @@ describe('kinds, classes, flaggability (spec §1/§6)', () => {
     expect(isFlaggableMcp(defChange({ severity: 'info' }))).toBe(true);
     expect(isFlaggableMcp(finding({ kind: 'stale_client' }))).toBe(false);
     expect(isFlaggableMcp(defChange({ severity: 'warning', rule: 'description-changed' }))).toBe(false);
+  });
+});
+
+describe('badge tiers + acknowledge (qfix-2026-08-25)', () => {
+  it('red tier = breaking severity, all sources — never the protocol', () => {
+    expect(isBreakingFinding(finding({}))).toBe(true); // output_mismatch
+    expect(isBreakingFinding(defChange())).toBe(true); // MCP BREAKING
+    expect(isBreakingFinding({ severity: 'breaking' })).toBe(true); // REST live-vs-spec
+    expect(isBreakingFinding(defChange({ severity: 'info' }))).toBe(false);
+    expect(isBreakingFinding(defChange({ severity: 'warning', rule: 'description-changed' }))).toBe(false);
+  });
+
+  it('ackable: DESCRIPTION + NON-BREAKING definition changes ONLY', () => {
+    expect(isAckable(defChange({ severity: 'warning', rule: 'description-changed' }))).toBe(true);
+    expect(isAckable(defChange({ severity: 'info' }))).toBe(true);
+    // Never: BREAKING, output_mismatch, stale_client, live-vs-spec.
+    expect(isAckable(defChange())).toBe(false);
+    expect(isAckable(finding({}))).toBe(false);
+    expect(isAckable(finding({ kind: 'stale_client' }))).toBe(false);
+    expect(isAckable({ kind: 'live-vs-spec', severity: 'breaking', rule: 'type' })).toBe(false);
+  });
+
+  it('acked state comes from the read-API join', () => {
+    expect(isAcked(finding({ acked: true }))).toBe(true);
+    expect(isAcked(finding({}))).toBe(false);
+    expect(isAcked({ acked: undefined })).toBe(false);
+  });
+
+  it('control + footer strings (verbatim)', () => {
+    expect(ACK_LABEL).toBe('Acknowledge');
+    expect(ACK_TITLE).toBe('Local only — clears it from the counts on this collector. Nothing is sent anywhere.');
+    expect(UNDO_LABEL).toBe('Undo');
+    expect(UNDO_TITLE).toBe('Puts it back in the count.');
+    expect(ackedLine('5m ago')).toBe('Acknowledged 5m ago.');
+  });
+
+  it('tab-pill titles', () => {
+    expect(breakingCountTitle(7)).toBe('7 breaking findings');
+    expect(breakingCountTitle(1)).toBe('1 breaking finding');
+    expect(informationalCountTitle(2)).toBe('2 non-breaking — acknowledge to clear');
+    expect(informationalCountTitle(1)).toBe('1 non-breaking — acknowledge to clear');
+  });
+
+  it('card chips + composition title', () => {
+    expect(breakingChipLabel(1)).toBe('1 BREAKING');
+    expect(breakingChipLabel(6)).toBe('6 BREAKING');
+    expect(informationalChipLabel(2)).toBe('2 NON-BREAKING');
+    expect(informationalChipTitle(1, 1)).toBe('1 non-breaking change · 1 description change');
+    expect(informationalChipTitle(2, 0)).toBe('2 non-breaking changes');
+    expect(informationalChipTitle(0, 2)).toBe('2 description changes');
   });
 });
 

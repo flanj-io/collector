@@ -235,6 +235,8 @@ the §2 MCP call / `contract_snapshot` records — same `Finding` shape, same pe
 
 The two flaggable MCP kinds also carry the additive **optional** `snapshot_observed_at` (ISO date-time): the `tools/list` observation backing the finding — the **current** snapshot's `ObservedAt` for `output_mismatch`, the **after** snapshot's for `definition_change`; absent on other kinds and on findings from older collectors (readers must tolerate its absence).
 
+`definition_change` findings also carry the additive **optional** `snapshot_observed_from` (ISO date-time): the **previous** snapshot's observation time — the structured sibling of `snapshot_observed_at` (which stays the **after** snapshot), so readers never parse the `detail` prose for the before-time; absent on other kinds and on findings from older collectors (readers must tolerate its absence).
+
 The evidence rule (v0.5 spec §6) is enforced **server-side in the collector relay**, not only by UI
 absence: `POST /api/flag` for a `stale_client` or description-only `definition_change` finding returns
 `403 {"error":"not_flaggable"}`, and such findings never reach the CP.

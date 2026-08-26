@@ -168,6 +168,13 @@ type Finding struct {
 	// AFTER snapshot for definition_change. Empty on every other kind (and on
 	// findings from older collectors) — readers must tolerate its absence.
 	SnapshotObservedAt string `json:"snapshot_observed_at,omitempty"`
+	// SnapshotObservedFrom (additive, optional — CONTRACTS §4 MCP block) is the
+	// PREVIOUS snapshot's ObservedAt on a definition_change finding — the
+	// structured sibling of SnapshotObservedAt (which stays the AFTER snapshot),
+	// so readers never have to parse the Detail prose for the before-time. Empty
+	// on every other kind and on findings from older collectors — readers must
+	// tolerate its absence.
+	SnapshotObservedFrom string `json:"snapshot_observed_from,omitempty"`
 
 	// Dedup fields (CONTRACTS §4): a drift is per-endpoint, not per-call. The
 	// Signature (integration|endpoint|kind|rule|field_path) collapses every call

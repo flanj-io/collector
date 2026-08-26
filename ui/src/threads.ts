@@ -88,19 +88,18 @@ export function turnLabel(summary: ThreadSummary | null | undefined, provider: s
   }
 }
 
-/** Link column label (copy deck). */
+/** Link-strip label (copy deck): `Active · expires <D>` · `Replaced` ·
+ *  `Expired · N tried to open`. Knocks on a LIVE link are NOT part of the
+ *  label — they get their own muted knock note (see knockNote). */
 export function linkLabel(summary: ThreadSummary | null | undefined, fmtDate: (iso: string) => string = shortDate): string {
   const link = summary?.link;
   if (!link) return '—';
   const knocks = summary?.knock_count || 0;
   switch (link.status) {
-    case 'active': {
-      // Knocks explain the amber state: the link is live, yet someone hit an old (replaced/expired) one.
-      const active = link.expires_at ? 'Active · expires ' + fmtDate(link.expires_at) : 'Active';
-      return knocks > 0 ? active + ' · ' + knocks + ' tried an old link' : active;
-    }
+    case 'active':
+      return link.expires_at ? 'Active · expires ' + fmtDate(link.expires_at) : 'Active';
     case 'replaced':
-      return knocks > 0 ? 'Replaced · ' + knocks + ' tried to open' : 'Replaced';
+      return 'Replaced';
     case 'expired':
       return knocks > 0 ? 'Expired · ' + knocks + ' tried to open' : 'Expired';
     default:
@@ -108,10 +107,29 @@ export function linkLabel(summary: ThreadSummary | null | undefined, fmtDate: (i
   }
 }
 
-/** True when the row should offer Replace prominently (link not live, or someone knocked). */
-export function linkNeedsAttention(summary: ThreadSummary | null | undefined): boolean {
-  if (!summary?.link) return false;
-  return summary.link.status !== 'active' || (summary.knock_count || 0) > 0;
+/** The muted knock note under an active link (shown only when knock_count > 0):
+ *  the discoverability fix for safe re-sharing. Muted, never amber — the
+ *  counter is lifetime and never resets on Replace, so an amber knock would be
+ *  a permanent alarm. */
+export function knockNote(n: number): string {
+  return n + ' tried an old link — re-share with Copy thread link, or Replace link to cut off old copies.';
+}
+
+/** Amber window before expiry: a link expiring within 72h needs review now. */
+export const LINK_EXPIRY_ATTENTION_MS = 72 * 60 * 60 * 1000;
+
+/** Amber policy for the link strip: states that need review NOW — Expired,
+ *  Replaced, or an active link expiring within 72h. Knocks alone never amber
+ *  (lifetime counter — see knockNote). */
+export function linkNeedsAttention(summary: ThreadSummary | null | undefined, now: number = Date.now()): boolean {
+  const link = summary?.link;
+  if (!link) return false;
+  if (link.status !== 'active') return true;
+  if (link.expires_at) {
+    const t = new Date(link.expires_at).getTime();
+    if (!isNaN(t) && t - now < LINK_EXPIRY_ATTENTION_MS) return true;
+  }
+  return false;
 }
 
 /** Finding-row chip: `In thread · <turn label> · opened ×N` (opened = respondent opens). */

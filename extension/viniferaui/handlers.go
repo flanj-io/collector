@@ -21,6 +21,9 @@ func (e *uiExtension) routes() http.Handler {
 	mux.HandleFunc("/api/edges", e.handleEdges)
 	mux.HandleFunc("/api/calls", e.handleCalls)
 	mux.HandleFunc("/api/findings", e.handleFindings)
+	// Local acknowledge (never a relay route — guarded WITHOUT the CP check).
+	mux.HandleFunc("/api/findings/{id}/ack", e.handleFindingAck)
+	mux.HandleFunc("/api/findings/{id}/unack", e.handleFindingUnack)
 	mux.HandleFunc("/api/contracts", e.handleContracts)
 	mux.HandleFunc("/api/contracts/spec", e.handleContractSpec)
 	mux.HandleFunc("/api/connect", e.handleConnect)
@@ -184,6 +187,15 @@ func (e *uiExtension) handleCalls(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"calls": calls})
 }
 
+// findingView decorates a stored finding with its LOCAL ack state for the UI —
+// a read-API join only. model.Finding itself never gains the field (it mirrors
+// the frozen schema and is what promotes to the CP; the ack never leaves).
+type findingView struct {
+	model.Finding
+	Acked   bool   `json:"acked,omitempty"`
+	AckedAt string `json:"acked_at,omitempty"`
+}
+
 func (e *uiExtension) handleFindings(w http.ResponseWriter, r *http.Request) {
 	st := e.storeOrError(w)
 	if st == nil {
@@ -194,7 +206,20 @@ func (e *uiExtension) handleFindings(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"findings": findings})
+	acks, err := loadAckSet(st)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	views := make([]findingView, len(findings))
+	for i, f := range findings {
+		views[i] = findingView{Finding: f}
+		if rec, ok := acks[findingSignature(f)]; ok && ackable(f) {
+			views[i].Acked = true
+			views[i].AckedAt = rec.AckedAt
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"findings": views})
 }
 
 // flagRequestBody is the UI -> collector flag payload (not the CP contract body,

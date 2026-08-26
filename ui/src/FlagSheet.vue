@@ -5,7 +5,7 @@
 // confirmed contact — the sheet polls and unlocks the moment the click lands),
 // compose (evidence line, "what leaves this collector", the optional message,
 // Create thread) and the success state (the link, Copy thread link, Copy link +
-// message, Open thread). Nothing is emailed by Vinifera on flag.
+// message, View thread). Nothing is emailed by Vinifera on flag.
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { ApiError, apiPost, openThreadInNewTab } from './api';
 import { copyText, selectInput } from './clipboard';
@@ -259,7 +259,7 @@ watch(result, (r) => {
         <div class="sheet-actions">
           <button type="button" class="btn primary" @click="copyLink">{{ copiedWhat === 'link' ? 'Copied' : 'Copy thread link' }}</button>
           <button type="button" class="btn" @click="copyLinkAndMessage">{{ copiedWhat === 'message' ? 'Copied' : 'Copy link + message' }}</button>
-          <button type="button" class="btn" :disabled="openBusy" @click="openThread">{{ openBusy ? 'Opening…' : 'Open thread' }}</button>
+          <button type="button" class="btn" :disabled="openBusy" @click="openThread">{{ openBusy ? 'Opening…' : 'View thread' }}</button>
         </div>
         <p v-if="openError" class="error">{{ openError }}</p>
         <p v-if="blockedOwnerUrl" class="hint-copy">
@@ -297,8 +297,8 @@ textarea { background: var(--bg); border: 1px solid var(--line); border-radius: 
 textarea:focus { outline: none; border-color: var(--accent); }
 .sheet-actions { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
 .link-input { width: 100%; background: var(--bg); border: 1px solid var(--accent); border-radius: 8px; color: var(--ink); font-size: 0.88rem; padding: 0.5rem 0.65rem; }
-.hint-copy { margin: 0; color: var(--warn); font-size: 0.85rem; }
-.warning { margin: 0; color: var(--warn); font-size: 0.85rem; }
+.hint-copy { margin: 0; color: var(--warn-text); font-size: 0.85rem; }
+.warning { margin: 0; color: var(--warn-text); font-size: 0.85rem; }
 .paste-preview { font-size: 0.82rem; color: var(--muted); }
 .paste-preview summary { cursor: pointer; }
 .paste { margin: 0.35rem 0 0; word-break: break-all; font-size: 0.8rem; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 0.5rem 0.65rem; }

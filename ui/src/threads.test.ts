@@ -6,6 +6,7 @@ import {
   defaultFlagMessage,
   evidenceLine,
   fieldName,
+  knockNote,
   linkLabel,
   linkNeedsAttention,
   needsCollectorAddress,
@@ -47,21 +48,30 @@ describe('turnLabel (copy deck status column)', () => {
   });
 });
 
-describe('linkLabel', () => {
+describe('linkLabel + knock note + amber policy', () => {
   const d = (iso: string) => iso.slice(0, 10);
-  it('active / replaced / expired with knocks', () => {
+  it('active / replaced / expired — knocks on a live link leave the label (they get the knock note)', () => {
     expect(linkLabel(base, d)).toBe('Active · expires 2026-09-22');
-    // An ACTIVE link with knocks explains the amber state: someone hit an old link.
-    expect(linkLabel({ ...base, knock_count: 2 }, d)).toBe('Active · expires 2026-09-22 · 2 tried an old link');
-    expect(linkLabel({ ...base, link: { status: 'active' }, knock_count: 1 }, d)).toBe('Active · 1 tried an old link');
-    expect(linkLabel({ ...base, link: { status: 'replaced' } }, d)).toBe('Replaced');
+    expect(linkLabel({ ...base, knock_count: 2 }, d)).toBe('Active · expires 2026-09-22');
+    expect(linkLabel({ ...base, link: { status: 'active' }, knock_count: 1 }, d)).toBe('Active');
+    expect(linkLabel({ ...base, link: { status: 'replaced' }, knock_count: 3 }, d)).toBe('Replaced');
     expect(linkLabel({ ...base, link: { status: 'expired' }, knock_count: 2 }, d)).toBe('Expired · 2 tried to open');
+    expect(linkLabel({ ...base, link: { status: 'expired' } }, d)).toBe('Expired');
     expect(linkLabel(null, d)).toBe('—');
   });
-  it('needs attention when not active or knocked', () => {
-    expect(linkNeedsAttention(base)).toBe(false);
-    expect(linkNeedsAttention({ ...base, knock_count: 1 })).toBe(true);
-    expect(linkNeedsAttention({ ...base, link: { status: 'expired' } })).toBe(true);
+  it('knock note: the safe re-share sentence, muted, only when knocked', () => {
+    expect(knockNote(2)).toBe('2 tried an old link — re-share with Copy thread link, or Replace link to cut off old copies.');
+    expect(knockNote(1)).toBe('1 tried an old link — re-share with Copy thread link, or Replace link to cut off old copies.');
+  });
+  it('amber = review NOW: expired, replaced, expiring within 72h — knocks alone never', () => {
+    const now = Date.parse('2026-08-25T00:00:00Z');
+    expect(linkNeedsAttention(base, now)).toBe(false); // expires ~4 weeks out
+    expect(linkNeedsAttention({ ...base, knock_count: 5 }, now)).toBe(false); // lifetime counter ≠ alarm
+    expect(linkNeedsAttention({ ...base, link: { status: 'expired' } }, now)).toBe(true);
+    expect(linkNeedsAttention({ ...base, link: { status: 'replaced' } }, now)).toBe(true);
+    expect(linkNeedsAttention({ ...base, link: { status: 'active', expires_at: '2026-08-26T00:00:00Z' } }, now)).toBe(true); // tomorrow
+    expect(linkNeedsAttention({ ...base, link: { status: 'active', expires_at: '2026-08-29T00:00:00Z' } }, now)).toBe(false); // 4 days out
+    expect(linkNeedsAttention(null, now)).toBe(false);
   });
 });
 
