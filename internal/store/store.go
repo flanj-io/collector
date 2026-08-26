@@ -49,6 +49,9 @@ type Store interface {
 	// the finding and pins its source call; repeats only increment
 	// occurrence_count/last_seen. The finding id stays the FIRST occurrence's id
 	// (the flag idempotency key depends on it).
+	//
+	// ONE exception to the frozen doc: a definition_change whose EVIDENCE has
+	// moved on — see refreshedFindingDoc.
 	InsertFinding(f model.Finding) error
 	// MarkPromoted implements evict-after-promote: unpin + stamp promoted_at.
 	MarkPromoted(id string) error
@@ -245,11 +248,95 @@ func (b *base) ListFindings(limit int) ([]model.Finding, error) {
 	return b.scanFindings(`SELECT doc, occurrence_count, last_seen FROM findings ORDER BY seq DESC LIMIT ?`, limit)
 }
 
+// findingEvidenceVersion is the content hash a finding's EVIDENCE is bound to:
+// the AFTER snapshot hash of a definition_change — the same hash the UI renders
+// as "AFTER (snapshot sha256:…)" and that a local acknowledgement keys on
+// (ux-design-v2 §2.8). Empty for every other kind, whose evidence is a call and
+// whose recurrence is counted rather than re-evidenced.
+func findingEvidenceVersion(f model.Finding) string {
+	if f.Kind != model.KindDefinitionChange || f.SpecVersionTo == nil {
+		return ""
+	}
+	return *f.SpecVersionTo
+}
+
+// evidenceOrder is the sortable stamp of a finding's evidence: the AFTER
+// snapshot's observed-at, falling back to when the drift was detected.
+func evidenceOrder(f model.Finding) string {
+	if f.SnapshotObservedAt != "" {
+		return f.SnapshotObservedAt
+	}
+	return f.DetectedAt
+}
+
+// refreshedFindingDoc decides whether a REPEAT occurrence must replace the
+// stored doc instead of leaving it frozen, and returns the replacement JSON.
+//
+// definition_change is the one kind that needs this. Its signature
+// (integration|endpoint|kind|rule|field_path) is STABLE across successive
+// changes to the same field, so a second change to the same tool description
+// dedups onto the row the FIRST change created. Leaving that first doc in place
+// has two consequences, both wrong:
+//
+//   - spec_version_to would never advance, so an acknowledgement keyed on the
+//     evidence version (ux-design-v2 §2.8) could never stop matching: the
+//     second change would render silently PRE-acknowledged, which is exactly
+//     the hole the evidence-version key exists to close.
+//   - a flag on the row would disclose the FIRST change's two definition
+//     fragments, snapshot hashes and observed-at times to the provider as
+//     "your own published text" — the wrong evidence, on the one claim the
+//     amended evidence rule (§2.7.3) rests on.
+//
+// So when the after-hash moves FORWARD, the doc is rewritten with the new
+// evidence and only the identity the rest of the system keys on is carried
+// over: the finding id (the flag idempotency key is flag_<id>), the signature,
+// first_seen, and a source call the new record does not name. A replay of the
+// SAME change (same after-hash) is not a refresh — it falls through to the
+// plain counter bump — and neither is an OLDER transition arriving late (a
+// front collector replaying, a re-delivered batch), which must never revert the
+// row to stale evidence.
+func refreshedFindingDoc(storedDoc string, f model.Finding) (string, bool) {
+	ev := findingEvidenceVersion(f)
+	if ev == "" {
+		return "", false
+	}
+	var stored model.Finding
+	if err := json.Unmarshal([]byte(storedDoc), &stored); err != nil {
+		return "", false // unreadable stored doc: leave it alone, just count
+	}
+	if findingEvidenceVersion(stored) == ev {
+		return "", false
+	}
+	// Content hashes carry no order, so the AFTER snapshot's observed-at does
+	// (ISO-8601 compares lexically). Only a STRICTLY OLDER record is refused —
+	// an indeterminate comparison refreshes, because a stale doc is the failure
+	// that silently pre-acknowledges a change nobody saw.
+	if evidenceOrder(f) < evidenceOrder(stored) {
+		return "", false
+	}
+	next := f
+	next.ID = stored.ID
+	next.Signature = stored.Signature
+	if stored.FirstSeen != "" {
+		next.FirstSeen = stored.FirstSeen
+	}
+	if next.SourceCallID == nil {
+		next.SourceCallID = stored.SourceCallID
+	}
+	b, err := json.Marshal(next)
+	if err != nil {
+		return "", false
+	}
+	return string(b), true
+}
+
 // scanFindings runs a query selecting (doc, occurrence_count, last_seen) rows
 // and patches the two column-authoritative counters into the unmarshalled doc.
 // The doc stays frozen as the FIRST occurrence's JSON (keeping the finding id —
 // and thus the flag idempotency key — stable), while dedup advances the
-// counters atomically in their columns.
+// counters atomically in their columns. The single exception is a
+// definition_change whose evidence has moved on, which InsertFinding rewrites
+// in place while keeping that same id — see refreshedFindingDoc.
 func (b *base) scanFindings(query string, args ...any) ([]model.Finding, error) {
 	rows, err := b.db.Query(b.rebind(query), args...)
 	if err != nil {

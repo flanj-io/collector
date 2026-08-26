@@ -47,10 +47,12 @@ API + the flag action.
     every 5s while pending).
   - `POST /api/flag {finding_id, message?, provider_display_name?}` — **Create
     thread**: `403 {error: not_flaggable}` for LOCAL-ONLY finding kinds
-    (`model.Finding.Flaggable()` — `stale_client` always; `definition_change`
-    when the change is DESCRIPTION-only): the v0.5 evidence rule is enforced
-    server-side in the relay, never just by UI absence, so a hand-crafted
-    request cannot promote a local notice. `412 {error: not_connected |
+    (`model.Finding.Flaggable()` — `stale_client`, and only `stale_client`): the
+    evidence rule is enforced server-side in the relay, never just by UI
+    absence, so a hand-crafted request cannot promote a local notice. A
+    `definition_change` is CALL-LESS by nature, so `400 finding_has_no_call` is
+    lifted for that kind (qfix2-2026-08-26) and the body omits `call`; every
+    other kind still needs its failing call. `412 {error: not_connected |
     contact_unconfirmed}` before Connect /
     the FIRST confirmation — the gate is "a confirmed contact exists"
     (`confirmed_contact_email` non-null), so a new pending contact never blocks

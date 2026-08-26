@@ -293,6 +293,167 @@ func TestDriftDedup(t *testing.T) {
 	})
 }
 
+// definitionChangeFinding builds an MCP DESCRIPTION definition_change on one
+// tool + field. Successive changes to the SAME field share the signature by
+// design (integration|endpoint|kind|rule|field_path) — only the evidence (the
+// before/after fragments, the two snapshot hashes and the observed-at times)
+// moves. That is exactly why the stored doc cannot stay frozen for this kind.
+func definitionChangeFinding(id, from, to, observedAt, detectedAt, actual string) model.Finding {
+	f := model.Finding{
+		SchemaVersion:        model.SchemaVersion,
+		ID:                   id,
+		Kind:                 model.KindDefinitionChange,
+		Severity:             model.SeverityWarning,
+		Integration:          "acme-tools",
+		Endpoint:             "create_refund",
+		FieldPath:            model.Ptr("description"),
+		Expected:             `"Refund a payment."`,
+		Actual:               actual,
+		Rule:                 model.RuleDescriptionChanged,
+		SpecVersionFrom:      model.Ptr(from),
+		SpecVersionTo:        model.Ptr(to),
+		DetectedAt:           detectedAt,
+		Detail:               "Definition change (DESCRIPTION): description-changed on `create_refund` at description.",
+		SnapshotObservedAt:   observedAt,
+		SnapshotObservedFrom: "2026-08-26T08:00:00.000Z",
+	}
+	f.Signature = f.ComputeSignature()
+	return f
+}
+
+func derefStr(p *string) string {
+	if p == nil {
+		return "<nil>"
+	}
+	return *p
+}
+
+// TestDefinitionChangeRefreshesEvidence is the regression oracle for
+// ux-design-v2 §2.8, run against the REAL store (a fake that keys findings by
+// id instead of signature cannot see this bug at all).
+//
+// A second description change on the same tool and field dedups onto the row
+// the first one created. If the doc stayed frozen there, spec_version_to would
+// never advance — so an acknowledgement keyed on the evidence version could
+// never stop matching, and the second change would render silently
+// PRE-acknowledged; a flag would also disclose the FIRST change's two
+// definitions and timestamps to the provider as their own published text.
+//
+// So: one row, the SAME finding id (flag_<id> is the flag idempotency key), the
+// LATEST evidence. A replay of the same change refreshes nothing, and an
+// occurrence-counted kind keeps its frozen doc.
+func TestDefinitionChangeRefreshesEvidence(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, b *testBackend) {
+		s := b.open(t, 0, 0)
+
+		first := definitionChangeFinding("f_one", "sha256:aaa", "sha256:bbb",
+			"2026-08-26T09:00:00.000Z", "2026-08-26T09:00:01.000Z", `"Refund a captured payment."`)
+		if err := s.InsertFinding(first); err != nil {
+			t.Fatalf("insert first definition change: %v", err)
+		}
+		second := definitionChangeFinding("f_two", "sha256:bbb", "sha256:ccc",
+			"2026-08-26T10:00:00.000Z", "2026-08-26T10:00:01.000Z", `"Refund a captured payment, in full or in part."`)
+		if err := s.InsertFinding(second); err != nil {
+			t.Fatalf("insert second definition change: %v", err)
+		}
+
+		fs, err := s.ListFindings(100)
+		if err != nil {
+			t.Fatalf("list findings: %v", err)
+		}
+		if len(fs) != 1 {
+			t.Fatalf("findings = %d, want exactly 1 (the signature is stable across successive changes)", len(fs))
+		}
+		f := fs[0]
+		if f.ID != "f_one" {
+			t.Errorf("finding id = %q, want the FIRST occurrence's id (the flag idempotency key must stay stable)", f.ID)
+		}
+		if f.SpecVersionTo == nil || *f.SpecVersionTo != "sha256:ccc" {
+			t.Fatalf("spec_version_to = %q, want sha256:ccc — a frozen after-hash means the evidence-version ack key can NEVER fire and the second change arrives silently pre-acknowledged", derefStr(f.SpecVersionTo))
+		}
+		if f.SpecVersionFrom == nil || *f.SpecVersionFrom != "sha256:bbb" {
+			t.Errorf("spec_version_from = %q, want sha256:bbb", derefStr(f.SpecVersionFrom))
+		}
+		if f.Actual != second.Actual {
+			t.Errorf("actual = %q, want the SECOND change's published text — a flag would otherwise disclose the wrong text to the provider", f.Actual)
+		}
+		if f.SnapshotObservedAt != second.SnapshotObservedAt {
+			t.Errorf("snapshot_observed_at = %q, want %q (the flag's evidence line and prefilled date read this)", f.SnapshotObservedAt, second.SnapshotObservedAt)
+		}
+		if f.FirstSeen != first.DetectedAt {
+			t.Errorf("first_seen = %q, want the FIRST occurrence's %q", f.FirstSeen, first.DetectedAt)
+		}
+		if f.OccurrenceCount != 2 {
+			t.Errorf("occurrence_count = %d, want 2", f.OccurrenceCount)
+		}
+
+		// A REPLAY of the same change (same after-hash — e.g. a restart re-seeding
+		// from the stored snapshots) is not new evidence: count only, doc untouched.
+		replay := definitionChangeFinding("f_three", "sha256:bbb", "sha256:ccc",
+			"2026-08-26T10:00:00.000Z", "2026-08-26T11:00:00.000Z", `"tampered"`)
+		if err := s.InsertFinding(replay); err != nil {
+			t.Fatalf("insert replay: %v", err)
+		}
+		fs, err = s.ListFindings(100)
+		if err != nil {
+			t.Fatalf("list findings after replay: %v", err)
+		}
+		if len(fs) != 1 || fs[0].ID != "f_one" || fs[0].Actual != second.Actual {
+			t.Fatalf("replay rewrote the doc: id=%q actual=%q (want f_one / the second change's text)", fs[0].ID, fs[0].Actual)
+		}
+		if fs[0].OccurrenceCount != 3 {
+			t.Errorf("occurrence_count after replay = %d, want 3", fs[0].OccurrenceCount)
+		}
+
+		// An OLDER transition arriving late (a front collector replaying, a
+		// re-delivered batch) must never revert the row to stale evidence —
+		// that would re-open the silent-pre-ack hole from the other direction.
+		stale := definitionChangeFinding("f_four", "sha256:aaa", "sha256:bbb",
+			"2026-08-26T09:00:00.000Z", "2026-08-26T12:00:00.000Z", `"Refund a captured payment."`)
+		if err := s.InsertFinding(stale); err != nil {
+			t.Fatalf("insert stale replay: %v", err)
+		}
+		fs, err = s.ListFindings(100)
+		if err != nil {
+			t.Fatalf("list findings after stale replay: %v", err)
+		}
+		if fs[0].SpecVersionTo == nil || *fs[0].SpecVersionTo != "sha256:ccc" {
+			t.Errorf("a LATE, OLDER change reverted the evidence to %q — the row must keep the newest", derefStr(fs[0].SpecVersionTo))
+		}
+		if fs[0].Actual != second.Actual {
+			t.Errorf("a LATE, OLDER change reverted the published text to %q", fs[0].Actual)
+		}
+
+		// Occurrence-counted kinds are NOT refreshed: recurrence there is expected
+		// and is surfaced as a count, so the doc stays the first occurrence's.
+		d1 := driftFinding("d_one", "call-1")
+		if err := s.InsertFinding(d1); err != nil {
+			t.Fatalf("insert drift finding: %v", err)
+		}
+		d2 := driftFinding("d_two", "call-2")
+		d2.Actual = `type=boolean (true)`
+		if err := s.InsertFinding(d2); err != nil {
+			t.Fatalf("insert repeat drift finding: %v", err)
+		}
+		fs, err = s.ListFindings(100)
+		if err != nil {
+			t.Fatalf("list findings after drift: %v", err)
+		}
+		var live *model.Finding
+		for i := range fs {
+			if fs[i].Kind == model.KindLiveVsSpec {
+				live = &fs[i]
+			}
+		}
+		if live == nil {
+			t.Fatal("live-vs-spec finding missing")
+		}
+		if live.ID != "d_one" || live.Actual != d1.Actual {
+			t.Errorf("occurrence-counted doc was rewritten: id=%q actual=%q, want d_one / %q", live.ID, live.Actual, d1.Actual)
+		}
+	})
+}
+
 // TestRingBuffer_StableFill_RowCap fills far past the row cap and asserts the
 // window holds at the cap (oldest evicted first, FIFO).
 func TestRingBuffer_StableFill_RowCap(t *testing.T) {

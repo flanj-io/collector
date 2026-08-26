@@ -21,6 +21,8 @@ import {
   type ConnectState
 } from './threads';
 import {
+  FLAG_DESCRIPTION_GUARD,
+  isDescriptionChange,
   isMcpFinding,
   mcpDefaultMessage,
   mcpDisclosureLead,
@@ -79,17 +81,25 @@ let copiedTimer: number | undefined;
 const connected = computed(() => canCreateThread(props.connect));
 const contactEmail = computed(() => props.connect?.confirmed_contact_email || props.connect?.contact_email || '');
 const evidence = computed(() =>
-  isMcp.value ? mcpEvidenceLine(props.finding, mcpServer.value) : evidenceLine(props.finding)
+  isMcp.value ? mcpEvidenceLine(props.finding, mcpServer.value, shortDate) : evidenceLine(props.finding)
 );
+// The mute-risk guard renders on the DESCRIPTION class only (ux-design-v2
+// §2.7.4): this class is the one where the finding is a question, not a defect,
+// and saying so is what keeps a subjective flag from reading as an accusation.
+const descriptionGuard = computed(() => (isMcp.value && isDescriptionChange(props.finding) ? FLAG_DESCRIPTION_GUARD : ''));
 // The IDs line: an MCP flag uses the deck's JSON-RPC line ONLY while the
 // client-generated id is the sole correlation key — mixed keys fall back to
 // the standard count line with an honest note for the client-generated one
 // (deck §5). HTTP keeps the existing line.
-const idsLine = computed(() =>
-  isMcp.value
+// A definition_change is CALL-LESS: there is no call, so "No request IDs were
+// captured on this call." would be answering a question nobody asked about a
+// thing that does not exist. The disclosure carries what leaves instead.
+const idsLine = computed(() => {
+  if (props.finding.kind === 'definition_change') return '';
+  return isMcp.value
     ? mcpIdsLineFor(props.correlation, props.provider)
-    : requestIdsLine(correlationCount(props.correlation))
-);
+    : requestIdsLine(correlationCount(props.correlation));
+});
 const disclosureLead = computed(() =>
   isMcp.value
     ? mcpDisclosureLead(props.finding, mcpTool.value)
@@ -227,7 +237,7 @@ watch(result, (r) => {
       <template v-else-if="!result">
         <h2 id="sheet-title" class="sheet-title">New thread with {{ provider }}</h2>
         <p class="evidence"><span class="k">Evidence (1):</span> {{ evidence }}</p>
-        <p class="ids">{{ idsLine }}</p>
+        <p v-if="idsLine" class="ids">{{ idsLine }}</p>
 
         <button type="button" class="disclosure" :aria-expanded="disclosureOpen" @click="toggleDisclosure">
           {{ disclosureOpen ? '▾' : '▸' }} What leaves this collector
@@ -241,6 +251,8 @@ watch(result, (r) => {
           <span class="field-label">Message (optional)</span>
           <textarea v-model="message" rows="4" :disabled="busy"></textarea>
         </label>
+
+        <p v-if="descriptionGuard" class="guard">{{ descriptionGuard }}</p>
 
         <p v-if="errorMsg" class="error">{{ errorMsg }}</p>
         <div class="sheet-actions">
@@ -302,6 +314,7 @@ textarea:focus { outline: none; border-color: var(--accent); }
 .paste-preview { font-size: 0.82rem; color: var(--muted); }
 .paste-preview summary { cursor: pointer; }
 .paste { margin: 0.35rem 0 0; word-break: break-all; font-size: 0.8rem; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 0.5rem 0.65rem; }
+.guard { margin: 0; color: var(--muted); font-size: 0.88rem; }
 .error { color: var(--danger); margin: 0; font-size: 0.88rem; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 </style>

@@ -127,6 +127,9 @@ func newStubCP(t *testing.T) *stubCP {
 			jsonOut(w, 412, map[string]string{"error": "contact_unconfirmed", "message": "confirm first"})
 			return
 		}
+		// Reset first: decoding into a non-nil map MERGES, which would let a
+		// previous flag's `call` linger and mask a call-less body.
+		s.lastFlagBody = nil
 		_ = json.NewDecoder(r.Body).Decode(&s.lastFlagBody)
 		s.flagCalls++
 		s.state["thr_1"] = "open"
@@ -740,11 +743,12 @@ func TestFlagGateBeforeFirstConfirmation(t *testing.T) {
 	}
 }
 
-// TestFlagRefusesLocalOnlyKinds (v0.5 §4.C.4): the relay REFUSES to flag
-// local-only finding kinds SERVER-SIDE — stale_client always, and
-// definition_change when the change is DESCRIPTION-only — even for a fully
-// Connected collector. Nothing reaches the CP. Flaggable MCP kinds
-// (output_mismatch; BREAKING definition changes ride the same path) still flag.
+// TestFlagRefusesLocalOnlyKinds (v0.5 §4.C.4, amended qfix2-2026-08-26): the
+// relay REFUSES to flag local-only finding kinds SERVER-SIDE — stale_client,
+// and ONLY stale_client — even for a fully Connected collector. Nothing reaches
+// the CP for those. Every flaggable kind still flags, including a DESCRIPTION
+// definition change, which is also CALL-LESS: no 400 finding_has_no_call, and
+// the promoted body carries the finding with NO call.
 func TestFlagRefusesLocalOnlyKinds(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
@@ -773,11 +777,11 @@ func TestFlagRefusesLocalOnlyKinds(t *testing.T) {
 		Expected: "type=integer", Actual: `type=string ("1200")`, Rule: "type-mismatch",
 		SourceCallID: &callID, DetectedAt: "2026-08-24T10:00:01Z"})
 
-	for _, id := range []string{"fnd_stale", "fnd_desc"} {
-		resp, out, _ := r.do(t, http.MethodPost, "/api/flag", map[string]string{"finding_id": id})
-		if resp.StatusCode != 403 || out["error"] != "not_flaggable" {
-			t.Errorf("flag %s = %d %v, want 403 not_flaggable", id, resp.StatusCode, out)
-		}
+	// stale_client is the ONLY server-side refusal. Never a flag control
+	// anywhere, never a path out of this collector.
+	resp, out, _ := r.do(t, http.MethodPost, "/api/flag", map[string]string{"finding_id": "fnd_stale"})
+	if resp.StatusCode != 403 || out["error"] != "not_flaggable" {
+		t.Errorf("flag fnd_stale = %d %v, want 403 not_flaggable", resp.StatusCode, out)
 	}
 	if r.cp.flagCalls != 0 {
 		t.Fatalf("a local-only finding reached the CP (%d flag calls)", r.cp.flagCalls)
@@ -793,6 +797,38 @@ func TestFlagRefusesLocalOnlyKinds(t *testing.T) {
 	}
 	if kind, _ := r.cp.lastFlagBody["finding"].(map[string]any)["kind"].(string); kind != model.KindOutputMismatch {
 		t.Errorf("promoted finding kind = %q", kind)
+	}
+	if _, has := r.cp.lastFlagBody["call"]; !has {
+		t.Errorf("an output_mismatch flag must carry its failing call: %v", r.cp.lastFlagBody)
+	}
+
+	// CALL-LESS FLAGGING (ux-design-v2 §2.7.5): a DESCRIPTION definition change
+	// has no source call at all. It must NOT 400 finding_has_no_call, and the
+	// body must omit `call` rather than invent one.
+	resp, out, raw = r.do(t, http.MethodPost, "/api/flag", map[string]string{"finding_id": "fnd_desc"})
+	if (resp.StatusCode != 201 && resp.StatusCode != 200) || out["thread_url"] == "" {
+		t.Fatalf("flag DESCRIPTION definition change: %d %s", resp.StatusCode, raw)
+	}
+	if r.cp.flagCalls != 2 {
+		t.Errorf("flag calls = %d, want 2", r.cp.flagCalls)
+	}
+	if _, has := r.cp.lastFlagBody["call"]; has {
+		t.Errorf("a call-less flag must not carry a `call` key: %v", r.cp.lastFlagBody)
+	}
+	fnd, _ := r.cp.lastFlagBody["finding"].(map[string]any)
+	if fnd == nil || fnd["kind"] != model.KindDefinitionChange || fnd["rule"] != model.RuleDescriptionChanged {
+		t.Errorf("promoted finding = %v, want the DESCRIPTION definition change", fnd)
+	}
+
+	// A finding that SHOULD have a call and does not still 400 — the lift is
+	// scoped to definition_change, not a blanket removal of the guard.
+	_ = r.st.InsertFinding(model.Finding{SchemaVersion: 1, ID: "fnd_mismatch_nocall", Kind: model.KindOutputMismatch,
+		Severity: model.SeverityBreaking, Integration: "acme-payments", Endpoint: "list_transactions",
+		Expected: "type=integer", Actual: `type=string ("1200")`, Rule: "type-mismatch",
+		DetectedAt: "2026-08-24T10:00:01Z"})
+	resp, out, _ = r.do(t, http.MethodPost, "/api/flag", map[string]string{"finding_id": "fnd_mismatch_nocall"})
+	if resp.StatusCode != 400 || out["error"] != "finding_has_no_call" {
+		t.Errorf("output_mismatch with no call = %d %v, want 400 finding_has_no_call", resp.StatusCode, out)
 	}
 }
 
@@ -1024,5 +1060,210 @@ func TestFindingAckFlow(t *testing.T) {
 	// and nothing ever reached the CP from the ack flow
 	if r.cp.flagCalls != 0 || r.cp.registerCalls != 0 {
 		t.Errorf("ack flow must never touch the CP (flags=%d registers=%d)", r.cp.flagCalls, r.cp.registerCalls)
+	}
+}
+
+// TestAckKeyedOnEvidenceVersion (qfix2-2026-08-26, ux-design-v2 §2.8; §7 risk 2)
+// is THE regression test for silent auto-acknowledgement.
+//
+// Finding.ComputeSignature() is integration|endpoint|kind|rule|field_path —
+// identical for a FIRST and a SECOND description change on the same tool and
+// field. Under a signature-only key the second change would arrive silently
+// pre-acknowledged and could never be seen. The ack therefore also binds to the
+// AFTER-snapshot hash, and this test walks exactly that: ack a description
+// change, mutate the same field again, assert the finding renders UN-acked.
+//
+// PRODUCTION SHAPE. The real store deduplicates on signature, so the second
+// change never becomes a second row: it lands on the SAME row, keeping the same
+// finding id (the flag idempotency key) while the doc is refreshed with the new
+// evidence (internal/store.refreshedFindingDoc —
+// TestDefinitionChangeRefreshesEvidence is the oracle for that half, and it runs
+// against the real store because this fake keys findings by id and could not
+// see a signature-dedup bug at all). This test therefore re-inserts the SAME id
+// with a moved after-hash, which is exactly what the store's refresh produces.
+func TestAckKeyedOnEvidenceVersion(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	r.ext.cp = nil // local-only, as always
+
+	mkDesc := func(after, actual string) model.Finding {
+		f := model.Finding{SchemaVersion: 1, ID: "fnd_desc", Kind: model.KindDefinitionChange,
+			Severity: model.SeverityWarning, Integration: "acme-tools", Endpoint: "create_refund",
+			FieldPath: model.Ptr("description"), Expected: `"Refund a charge."`,
+			Actual: actual, Rule: model.RuleDescriptionChanged,
+			SpecVersionFrom: model.Ptr("sha256:aaaa11112222"), SpecVersionTo: model.Ptr(after),
+			DetectedAt: "2026-08-26T10:00:01Z"}
+		f.Signature = f.ComputeSignature()
+		return f
+	}
+	v1 := mkDesc("sha256:bbbb33334444", `"Refund a charge, with fees."`)
+	v2 := mkDesc("sha256:cccc55556666", `"Refund a charge, fees excluded."`) // SAME row, NEW evidence
+	if v1.Signature != v2.Signature {
+		t.Fatalf("test premise broken: signatures differ (%q vs %q)", v1.Signature, v2.Signature)
+	}
+	_ = r.st.InsertFinding(v1)
+
+	ackedOf := func(raw []byte) map[string]map[string]any {
+		t.Helper()
+		var body struct {
+			Findings []map[string]any `json:"findings"`
+		}
+		if err := json.Unmarshal(raw, &body); err != nil {
+			t.Fatalf("findings: %v (%s)", err, raw)
+		}
+		out := map[string]map[string]any{}
+		for _, f := range body.Findings {
+			out[f["id"].(string)] = f
+		}
+		return out
+	}
+
+	// 1. Acknowledge the first description change. The record binds to the
+	//    AFTER hash the row rendered, and the response says which one.
+	resp, out, _ := r.do(t, http.MethodPost, "/api/findings/fnd_desc/ack", map[string]string{})
+	if resp.StatusCode != 200 || out["acked"] != true {
+		t.Fatalf("ack: %d %v", resp.StatusCode, out)
+	}
+	if out["evidence_version"] != "sha256:bbbb33334444" {
+		t.Errorf("ack response evidence_version = %v, want the AFTER snapshot hash", out["evidence_version"])
+	}
+	var rec ackRecord
+	if err := json.Unmarshal([]byte(r.st.settings[settingAckPrefix+v1.Signature]), &rec); err != nil {
+		t.Fatalf("ack record: %v", err)
+	}
+	if rec.EvidenceVersion != "sha256:bbbb33334444" {
+		t.Errorf("persisted evidence_version = %q", rec.EvidenceVersion)
+	}
+	_, _, raw := r.do(t, http.MethodGet, "/api/findings", nil)
+	if rows := ackedOf(raw); rows["fnd_desc"]["acked"] != true ||
+		rows["fnd_desc"]["acked_evidence_version"] != "sha256:bbbb33334444" {
+		t.Fatalf("v1 should be acked with its evidence version: %v", rows["fnd_desc"])
+	}
+
+	// 2. <P> changes the SAME description again. Same signature → the same row,
+	//    same id, refreshed evidence. THE FINDING MUST COME BACK UN-ACKNOWLEDGED.
+	_ = r.st.InsertFinding(v2)
+	_, _, raw = r.do(t, http.MethodGet, "/api/findings", nil)
+	rows := ackedOf(raw)
+	if rows["fnd_desc"]["actual"] != v2.Actual {
+		t.Fatalf("test premise broken: the row still carries the FIRST change's text: %v", rows["fnd_desc"])
+	}
+	if acked, has := rows["fnd_desc"]["acked"]; has && acked == true {
+		t.Fatalf("SILENT AUTO-ACK: a NEW description change inherited the old acknowledgement: %v", rows["fnd_desc"])
+	}
+	if _, has := rows["fnd_desc"]["acked_evidence_version"]; has {
+		t.Errorf("un-acked row must not carry acked_evidence_version: %v", rows["fnd_desc"])
+	}
+
+	// 3. Acknowledging the new evidence re-binds the record to the new hash.
+	if resp, out, _ = r.do(t, http.MethodPost, "/api/findings/fnd_desc/ack", map[string]string{}); resp.StatusCode != 200 {
+		t.Fatalf("re-ack: %d %v", resp.StatusCode, out)
+	}
+	_, _, raw = r.do(t, http.MethodGet, "/api/findings", nil)
+	if rows = ackedOf(raw); rows["fnd_desc"]["acked"] != true {
+		t.Errorf("v2 not acked after acknowledging the new evidence: %v", rows["fnd_desc"])
+	}
+	// The index never grew a second entry — the KEY is still the signature.
+	if sigs, _ := loadAckIndex(r.st); len(sigs) != 1 || sigs[0] != v1.Signature {
+		t.Errorf("acks index = %v, want exactly the one signature", sigs)
+	}
+
+	// 4. MIGRATION: a LEGACY record (written before evidence versions existed)
+	//    carries none, so it does NOT match a definition_change and the finding
+	//    re-surfaces un-acknowledged. Fail safe — never silently acked.
+	legacy, _ := json.Marshal(ackRecord{Signature: v1.Signature, Rule: v1.Rule, AckedAt: "2026-08-25T09:00:00Z"})
+	r.st.settings[settingAckPrefix+v1.Signature] = string(legacy)
+	_, _, raw = r.do(t, http.MethodGet, "/api/findings", nil)
+	rows = ackedOf(raw)
+	if acked, has := rows["fnd_desc"]["acked"]; has && acked == true {
+		t.Errorf("legacy ack must not cover a definition_change: %v", rows["fnd_desc"])
+	}
+
+	// 5. The optional §2.8 wire fields are accepted and PERSISTED (no UI for
+	//    them in this slice — the reason set and the person model are next).
+	resp, _, _ = r.do(t, http.MethodPost, "/api/findings/fnd_desc/ack", map[string]any{
+		"reason": "we_adapt", "note": "we pin tools/list at v1.2.0", "actor_person_id": "per_1",
+	})
+	if resp.StatusCode != 200 {
+		t.Fatalf("ack with reason/note: %d", resp.StatusCode)
+	}
+	rec = ackRecord{}
+	if err := json.Unmarshal([]byte(r.st.settings[settingAckPrefix+v1.Signature]), &rec); err != nil {
+		t.Fatalf("ack record: %v", err)
+	}
+	if rec.Reason != "we_adapt" || rec.Note != "we pin tools/list at v1.2.0" || rec.ActorPersonID != "per_1" {
+		t.Errorf("reason/note/actor not persisted: %+v", rec)
+	}
+	if rec.EvidenceVersion != "sha256:cccc55556666" {
+		t.Errorf("evidence_version = %q, want v2's after-hash", rec.EvidenceVersion)
+	}
+}
+
+// TestAckOccurrenceCountedKeepsSignatureOnlyKey: the evidence-version binding is
+// for definition_change ONLY. An occurrence-counted finding (type-mismatch /
+// output_mismatch) carries no evidence version, so its ack keys on the signature
+// alone — recurrence there is expected and is surfaced as text, not a re-alarm.
+func TestAckOccurrenceCountedKeepsSignatureOnlyKey(t *testing.T) {
+	callID := "call_1"
+	f := model.Finding{SchemaVersion: 1, ID: "fnd_mism", Kind: model.KindOutputMismatch,
+		Severity: model.SeverityBreaking, Integration: "acme-tools", Endpoint: "create_refund",
+		FieldPath: model.Ptr("refund.amount"), Expected: "type=integer", Actual: `type=string ("1200")`,
+		Rule: "type-mismatch", SourceCallID: &callID, DetectedAt: "2026-08-26T10:00:01Z",
+		SpecVersionTo: model.Ptr("sha256:bbbb33334444")} // even WITH a snapshot hash
+	f.Signature = f.ComputeSignature()
+	if got := ackEvidenceVersion(f); got != "" {
+		t.Errorf("ackEvidenceVersion(output_mismatch) = %q, want empty", got)
+	}
+	// A record with no evidence version matches it, at any occurrence count.
+	if !ackMatches(f, ackRecord{Signature: f.Signature}) {
+		t.Error("an occurrence-counted finding must key on the signature alone")
+	}
+	f.OccurrenceCount = 47
+	if !ackMatches(f, ackRecord{Signature: f.Signature}) {
+		t.Error("recurrence must NOT un-acknowledge an occurrence-counted finding")
+	}
+	// A definition_change with no after-hash at all has nothing to version, so
+	// it keeps signature-only behaviour rather than becoming un-ackable.
+	d := model.Finding{Kind: model.KindDefinitionChange, Rule: model.RuleDescriptionChanged}
+	if !ackMatches(d, ackRecord{}) {
+		t.Error("a definition_change with no after-hash must stay signature-keyed")
+	}
+	if ackMatches(model.Finding{Kind: model.KindDefinitionChange, SpecVersionTo: model.Ptr("sha256:x")}, ackRecord{}) {
+		t.Error("a definition_change WITH an after-hash must not match a record without one")
+	}
+}
+
+// TestHeldPriorDataProbe (qfix2-2026-08-26, ux-design-v2 §3.4): GET /api/health
+// reports whether this collector held data before the light-default upgrade —
+// the SECOND gate on the one-time theme-flip notice (the first, "no stored
+// theme choice", only the browser can answer). A fresh install must answer
+// false and keep answering false once traffic starts, because the answer is a
+// statement about a moment in the past and is frozen the first time it is asked.
+func TestHeldPriorDataProbe(t *testing.T) {
+	// Fresh install: empty store, nothing connected → false, and it STAYS false.
+	// (r.start seeds a call + finding, so serve the routes directly instead.)
+	r := newRig(t)
+	r.ui = httptest.NewServer(r.ext.routes())
+	t.Cleanup(r.ui.Close)
+	_, out, raw := r.do(t, http.MethodGet, "/api/health", nil)
+	if out["held_prior_data"] != false {
+		t.Fatalf("fresh install must not report prior data: %s", raw)
+	}
+	_ = r.st.InsertCall(model.RedactedCall{SchemaVersion: 1, ID: "c1", CapturedAt: "2026-08-26T10:00:00Z",
+		Integration: "acme-tools", Direction: "client", Method: "GET", Route: "/x",
+		Redaction: model.Redaction{Patterns: []string{}}})
+	if _, out, raw = r.do(t, http.MethodGet, "/api/health", nil); out["held_prior_data"] != false {
+		t.Errorf("the probe must be frozen, not re-evaluated per request: %s", raw)
+	}
+
+	// Upgraded install: the store already held data the first time it is asked.
+	r2 := newRig(t)
+	_ = r2.st.InsertCall(model.RedactedCall{SchemaVersion: 1, ID: "c1", CapturedAt: "2026-08-24T10:00:00Z",
+		Integration: "acme-tools", Direction: "client", Method: "GET", Route: "/x",
+		Redaction: model.Redaction{Patterns: []string{}}})
+	r2.ui = httptest.NewServer(r2.ext.routes())
+	t.Cleanup(r2.ui.Close)
+	if _, out, raw = r2.do(t, http.MethodGet, "/api/health", nil); out["held_prior_data"] != true {
+		t.Errorf("a collector that already held calls must report prior data: %s", raw)
 	}
 }

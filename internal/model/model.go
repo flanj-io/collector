@@ -110,9 +110,11 @@ const (
 	KindOutputMismatch = "output_mismatch"
 	// KindDefinitionChange: two consecutive observed tools/list snapshots
 	// differ; one finding per (edge, operation, rule, fieldPath) with the
-	// classifier's class. FLAGGABLE for BREAKING and NON_BREAKING; a
-	// DESCRIPTION-only change (rule = RuleDescriptionChanged) is a LOCAL
-	// warning, never flaggable.
+	// classifier's class. FLAGGABLE at every class — BREAKING, NON_BREAKING and
+	// (since qfix2-2026-08-26) DESCRIPTION: the evidence is the provider's own
+	// published tools/list text, two content-hashed snapshots with observation
+	// timestamps, which they can verify by reading their own two versions.
+	// Flagging is always a human pressing the control; nothing auto-flags.
 	KindDefinitionChange = "definition_change"
 	// KindStaleClient: the consumer's agent called a tool absent from the
 	// CURRENT tools/list, or with args violating the current inputSchema.
@@ -130,17 +132,20 @@ const (
 const RuleDescriptionChanged = "description-changed"
 
 // Flaggable reports whether this finding may be flagged cross-org (v0.5 spec
-// §6 evidence rule): stale_client and DESCRIPTION-only definition changes are
-// local-only — the relay REFUSES them server-side, the UI shows no flag
-// control, and they never reach the control plane.
+// §6 evidence rule, AMENDED qfix2-2026-08-26): stale_client is consumer-side —
+// it is local-only, the relay REFUSES it server-side, the UI shows no flag
+// control anywhere, and it never reaches the control plane.
+//
+// DESCRIPTION-only definition changes are no longer local-only. The evidence
+// rule is amended, not broken: a description change IS verifiable in the
+// provider's own systems (their published tools/list text, before and after,
+// content-hashed and timestamped). What failed the bar was the claim, not the
+// evidence — the flag sheet now carries the claim honestly. Nothing auto-flags:
+// a description change only ever leaves this collector when a human presses the
+// control.
 func (f Finding) Flaggable() bool {
-	switch f.Kind {
-	case KindStaleClient:
-		return false
-	case KindDefinitionChange:
-		return f.Rule != RuleDescriptionChanged
-	}
-	return true
+	// stale_client only. Never widen this without re-reading the evidence rule.
+	return f.Kind != KindStaleClient
 }
 
 // Finding is a technical-adherence drift record. Mirrors

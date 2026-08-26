@@ -255,6 +255,25 @@ func (s *sqliteStore) InsertFinding(f model.Finding) error {
 
 	// Repeat occurrence — increment count + advance last_seen, no duplicate row.
 	// ISO-8601 text compares lexically, so MAX() advances correctly.
+	//
+	// …and, for a definition_change whose evidence has MOVED ON, rewrite the doc
+	// in place (refreshedFindingDoc explains why the frozen doc is wrong for
+	// that one kind). Same statement, so the counter and the evidence can never
+	// disagree; the id, signature and first_seen are carried over.
+	var storedDoc string
+	if err := s.db.QueryRow(`SELECT doc FROM findings WHERE signature=?`, f.Signature).Scan(&storedDoc); err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("read finding doc: %w", err)
+	}
+	if next, ok := refreshedFindingDoc(storedDoc, f); ok {
+		if _, err := s.db.Exec(
+			`UPDATE findings SET occurrence_count = occurrence_count + 1, last_seen = MAX(last_seen, ?),
+			   severity=?, detected_at=?, doc=? WHERE signature=?`,
+			seen, f.Severity, f.DetectedAt, next, f.Signature,
+		); err != nil {
+			return fmt.Errorf("refresh finding evidence: %w", err)
+		}
+		return nil
+	}
 	if _, err := s.db.Exec(
 		`UPDATE findings SET occurrence_count = occurrence_count + 1, last_seen = MAX(last_seen, ?) WHERE signature=?`,
 		seen, f.Signature,

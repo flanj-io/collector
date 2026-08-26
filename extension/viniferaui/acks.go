@@ -3,7 +3,9 @@ package viniferaui
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/vinifera-io/collector/internal/model"
@@ -14,14 +16,49 @@ import (
 // it" mark for INFORMATIONAL findings only — definition_change with class
 // DESCRIPTION (rule description-changed) or NON-BREAKING (severity info).
 // Acknowledging is LOCAL ONLY: nothing is ever sent to the control plane, and
-// it is never a path to flagging — Finding.Flaggable() and the relay's
-// 403 not_flaggable stay exactly as they are. BREAKING findings are never
-// ackable (breaking drift is resolved by a fix or a thread, not muted), and
-// stale_client stays an Overview notice with no control at all.
+// it is never a path to flagging — the relay's 403 not_flaggable for
+// stale_client stays exactly as it is. BREAKING findings are not ackable in
+// this slice, and stale_client stays an Overview notice with no control at all.
 //
-// Storage is the settings KV, keyed by finding SIGNATURE (not id): the mark
-// survives a store reset, and a genuinely NEW change (new signature) arrives
-// un-acked — exactly right, with no explanation needed.
+// Storage is the settings KV, keyed by finding SIGNATURE (not id), so the mark
+// survives a store reset and a re-detected finding keeps its id-independent
+// identity.
+//
+// THE SIGNATURE ALONE IS NOT A SUFFICIENT KEY (qfix2-2026-08-26, ux-design-v2
+// §2.8). Finding.ComputeSignature() is integration|endpoint|kind|rule|field_path
+// — STABLE across successive definition changes. A SECOND description change on
+// the same tool and field produces the IDENTICAL signature, so under a
+// signature-only key it would arrive silently pre-acknowledged, and a breaking
+// change could sit unseen behind an old acknowledgement. (The previous comment
+// here claimed "a genuinely NEW change (new signature) arrives un-acked" — that
+// assumption is FALSE for definition_change and is what this fixes.)
+//
+// So an ack also binds to the EVIDENCE VERSION it acknowledges:
+//
+//   - definition_change (BREAKING / NON-BREAKING / DESCRIPTION): the after-
+//     snapshot content hash (Finding.SpecVersionTo — the same "AFTER (snapshot
+//     …)" hash the row renders). When the provider changes the field again the
+//     after-hash changes, the ack no longer matches, and the finding returns
+//     UN-acknowledged in its own colour.
+//   - occurrence-counted kinds (type-mismatch / output_mismatch): no evidence
+//     version (empty) — the key stays the signature alone, because recurrence
+//     there is expected and is surfaced as text, not as a re-alarm.
+//
+// Matching is EQUALITY of evidence versions (record vs finding), which makes
+// the migration fail safe: a legacy record written before this change carries
+// no evidence_version, so against a real definition_change (which always
+// carries an after-hash) it does NOT match and the finding re-surfaces
+// un-acknowledged rather than staying silently acked.
+//
+// THE KEY IS ONLY HALF THE FIX, and the other half lives in internal/store.
+// InsertFinding dedups on signature, so a second change to the same field lands
+// on the row the FIRST change created. While that row's doc stayed frozen,
+// f.SpecVersionTo here could never advance and this comparison could never stop
+// matching — the key would be inert and the finding still silently pre-acked.
+// The store therefore REFRESHES a definition_change doc in place when its
+// after-hash moves (store.refreshedFindingDoc), keeping the finding id. If that
+// ever regresses, this key goes quiet with it: internal/store's
+// TestDefinitionChangeRefreshesEvidence is the oracle for that half.
 
 const (
 	// settingAckPrefix + <signature> → ackRecord JSON.
@@ -35,10 +72,40 @@ const (
 )
 
 // ackRecord is what the collector remembers about one acknowledged signature.
+// It never leaves this collector.
 type ackRecord struct {
 	Signature string `json:"signature"`
 	Rule      string `json:"rule"`
 	AckedAt   string `json:"acked_at"`
+	// EvidenceVersion is the content hash of the evidence this ack covers — the
+	// AFTER snapshot hash for definition_change, empty for occurrence-counted
+	// kinds (and on legacy records, which therefore no longer match a
+	// definition_change). See the package comment above.
+	EvidenceVersion string `json:"evidence_version,omitempty"`
+	// Reason / Note / ActorPersonID are accepted and persisted when the caller
+	// supplies them (ux-design-v2 §2.8 wire shape). The reason-set UI, the note
+	// field and the person model land in the NEXT slice — nothing renders them
+	// yet, and nothing here invents an actor.
+	Reason        string `json:"reason,omitempty"`
+	Note          string `json:"note,omitempty"`
+	ActorPersonID string `json:"actor_person_id,omitempty"`
+}
+
+// ackEvidenceVersion is the evidence hash an ack on this finding binds to:
+// the AFTER snapshot hash for a definition_change, empty for every other kind
+// (occurrence-counted findings key on the signature alone).
+func ackEvidenceVersion(f model.Finding) string {
+	if f.Kind != model.KindDefinitionChange || f.SpecVersionTo == nil {
+		return ""
+	}
+	return *f.SpecVersionTo
+}
+
+// ackMatches reports whether a stored record still acknowledges this finding.
+// A definition_change whose after-hash has moved on (the provider changed the
+// same field again) no longer matches, so it renders un-acknowledged.
+func ackMatches(f model.Finding, rec ackRecord) bool {
+	return rec.EvidenceVersion == ackEvidenceVersion(f)
 }
 
 // ackable reports whether a finding may be acknowledged: only informational
@@ -111,9 +178,12 @@ func mutateAckIndex(st store.Store, sig string, add bool) error {
 	return lastErr
 }
 
-// loadAckSet returns every acknowledged signature with its record (the index is
-// authoritative for the acked STATE; a missing/corrupt record only loses the
-// acked_at timestamp, never the mark).
+// loadAckSet returns every acknowledged signature with its record. The index
+// says WHICH signatures were acknowledged; the RECORD says which evidence
+// version was acknowledged, so callers must still run ackMatches. A missing or
+// corrupt record therefore yields an empty evidence version — which keeps a
+// definition_change un-acknowledged (fail safe) and leaves occurrence-counted
+// kinds acked with no timestamp, exactly as before.
 func loadAckSet(st store.Store) (map[string]ackRecord, error) {
 	sigs, err := loadAckIndex(st)
 	if err != nil {
@@ -128,6 +198,39 @@ func loadAckSet(st store.Store) (map[string]ackRecord, error) {
 		out[sig] = rec
 	}
 	return out, nil
+}
+
+// ackRequestBody is the optional POST body of /api/findings/{id}/ack. Every
+// field is optional and LOCAL-ONLY; the evidence version is never taken from
+// the client — it is derived server-side from the finding being acknowledged.
+type ackRequestBody struct {
+	// Reason is the wire code for why (ux-design-v2 §2.2: "no_change" |
+	// "we_adapt"). Stored opaquely — the contract file is authoritative for the
+	// value set and the reason-set UI is the NEXT slice's work.
+	Reason string `json:"reason"`
+	// Note is the optional one-line free text. It never leaves this collector,
+	// so it needs no DLP pass.
+	Note string `json:"note"`
+	// ActorPersonID is the person who acknowledged, when one is known. There is
+	// no person model in this slice, so it is always absent today.
+	ActorPersonID string `json:"actor_person_id"`
+}
+
+// decodeAckBody reads the optional ack body. An absent or empty body is normal
+// (the shipped UI sends `{}`), so only malformed JSON is an error.
+func decodeAckBody(r *http.Request) (ackRequestBody, bool) {
+	var b ackRequestBody
+	if r.Body == nil {
+		return b, true
+	}
+	err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&b)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return b, false
+	}
+	b.Reason = strings.TrimSpace(b.Reason)
+	b.Note = strings.TrimSpace(b.Note)
+	b.ActorPersonID = strings.TrimSpace(b.ActorPersonID)
+	return b, true
 }
 
 // handleFindingAck / handleFindingUnack are POST /api/findings/{id}/ack|unack.
@@ -167,13 +270,27 @@ func (e *uiExtension) findingAck(w http.ResponseWriter, r *http.Request, ack boo
 	sig := findingSignature(finding)
 	out := map[string]any{"finding_id": finding.ID, "acked": ack}
 	if ack {
+		body, ok := decodeAckBody(r)
+		if !ok {
+			writeErr(w, http.StatusBadRequest, "invalid_json", msgInvalidJSON)
+			return
+		}
 		now := time.Now().UTC().Format(time.RFC3339)
-		b, _ := json.Marshal(ackRecord{Signature: sig, Rule: finding.Rule, AckedAt: now})
+		// The evidence version is derived from the finding, never supplied by
+		// the caller: an ack can only ever cover the evidence on screen.
+		ev := ackEvidenceVersion(finding)
+		b, _ := json.Marshal(ackRecord{
+			Signature: sig, Rule: finding.Rule, AckedAt: now, EvidenceVersion: ev,
+			Reason: body.Reason, Note: body.Note, ActorPersonID: body.ActorPersonID,
+		})
 		if err := st.PutSetting(settingAckPrefix+sig, string(b)); err != nil {
 			writeErr(w, http.StatusInternalServerError, "store_error", msgStoreUnavailable)
 			return
 		}
 		out["acked_at"] = now
+		if ev != "" {
+			out["evidence_version"] = ev
+		}
 	} else {
 		// The settings KV has no delete; an empty record + index removal is the
 		// tombstone (the index is authoritative for the acked state).

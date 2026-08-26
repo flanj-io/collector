@@ -8,8 +8,35 @@
     "idempotency_key",
     "consumer_display_name",
     "message",
-    "call",
     "finding"
+  ],
+  "allOf": [
+    {
+      "$comment": "qfix2-2026-08-26, additive relaxation: `call` is OPTIONAL when the finding is a `definition_change` — that kind is evidenced by two published tools/list snapshots and has `source_call_id: null` by nature, so no call exists to send. Every other kind still REQUIRES `call` (a call-less `output_mismatch` / `type-mismatch` is refused with 400 finding_has_no_call). Every payload valid before this change is still valid.",
+      "if": {
+        "required": [
+          "finding"
+        ],
+        "properties": {
+          "finding": {
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "const": "definition_change"
+              }
+            }
+          }
+        }
+      },
+      "then": {},
+      "else": {
+        "required": [
+          "call"
+        ]
+      }
+    }
   ],
   "properties": {
     "idempotency_key": {
@@ -26,12 +53,13 @@
     "invitee_email": {
       "type": "string",
       "format": "email",
-      "description": "DEPRECATED (v0.1a): optional and ignored \u2014 the CP sends no invite email; the consumer copies the thread link."
+      "description": "DEPRECATED (v0.1a): optional and ignored — the CP sends no invite email; the consumer copies the thread link."
     },
     "message": {
       "type": "string"
     },
     "call": {
+      "description": "The redacted evidence call. REQUIRED for every finding kind except `definition_change`, which is call-less by nature (qfix2-2026-08-26).",
       "$ref": "https://vinifera.io/contracts/v1/redacted-call.schema.json"
     },
     "finding": {

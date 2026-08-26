@@ -3,13 +3,14 @@ import {
   ACK_LABEL,
   ACK_TITLE,
   JSONRPC_ID_TITLE,
-  LOCAL_NOTE_NOT_FLAGGABLE,
+  FLAG_DESCRIPTION_GUARD,
   LOCAL_NOTICES_TITLE,
   MCP_BADGE_TOOLTIP,
   MCP_ERROR_TOOLTIP,
   MCP_NO_SPEC_NEEDED,
   UNDO_LABEL,
   UNDO_TITLE,
+  ackEvidenceVersion,
   ackedLine,
   afterColLabel,
   beforeColLabel,
@@ -24,6 +25,7 @@ import {
   isAckable,
   isAcked,
   isBreakingFinding,
+  isDescriptionChange,
   isFlaggableMcp,
   isLocalNotice,
   isMcpCall,
@@ -88,6 +90,19 @@ const defChange = (over: Partial<Finding> = {}) =>
     ...over
   });
 
+/** The DESCRIPTION class — flaggable since qfix2-2026-08-26. */
+const descChange = (over: Partial<Finding> = {}) =>
+  defChange({
+    severity: 'warning',
+    rule: 'description-changed',
+    field_path: 'description',
+    expected: '"Refund a charge."',
+    actual: '"Refund a charge, with fees."',
+    detail:
+      'Definition change (DESCRIPTION): description-changed on `get_balance` at description — tools/list observed 2026-08-18T08:00:00Z → 2026-08-19T09:00:00Z.',
+    ...over
+  });
+
 describe('kinds, classes, flaggability (spec §1/§6)', () => {
   it('classifies MCP findings and calls', () => {
     expect(isMcpFinding(finding({}))).toBe(true);
@@ -104,16 +119,29 @@ describe('kinds, classes, flaggability (spec §1/§6)', () => {
     expect(definitionClass(finding({}))).toBe('');
   });
 
-  it('stale_client and DESCRIPTION-only changes are local notices — never flaggable', () => {
+  it('stale_client is the ONLY local notice — and the only never-flaggable kind', () => {
     expect(isLocalNotice(finding({ kind: 'stale_client' }))).toBe(true);
-    expect(isLocalNotice(defChange({ severity: 'warning', rule: 'description-changed' }))).toBe(true);
     expect(isLocalNotice(defChange())).toBe(false);
     expect(isLocalNotice(finding({}))).toBe(false);
+    // qfix2-2026-08-26: DESCRIPTION left the local-notice set when the owner
+    // made it flaggable — the Overview band promises nothing in it can be
+    // flagged, so it must not hold a row that now has a Flag control.
+    expect(isLocalNotice(descChange())).toBe(false);
+  });
+
+  it('every definition_change class is flaggable; stale_client never is', () => {
     expect(isFlaggableMcp(finding({}))).toBe(true);
     expect(isFlaggableMcp(defChange())).toBe(true);
     expect(isFlaggableMcp(defChange({ severity: 'info' }))).toBe(true);
+    expect(isFlaggableMcp(descChange())).toBe(true);
     expect(isFlaggableMcp(finding({ kind: 'stale_client' }))).toBe(false);
-    expect(isFlaggableMcp(defChange({ severity: 'warning', rule: 'description-changed' }))).toBe(false);
+  });
+
+  it('isDescriptionChange picks out the one class that carries the guard line', () => {
+    expect(isDescriptionChange(descChange())).toBe(true);
+    expect(isDescriptionChange(defChange())).toBe(false);
+    expect(isDescriptionChange(defChange({ severity: 'info' }))).toBe(false);
+    expect(isDescriptionChange(finding({}))).toBe(false);
   });
 });
 
@@ -139,7 +167,7 @@ describe('badge tiers + acknowledge (qfix-2026-08-25)', () => {
   it('acked state comes from the read-API join', () => {
     expect(isAcked(finding({ acked: true }))).toBe(true);
     expect(isAcked(finding({}))).toBe(false);
-    expect(isAcked({ acked: undefined })).toBe(false);
+    expect(isAcked({ kind: 'output_mismatch', acked: undefined } as Finding)).toBe(false);
   });
 
   it('control + footer strings (verbatim)', () => {
@@ -197,6 +225,25 @@ describe('deck §2 — health', () => {
     expect(h.text).toBe('Server: acme-mcp v1.4.0. You: no drift detected.');
   });
 
+  // qfix2-2026-08-26 (§7 risk 3): a description change left the Local notices
+  // band when it became flaggable. If the headline had no clause for it, a
+  // server whose ONLY drift is a wording change would say "no drift detected"
+  // in green here while the Contracts tab showed an amber row with a primary
+  // `Flag this` — and the finding would appear nowhere on Overview at all.
+  it('description-only server is never green', () => {
+    const h = mcpHeadline(server, [descChange()], t);
+    expect(h.ok).toBe(false);
+    expect(h.text).toBe(
+      'Server: acme-mcp v1.4.0. You: definition change on get_balance — description only, no schema change.'
+    );
+  });
+
+  it('a breaking definition change still outranks a description one', () => {
+    const h = mcpHeadline(server, [descChange({ id: 'f2', endpoint: 'list_txns' }), defChange()], t);
+    expect(h.ok).toBe(false);
+    expect(h.text).toBe('Server: acme-mcp v1.4.0. You: definition change on get_balance — breaking, no calls affected yet.');
+  });
+
   it('local notices band copy', () => {
     expect(LOCAL_NOTICES_TITLE).toBe('Local notices');
     expect(localNoticesSub('Acme Payments')).toBe(
@@ -214,18 +261,13 @@ describe('deck §2 — health', () => {
     );
   });
 
-  it('notice lines: stale tool, stale args, description-only', () => {
-    expect(noticeLine(finding({ kind: 'stale_client', rule: 'tool-not-listed' }), 'acme-mcp', 'Acme Payments')).toBe(
+  it('notice lines: stale tool, stale args (the description line is DELETED)', () => {
+    expect(noticeLine(finding({ kind: 'stale_client', rule: 'tool-not-listed' }), 'acme-mcp')).toBe(
       'Your agent still calls get_balance — acme-mcp no longer lists it. Update your client.'
     );
     expect(
-      noticeLine(finding({ kind: 'stale_client', rule: 'type-mismatch', field_path: 'account' }), 'acme-mcp', 'Acme Payments')
+      noticeLine(finding({ kind: 'stale_client', rule: 'type-mismatch', field_path: 'account' }), 'acme-mcp')
     ).toBe("Your agent's arguments to get_balance no longer match the current inputSchema at $.account. Update your client.");
-    expect(
-      noticeLine(defChange({ severity: 'warning', rule: 'description-changed' }), 'acme-mcp', 'Acme Payments')
-    ).toBe(
-      "Description changed on get_balance — schema unchanged. This can change which tools your model picks. Wording is Acme Payments's to change, so this stays a local note."
-    );
   });
 });
 
@@ -264,7 +306,6 @@ describe('deck §3 — contracts', () => {
     expect(beforeColLabel('sha256:aaaa11112222', 'T1')).toBe('before (snapshot sha256:aaaa11112222 · T1)');
     expect(afterColLabel('sha256:bbbb33334444', 'T2')).toBe('after (snapshot sha256:bbbb33334444 · T2)');
     expect(defChangeDetail('T1', 'T2', 'Acme Payments')).toBe("Their tools/list at T1 vs at T2 — both Acme Payments's own words.");
-    expect(LOCAL_NOTE_NOT_FLAGGABLE).toBe('Local note — not flaggable.');
   });
 });
 
@@ -372,6 +413,106 @@ describe('deck §5 — flag sheet', () => {
     );
     expect(mcpDefaultMessage(defChange(), fmt)).toBe(
       'Your tools/list changed get_balance between Aug 18 and Aug 18 — input-required-property-added. Was this intentional? Anything we should migrate to?'
+    );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// qfix2-2026-08-26 — ux-design-v2 §2.8: the ack key
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('an ack binds to the evidence version it acknowledged (§2.8, §7 risk 2)', () => {
+  it('a SECOND change on the same tool + field arrives UN-acknowledged', () => {
+    // Both rows carry the IDENTICAL finding signature
+    // (integration|endpoint|kind|rule|field_path) — that is the whole problem.
+    const v1 = descChange({ spec_version_to: 'sha256:bbbb33334444' });
+    const acked = { ...v1, acked: true, acked_evidence_version: 'sha256:bbbb33334444' };
+    expect(isAcked(acked)).toBe(true);
+
+    // <P> edits the same description again: same signature, NEW after-hash.
+    const v2 = { ...acked, id: 'f2', spec_version_to: 'sha256:cccc55556666' };
+    expect(isAcked(v2)).toBe(false);
+  });
+
+  it('acknowledging the new evidence re-covers the row', () => {
+    const v2 = descChange({
+      spec_version_to: 'sha256:cccc55556666',
+      acked: true,
+      acked_evidence_version: 'sha256:cccc55556666'
+    });
+    expect(isAcked(v2)).toBe(true);
+  });
+
+  it('a LEGACY ack (no evidence version) does not cover a definition_change', () => {
+    // Fail-safe migration: the finding re-surfaces un-acknowledged rather than
+    // staying silently acked behind a record that predates the key change.
+    expect(isAcked(descChange({ acked: true }))).toBe(false);
+    expect(isAcked(defChange({ severity: 'info', acked: true }))).toBe(false);
+  });
+
+  it('occurrence-counted kinds key on the signature alone — recurrence is text, not a re-alarm', () => {
+    expect(ackEvidenceVersion(finding({}))).toBe('');
+    expect(ackEvidenceVersion(descChange())).toBe('sha256:bbbb33334444');
+    expect(ackEvidenceVersion({ kind: 'definition_change' } as Finding)).toBe('');
+    // An output_mismatch stays acked no matter how many more calls land.
+    expect(isAcked(finding({ acked: true, occurrence_count: 47 }))).toBe(true);
+    // …even if a snapshot hash happens to ride along on the record.
+    expect(isAcked(finding({ acked: true, spec_version_to: 'sha256:bbbb33334444' }))).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// qfix2-2026-08-26 — ux-design-v2 §2.7.4: the DESCRIPTION flag sheet
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('flag sheet, DESCRIPTION variant (§2.7.4)', () => {
+  const d = (iso: string) => (iso === '2026-08-19T09:00:00Z' ? 'Aug 19' : iso);
+
+  it('evidence line claims the provider own two published versions', () => {
+    expect(mcpEvidenceLine(descChange(), 'acme-mcp', d)).toBe(
+      'get_balance — description changed in your tools/list on Aug 19. Both versions are your own published text.'
+    );
+  });
+
+  it('prefers the structured snapshot_observed_at over parsing the detail line', () => {
+    expect(mcpEvidenceLine(descChange({ snapshot_observed_at: '2026-08-19T09:00:00Z' }), 'acme-mcp', d)).toBe(
+      'get_balance — description changed in your tools/list on Aug 19. Both versions are your own published text.'
+    );
+  });
+
+  it('the other definition classes keep their shipped evidence line', () => {
+    expect(mcpEvidenceLine(defChange(), 'acme-mcp')).toBe(
+      'get_balance on acme-mcp — definition change (BREAKING): input-required-property-added. Two tools/list snapshots, 2026-08-18T08:00:00Z → 2026-08-19T09:00:00Z.'
+    );
+  });
+
+  it('disclosure names the two descriptions, and raw calls never leave', () => {
+    expect(mcpDisclosureLead(descChange(), 'get_balance')).toBe(
+      'The two published descriptions, when each was observed, the endpoint, your message, and'
+    );
+    expect(mcpDisclosureTail(descChange())).toBe('Raw calls never leave.');
+    // BREAKING / NON-BREAKING keep the shipped pair.
+    expect(mcpDisclosureLead(defChange(), 'get_balance')).toBe(
+      "The before/after fragments of get_balance's definition, the finding, the two snapshot hashes and observed-at times, the server name and version, your message, and"
+    );
+    expect(mcpDisclosureTail(defChange())).toBe('No call data is involved, so none leaves.');
+  });
+
+  it('prefilled message asks whether the wording was intended', () => {
+    expect(mcpDefaultMessage(descChange(), d)).toBe(
+      "Your tools/list description for get_balance changed on Aug 19. The schema didn't change, but the wording did, and our agent picks tools from that text. Can you confirm the new wording is intended and stable?"
+    );
+  });
+
+  it('the mute-risk guard is verbatim', () => {
+    expect(FLAG_DESCRIPTION_GUARD).toBe(
+      "This isn't a bug report — you're asking whether the change was intended."
+    );
+  });
+
+  it('the definition-change hint stands in for the call, on every class', () => {
+    expect(defChangeNoCallSub('Acme Payments')).toBe(
+      "No call is shared — the evidence is Acme Payments's own published definitions, before and after."
     );
   });
 });

@@ -81,6 +81,11 @@ func (e *uiExtension) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"cp_configured":     e.cp != nil,
 		"connect_status":    connect,
 		"collector_version": collectorVersion,
+		// Did this collector hold data before the light-default upgrade? The
+		// second of the two gates on the one-time theme-flip notice
+		// (ux-design-v2 §3.4) — the first is "this browser has no stored theme
+		// choice", which only the browser can answer.
+		"held_prior_data": heldPriorData(st),
 		// Display names from config: the UI prefills Connect's org field and
 		// names the provider on the Flag sheet with these.
 		"consumer_display_name": e.cfg.ConsumerDisplayName,
@@ -194,6 +199,12 @@ type findingView struct {
 	model.Finding
 	Acked   bool   `json:"acked,omitempty"`
 	AckedAt string `json:"acked_at,omitempty"`
+	// AckedEvidenceVersion is the evidence hash the ack covers (the AFTER
+	// snapshot hash on a definition_change; absent otherwise). Surfaced so the
+	// SPA can apply the SAME match rule client-side — a second, independent
+	// check that a new change can never inherit an old acknowledgement
+	// (ux-design-v2 §2.8 / §7 risk 2).
+	AckedEvidenceVersion string `json:"acked_evidence_version,omitempty"`
 }
 
 func (e *uiExtension) handleFindings(w http.ResponseWriter, r *http.Request) {
@@ -214,9 +225,13 @@ func (e *uiExtension) handleFindings(w http.ResponseWriter, r *http.Request) {
 	views := make([]findingView, len(findings))
 	for i, f := range findings {
 		views[i] = findingView{Finding: f}
-		if rec, ok := acks[findingSignature(f)]; ok && ackable(f) {
+		// ackMatches is what makes the acknowledged band's promise true: a
+		// definition_change whose after-snapshot hash has moved on is NOT
+		// covered by the old record and comes back un-acknowledged.
+		if rec, ok := acks[findingSignature(f)]; ok && ackable(f) && ackMatches(f, rec) {
 			views[i].Acked = true
 			views[i].AckedAt = rec.AckedAt
+			views[i].AckedEvidenceVersion = rec.EvidenceVersion
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"findings": views})
@@ -293,24 +308,36 @@ func (e *uiExtension) handleFlag(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "finding_not_found", msgFindingNotFound)
 		return
 	}
-	// Evidence rule (v0.5 §6), enforced SERVER-SIDE — not just by UI absence:
-	// local-only kinds (stale_client; DESCRIPTION-only definition changes) are
-	// consumer-side or subjective and never leave this collector as a flag.
+	// Evidence rule (v0.5 §6, amended qfix2-2026-08-26), enforced SERVER-SIDE —
+	// not just by UI absence: stale_client is consumer-side and never leaves
+	// this collector as a flag. It is the only local-only kind.
 	if !finding.Flaggable() {
 		writeErr(w, http.StatusForbidden, "not_flaggable", msgNotFlaggable)
 		return
 	}
-	if finding.SourceCallID == nil || *finding.SourceCallID == "" {
+	// CALL-LESS flagging (qfix2-2026-08-26, ux-design-v2 §2.7.5): a
+	// definition_change has no failing call by nature — the evidence is the
+	// provider's own tools/list, before and after — so 400 finding_has_no_call
+	// is lifted for it. Every other kind still needs its call: an
+	// output_mismatch without one has nothing to show, and a flag control that
+	// 400s is worse than no control at all.
+	callLess := finding.Kind == model.KindDefinitionChange
+	var call *model.RedactedCall
+	if finding.SourceCallID != nil && *finding.SourceCallID != "" {
+		c, ok, err := st.GetCall(*finding.SourceCallID)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "store_error", msgStoreUnavailable)
+			return
+		}
+		if !ok && !callLess {
+			writeErr(w, http.StatusNotFound, "call_not_found", msgCallEvicted)
+			return
+		}
+		if ok {
+			call = &c
+		}
+	} else if !callLess {
 		writeErr(w, http.StatusBadRequest, "finding_has_no_call", msgFindingNoCall)
-		return
-	}
-	call, ok, err := st.GetCall(*finding.SourceCallID)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "store_error", msgStoreUnavailable)
-		return
-	}
-	if !ok {
-		writeErr(w, http.StatusNotFound, "call_not_found", msgCallEvicted)
 		return
 	}
 
@@ -326,7 +353,12 @@ func (e *uiExtension) handleFlag(w http.ResponseWriter, r *http.Request) {
 		providerName = e.cfg.ProviderDisplayName
 	}
 	if providerName == "" {
-		providerName = humanizeIntegration(call.Integration)
+		// A call-less finding names its own integration.
+		integration := finding.Integration
+		if call != nil {
+			integration = call.Integration
+		}
+		providerName = humanizeIntegration(integration)
 	}
 	if providerName == "" {
 		providerName = humanizeIntegration(e.cfg.IntegrationID)
@@ -372,9 +404,12 @@ func (e *uiExtension) handleFlag(w http.ResponseWriter, r *http.Request) {
 	if err := saveThread(st, rec); err != nil {
 		e.telemetry.Logger.Warn("flag succeeded but persisting the thread record failed: " + err.Error())
 	}
-	// evict-after-promote: unpin + stamp promoted_at so the call re-enters the pool.
-	if err := st.MarkPromoted(call.ID); err != nil {
-		e.telemetry.Logger.Warn("flag succeeded but mark-promoted failed: " + err.Error())
+	// evict-after-promote: unpin + stamp promoted_at so the call re-enters the
+	// pool. A call-less flag has nothing to unpin.
+	if call != nil {
+		if err := st.MarkPromoted(call.ID); err != nil {
+			e.telemetry.Logger.Warn("flag succeeded but mark-promoted failed: " + err.Error())
+		}
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, code, map[string]any{

@@ -5,12 +5,19 @@ import ConnectPanel from './ConnectPanel.vue';
 import FlagSheet from './FlagSheet.vue';
 import ThreadsTab from './ThreadsTab.vue';
 import { chipLabel, needsCollectorAddress, threadIdFromHash, timeAgo, type ConnectState, type ThreadRow } from './threads';
-import { applyTheme, loadThemePref, saveThemePref, type ThemePref } from './theme';
+import {
+  THEME_FLIP_NOTICE_KEY,
+  applyTheme,
+  hasStoredThemeChoice,
+  loadThemePref,
+  saveThemePref,
+  shouldShowThemeFlipNotice,
+  type ThemePref
+} from './theme';
 import {
   ACK_LABEL,
   ACK_TITLE,
   JSONRPC_ID_TITLE,
-  LOCAL_NOTE_NOT_FLAGGABLE,
   LOCAL_NOTICES_TITLE,
   MCP_BADGE_TOOLTIP,
   MCP_ERROR_TOOLTIP,
@@ -231,15 +238,42 @@ function applyHash() {
 const tab = ref<Tab>('overview');
 const expanded = ref<Record<string, boolean>>({});
 
-// ─── Appearance (Settings): System / Light / Dark, default System ─────────
-// Persisted as `vinifera.theme`; applied as data-theme on <html>. The System
-// state carries no attribute — the CSS prefers-color-scheme media query tracks
-// the OS live (no JS listener needed).
+// ─── Appearance (Settings): Light / Dark, default LIGHT ───────────────────
+// ux-design-v2 §3: the collector matches the thread page — light by default,
+// dark opt-in, NO System option. Persisted as `vinifera.theme` and applied as
+// data-theme on <html>; the dark palette lives under [data-theme="dark"] only
+// and the prefers-color-scheme media query is gone from the stylesheet.
 const themePref = ref<ThemePref>(loadThemePref());
 function setTheme(pref: ThemePref) {
   themePref.value = pref;
   saveThemePref(pref);
   applyTheme(pref);
+  // Choosing a theme retires the flip notice for good — it has nothing left to
+  // tell you once you have used the control it points at.
+  themeChoiceStored.value = true;
+  themeNoticeDismissed.value = true;
+}
+
+// The one-time light-default notice (§3.4). BOTH gates: this browser never
+// chose a theme (i.e. it was on the deleted System setting) AND the collector
+// reports it held data before this upgrade — so a fresh install never sees it,
+// and a dark-OS user who wakes up to a light UI is told why exactly once.
+const themeChoiceStored = ref(hasStoredThemeChoice());
+const themeNoticeDismissed = ref(localStorage.getItem(THEME_FLIP_NOTICE_KEY) === '1');
+const showThemeFlipNotice = computed(() =>
+  shouldShowThemeFlipNotice({
+    storedChoice: themeChoiceStored.value,
+    heldPriorData: health.value?.held_prior_data === true,
+    dismissed: themeNoticeDismissed.value
+  })
+);
+function dismissThemeFlipNotice() {
+  themeNoticeDismissed.value = true;
+  localStorage.setItem(THEME_FLIP_NOTICE_KEY, '1');
+}
+function openAppearance() {
+  dismissThemeFlipNotice();
+  tab.value = 'settings';
 }
 
 // Live-tail stream state: polling always lands in `calls`, but while the user
@@ -564,14 +598,20 @@ const mcpOverview = computed(() =>
   }))
 );
 
-// Local notices (deck §2): stale_client + DESCRIPTION-only definition changes.
-// Visible to you only; these items NEVER carry a flag control. An acknowledged
-// notice stays listed, dimmed with a trailing "Acknowledged" — one state, two
-// surfaces (the Contracts row is the control; no control here).
+// Local notices (deck §2): stale_client ONLY since qfix2-2026-08-26. A
+// DESCRIPTION definition change is now flaggable, so it cannot sit under a band
+// whose sub-line promises "Nothing here can be flagged" — it lives on the
+// Contracts tab with a Flag control, like every other definition change.
+// Visible to you only; these items NEVER carry a flag control.
+//
+// Nor an acknowledged state: ackable() (extension/viniferaui/acks.go) requires
+// kind=definition_change, so a stale_client finding can never be acknowledged
+// and the band carries no acked rendering. The band's items used to be able to
+// be acked back when DESCRIPTION lived here.
 const localNotices = computed(() =>
   mcpFindings.value
     .filter((f) => isLocalNotice(f))
-    .map((f) => ({ id: f.id, line: noticeLine(f, mcpServerName(f.integration), providerNameFor(f)), acked: isAcked(f) }))
+    .map((f) => ({ id: f.id, line: noticeLine(f, mcpServerName(f.integration)) }))
 );
 // The band's sub-line: named only while every notice points at ONE provider;
 // notices spanning several providers fall back to the neutral copy.
@@ -793,6 +833,18 @@ watch(tab, (t) => {
 
     <p v-if="loadError" class="error banner">Failed to load: {{ loadError }}</p>
 
+    <!-- One-time light-default notice (ux-design-v2 §3.4). Reuses the shipped
+         dismissible-banner component — no new component, no modal, no
+         interstitial. Above the tab strip so it shows on whichever tab is
+         opened first, exactly once per browser. -->
+    <div v-if="showThemeFlipNotice" class="connect-banner info theme-flip-banner">
+      <span>Vinifera is light by default now. Dark is in Settings → Appearance.</span>
+      <span class="connect-banner-actions">
+        <button type="button" class="btn small" @click="openAppearance">Open Appearance</button>
+        <button type="button" class="btn ghost small" aria-label="Dismiss" @click="dismissThemeFlipNotice">Dismiss</button>
+      </span>
+    </div>
+
     <nav class="tabs" role="tablist">
       <button role="tab" :class="{ active: tab === 'overview' }" @click="tab = 'overview'">
         Overview
@@ -839,17 +891,17 @@ watch(tab, (t) => {
         </div>
       </section>
 
-      <!-- Local notices band (deck §2): stale-client + description-only items.
-           Visible to you only; NO flag control here, ever. -->
+      <!-- Local notices band (deck §2): stale-client items ONLY since
+           qfix2-2026-08-26 — description-only changes moved to the Contracts
+           tab when they became flaggable. Visible to you only; NO flag control
+           here, ever, and nothing here is ackable either. -->
       <section v-if="localNotices.length" class="local-notices">
         <div class="ln-head">
           <span class="ln-title">{{ LOCAL_NOTICES_TITLE }}</span>
           <span class="ln-sub">{{ localNoticesSubFor(localNoticesProviders) }}</span>
         </div>
         <ul class="ln-list">
-          <li v-for="n in localNotices" :key="n.id" class="ln-item" :class="{ acked: n.acked }">
-            {{ n.line }}<span v-if="n.acked" class="ln-ackmark"> · Acknowledged</span>
-          </li>
+          <li v-for="n in localNotices" :key="n.id" class="ln-item">{{ n.line }}</li>
         </ul>
       </section>
 
@@ -1078,31 +1130,33 @@ watch(tab, (t) => {
                 <span v-if="ackError[f.id]" class="error small-err">{{ ackError[f.id] }}</span>
               </template>
               <!-- Evidence rule (v0.5 §6): local notices NEVER carry a flag control.
-                   Acknowledge is ADDITIVE next to the pinned text — never a replacement. -->
-              <template v-else-if="isLocalNotice(f)">
-                <span class="hint-inline">{{ LOCAL_NOTE_NOT_FLAGGABLE }}</span>
-                <button v-if="isAckable(f)" type="button" class="btn ghost small" :disabled="ackBusy[f.id]" :title="ACK_TITLE" @click="setAck(f, true)">{{ ACK_LABEL }}</button>
-                <span v-if="ackError[f.id]" class="error small-err">{{ ackError[f.id] }}</span>
-              </template>
-              <!-- Flaggable definition_change: call-less — the flag POST refuses a
-                   finding without a call (KNOWN v0.5 limitation), so the control
-                   stays disabled with the honest reason instead of failing late.
-                   NON-BREAKING rows render it as a disabled ghost (not a fake
-                   primary) and gain Acknowledge. -->
+                   stale_client only — and it never reaches the Contracts tab
+                   (mcpContractFindings excludes it), so this branch is a GUARD,
+                   not a surface: it renders nothing, and its whole job is to
+                   swallow a stale_client row before any Flag control below can
+                   claim it. Deliberately empty — do not give it content. -->
+              <template v-else-if="isLocalNotice(f)"><!-- no control, by design --></template>
+              <!-- definition_change, EVERY class incl. DESCRIPTION (ux-design-v2
+                   §2.7): flaggable and CALL-LESS. The control is never born
+                   disabled — the relay lifted 400 finding_has_no_call for this
+                   kind. `Flag this` keeps primary styling; the shared hint says
+                   what stands in for the call. -->
               <template v-else-if="f.kind === 'definition_change'">
-                <button
-                  type="button"
-                  class="btn"
-                  :class="definitionClass(f) === 'NON-BREAKING' ? 'ghost' : 'primary flag'"
-                  disabled
-                  title="Flagging this needs a failing call — not available yet for definition changes."
-                >Flag this</button>
+                <button type="button" class="btn primary flag" @click="openSheet(f)">Flag this</button>
                 <span class="hint-inline">{{ defChangeNoCallSub(providerNameFor(f)) }}</span>
                 <button v-if="isAckable(f)" type="button" class="btn ghost small" :disabled="ackBusy[f.id]" :title="ACK_TITLE" @click="setAck(f, true)">{{ ACK_LABEL }}</button>
                 <span v-if="ackError[f.id]" class="error small-err">{{ ackError[f.id] }}</span>
               </template>
-              <button v-else-if="f.source_call_id" type="button" class="btn primary flag" @click="openSheet(f)">Flag this</button>
-              <span v-else class="hint-inline">Informational — spec-version findings have no failing call to share.</span>
+              <!-- The !isLocalNotice guards are redundant with the branch above
+                   and deliberately so: a stale_client row must NEVER reach a
+                   Flag control, and one guard is one edit away from being lost.
+                   The trailing hint is likewise a fallback no row reaches today
+                   (contractTabRows is live-vs-spec + output_mismatch +
+                   definition_change, and the first two always carry their call)
+                   — it is what a call-less kind arriving here would say, rather
+                   than an empty actions row. -->
+              <button v-else-if="f.source_call_id && !isLocalNotice(f)" type="button" class="btn primary flag" @click="openSheet(f)">Flag this</button>
+              <span v-else-if="!isLocalNotice(f)" class="hint-inline">Informational — spec-version findings have no failing call to share.</span>
             </div>
           </article>
         </article>
@@ -1149,12 +1203,15 @@ watch(tab, (t) => {
         <h2>Appearance</h2>
         <div class="theme-field">
           <span class="theme-label">Theme</span>
+          <!-- Exactly two segments (ux-design-v2 §3.2). The System segment and
+               the OS-setting helper line beside it are DELETED, not re-worded —
+               the replacement states the two consequences that matter: what the
+               default is, and that the choice is per-browser. -->
           <div class="seg" role="group" aria-label="Theme">
-            <button type="button" :class="{ active: themePref === 'system' }" :aria-pressed="themePref === 'system'" @click="setTheme('system')">System</button>
             <button type="button" :class="{ active: themePref === 'light' }" :aria-pressed="themePref === 'light'" @click="setTheme('light')">Light</button>
             <button type="button" :class="{ active: themePref === 'dark' }" :aria-pressed="themePref === 'dark'" @click="setTheme('dark')">Dark</button>
           </div>
-          <span class="theme-help">System follows your OS setting.</span>
+          <span class="theme-help">Light by default. Dark is remembered on this browser only.</span>
         </div>
       </section>
     </div>
@@ -1364,9 +1421,15 @@ watch(tab, (t) => {
 </template>
 
 <style>
-/* Theme tokens. Dark is the base palette; light is applied for an explicit
-   data-theme="light" AND (via prefers-color-scheme, guarded so an explicit
-   dark choice wins) for the default System state on a light OS.
+/* Theme tokens (ux-design-v2 §3.3). LIGHT is the base palette — key-absent
+   means light, matching the thread page — and the DARK palette is applied under
+   [data-theme="dark"] ONLY.
+
+   The `prefers-color-scheme` media block that served the deleted System state
+   is GONE on purpose: leaving it in place while defaulting to light would give
+   a dark-OS user a dark first paint and quietly reintroduce System.
+
+   Palette values are a lift-and-shift — nothing re-picked, no new tokens.
    --warn is the amber FILL; --warn-text is the amber TEXT/BORDER role (the
    fill fails contrast as text on light surfaces). Same split for green:
    --ok is the green FILL; --ok-text is the green TEXT/BORDER role — on light,
@@ -1376,26 +1439,6 @@ watch(tab, (t) => {
    (not the table's #9a6700, which is 4.30:1 on --panel2 — fails 4.5:1).
    --on-* are the inks used on filled accent/danger/warn/ok surfaces. */
 :root {
-  color-scheme: dark;
-  --bg: #0f1216;
-  --panel: #171b21;
-  --panel2: #1d232b;
-  --ink: #e7ecf2;
-  --muted: #8b97a7;
-  --line: #2a323c;
-  --accent: #6ea8fe;
-  --danger: #ff6b6b;
-  --danger-bg: #2a1618;
-  --ok: #46d19e;
-  --ok-text: #46d19e;
-  --warn: #f4b740;
-  --warn-text: #f4b740;
-  --on-accent: #04122e;
-  --on-danger: #200;
-  --on-warn: #201800;
-  --on-ok: #04231a;
-}
-:root[data-theme='light'] {
   color-scheme: light;
   --bg: #f6f8fa;
   --panel: #ffffff;
@@ -1415,28 +1458,25 @@ watch(tab, (t) => {
   --on-warn: #201800;
   --on-ok: #ffffff;
 }
-/* System state on a light OS — same palette; an explicit dark choice wins. */
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme='dark']) {
-    color-scheme: light;
-    --bg: #f6f8fa;
-    --panel: #ffffff;
-    --panel2: #eef1f5;
-    --ink: #1a222c;
-    --muted: #5b6878;
-    --line: #d5dce4;
-    --accent: #2f6fed;
-    --danger: #c62f3d;
-    --danger-bg: #fbe9ea;
-    --ok: #157f5f;
-    --ok-text: #116b50;
-    --warn: #f4b740;
-    --warn-text: #8a5c00;
-    --on-accent: #ffffff;
-    --on-danger: #ffffff;
-    --on-warn: #201800;
-    --on-ok: #ffffff;
-  }
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #0f1216;
+  --panel: #171b21;
+  --panel2: #1d232b;
+  --ink: #e7ecf2;
+  --muted: #8b97a7;
+  --line: #2a323c;
+  --accent: #6ea8fe;
+  --danger: #ff6b6b;
+  --danger-bg: #2a1618;
+  --ok: #46d19e;
+  --ok-text: #46d19e;
+  --warn: #f4b740;
+  --warn-text: #f4b740;
+  --on-accent: #04122e;
+  --on-danger: #200;
+  --on-warn: #201800;
+  --on-ok: #04231a;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, sans-serif; }
@@ -1522,6 +1562,8 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .connect-banner { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin: 0.75rem 0 0; padding: 0.6rem 0.9rem; border: 1px solid var(--warn-text); border-radius: 10px; background: var(--panel); font-size: 0.88rem; }
 .connect-banner-actions { display: flex; gap: 0.5rem; }
 .connect-banner.info { border-color: var(--line); color: var(--muted); }
+/* The one-time theme-flip notice sits above the tab strip, not inside a tab. */
+.theme-flip-banner { margin-top: 1rem; }
 .error { color: var(--danger); }
 
 /* Traffic toolbar: search + facet filters + live/pause control */
@@ -1651,8 +1693,6 @@ pre.body { background: var(--panel2); border: 1px solid var(--line); border-radi
 .ln-sub { color: var(--muted); font-size: 0.82rem; }
 .ln-list { margin: 0.55rem 0 0; padding-left: 1.1rem; }
 .ln-item { color: var(--muted); font-size: 0.88rem; margin-top: 0.25rem; }
-.ln-item.acked { opacity: 0.55; }
-.ln-ackmark { font-weight: 600; }
 .method.tool { color: var(--accent); border-color: var(--accent); }
 .tool-rows { margin-top: 0.65rem; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .tool-row { padding: 0.42rem 0.7rem; border-top: 1px solid var(--line); }

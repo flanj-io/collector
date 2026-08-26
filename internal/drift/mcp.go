@@ -9,10 +9,11 @@
 //   - output_mismatch  (FLAGGABLE): a tools/call structuredContent violates the
 //     tool's declared outputSchema. A tool WITHOUT outputSchema produces NO
 //     output_mismatch — the honest "no output contract declared" limit.
-//   - definition_change (FLAGGABLE for BREAKING / NON_BREAKING; a
-//     DESCRIPTION-only change is a LOCAL warning, never flaggable): two
-//     consecutive snapshots differ; one finding per (edge, operation, rule,
-//     fieldPath) via the contract/diff classifier.
+//   - definition_change (FLAGGABLE at every class — BREAKING, NON_BREAKING and,
+//     since qfix2-2026-08-26, DESCRIPTION): two consecutive snapshots differ;
+//     one finding per (edge, operation, rule, fieldPath) via the contract/diff
+//     classifier. The evidence is the provider's own published text, before and
+//     after, so it passes the evidence rule; flagging is always a human act.
 //   - stale_client (LOCAL ONLY, never flaggable): the consumer's agent called a
 //     tool absent from the CURRENT tools/list, or with arguments violating the
 //     CURRENT inputSchema. Consumer-side — it fails the evidence rule.
@@ -383,7 +384,10 @@ func definitionChangeFinding(integration string, ch diff.Change, prev, cur *cont
 	case diff.ClassNonBreaking:
 		severity = model.SeverityInfo
 	case diff.ClassDescription:
-		// Local warning only (never flaggable — model.Finding.Flaggable).
+		// Informational: a wording change is not a severity claim. Flaggable
+		// since qfix2-2026-08-26 (the evidence is the provider's own published
+		// text) — but only ever by a human pressing the control; the detector
+		// never flags anything.
 		severity = model.SeverityWarning
 	}
 	f := model.Finding{

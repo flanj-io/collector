@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { THEME_STORAGE_KEY, applyTheme, loadThemePref, normalizeTheme, saveThemePref, themeAttribute } from './theme';
+import {
+  THEME_STORAGE_KEY,
+  applyTheme,
+  hasStoredThemeChoice,
+  loadThemePref,
+  normalizeTheme,
+  saveThemePref,
+  shouldShowThemeFlipNotice,
+  themeAttribute
+} from './theme';
 
 function fakeStorage(init: Record<string, string> = {}) {
   const m = new Map(Object.entries(init));
@@ -15,23 +24,22 @@ function fakeRoot() {
   const attrs = new Map<string, string>();
   return {
     setAttribute: (n: string, v: string) => void attrs.set(n, v),
-    removeAttribute: (n: string) => void attrs.delete(n),
     get: (n: string) => attrs.get(n) ?? null
   };
 }
 
-describe('theme preference (System / Light / Dark, default System)', () => {
-  it('normalizes: unknown and missing values are System', () => {
+describe('theme preference (Light / Dark, default Light — ux-design-v2 §3)', () => {
+  it('normalizes: unknown, missing and the legacy "system" value are Light', () => {
     expect(normalizeTheme('light')).toBe('light');
     expect(normalizeTheme('dark')).toBe('dark');
-    expect(normalizeTheme('system')).toBe('system');
-    expect(normalizeTheme(null)).toBe('system');
-    expect(normalizeTheme(undefined)).toBe('system');
-    expect(normalizeTheme('sepia')).toBe('system');
+    expect(normalizeTheme(null)).toBe('light');
+    expect(normalizeTheme(undefined)).toBe('light');
+    expect(normalizeTheme('sepia')).toBe('light');
+    // The System users are exactly who the flip moves to light.
+    expect(normalizeTheme('system')).toBe('light');
   });
 
-  it('System carries NO data-theme attribute; explicit choices do', () => {
-    expect(themeAttribute('system')).toBeNull();
+  it('always stamps data-theme — there is no attribute-less state any more', () => {
     expect(themeAttribute('light')).toBe('light');
     expect(themeAttribute('dark')).toBe('dark');
     const root = fakeRoot();
@@ -39,18 +47,50 @@ describe('theme preference (System / Light / Dark, default System)', () => {
     expect(root.get('data-theme')).toBe('dark');
     applyTheme('light', root);
     expect(root.get('data-theme')).toBe('light');
-    applyTheme('system', root);
-    expect(root.get('data-theme')).toBeNull();
   });
 
-  it('persists under vinifera.theme; System clears the key', () => {
+  it('persists under vinifera.theme; Light is written explicitly, not by absence', () => {
     const s = fakeStorage();
+    expect(loadThemePref(s)).toBe('light'); // key absent = light
     saveThemePref('dark', s);
     expect(s.dump()).toEqual({ [THEME_STORAGE_KEY]: 'dark' });
     expect(loadThemePref(s)).toBe('dark');
-    saveThemePref('system', s);
-    expect(s.dump()).toEqual({});
-    expect(loadThemePref(s)).toBe('system');
+    saveThemePref('light', s);
+    expect(s.dump()).toEqual({ [THEME_STORAGE_KEY]: 'light' });
+    expect(loadThemePref(s)).toBe('light');
+  });
+
+  it('migration spares an explicit choice and moves System users to light', () => {
+    expect(loadThemePref(fakeStorage({ [THEME_STORAGE_KEY]: 'dark' }))).toBe('dark');
     expect(loadThemePref(fakeStorage({ [THEME_STORAGE_KEY]: 'light' }))).toBe('light');
+    expect(loadThemePref(fakeStorage())).toBe('light');
+  });
+
+  it('knows whether this browser ever chose', () => {
+    expect(hasStoredThemeChoice(fakeStorage())).toBe(false);
+    expect(hasStoredThemeChoice(fakeStorage({ [THEME_STORAGE_KEY]: 'system' }))).toBe(false);
+    expect(hasStoredThemeChoice(fakeStorage({ [THEME_STORAGE_KEY]: 'light' }))).toBe(true);
+    expect(hasStoredThemeChoice(fakeStorage({ [THEME_STORAGE_KEY]: 'dark' }))).toBe(true);
+  });
+});
+
+describe('the one-time light-default notice is gated on BOTH conditions (§3.4)', () => {
+  const base = { storedChoice: false, heldPriorData: true, dismissed: false };
+
+  it('shows for a System user on a collector that held prior data', () => {
+    expect(shouldShowThemeFlipNotice(base)).toBe(true);
+  });
+
+  it('never shows on a fresh install, even with no stored choice', () => {
+    expect(shouldShowThemeFlipNotice({ ...base, heldPriorData: false })).toBe(false);
+  });
+
+  it('never shows to someone who already chose a theme', () => {
+    expect(shouldShowThemeFlipNotice({ ...base, storedChoice: true })).toBe(false);
+    expect(shouldShowThemeFlipNotice({ storedChoice: true, heldPriorData: false, dismissed: false })).toBe(false);
+  });
+
+  it('never returns once dismissed on this browser', () => {
+    expect(shouldShowThemeFlipNotice({ ...base, dismissed: true })).toBe(false);
   });
 });

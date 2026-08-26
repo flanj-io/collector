@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -79,7 +80,7 @@ func TestFlagBody_ConformsToSchema(t *testing.T) {
 	req := Build(Input{
 		ConsumerDisplayName: "Acme Consumer Ltd",
 		Message:             "", // exercise the derived default
-		Call:                call,
+		Call:                &call,
 		Finding:             finding,
 	})
 
@@ -159,23 +160,116 @@ func TestFlagBody_MCPOutputMismatchConforms(t *testing.T) {
 		SourceCallID: &callID, DetectedAt: "2026-08-24T10:00:01.000Z",
 		Signature: "acme-payments|create_refund|output_mismatch|type-mismatch|refund.amount", OccurrenceCount: 12,
 	}
-	req := Build(Input{ConsumerDisplayName: "Acme Consumer Ltd", Call: call, Finding: finding})
+	req := Build(Input{ConsumerDisplayName: "Acme Consumer Ltd", Call: &call, Finding: finding})
 	body, err := json.Marshal(req)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
 	validate(t, flagSchema(t), body)
 
-	// definition_change (the other flaggable v0.5 kind) is accepted by the
-	// frozen schema too — its artifact has no source call.
+	// definition_change (the other flaggable v0.5 kind) still conforms while a
+	// representative call happens to be attached. The CALL-LESS shape it
+	// normally takes is covered by TestFlagBody_CallLessDefinitionChange.
 	finding.Kind = model.KindDefinitionChange
 	finding.SourceCallID = nil
 	finding.SpecVersionFrom, finding.SpecVersionTo = model.Ptr("sha256:aaaaaaaaaaaa"), model.Ptr("sha256:bbbbbbbbbbbb")
-	req = Build(Input{ConsumerDisplayName: "Acme Consumer Ltd", Call: call, Finding: finding})
+	req = Build(Input{ConsumerDisplayName: "Acme Consumer Ltd", Call: &call, Finding: finding})
 	if body, err = json.Marshal(req); err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
 	validate(t, flagSchema(t), body)
+}
+
+// TestFlagBody_CallLessDefinitionChange (qfix2-2026-08-26, ux-design-v2 §2.7.5):
+// a definition_change is CALL-LESS by nature — its evidence is the provider's
+// own two published tools/list snapshots, carried by the Finding. The body must
+// OMIT `call` entirely rather than carry an empty or invented call record, and
+// it must still name the provider from the finding's own integration.
+//
+// The vendored schema makes `call` conditional on kind (required for every kind
+// EXCEPT definition_change), so this body is validated against it below — that
+// assertion is what keeps a re-vendor from silently regressing the relaxation.
+func TestFlagBody_CallLessDefinitionChange(t *testing.T) {
+	finding := loadJSON[model.Finding](t, "sample-finding.json")
+	finding.Kind = model.KindDefinitionChange
+	finding.Rule = model.RuleDescriptionChanged
+	finding.SourceCallID = nil
+	finding.Integration = "acme-tools"
+	finding.SpecVersionFrom, finding.SpecVersionTo = model.Ptr("sha256:aaaaaaaaaaaa"), model.Ptr("sha256:bbbbbbbbbbbb")
+
+	req := Build(Input{ConsumerDisplayName: "Acme Consumer Ltd", Finding: finding})
+	if req.Call != nil {
+		t.Fatalf("call-less flag carries a call: %+v", req.Call)
+	}
+	if req.ProviderDisplayName != "Acme Tools" {
+		t.Errorf("provider display name = %q, want Acme Tools (humanized from the finding)", req.ProviderDisplayName)
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(body, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, has := m["call"]; has {
+		t.Errorf("call-less flag body still has a `call` key: %s", body)
+	}
+	if _, has := m["finding"]; !has {
+		t.Errorf("call-less flag body must still carry the finding: %s", body)
+	}
+	// The guard: a re-vendor that restores `call` to the unconditional `required`
+	// list fails here, not in production.
+	validate(t, flagSchema(t), body)
+}
+
+// TestDefaultMessage_DescriptionAsksRatherThanAccuses (qfix2-2026-08-26,
+// ux-design-v2 §2.7.4): the flag sheet labels its textarea "Message
+// (optional)", so a user who clears the prefilled question sends an EMPTY
+// message — and the default written here is what the provider actually reads.
+// For a DESCRIPTION change that default must stay the question. "Contract
+// drift on <tool>" would file a wording change as a defect claim, which is the
+// mute risk the sheet's guard line exists to prevent.
+func TestDefaultMessage_DescriptionAsksRatherThanAccuses(t *testing.T) {
+	finding := loadJSON[model.Finding](t, "sample-finding.json")
+	finding.Kind = model.KindDefinitionChange
+	finding.Rule = model.RuleDescriptionChanged
+	finding.Endpoint = "create_refund"
+	finding.SourceCallID = nil
+	finding.SnapshotObservedAt = "2026-08-19T14:02:00.000Z"
+	finding.Detail = "Definition change (DESCRIPTION): description-changed on `create_refund` at description — tools/list observed T1 → T2."
+
+	req := Build(Input{ConsumerDisplayName: "Acme Consumer Ltd", Message: "", Finding: finding})
+	want := "Your tools/list description for create_refund changed on Aug 19. The schema didn't change, but the wording did, and our agent picks tools from that text. Can you confirm the new wording is intended and stable?"
+	if req.Message != want {
+		t.Errorf("default message =\n  %q\nwant\n  %q", req.Message, want)
+	}
+	if strings.Contains(req.Message, "Contract drift") {
+		t.Errorf("a DESCRIPTION flag must never file a defect claim: %q", req.Message)
+	}
+
+	// A whitespace-only message is the same case (Build trims).
+	if got := Build(Input{ConsumerDisplayName: "Acme Consumer Ltd", Message: "   ", Finding: finding}).Message; got != want {
+		t.Errorf("whitespace-only message = %q, want the prefill", got)
+	}
+	// A user's own message is never replaced.
+	if got := Build(Input{ConsumerDisplayName: "Acme Consumer Ltd", Message: "Was this intended?", Finding: finding}).Message; got != "Was this intended?" {
+		t.Errorf("typed message = %q, want it untouched", got)
+	}
+	// No observed-at (older collector / absent field): the clause is dropped,
+	// never rendered as a broken date.
+	noDate := finding
+	noDate.SnapshotObservedAt = ""
+	if got := Build(Input{ConsumerDisplayName: "Acme Consumer Ltd", Finding: noDate}).Message; !strings.HasPrefix(got, "Your tools/list description for create_refund changed. The schema") {
+		t.Errorf("message without an observed-at = %q", got)
+	}
+	// Every other class still states the drift plainly — this branch is
+	// DESCRIPTION-only.
+	breaking := finding
+	breaking.Rule = "type-narrowed"
+	if got := Build(Input{ConsumerDisplayName: "Acme Consumer Ltd", Finding: breaking}).Message; !strings.HasPrefix(got, "Contract drift on create_refund.") {
+		t.Errorf("non-description default message = %q", got)
+	}
 }
 
 // TestHumanizeIntegration proves the shared humanize rule: split on -/_/space,
@@ -204,12 +298,12 @@ func TestBuild_ProviderDisplayName(t *testing.T) {
 	call := loadJSON[model.RedactedCall](t, "sample-redacted-call.json") // integration=acme-payments
 	finding := loadJSON[model.Finding](t, "sample-finding.json")
 
-	explicit := Build(Input{ConsumerDisplayName: "Acme Consumer Ltd", ProviderDisplayName: "Acme Payments Inc", Call: call, Finding: finding})
+	explicit := Build(Input{ConsumerDisplayName: "Acme Consumer Ltd", ProviderDisplayName: "Acme Payments Inc", Call: &call, Finding: finding})
 	if explicit.ProviderDisplayName != "Acme Payments Inc" {
 		t.Errorf("explicit provider name = %q, want Acme Payments Inc", explicit.ProviderDisplayName)
 	}
 
-	defaulted := Build(Input{ConsumerDisplayName: "Acme Consumer Ltd", Call: call, Finding: finding})
+	defaulted := Build(Input{ConsumerDisplayName: "Acme Consumer Ltd", Call: &call, Finding: finding})
 	if defaulted.ProviderDisplayName != "Acme Payments" {
 		t.Errorf("defaulted provider name = %q, want Acme Payments (humanized integration)", defaulted.ProviderDisplayName)
 	}

@@ -474,7 +474,11 @@ func TestDefinitionChange_Classes(t *testing.T) {
 
 	check("create_refund", diff.RuleInputRequiredPropertyAdded, "input.reason", model.SeverityBreaking, true)
 	check("list_transactions", diff.RuleOutputSchemaDeclared, "output", model.SeverityInfo, true)
-	desc := check("create_refund", diff.RuleDescriptionChanged, "description", model.SeverityWarning, false)
+	// DESCRIPTION is FLAGGABLE since qfix2-2026-08-26 (ux-design-v2 §2.7): the
+	// evidence rule is amended, not broken — a description change is the
+	// provider's own published text, before and after. It still never
+	// auto-flags; only a human pressing the control sends it.
+	desc := check("create_refund", diff.RuleDescriptionChanged, "description", model.SeverityWarning, true)
 	if desc.Rule != model.RuleDescriptionChanged {
 		t.Errorf("model.RuleDescriptionChanged mirror out of sync: %q vs %q", desc.Rule, model.RuleDescriptionChanged)
 	}
