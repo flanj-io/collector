@@ -4,7 +4,16 @@ import { ApiError, apiGet, apiPost, openThreadInNewTab } from './api';
 import ConnectPanel from './ConnectPanel.vue';
 import FlagSheet from './FlagSheet.vue';
 import ThreadsTab from './ThreadsTab.vue';
-import { chipLabel, needsCollectorAddress, threadIdFromHash, timeAgo, type ConnectState, type ThreadRow } from './threads';
+import {
+  THREAD_STATE_UNKNOWN,
+  chipLabel,
+  needsCollectorAddress,
+  threadIdFromHash,
+  timeAgo,
+  type ConnectState,
+  type ThreadListResponse,
+  type ThreadRow
+} from './threads';
 import {
   THEME_FLIP_NOTICE_KEY,
   applyTheme,
@@ -98,12 +107,25 @@ const loadError = ref('');
 // Connect state comes from the relay (`GET /api/connect`, refreshed from the CP);
 // polled every 5s while a confirmation is pending (or the Settings tab / a Flag
 // sheet is open) and on focus, so "Create thread" unlocks the moment the
-// contact clicks the confirmation. Threads come from `GET /api/threads` (every
-// row with its CP summary) and feed both the Threads tab and the finding chips.
+// contact clicks the confirmation. Threads come from `GET /api/threads` — one
+// relayed call to the control plane's §5.5a list, most-recently-active first,
+// with the collector's local join fields merged on — and feed both the Threads
+// tab and the finding chips.
 const connect = ref<ConnectState | null>(null);
 const threads = ref<ThreadRow[]>([]);
 const threadsLoaded = ref(false);
 const threadsError = ref('');
+// The relay's line when it cannot list at all (not connected / no control plane
+// configured) — shown instead of an empty state, never as an error.
+const threadsNotice = ref('');
+// threadsKnown: the thread list has been ANSWERED at least once (a list, or the
+// relay saying it cannot list). Until then a finding's thread state is unknown,
+// and unknown must not render as "no thread" — that would offer Create thread
+// for a thread that already exists. A later failure never clears it, and never
+// clears the rows either: a stale chip beats a wrong one.
+const threadsKnown = ref(false);
+const threadsTotal = ref(0);
+const threadsHasMore = ref(false);
 const sheetFinding = ref<Finding | null>(null);
 const highlightThreadId = ref<string | null>(null);
 const connectBannerDismissed = ref(localStorage.getItem('vinifera.connect.banner.dismissed') === '1');
@@ -143,12 +165,35 @@ async function loadConnect() {
   }
 }
 
+// The list is the control plane's (CONTRACTS-CP §5.5a), relayed by the
+// collector and joined to its local records. There is no local enumeration to
+// fall back on any more, so a failure is an honest error state — never a stale
+// list — and the 5s poll is the retry. The relay's own message (the deck's
+// "Couldn't reach the control plane.") is shown when it sent one.
 async function loadThreads() {
   try {
-    threads.value = (await apiGet<ThreadRow[]>('/api/threads')) || [];
+    const out = await apiGet<ThreadListResponse>('/api/threads');
+    threads.value = out?.threads || [];
+    threadsTotal.value = out?.total ?? threads.value.length;
+    threadsHasMore.value = !!out?.has_more;
+    threadsNotice.value = '';
     threadsError.value = '';
+    threadsKnown.value = true;
   } catch (e) {
-    threadsError.value = 'Could not load threads from this collector.';
+    const code = e instanceof ApiError ? e.code : '';
+    if (code === 'not_connected' || code === 'cp_not_configured') {
+      // Not a failure: the relay is telling us it cannot list, and why. There
+      // are no threads to chip either — creating one needs the same key.
+      threads.value = [];
+      threadsTotal.value = 0;
+      threadsHasMore.value = false;
+      threadsNotice.value = (e as ApiError).message;
+      threadsError.value = '';
+      threadsKnown.value = true;
+    } else {
+      // Keep the last known rows: a failed poll must never un-chip a finding.
+      threadsError.value = e instanceof ApiError ? e.message : 'Could not load threads from this collector.';
+    }
   } finally {
     threadsLoaded.value = true;
   }
@@ -177,6 +222,13 @@ function dismissAddressNudge() {
 function addCollectorAddress() {
   tab.value = 'settings';
   focusAddressTick.value++;
+}
+
+// The Threads tab's not-connected notice routes here, the same way the Contracts
+// banner does. `#settings` so a reload (or a back) lands on the same tab.
+function goToSettings() {
+  tab.value = 'settings';
+  if (window.location.hash !== '#settings') history.replaceState(null, '', '#settings');
 }
 
 // Provider name shown on the sheet and sent on the flag: the configured
@@ -1136,6 +1188,11 @@ watch(tab, (t) => {
                    swallow a stale_client row before any Flag control below can
                    claim it. Deliberately empty — do not give it content. -->
               <template v-else-if="isLocalNotice(f)"><!-- no control, by design --></template>
+              <!-- Thread state comes from the control plane and nowhere else.
+                   Until the list has been answered once, this finding may well
+                   already be in a thread — offering Create thread would be a
+                   claim we cannot make. Say what we don't know instead. -->
+              <template v-else-if="!threadsKnown"><span class="hint-inline">{{ THREAD_STATE_UNKNOWN }}</span></template>
               <!-- definition_change, EVERY class incl. DESCRIPTION (ux-design-v2
                    §2.7): flaggable and CALL-LESS. The control is never born
                    disabled — the relay lifted 400 finding_has_no_call for this
@@ -1175,10 +1232,13 @@ watch(tab, (t) => {
       <ThreadsTab
         :rows="threads"
         :loaded="threadsLoaded"
-        :connected="connectStatus === 'connected'"
         :highlight-id="highlightThreadId"
         :load-error="threadsError"
+        :notice="threadsNotice"
+        :total="threadsTotal"
+        :has-more="threadsHasMore"
         @refresh="loadThreads"
+        @connect="goToSettings"
       />
     </div>
 

@@ -5,6 +5,9 @@ export type ThreadTurn = 'waiting_on_provider' | 'provider_replied' | 'fix_repor
 export type ThreadState = 'open' | 'closed';
 export type LinkStatus = 'active' | 'replaced' | 'expired';
 
+/** One row of the control plane's thread list (CONTRACTS-CP §5.5a) — the SAME
+ *  object `GET /api/v1/threads/{id}/summary` returns. It is thread STATE only:
+ *  no finding id, no thread_url, and never a token. */
 export interface ThreadSummary {
   id: string;
   thread_public_id: string;
@@ -12,6 +15,7 @@ export interface ThreadSummary {
   closed_at?: string | null;
   reopened_at?: string | null;
   turn: ThreadTurn;
+  consumer_display_name?: string;
   provider_display_name?: string;
   endpoint?: string;
   evidence_count?: number;
@@ -22,8 +26,22 @@ export interface ThreadSummary {
   fixed_claim?: { display_name: string; at: string } | null;
   link?: { status: LinkStatus; expires_at?: string } | null;
   archived?: boolean;
+  created_at?: string;
+  /** Last activity — what the §5.5a order sorts on (a reply, a close/reopen, a
+   *  link replace). The archive sweep deliberately does not move it. */
+  updated_at?: string;
 }
 
+/** One `GET /api/threads` row: the CP summary above, with the local fields the
+ *  control plane cannot carry joined on by the collector — `finding_id` (the
+ *  finding chip), `integration`, and `thread_url`.
+ *
+ *  `thread_url` is EMPTY when this collector holds no copy of the link for a
+ *  thread the CP listed (a wiped local store). The thread-link token lives only
+ *  in a URL fragment and never comes back from the CP, so there is nothing to
+ *  copy: the row still renders and Copy thread link is disabled, never hidden.
+ *  Replace link makes a fresh one and the collector persists it for ANY row, so
+ *  the disabled state is recoverable in one click. */
 export interface ThreadRow {
   thread_id: string;
   thread_public_id: string;
@@ -35,8 +53,47 @@ export interface ThreadRow {
   created_at: string;
   updated_at?: string;
   summary: ThreadSummary | null;
-  error?: string;
 }
+
+/** The collector's own `GET /api/threads` envelope (its internal shape, not a
+ *  published contract). `total` / `has_more` are the control plane's: §5.5a has
+ *  no cursor, so a collector with more threads than the hard cap gets a short
+ *  list, and the tab has to say so instead of quietly dropping rows. */
+export interface ThreadListResponse {
+  threads: ThreadRow[];
+  count: number;
+  total: number;
+  limit: number;
+  has_more: boolean;
+}
+
+/** Copy thread link needs the collector's own copy of the link. See ThreadRow. */
+export function canCopyLink(row: Pick<ThreadRow, 'thread_url'>): boolean {
+  return !!row.thread_url;
+}
+
+/** Why Copy thread link is disabled — and the one click that fixes it. The ellipsis is a UI
+ *  convention meaning "opens a confirm", not part of the control's name, so it stays on the BUTTON
+ *  and out of the prose. */
+export const NO_LINK_COPY_TITLE = 'This collector has no copy of the link. Replace link makes a new one and keeps it here.';
+
+/** The same fact, rendered in the row's link facts. A disabled button is out of the tab order, so a
+ *  `title` alone reaches no keyboard user, no screen reader and no touch device — the row already
+ *  has the slot for it, next to the knock note. */
+export const NO_LINK_COPY_NOTE = 'No copy of the link on this collector — Replace link makes a new one.';
+
+/** Shown when the control plane has more threads than one page can carry: say
+ *  what is on screen and what is not. There is no cursor to page with. The
+ *  participant inbox (`peek-web/assets/inbox.js`) says this same sentence — one
+ *  idea, one phrasing, on both surfaces. */
+export function truncationNote(count: number, total: number): string {
+  return 'Showing the ' + count + ' most recently active threads of ' + total + ". The rest aren't on this page.";
+}
+
+/** A finding's thread state is only knowable from the control plane. When the
+ *  list has never loaded, say so — never fall back to "no thread", which offers
+ *  Create thread for a thread that already exists. */
+export const THREAD_STATE_UNKNOWN = "Thread status unknown — couldn't reach the control plane.";
 
 export type ConnectStatus = 'disconnected' | 'pending' | 'connected';
 

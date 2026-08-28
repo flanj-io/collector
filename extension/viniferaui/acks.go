@@ -63,11 +63,12 @@ import (
 const (
 	// settingAckPrefix + <signature> → ackRecord JSON.
 	settingAckPrefix = "finding.ack."
-	// settingAcksIndex → JSON array of acked signatures. Same read-modify-write
-	// retry caveat as threads.index (see saveThread): the index is re-read
-	// immediately before each write and verified after, up to
-	// indexWriteAttempts times; a residual two-writer race can still drop an
-	// entry — the per-signature record itself is never lost.
+	// settingAcksIndex → JSON array of acked signatures, and the last
+	// read-modify-write left in this package: the index is re-read immediately
+	// before each write and verified after, up to indexWriteAttempts times, and
+	// a residual two-writer race can still drop an entry — the per-signature
+	// record itself is never lost. See indexWriteAttempts for why the threads
+	// list's per-thread-key answer does not transfer here.
 	settingAcksIndex = "findings.acks"
 )
 
@@ -138,11 +139,36 @@ func loadAckIndex(st store.Store) ([]string, error) {
 	return sigs, nil
 }
 
-// errAckIndexRace mirrors errIndexRace for the acks index.
+// errAckIndexRace: the index write was overwritten by a concurrent writer on
+// every attempt; the ack record itself is persisted, only the index entry is
+// missing.
 var errAckIndexRace = errors.New("findings.acks: concurrent writer won every attempt; record saved, index entry missing")
 
-// mutateAckIndex adds or removes one signature in findings.acks with the same
-// re-read-before-write + verify retry as addToThreadIndex.
+// indexWriteAttempts bounds the read-modify-write retry on findings.acks.
+//
+// findings.acks is a single JSON array behind a plain settings KV (no
+// compare-and-swap), so adding or removing a signature is a read-modify-write:
+// the index is re-read IMMEDIATELY before each write and the write is verified
+// by a re-read afterwards, up to this many times. RESIDUAL RACE: two writers
+// that both read, both write and both verify inside each other's window can
+// still drop an entry — without CAS in the KV this cannot be made airtight from
+// here. (The threads list retired its own array for exactly this reason and now
+// uses a per-thread single-key pointer; the ack index has no equivalent reverse
+// key to hang off, so the retry stays.)
+const indexWriteAttempts = 3
+
+// containsID reports whether ids holds id.
+func containsID(ids []string, id string) bool {
+	for _, x := range ids {
+		if x == id {
+			return true
+		}
+	}
+	return false
+}
+
+// mutateAckIndex adds or removes one signature in findings.acks with the
+// re-read-before-write + verify retry described on indexWriteAttempts.
 func mutateAckIndex(st store.Store, sig string, add bool) error {
 	var lastErr error
 	for attempt := 0; attempt < indexWriteAttempts; attempt++ {

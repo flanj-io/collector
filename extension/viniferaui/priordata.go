@@ -45,13 +45,14 @@ func heldPriorData(st store.Store) bool {
 }
 
 // probePriorData looks for any trace of a collector that has been used: a
-// Connect registration, a thread, an acknowledgement, or stored calls/findings.
+// Connect registration, an acknowledgement, or stored calls/findings.
+//
+// There is deliberately no thread probe: a thread can only be created by a
+// Connected collector, so the Connect check above subsumes it. (It used to read
+// the `threads.index` array, which the CP-backed thread list retired.)
 func probePriorData(st store.Store) bool {
 	if cs, err := loadConnect(st); err == nil &&
 		(cs.CollectorKey != "" || cs.ContactEmail != "" || cs.ConsumerDisplayName != "" || cs.RegisteredAt != "") {
-		return true
-	}
-	if ids, err := loadThreadIndex(st); err == nil && len(ids) > 0 {
 		return true
 	}
 	if sigs, err := loadAckIndex(st); err == nil && len(sigs) > 0 {

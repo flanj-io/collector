@@ -3,11 +3,11 @@ package viniferaui
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -40,6 +40,36 @@ type stubCP struct {
 	lastRegisterBody map[string]any
 	wrongOrigin      bool
 	mintCount        int
+	// §5.5a list route: insertion order (the stub lists it reversed, so the
+	// most recently touched thread is first), the last query string seen, the
+	// number of list calls, and an optional forced status for the error paths.
+	order      []string
+	listQuery  string
+	listCalls  int
+	listStatus int
+	// listTotal / listHasMore override the envelope's truncation fields, so a
+	// test can be a collector with more threads than §5.5a's hard cap.
+	listTotal   int
+	listHasMore bool
+}
+
+// summaryRow is the §5.5 summary object — the SAME row §5.5a lists.
+func (s *stubCP) summaryRow(id string) map[string]any {
+	return map[string]any{"id": id, "thread_public_id": "pub_" + id, "state": s.state[id], "closed_at": nil, "reopened_at": nil,
+		"turn": "waiting_on_provider", "consumer_display_name": "Acme Consumer Ltd", "provider_display_name": "Acme Payments",
+		"endpoint": "POST /v1/charges", "evidence_count": 1, "opened_count": 2, "knock_count": 0, "message_count": 0,
+		"last_reply_at": nil, "fixed_claim": nil, "link": map[string]any{"status": "active", "expires_at": "2026-09-22T00:00:00Z"},
+		"archived": false, "created_at": "2026-08-23T10:00:00Z", "updated_at": "2026-08-23T11:00:00Z"}
+}
+
+// track records a thread id in list order (once).
+func (s *stubCP) track(id string) {
+	for _, x := range s.order {
+		if x == id {
+			return
+		}
+	}
+	s.order = append(s.order, id)
 }
 
 func newStubCP(t *testing.T) *stubCP {
@@ -133,12 +163,36 @@ func newStubCP(t *testing.T) *stubCP {
 		_ = json.NewDecoder(r.Body).Decode(&s.lastFlagBody)
 		s.flagCalls++
 		s.state["thr_1"] = "open"
+		s.track("thr_1")
 		status, st := 201, "created"
 		if s.flagCalls > 1 {
 			status, st = 200, "existing"
 		}
 		jsonOut(w, status, map[string]any{"thread_id": "thr_1", "thread_public_id": "pub_thr_1", "thread_url": fmt.Sprintf("https://cp.test/t/pub_thr_1#k=tok_%d", s.flagCalls),
 			"peek_url": fmt.Sprintf("https://cp.test/t/pub_thr_1#k=tok_%d", s.flagCalls), "magic_token": "x", "state": "open", "status": st})
+	})
+	// CONTRACTS-CP §5.5a: the collector-key-scoped thread list, an ENVELOPE.
+	mux.HandleFunc("GET /api/v1/threads", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if !keyed(w, r) {
+			return
+		}
+		s.listCalls++
+		s.listQuery = r.URL.RawQuery
+		if s.listStatus != 0 {
+			jsonOut(w, s.listStatus, map[string]string{"error": "rate_limited", "message": "slow down"})
+			return
+		}
+		rows := make([]map[string]any, 0, len(s.order))
+		for i := len(s.order) - 1; i >= 0; i-- { // most-recently-active first
+			rows = append(rows, s.summaryRow(s.order[i]))
+		}
+		total := len(rows)
+		if s.listTotal != 0 {
+			total = s.listTotal
+		}
+		jsonOut(w, 200, map[string]any{"threads": rows, "count": len(rows), "total": total, "limit": 200, "has_more": s.listHasMore})
 	})
 	mux.HandleFunc("/api/v1/threads/{id}/{action}", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
@@ -157,9 +211,7 @@ func newStubCP(t *testing.T) *stubCP {
 		}
 		switch r.PathValue("action") {
 		case "summary":
-			jsonOut(w, 200, map[string]any{"id": id, "thread_public_id": "pub_" + id, "state": s.state[id], "turn": "waiting_on_provider", "provider_display_name": "Acme Payments",
-				"endpoint": "POST /v1/charges", "evidence_count": 1, "opened_count": 2, "knock_count": 0, "message_count": 0, "last_reply_at": nil, "fixed_claim": nil,
-				"link": map[string]any{"status": "active", "expires_at": "2026-09-22T00:00:00Z"}, "archived": false})
+			jsonOut(w, 200, s.summaryRow(id))
 		case "close":
 			s.state[id] = "closed"
 			jsonOut(w, 200, map[string]any{"state": "closed", "closed_at": "2026-08-23T12:00:00Z", "reopened_at": nil})
@@ -424,11 +476,11 @@ func TestConnectThenFlagLoop(t *testing.T) {
 
 	// 8. GET /api/threads lists it with the CP summary
 	resp, _, raw = r.do(t, http.MethodGet, "/api/threads", nil)
-	var list []map[string]any
-	if err := json.Unmarshal(raw, &list); err != nil || len(list) != 1 {
+	list := decodeThreadList(t, raw)
+	if resp.StatusCode != 200 || len(list.Threads) != 1 {
 		t.Fatalf("threads: %d %s", resp.StatusCode, raw)
 	}
-	row := list[0]
+	row := list.Threads[0]
 	if row["thread_id"] != "thr_1" || row["finding_id"] != "fnd_1" || row["thread_url"] != "https://cp.test/t/pub_thr_1#k=tok_2" {
 		t.Errorf("row: %v", row)
 	}
@@ -442,9 +494,11 @@ func TestConnectThenFlagLoop(t *testing.T) {
 	if resp.StatusCode != 200 || out["turn"] != "waiting_on_provider" {
 		t.Errorf("summary: %d %v", resp.StatusCode, out)
 	}
-	// unknown thread → 404
+	// A thread id this collector holds no record for is NOT refused locally —
+	// resolution is not authorization. It goes to the control plane, which
+	// authorizes by collector key AND origin match and answers 404 itself.
 	resp, out, _ = r.do(t, http.MethodGet, "/api/threads/nope/summary", nil)
-	if resp.StatusCode != 404 || out["error"] != "thread_not_found" {
+	if resp.StatusCode != 404 || out["error"] != "not_found" {
 		t.Errorf("unknown summary: %d %v", resp.StatusCode, out)
 	}
 
@@ -542,26 +596,338 @@ func TestCPUnreachable(t *testing.T) {
 	}
 }
 
-func TestThreadsListToleratesCPErrors(t *testing.T) {
+// threadListBody is GET /api/threads as the UI sees it: the collector's own
+// envelope (its internal shape, not a published contract) around the merged
+// rows, carrying total/has_more so the tab can say when it is showing less than
+// everything.
+type threadListBody struct {
+	Threads []map[string]any `json:"threads"`
+	Count   int              `json:"count"`
+	Total   int              `json:"total"`
+	Limit   int              `json:"limit"`
+	HasMore bool             `json:"has_more"`
+}
+
+func decodeThreadList(t *testing.T, raw []byte) threadListBody {
+	t.Helper()
+	var out threadListBody
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("decode /api/threads: %v (%s)", err, raw)
+	}
+	return out
+}
+
+func TestThreadsListSourceIsTheControlPlane(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
-	// Seed a connected state + a thread record directly.
 	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, ConsumerDisplayName: "Acme", ContactEmail: "ops@acme.test", ContactStatus: "confirmed"})
-	_ = saveThread(r.st, threadRecord{ThreadID: "thr_missing", ThreadPublicID: "p", FindingID: "fnd_1", Endpoint: "POST /v1/charges", Provider: "Acme Payments", ThreadURL: "https://cp.test/t/p#k=t", CreatedAt: "2026-08-23T10:00:00Z"})
+	// A local record whose thread the CP does NOT list any more (deleted /
+	// tombstoned): the CP is the list, so it must not appear.
+	_ = saveThread(r.st, threadRecord{ThreadID: "thr_gone", ThreadPublicID: "p", FindingID: "fnd_gone", Endpoint: "POST /v1/charges",
+		Provider: "Acme Payments", ThreadURL: "https://cp.test/t/p#k=t", CreatedAt: "2026-08-23T10:00:00Z"})
+	// Two CP rows: one this collector has a local record for, one it does not
+	// (a wiped local store — §5.5a exists precisely so that no longer loses the list).
+	_ = saveThread(r.st, threadRecord{ThreadID: "thr_1", ThreadPublicID: "pub_thr_1", FindingID: "fnd_1", Endpoint: "POST /v1/charges",
+		Provider: "Acme Payments", Integration: "acme-payments", ThreadURL: "https://cp.test/t/pub_thr_1#k=tok_1", CreatedAt: "2026-08-23T10:00:00Z"})
+	r.cp.mu.Lock()
+	r.cp.state["thr_1"], r.cp.state["thr_2"] = "open", "open"
+	r.cp.track("thr_1")
+	r.cp.track("thr_2")
+	r.cp.mu.Unlock()
+
 	resp, _, raw := r.do(t, http.MethodGet, "/api/threads", nil)
-	var list []map[string]any
-	if err := json.Unmarshal(raw, &list); err != nil || resp.StatusCode != 200 || len(list) != 1 {
+	body := decodeThreadList(t, raw)
+	list := body.Threads
+	if resp.StatusCode != 200 || len(list) != 2 {
 		t.Fatalf("threads: %d %s", resp.StatusCode, raw)
 	}
-	if list[0]["summary"] != nil || list[0]["error"] != "not_found" {
-		t.Errorf("expected summary:null + error, got %v", list[0])
+	if body.Count != 2 || body.Total != 2 || body.HasMore || body.Limit != 200 {
+		t.Errorf("envelope: %+v", body)
 	}
-	// CP down → cp_unreachable, list still renders
-	r.cp.srv.Close()
+	// ONE list call, not one summary per thread.
+	r.cp.mu.Lock()
+	calls, query := r.cp.listCalls, r.cp.listQuery
+	r.cp.mu.Unlock()
+	if calls != 1 {
+		t.Errorf("expected exactly one CP list call, got %d", calls)
+	}
+	if query != "limit=200" {
+		t.Errorf("limit must be the §5.5a hard cap, got %q", query)
+	}
+	// CP order is the order (most-recently-active first): thr_2 then thr_1.
+	if list[0]["thread_id"] != "thr_2" || list[1]["thread_id"] != "thr_1" {
+		t.Errorf("CP order not preserved: %v", []any{list[0]["thread_id"], list[1]["thread_id"]})
+	}
+	// The merged row: CP state + the local join fields.
+	merged := list[1]
+	if merged["finding_id"] != "fnd_1" || merged["integration"] != "acme-payments" || merged["thread_url"] != "https://cp.test/t/pub_thr_1#k=tok_1" {
+		t.Errorf("local fields not merged onto the CP row: %v", merged)
+	}
+	sum, _ := merged["summary"].(map[string]any)
+	if sum == nil || sum["state"] != "open" || sum["turn"] != "waiting_on_provider" || sum["opened_count"] != float64(2) ||
+		sum["link"].(map[string]any)["status"] != "active" || sum["consumer_display_name"] != "Acme Consumer Ltd" ||
+		sum["updated_at"] != "2026-08-23T11:00:00Z" {
+		t.Errorf("summary: %v", merged["summary"])
+	}
+	// A CP row with no local record still renders — only the link copy is
+	// missing, so the UI disables Copy thread link for it.
+	orphan := list[0]
+	if orphan["thread_url"] != "" || orphan["finding_id"] != "" {
+		t.Errorf("a CP row with no local record must carry no link: %v", orphan)
+	}
+	if orphan["endpoint"] != "POST /v1/charges" || orphan["provider"] != "Acme Payments" || orphan["created_at"] != "2026-08-23T10:00:00Z" {
+		t.Errorf("CP fields must still render on an orphan row: %v", orphan)
+	}
+	// …and its operations are NOT stranded, WITHOUT the list having written
+	// anything: a thread the CP listed resolves to a minimal record, and the CP
+	// authorizes the operation itself.
+	resp, out, _ := r.do(t, http.MethodPost, "/api/threads/thr_2/close", map[string]string{})
+	if resp.StatusCode != 200 || out["state"] != "closed" {
+		t.Errorf("close on a CP row with no local record: %d %v", resp.StatusCode, out)
+	}
+}
+
+// TestThreadsListWritesNoPointers is the regression for the orphaning blocker:
+// GET /api/threads must not write ANY settings key.
+//
+// It used to Get-then-Put an empty pointer for a thread it could not resolve —
+// a check-then-act on a key two pods share. With the 5s Threads poll running
+// while the Flag sheet is open, a flag landing between that Get and that Put had
+// its real `thread.id.<id> -> <finding id>` pointer overwritten with "", leaving
+// the record that holds the live thread link with no key reaching it and no
+// repair path (the empty value read as "known"). An absent pointer already means
+// exactly what an empty one meant, so the write is gone entirely.
+func TestThreadsListWritesNoPointers(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, ConsumerDisplayName: "Acme", ContactEmail: "ops@acme.test", ContactStatus: "confirmed"})
+	r.cp.mu.Lock()
+	r.cp.state["thr_1"] = "open"
+	r.cp.track("thr_1")
+	r.cp.mu.Unlock()
+
+	before := r.st.settingsSnapshot()
+	resp, _, raw := r.do(t, http.MethodGet, "/api/threads", nil)
+	if resp.StatusCode != 200 || len(decodeThreadList(t, raw).Threads) != 1 {
+		t.Fatalf("threads: %d %s", resp.StatusCode, raw)
+	}
+	if after := r.st.settingsSnapshot(); !reflect.DeepEqual(before, after) {
+		t.Fatalf("the list path wrote to the settings KV: before=%v after=%v", before, after)
+	}
+
+	// The exact interleaving that used to orphan the record: the poll listed
+	// thr_1 (above, finding nothing), then the flag persists the real pointer.
+	// A second poll must leave it alone.
+	rec := threadRecord{ThreadID: "thr_1", ThreadPublicID: "pub_thr_1", FindingID: "fnd_1", Endpoint: "POST /v1/charges",
+		Provider: "Acme Payments", ThreadURL: "https://cp.test/t/pub_thr_1#k=tok_1", CreatedAt: "2026-08-23T10:00:00Z"}
+	if err := saveThread(r.st, rec); err != nil {
+		t.Fatal(err)
+	}
 	_, _, raw = r.do(t, http.MethodGet, "/api/threads", nil)
-	_ = json.Unmarshal(raw, &list)
-	if len(list) != 1 || list[0]["error"] != "cp_unreachable" {
-		t.Errorf("cp down: %s", raw)
+	row := decodeThreadList(t, raw).Threads[0]
+	if row["finding_id"] != "fnd_1" || row["thread_url"] != "https://cp.test/t/pub_thr_1#k=tok_1" {
+		t.Errorf("the poll orphaned the record it raced: %v", row)
+	}
+	if got, _, _ := r.st.GetSetting(settingThreadIDPrefix + "thr_1"); got != "fnd_1" {
+		t.Errorf("thread.id.thr_1 = %q, want fnd_1", got)
+	}
+}
+
+// TestThreadsReplaceLinkPersistsOnEveryRow is the regression for the
+// revoke-and-drop blocker: the control plane kills every outstanding token the
+// moment it mints a new one, so a Replace link the collector does not persist
+// leaves a thread with zero working links and no way to make another. It must be
+// stored for ANY row — including one with no finding record, which gets its own
+// thread.link.<thread_id> key (a single blind write, never a read-modify-write).
+func TestThreadsReplaceLinkPersistsOnEveryRow(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, ConsumerDisplayName: "Acme", ContactEmail: "ops@acme.test", ContactStatus: "confirmed"})
+	r.cp.mu.Lock()
+	r.cp.state["thr_2"] = "open"
+	r.cp.track("thr_2")
+	r.cp.mu.Unlock()
+
+	// The row as the tab sees it before: no local record, so no link to copy.
+	_, _, raw := r.do(t, http.MethodGet, "/api/threads", nil)
+	if row := decodeThreadList(t, raw).Threads[0]; row["thread_url"] != "" || row["finding_id"] != "" {
+		t.Fatalf("expected a record-less row, got %v", row)
+	}
+	resp, out, _ := r.do(t, http.MethodPost, "/api/threads/thr_2/replace-link", map[string]string{})
+	want := "https://cp.test/t/pub_thr_2#k=replaced_1"
+	if resp.StatusCode != 200 || out["thread_url"] != want {
+		t.Fatalf("replace-link: %d %v", resp.StatusCode, out)
+	}
+	if got, ok, _ := r.st.GetSetting(settingThreadLinkPrefix + "thr_2"); !ok || got != want {
+		t.Errorf("thread.link.thr_2 = %q ok=%v, want %q", got, ok, want)
+	}
+	// …and the next list — the one the tab triggers right after Replace link —
+	// carries it, so Copy thread link is enabled without a reload.
+	_, _, raw = r.do(t, http.MethodGet, "/api/threads", nil)
+	if row := decodeThreadList(t, raw).Threads[0]; row["thread_url"] != want {
+		t.Errorf("the new link must reach the row: %v", row)
+	}
+	// No finding record was invented for it, and no empty pointer either.
+	if _, ok, _ := r.st.GetSetting(settingThreadIDPrefix + "thr_2"); ok {
+		t.Errorf("a record-less row must not gain a pointer")
+	}
+	// A finding-originated thread still persists onto its record (unchanged).
+	_ = saveThread(r.st, threadRecord{ThreadID: "thr_1", FindingID: "fnd_1", ThreadURL: "old", CreatedAt: "2026-08-23T10:00:00Z"})
+	r.cp.mu.Lock()
+	r.cp.state["thr_1"] = "open"
+	r.cp.mu.Unlock()
+	if resp, _, _ := r.do(t, http.MethodPost, "/api/threads/thr_1/replace-link", map[string]string{}); resp.StatusCode != 200 {
+		t.Fatalf("replace-link on a record row: %d", resp.StatusCode)
+	}
+	if rec, ok, _ := loadThread(r.st, "fnd_1"); !ok || rec.ThreadURL != "https://cp.test/t/pub_thr_1#k=replaced_2" {
+		t.Errorf("record row link: %+v ok=%v", rec, ok)
+	}
+	if _, ok, _ := r.st.GetSetting(settingThreadLinkPrefix + "thr_1"); ok {
+		t.Errorf("a row WITH a record must keep its link on the record only")
+	}
+}
+
+// TestFindThreadByIDRejectsAStalePointer: thread.finding.<fid> is rewritten in
+// place when a finding is re-flagged onto a new thread, and the KV has no
+// delete, so the OLD thread.id.<old> pointer survives and still names that
+// finding. Following it would hand back a record whose ThreadID is the NEW
+// thread — and every caller acts on rec.ThreadID, so a stale tab's Close would
+// close the wrong thread and Replace link would revoke the wrong live link.
+func TestFindThreadByIDRejectsAStalePointer(t *testing.T) {
+	st := newFakeStore()
+	// The pre-state: fnd_1 is on thr_old.
+	if err := saveThread(st, threadRecord{ThreadID: "thr_old", FindingID: "fnd_1", ThreadURL: "https://cp.test/t/pub_old#k=old"}); err != nil {
+		t.Fatal(err)
+	}
+	// Re-flag moves the SAME record to thr_new (handlers.go sets rec.ThreadID);
+	// thread.id.thr_old is never deleted.
+	if err := saveThread(st, threadRecord{ThreadID: "thr_new", FindingID: "fnd_1", ThreadURL: "https://cp.test/t/pub_new#k=new"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := st.GetSetting(settingThreadIDPrefix + "thr_old"); got != "fnd_1" {
+		t.Fatalf("the repro needs the stale pointer to survive, got %q", got)
+	}
+	rec, joined, err := findThreadByID(st, "thr_old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if joined {
+		t.Errorf("a stale pointer must not count as a local record: %+v", rec)
+	}
+	if rec.ThreadID != "thr_old" {
+		t.Fatalf("findThreadByID(thr_old).ThreadID = %q — operations would hit the wrong thread", rec.ThreadID)
+	}
+	if rec.ThreadURL != "" || rec.FindingID != "" {
+		t.Errorf("a stale pointer must carry none of the other thread's fields: %+v", rec)
+	}
+	// The live pointer still resolves normally.
+	if got, ok, _ := findThreadByID(st, "thr_new"); !ok || got.ThreadURL != "https://cp.test/t/pub_new#k=new" {
+		t.Errorf("findThreadByID(thr_new) = %+v ok=%v", got, ok)
+	}
+}
+
+// TestStaleThreadPointerOperatesOnTheRequestedThread is the same defect at the
+// route: a `#thread=thr_old` deep link (or a stale tab) posting close must close
+// thr_old, never the thread the rewritten record now points at.
+func TestStaleThreadPointerOperatesOnTheRequestedThread(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, ConsumerDisplayName: "Acme", ContactEmail: "ops@acme.test", ContactStatus: "confirmed"})
+	_ = saveThread(r.st, threadRecord{ThreadID: "thr_old", FindingID: "fnd_1", ThreadURL: "https://cp.test/t/pub_old#k=old"})
+	_ = saveThread(r.st, threadRecord{ThreadID: "thr_new", FindingID: "fnd_1", ThreadURL: "https://cp.test/t/pub_new#k=new"})
+	r.cp.mu.Lock()
+	r.cp.state["thr_old"], r.cp.state["thr_new"] = "open", "open"
+	r.cp.mu.Unlock()
+
+	resp, out, _ := r.do(t, http.MethodPost, "/api/threads/thr_old/close", map[string]string{})
+	if resp.StatusCode != 200 || out["state"] != "closed" {
+		t.Fatalf("close thr_old: %d %v", resp.StatusCode, out)
+	}
+	r.cp.mu.Lock()
+	oldState, newState := r.cp.state["thr_old"], r.cp.state["thr_new"]
+	r.cp.mu.Unlock()
+	if oldState != "closed" || newState != "open" {
+		t.Errorf("close hit the wrong thread: thr_old=%s thr_new=%s", oldState, newState)
+	}
+	// Replace link on the stale id must not touch the live record's link.
+	if resp, _, _ := r.do(t, http.MethodPost, "/api/threads/thr_old/replace-link", map[string]string{}); resp.StatusCode != 200 {
+		t.Fatalf("replace-link thr_old: %d", resp.StatusCode)
+	}
+	if rec, _, _ := loadThread(r.st, "fnd_1"); rec.ThreadURL != "https://cp.test/t/pub_new#k=new" {
+		t.Errorf("the live record's link was overwritten from a stale id: %+v", rec)
+	}
+	if got, ok, _ := r.st.GetSetting(settingThreadLinkPrefix + "thr_old"); !ok || got != "https://cp.test/t/pub_thr_old#k=replaced_1" {
+		t.Errorf("the stale id's new link must live on its own key, got %q ok=%v", got, ok)
+	}
+}
+
+// TestThreadsListTruncationIsHonest: §5.5a has no cursor, so a collector with
+// more threads than the hard cap gets a short list. That has to be visible —
+// total and has_more are relayed, never decoded and dropped.
+func TestThreadsListTruncationIsHonest(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, ConsumerDisplayName: "Acme", ContactEmail: "ops@acme.test", ContactStatus: "confirmed"})
+	r.cp.mu.Lock()
+	r.cp.state["thr_1"] = "open"
+	r.cp.track("thr_1")
+	r.cp.listTotal, r.cp.listHasMore = 250, true
+	r.cp.mu.Unlock()
+
+	_, _, raw := r.do(t, http.MethodGet, "/api/threads", nil)
+	body := decodeThreadList(t, raw)
+	if body.Count != 1 || body.Total != 250 || !body.HasMore || body.Limit != 200 {
+		t.Errorf("truncation must be relayed, got %+v", body)
+	}
+}
+
+// TestThreadsListNotConnectedIsNotAnEmptyList: a collector that cannot reach or
+// authenticate to the control plane has no idea whether it has threads, so it
+// must not answer with a list that says it has none. Both cases use the code
+// handleThreadSummary already uses.
+func TestThreadsListNotConnectedIsNotAnEmptyList(t *testing.T) {
+	r := newRig(t)
+	// No CP configured at all: e.cp is nil until start().
+	r.ui = httptest.NewServer(r.ext.routes())
+	t.Cleanup(r.ui.Close)
+	resp, out, _ := r.do(t, http.MethodGet, "/api/threads", nil)
+	if resp.StatusCode != 503 || out["error"] != "cp_not_configured" || out["message"] != msgCPNotConfigured {
+		t.Errorf("no control plane configured: %d %v", resp.StatusCode, out)
+	}
+	if _, has := out["threads"]; has {
+		t.Errorf("a collector that cannot list must not answer with a list: %v", out)
+	}
+
+	r2 := newRig(t)
+	r2.start(t)
+	resp, out, _ = r2.do(t, http.MethodGet, "/api/threads", nil)
+	if resp.StatusCode != 412 || out["error"] != "not_connected" || out["message"] != msgThreadsNotConnected {
+		t.Errorf("not connected: %d %v", resp.StatusCode, out)
+	}
+	if r2.cp.listCalls != 0 {
+		t.Errorf("not connected must not reach the CP")
+	}
+}
+
+// TestThreadsListErrorStates: there is no local enumeration any more, so a CP
+// failure is an honest error, never a stale list.
+func TestThreadsListErrorStates(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, ConsumerDisplayName: "Acme", ContactEmail: "ops@acme.test", ContactStatus: "confirmed"})
+	// A typed CP error passes through with its status + code.
+	r.cp.mu.Lock()
+	r.cp.listStatus = 429
+	r.cp.mu.Unlock()
+	resp, out, _ := r.do(t, http.MethodGet, "/api/threads", nil)
+	if resp.StatusCode != 429 || out["error"] != "rate_limited" {
+		t.Errorf("CP error pass-through: %d %v", resp.StatusCode, out)
+	}
+	// CP unreachable → 502 cp_unreachable, never a stale list.
+	r.cp.srv.Close()
+	resp, out, _ = r.do(t, http.MethodGet, "/api/threads", nil)
+	if resp.StatusCode != 502 || out["error"] != "cp_unreachable" || out["message"] != msgCPUnreachable {
+		t.Errorf("CP down: %d %v", resp.StatusCode, out)
 	}
 }
 
@@ -868,66 +1234,182 @@ func TestConnectRedactsDisplayNames(t *testing.T) {
 	}
 }
 
-// TestSaveThreadIndex: two sequential saves both land in threads.index, a
-// re-save of the same finding is idempotent, and a concurrent writer clobbering
-// the index between our read and write is survived by the re-read retry.
-func TestSaveThreadIndex(t *testing.T) {
+// TestSaveThreadWritesBothKeys replaces the retired TestSaveThreadIndex.
+//
+// `threads.index` was a JSON array behind a KV with no compare-and-swap, so
+// adding an id was a read-modify-write with a documented residual lost-update
+// race (errIndexRace). It is gone. saveThread now writes TWO independent
+// single-key values — the record and its reverse pointer — and a single-key
+// write has no read-modify-write, so the race does not move, it disappears.
+func TestSaveThreadWritesBothKeys(t *testing.T) {
 	st := newFakeStore()
-	a := threadRecord{ThreadID: "thr_a", FindingID: "fnd_a", CreatedAt: "2026-08-23T10:00:00Z"}
+	a := threadRecord{ThreadID: "thr_a", FindingID: "fnd_a", ThreadURL: "https://cp.test/t/pa#k=t", CreatedAt: "2026-08-23T10:00:00Z"}
 	b := threadRecord{ThreadID: "thr_b", FindingID: "fnd_b", CreatedAt: "2026-08-23T10:01:00Z"}
-	if err := saveThread(st, a); err != nil {
+	for _, rec := range []threadRecord{a, b, a /* re-save is idempotent */} {
+		if err := saveThread(st, rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct{ key, want string }{
+		{settingThreadIDPrefix + "thr_a", "fnd_a"},
+		{settingThreadIDPrefix + "thr_b", "fnd_b"},
+	} {
+		got, ok, _ := st.GetSetting(tc.key)
+		if !ok || got != tc.want {
+			t.Errorf("%s = %q ok=%v, want %q", tc.key, got, ok, tc.want)
+		}
+	}
+	if _, ok, _ := st.GetSetting(settingThreadsIndex); ok {
+		t.Errorf("nothing may write the retired threads.index any more")
+	}
+	// findThreadByID is a direct pointer lookup, never a scan.
+	got, ok, err := findThreadByID(st, "thr_a")
+	if err != nil || !ok || got.FindingID != "fnd_a" || got.ThreadURL != a.ThreadURL {
+		t.Fatalf("findThreadByID(thr_a) = %+v ok=%v err=%v", got, ok, err)
+	}
+	// An unknown id resolves to a MINIMAL record, never a miss: the thread may
+	// well exist on the control plane, which is the only thing that authorizes
+	// an operation on it. `joined` is false because there is no local record.
+	got, joined, err := findThreadByID(st, "thr_unknown")
+	if err != nil || joined || got.ThreadID != "thr_unknown" || got.FindingID != "" || got.ThreadURL != "" {
+		t.Errorf("unknown id = %+v joined=%v err=%v", got, joined, err)
+	}
+	if got, joined, _ := findThreadByID(st, ""); joined || got.ThreadID != "" {
+		t.Errorf("an empty thread id must not resolve: %+v", got)
+	}
+	// The reverse pointers of two findings are DIFFERENT keys, so two writers
+	// racing on them cannot lose each other's entry the way the array could.
+	// The extreme: the finding record itself is wiped (a lost local store) but
+	// the CP still lists the thread — the row still renders and its operations
+	// still work, off the minimal record.
+	if err := st.PutSetting(settingThreadIDPrefix+"thr_c", "fnd_wiped"); err != nil {
 		t.Fatal(err)
 	}
-	if err := saveThread(st, b); err != nil {
+	got, joined, err = findThreadByID(st, "thr_c")
+	if err != nil || joined || got.ThreadID != "thr_c" || got.FindingID != "" || got.ThreadURL != "" {
+		t.Errorf("record-less pointer = %+v joined=%v err=%v", got, joined, err)
+	}
+	// A Replace link on such a row parks the new link on its own key, and that
+	// is what the next resolution hands back.
+	if err := persistThreadLink(st, got, "https://cp.test/t/pc#k=fresh"); err != nil {
 		t.Fatal(err)
 	}
-	if err := saveThread(st, a); err != nil { // idempotent
+	if got, _, _ := findThreadByID(st, "thr_c"); got.ThreadURL != "https://cp.test/t/pc#k=fresh" {
+		t.Errorf("the parked link must come back: %+v", got)
+	}
+	// A record with a thread id but no finding id must never write an EMPTY
+	// pointer — that value is what used to orphan records.
+	if err := saveThread(st, threadRecord{ThreadID: "thr_e"}); err != nil {
 		t.Fatal(err)
 	}
-	recs, err := listThreads(st)
-	if err != nil || len(recs) != 2 || recs[0].ThreadID != "thr_b" || recs[1].ThreadID != "thr_a" {
-		t.Fatalf("listThreads = %+v err=%v", recs, err)
+	if _, ok, _ := st.GetSetting(settingThreadIDPrefix + "thr_e"); ok {
+		t.Errorf("an empty finding id must not create a pointer key")
 	}
-	ids, _ := loadThreadIndex(st)
-	if len(ids) != 2 {
-		t.Fatalf("index = %v", ids)
+	// A record with no thread id yet (never flagged) writes no pointer.
+	if err := saveThread(st, threadRecord{FindingID: "fnd_d"}); err != nil {
+		t.Fatal(err)
 	}
+	if _, ok, _ := st.GetSetting(settingThreadIDPrefix); ok {
+		t.Errorf("an empty thread id must not create a pointer key")
+	}
+}
 
-	// A concurrent writer: right after our first index write lands, another
-	// pod overwrites the index with its own stale read-modify-write (the
-	// lost-update window). The verify re-read notices, the retry re-reads the
-	// index immediately before writing again, and the final index holds both.
+// TestLegacyThreadIndexNeverCleared: the previous version derives its ENTIRE
+// thread list from `threads.index`, so this version must never clear it. It
+// reads the array — lazily, only when a listed thread has no pointer — and
+// writes back the REAL finding id as a single blind PutSetting.
+func TestLegacyThreadIndexNeverCleared(t *testing.T) {
+	st := newFakeStore()
+	// The pre-upgrade world by hand: records + the array (plus one id the array
+	// names but has no record, and one record with no thread id — both skipped,
+	// neither an error).
+	for _, rec := range []threadRecord{
+		{ThreadID: "thr_a", FindingID: "fnd_a", ThreadURL: "https://cp.test/t/pa#k=t"},
+		{ThreadID: "thr_b", FindingID: "fnd_b"},
+		{FindingID: "fnd_noid"},
+	} {
+		b, _ := json.Marshal(rec)
+		_ = st.PutSetting(settingThreadPrefix+rec.FindingID, string(b))
+	}
+	const index = `["fnd_a","fnd_b","fnd_noid","fnd_missing"]`
+	_ = st.PutSetting(settingThreadsIndex, index)
+
+	var legacy legacyIndex
+	for tid, want := range map[string]string{"thr_a": "fnd_a", "thr_b": "fnd_b", "thr_unknown": ""} {
+		got, err := legacy.findingFor(st, tid)
+		if err != nil || got != want {
+			t.Errorf("findingFor(%s) = %q err=%v, want %q", tid, got, err, want)
+		}
+	}
+	if raw, _, _ := st.GetSetting(settingThreadsIndex); raw != index {
+		t.Fatalf("threads.index is another version's data and must be left alone, got %q", raw)
+	}
+	// Corrupt and absent arrays recover nothing and are never errors.
 	st2 := newFakeStore()
-	clobbered := false
-	st2.afterPut = func(key, value string) {
-		if key == settingThreadsIndex && !clobbered {
-			clobbered = true
-			st2.mu.Lock()
-			st2.settings[settingThreadsIndex] = `["fnd_other"]`
-			st2.mu.Unlock()
-		}
+	_ = st2.PutSetting(settingThreadsIndex, "{not json")
+	var l2 legacyIndex
+	if got, err := l2.findingFor(st2, "thr_a"); err != nil || got != "" {
+		t.Errorf("corrupt index: %q %v", got, err)
 	}
-	if err := saveThread(st2, a); err != nil {
-		t.Fatalf("saveThread under a one-shot clobber: %v", err)
+	var l3 legacyIndex
+	if got, err := l3.findingFor(newFakeStore(), "thr_a"); err != nil || got != "" {
+		t.Errorf("absent index: %q %v", got, err)
 	}
-	ids, _ = loadThreadIndex(st2)
-	if len(ids) != 2 || !containsID(ids, "fnd_a") || !containsID(ids, "fnd_other") {
-		t.Fatalf("index after retry = %v; want both ids", ids)
+}
+
+// TestLegacyThreadIndexRecoveryIsLazyAndRepeatable: pointer recovery happens
+// when the control plane LISTS a thread no pointer resolves — per thread, per
+// request, idempotent.
+//
+// The retired migration did this once per process behind a sync.Once and then
+// cleared the array. Both halves broke a rolling upgrade: an old pod's list went
+// empty for the rest of the rollout, and any thread an old pod created in that
+// window found the new pod's sync.Once already spent. This has no once and
+// clears nothing, so a thread that appears later still heals.
+func TestLegacyThreadIndexRecoveryIsLazyAndRepeatable(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, ConsumerDisplayName: "Acme", ContactEmail: "ops@acme.test", ContactStatus: "confirmed"})
+	b, _ := json.Marshal(threadRecord{ThreadID: "thr_1", ThreadPublicID: "pub_thr_1", FindingID: "fnd_1", Endpoint: "POST /v1/charges",
+		Provider: "Acme Payments", Integration: "acme-payments", ThreadURL: "https://cp.test/t/pub_thr_1#k=tok_1", CreatedAt: "2026-08-23T10:00:00Z"})
+	_ = r.st.PutSetting(settingThreadPrefix+"fnd_1", string(b))
+	_ = r.st.PutSetting(settingThreadsIndex, `["fnd_1"]`) // the pre-upgrade world, pointer-less
+	r.cp.mu.Lock()
+	r.cp.state["thr_1"] = "open"
+	r.cp.track("thr_1")
+	r.cp.mu.Unlock()
+
+	_, _, raw := r.do(t, http.MethodGet, "/api/threads", nil)
+	rows := decodeThreadList(t, raw).Threads
+	if len(rows) != 1 || rows[0]["finding_id"] != "fnd_1" || rows[0]["thread_url"] != "https://cp.test/t/pub_thr_1#k=tok_1" {
+		t.Fatalf("the legacy record must be joined back on: %s", raw)
 	}
-	// Clobbered on every attempt → the record is still saved; the index error surfaces.
-	st3 := newFakeStore()
-	st3.afterPut = func(key, value string) {
-		if key == settingThreadsIndex {
-			st3.mu.Lock()
-			st3.settings[settingThreadsIndex] = `["fnd_other"]`
-			st3.mu.Unlock()
-		}
+	// The REAL finding id was written — never an empty placeholder.
+	if got, ok, _ := r.st.GetSetting(settingThreadIDPrefix + "thr_1"); !ok || got != "fnd_1" {
+		t.Errorf("recovered pointer = %q ok=%v, want fnd_1", got, ok)
 	}
-	if err := saveThread(st3, a); !errors.Is(err, errIndexRace) {
-		t.Errorf("always-clobbered index: err=%v, want errIndexRace", err)
+	// The array survives: the previous version still lists from it.
+	if raw, _, _ := r.st.GetSetting(settingThreadsIndex); raw != `["fnd_1"]` {
+		t.Errorf("threads.index must not be cleared, got %q", raw)
 	}
-	if _, ok, _ := loadThread(st3, "fnd_a"); !ok {
-		t.Fatalf("record must be persisted even when the index write loses")
+	// A thread an OLD pod creates during the rollout (record + index entry, no
+	// pointer) heals on the NEXT list — there is no once to have been spent.
+	b2, _ := json.Marshal(threadRecord{ThreadID: "thr_2", ThreadPublicID: "pub_thr_2", FindingID: "fnd_2",
+		Endpoint: "POST /v1/refunds", Provider: "Acme Payments", ThreadURL: "https://cp.test/t/pub_thr_2#k=tok_2"})
+	_ = r.st.PutSetting(settingThreadPrefix+"fnd_2", string(b2))
+	_ = r.st.PutSetting(settingThreadsIndex, `["fnd_1","fnd_2"]`)
+	r.cp.mu.Lock()
+	r.cp.state["thr_2"] = "open"
+	r.cp.track("thr_2")
+	r.cp.mu.Unlock()
+
+	_, _, raw = r.do(t, http.MethodGet, "/api/threads", nil)
+	rows = decodeThreadList(t, raw).Threads
+	if len(rows) != 2 || rows[0]["thread_id"] != "thr_2" || rows[0]["thread_url"] != "https://cp.test/t/pub_thr_2#k=tok_2" {
+		t.Fatalf("a thread that appeared after the first list must still heal: %s", raw)
+	}
+	if got, ok, _ := r.st.GetSetting(settingThreadIDPrefix + "thr_2"); !ok || got != "fnd_2" {
+		t.Errorf("recovered pointer = %q ok=%v, want fnd_2", got, ok)
 	}
 }
 

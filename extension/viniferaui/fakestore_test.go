@@ -101,3 +101,15 @@ func (f *fakeStore) PutSetting(key, value string) error {
 	return nil
 }
 func (f *fakeStore) Close() error { return nil }
+
+// settingsSnapshot is a copy of the whole KV — tests compare two of them to
+// prove a read path wrote nothing.
+func (f *fakeStore) settingsSnapshot() map[string]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[string]string, len(f.settings))
+	for k, v := range f.settings {
+		out[k] = v
+	}
+	return out
+}
