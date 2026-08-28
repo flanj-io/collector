@@ -156,7 +156,7 @@ function cancelEdit() {
         <button type="button" class="btn ghost" @click="changeEmail">Change contact</button>
       </div>
       <p v-if="showAddressNudge" class="connect-nudge">
-        <span>Add this collector's address so email links can deep-link back here.</span>
+        <span>Reply notification emails can link straight back to the thread here. Add this collector's address to turn that on.</span>
         <span class="connect-nudge-actions">
           <button type="button" class="btn small" @click="addAddress">Add address</button>
           <button type="button" class="btn ghost small" aria-label="Dismiss" @click="emit('dismiss-address-nudge')">Dismiss</button>
@@ -195,9 +195,9 @@ function cancelEdit() {
         <span class="field-help">Gets a one-time confirmation now and reply notifications later. Shown on your messages.</span>
       </label>
       <label class="field">
-        <span class="field-label">This collector's address <span class="dim">(optional)</span></span>
+        <span class="field-label">Collector address <span class="dim">(optional)</span></span>
         <input ref="localUrlEl" v-model="localUrl" type="url" :disabled="busy" @input="markTouched('localUrl')" @focus="setFocus('localUrl')" @blur="setFocus(null)" />
-        <span class="field-help">Used for the "Open in collector" link in your notification emails. Vinifera never calls it.</span>
+        <span class="field-help">The URL where you open this UI. Sent with your registration and used only in links back here.</span>
       </label>
       <p v-if="validation" class="error">{{ validation }}</p>
       <p v-if="errorMsg" class="error">{{ errorMsg }}</p>
@@ -217,10 +217,10 @@ function cancelEdit() {
 .connect-title { margin: 0; font-size: 1rem; }
 .connect-sub { margin: 0 0 0.5rem; color: var(--muted); font-size: 0.9rem; }
 .connect-state { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 0.8rem 1rem; }
-.connect-state.ok { border-color: var(--ok); }
-.connect-state.pending { border-color: var(--warn); }
+.connect-state.ok { border-color: var(--ok-text); }
+.connect-state.pending { border-color: var(--warn-text); }
 .connect-line { margin: 0; }
-.connect-note { margin: 0.35rem 0 0; color: var(--ok); font-size: 0.85rem; }
+.connect-note { margin: 0.35rem 0 0; color: var(--ok-text); font-size: 0.85rem; }
 .connect-nudge { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin: 0.6rem 0 0; padding-top: 0.6rem; border-top: 1px dashed var(--line); color: var(--muted); font-size: 0.88rem; }
 .connect-nudge-actions { display: flex; gap: 0.5rem; }
 .connect-form { display: flex; flex-direction: column; gap: 0.7rem; background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 0.9rem 1rem; }

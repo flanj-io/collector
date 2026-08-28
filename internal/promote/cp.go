@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/vinifera-io/collector/internal/model"
@@ -111,7 +112,13 @@ type LinkStatus struct {
 }
 
 // ThreadSummary is GET /api/v1/threads/{id}/summary — thread STATE only; the
-// conversation itself is read on the control plane.
+// conversation itself is read on the control plane. The SAME object is one row
+// of GET /api/v1/threads (CONTRACTS-CP §5.5a: "byte-for-byte the §5.5 summary
+// object"), so this struct serves both the per-thread poll and the list.
+//
+// It carries NO finding id, NO thread_url and NO token — a row is a state row,
+// never a way to re-obtain access. The collector joins its own local fields on
+// by thread id (extension/viniferaui/threads.go).
 type ThreadSummary struct {
 	ID                  string      `json:"id"`
 	ThreadPublicID      string      `json:"thread_public_id"`
@@ -119,6 +126,7 @@ type ThreadSummary struct {
 	ClosedAt            *string     `json:"closed_at"`
 	ReopenedAt          *string     `json:"reopened_at"`
 	Turn                string      `json:"turn"`
+	ConsumerDisplayName string      `json:"consumer_display_name"`
 	ProviderDisplayName string      `json:"provider_display_name"`
 	Endpoint            string      `json:"endpoint"`
 	EvidenceCount       int         `json:"evidence_count"`
@@ -129,6 +137,23 @@ type ThreadSummary struct {
 	FixedClaim          *FixedClaim `json:"fixed_claim"`
 	Link                *LinkStatus `json:"link"`
 	Archived            bool        `json:"archived"`
+	CreatedAt           string      `json:"created_at"`
+	// UpdatedAt is last activity — what the §5.5a order sorts on. A reply, a
+	// close/reopen, a link replace and a deletion move it; the archive sweep
+	// does not.
+	UpdatedAt string `json:"updated_at"`
+}
+
+// ThreadListResponse is GET /api/v1/threads (CONTRACTS-CP §5.5a) — an ENVELOPE,
+// not a bare array. `total` is what the collector has before the limit, so
+// has_more (total > count) means "ask again with a bigger limit"; there is no
+// cursor.
+type ThreadListResponse struct {
+	Threads []ThreadSummary `json:"threads"`
+	Count   int             `json:"count"`
+	Total   int             `json:"total"`
+	Limit   int             `json:"limit"`
+	HasMore bool            `json:"has_more"`
 }
 
 // WithCollectorKey returns a copy of the client that authenticates with the
@@ -210,6 +235,28 @@ func (c *Client) Summary(ctx context.Context, threadID string) (ThreadSummary, i
 	status, err := c.do(ctx, http.MethodGet, "/api/v1/threads/"+threadID+"/summary", c.bearer(), nil, &out, http.StatusOK)
 	return out, status, err
 }
+
+// ListThreads fetches the threads this collector created: GET
+// /api/v1/threads?limit=<n> (CONTRACTS-CP §5.5a), Bearer collector key, scoped
+// on the CP by `collector_id = auth.collector.id` — the caller never names a
+// collector. Rows come back most-recently-active first (`updated_at DESC,
+// created_at DESC, id ASC`); the order is fixed and there is no cursor.
+//
+// limit is the only query parameter: default 50, hard cap 200. A value outside
+// [1,200] is a 400 on the CP, never a silent clamp, so callers pass a legal one
+// (ListThreadsMaxLimit); <= 0 here means "let the CP apply its default".
+func (c *Client) ListThreads(ctx context.Context, limit int) (ThreadListResponse, int, error) {
+	path := "/api/v1/threads"
+	if limit > 0 {
+		path += "?limit=" + strconv.Itoa(limit)
+	}
+	var out ThreadListResponse
+	status, err := c.do(ctx, http.MethodGet, path, c.bearer(), nil, &out, http.StatusOK)
+	return out, status, err
+}
+
+// ListThreadsMaxLimit is §5.5a's hard cap — the biggest limit the CP accepts.
+const ListThreadsMaxLimit = 200
 
 // ReplaceLink = Replace thread link: revoke every outstanding thread-link token
 // (and anonymous sessions) and mint a fresh one. Owner access and verified

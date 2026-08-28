@@ -73,6 +73,20 @@ export interface Finding {
    *  backing the finding — the CURRENT one for output_mismatch, the AFTER one
    *  for definition_change. Absent on other kinds and older collectors. */
   snapshot_observed_at?: string;
+  /** Additive, optional: the PREVIOUS snapshot's ObservedAt on a
+   *  definition_change — the structured sibling of snapshot_observed_at.
+   *  Absent on other kinds and older collectors. */
+  snapshot_observed_from?: string;
+  /** Local acknowledge state (read-API join, never part of the wire contract):
+   *  true when this finding's signature is acknowledged on this collector. */
+  acked?: boolean;
+  /** When the acknowledge landed (RFC3339); set only with acked. */
+  acked_at?: string;
+  /** The evidence version the acknowledgement covers — the AFTER snapshot hash
+   *  on a definition_change, absent on every other kind. The SPA re-checks it
+   *  against spec_version_to so a NEW change can never inherit an old ack
+   *  (ux-design-v2 §2.8). */
+  acked_evidence_version?: string;
 }
 
 export interface Health {
@@ -84,6 +98,10 @@ export interface Health {
   cp_configured: boolean;
   connect_status?: 'disconnected' | 'pending' | 'connected';
   collector_version: string;
+  /** Did this collector hold data before the light-default upgrade? The second
+   *  gate on the one-time theme-flip notice (ux-design-v2 §3.4). Absent on an
+   *  older collector, which reads as "no notice" — the safe direction. */
+  held_prior_data?: boolean;
   consumer_display_name?: string;
   provider_display_name?: string;
 }

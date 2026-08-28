@@ -144,6 +144,6 @@ func relayMessages() []string {
 		msgNotConnected, msgContactUnconfirmed, msgCPUnreachableFlag, msgCPUnreachableSend, msgCPUnreachable,
 		msgCPNotConfigured, msgStoreUnavailable, msgPostOnly, msgUIHeaderRequired, msgJSONRequired, msgForeignOrigin,
 		msgInvalidJSON, msgConnectFields, msgInvalidEmail, msgFindingRequired, msgFindingNotFound, msgFindingNoCall,
-		msgCallEvicted, msgThreadNotFound, msgWrongOrigin, msgKeyMissing, contactUnconfirmedMessage("ops@example.test"),
+		msgCallEvicted, msgThreadNotFound, msgWrongOrigin, msgKeyMissing, msgNotAckable, contactUnconfirmedMessage("ops@example.test"),
 	}
 }

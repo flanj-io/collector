@@ -1,24 +1,53 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
-import { ApiError, apiGet, openThreadInNewTab } from './api';
+import { ApiError, apiGet, apiPost, openThreadInNewTab } from './api';
 import ConnectPanel from './ConnectPanel.vue';
 import FlagSheet from './FlagSheet.vue';
 import ThreadsTab from './ThreadsTab.vue';
-import { chipLabel, needsCollectorAddress, threadIdFromHash, type ConnectState, type ThreadRow } from './threads';
 import {
+  THREAD_STATE_UNKNOWN,
+  chipLabel,
+  needsCollectorAddress,
+  threadIdFromHash,
+  timeAgo,
+  type ConnectState,
+  type ThreadListResponse,
+  type ThreadRow
+} from './threads';
+import {
+  THEME_FLIP_NOTICE_KEY,
+  applyTheme,
+  hasStoredThemeChoice,
+  loadThemePref,
+  saveThemePref,
+  shouldShowThemeFlipNotice,
+  type ThemePref
+} from './theme';
+import {
+  ACK_LABEL,
+  ACK_TITLE,
   JSONRPC_ID_TITLE,
-  LOCAL_NOTE_NOT_FLAGGABLE,
   LOCAL_NOTICES_TITLE,
   MCP_BADGE_TOOLTIP,
   MCP_ERROR_TOOLTIP,
   MCP_NO_SPEC_NEEDED,
   MCP_TOOL_CHIP,
+  UNDO_LABEL,
+  UNDO_TITLE,
+  ackedLine,
   afterColLabel,
   beforeColLabel,
+  breakingChipLabel,
+  breakingCountTitle,
   defChangeDetail,
   defChangeNoCallSub,
   definitionClass,
-  isFlaggableMcp,
+  informationalChipLabel,
+  informationalChipTitle,
+  informationalCountTitle,
+  isAckable,
+  isAcked,
+  isBreakingFinding,
   isLocalNotice,
   isMcpFinding,
   localNoticesSubFor,
@@ -78,12 +107,25 @@ const loadError = ref('');
 // Connect state comes from the relay (`GET /api/connect`, refreshed from the CP);
 // polled every 5s while a confirmation is pending (or the Settings tab / a Flag
 // sheet is open) and on focus, so "Create thread" unlocks the moment the
-// contact clicks the confirmation. Threads come from `GET /api/threads` (every
-// row with its CP summary) and feed both the Threads tab and the finding chips.
+// contact clicks the confirmation. Threads come from `GET /api/threads` — one
+// relayed call to the control plane's §5.5a list, most-recently-active first,
+// with the collector's local join fields merged on — and feed both the Threads
+// tab and the finding chips.
 const connect = ref<ConnectState | null>(null);
 const threads = ref<ThreadRow[]>([]);
 const threadsLoaded = ref(false);
 const threadsError = ref('');
+// The relay's line when it cannot list at all (not connected / no control plane
+// configured) — shown instead of an empty state, never as an error.
+const threadsNotice = ref('');
+// threadsKnown: the thread list has been ANSWERED at least once (a list, or the
+// relay saying it cannot list). Until then a finding's thread state is unknown,
+// and unknown must not render as "no thread" — that would offer Create thread
+// for a thread that already exists. A later failure never clears it, and never
+// clears the rows either: a stale chip beats a wrong one.
+const threadsKnown = ref(false);
+const threadsTotal = ref(0);
+const threadsHasMore = ref(false);
 const sheetFinding = ref<Finding | null>(null);
 const highlightThreadId = ref<string | null>(null);
 const connectBannerDismissed = ref(localStorage.getItem('vinifera.connect.banner.dismissed') === '1');
@@ -110,6 +152,10 @@ const threadsByFinding = computed(() => {
   return m;
 });
 const consumerName = computed(() => connect.value?.consumer_display_name || health.value?.consumer_display_name || 'Your organization');
+// Header org pill: the org identity ONLY — when no display name is configured
+// or Connected, no pill renders. Never the integration slug (a spec-scoping
+// label, not an identity; it stays on the Overview headline + its Contracts card).
+const orgPillName = computed(() => connect.value?.consumer_display_name || health.value?.consumer_display_name || '');
 
 async function loadConnect() {
   try {
@@ -119,12 +165,35 @@ async function loadConnect() {
   }
 }
 
+// The list is the control plane's (CONTRACTS-CP §5.5a), relayed by the
+// collector and joined to its local records. There is no local enumeration to
+// fall back on any more, so a failure is an honest error state — never a stale
+// list — and the 5s poll is the retry. The relay's own message (the deck's
+// "Couldn't reach the control plane.") is shown when it sent one.
 async function loadThreads() {
   try {
-    threads.value = (await apiGet<ThreadRow[]>('/api/threads')) || [];
+    const out = await apiGet<ThreadListResponse>('/api/threads');
+    threads.value = out?.threads || [];
+    threadsTotal.value = out?.total ?? threads.value.length;
+    threadsHasMore.value = !!out?.has_more;
+    threadsNotice.value = '';
     threadsError.value = '';
+    threadsKnown.value = true;
   } catch (e) {
-    threadsError.value = 'Could not load threads from this collector.';
+    const code = e instanceof ApiError ? e.code : '';
+    if (code === 'not_connected' || code === 'cp_not_configured') {
+      // Not a failure: the relay is telling us it cannot list, and why. There
+      // are no threads to chip either — creating one needs the same key.
+      threads.value = [];
+      threadsTotal.value = 0;
+      threadsHasMore.value = false;
+      threadsNotice.value = (e as ApiError).message;
+      threadsError.value = '';
+      threadsKnown.value = true;
+    } else {
+      // Keep the last known rows: a failed poll must never un-chip a finding.
+      threadsError.value = e instanceof ApiError ? e.message : 'Could not load threads from this collector.';
+    }
   } finally {
     threadsLoaded.value = true;
   }
@@ -155,6 +224,13 @@ function addCollectorAddress() {
   focusAddressTick.value++;
 }
 
+// The Threads tab's not-connected notice routes here, the same way the Contracts
+// banner does. `#settings` so a reload (or a back) lands on the same tab.
+function goToSettings() {
+  tab.value = 'settings';
+  if (window.location.hash !== '#settings') history.replaceState(null, '', '#settings');
+}
+
 // Provider name shown on the sheet and sent on the flag: the configured
 // provider_display_name for the observed integration, else a humanized id
 // (the same rule the relay applies server-side).
@@ -178,14 +254,14 @@ function onThreadCreated(_r: FlagResult) {
 const openingThread = ref<string | null>(null);
 const chipError = ref<Record<string, string>>({});
 
-// "Open thread" on a finding chip = the owner handoff in a new tab (same as the
+// "View thread" on a finding chip = the owner handoff in a new tab (same as the
 // success state); "Threads ›" deep-links to the row for Close / Reopen / Replace.
 async function openChipThread(threadId: string) {
   openingThread.value = threadId;
   chipError.value = { ...chipError.value, [threadId]: '' };
   try {
     const out = await openThreadInNewTab(threadId);
-    if (!out.opened) chipError.value = { ...chipError.value, [threadId]: 'Your browser blocked the new tab — use Open on the Threads tab.' };
+    if (!out.opened) chipError.value = { ...chipError.value, [threadId]: 'Your browser blocked the new tab — use View thread on the Threads tab.' };
   } catch (e) {
     chipError.value = { ...chipError.value, [threadId]: e instanceof ApiError ? e.message : "Couldn't reach the control plane." };
   } finally {
@@ -213,6 +289,44 @@ function applyHash() {
 
 const tab = ref<Tab>('overview');
 const expanded = ref<Record<string, boolean>>({});
+
+// ─── Appearance (Settings): Light / Dark, default LIGHT ───────────────────
+// ux-design-v2 §3: the collector matches the thread page — light by default,
+// dark opt-in, NO System option. Persisted as `vinifera.theme` and applied as
+// data-theme on <html>; the dark palette lives under [data-theme="dark"] only
+// and the prefers-color-scheme media query is gone from the stylesheet.
+const themePref = ref<ThemePref>(loadThemePref());
+function setTheme(pref: ThemePref) {
+  themePref.value = pref;
+  saveThemePref(pref);
+  applyTheme(pref);
+  // Choosing a theme retires the flip notice for good — it has nothing left to
+  // tell you once you have used the control it points at.
+  themeChoiceStored.value = true;
+  themeNoticeDismissed.value = true;
+}
+
+// The one-time light-default notice (§3.4). BOTH gates: this browser never
+// chose a theme (i.e. it was on the deleted System setting) AND the collector
+// reports it held data before this upgrade — so a fresh install never sees it,
+// and a dark-OS user who wakes up to a light UI is told why exactly once.
+const themeChoiceStored = ref(hasStoredThemeChoice());
+const themeNoticeDismissed = ref(localStorage.getItem(THEME_FLIP_NOTICE_KEY) === '1');
+const showThemeFlipNotice = computed(() =>
+  shouldShowThemeFlipNotice({
+    storedChoice: themeChoiceStored.value,
+    heldPriorData: health.value?.held_prior_data === true,
+    dismissed: themeNoticeDismissed.value
+  })
+);
+function dismissThemeFlipNotice() {
+  themeNoticeDismissed.value = true;
+  localStorage.setItem(THEME_FLIP_NOTICE_KEY, '1');
+}
+function openAppearance() {
+  dismissThemeFlipNotice();
+  tab.value = 'settings';
+}
 
 // Live-tail stream state: polling always lands in `calls`, but while the user
 // inspects a call (or hits pause) the table renders a frozen snapshot so rows
@@ -308,6 +422,15 @@ const methodOptions = computed(() =>
 const peerOptions = computed(() =>
   Array.from(new Set(calls.value.map((c) => c.peer_host).filter(Boolean) as string[])).sort()
 );
+
+// Hosts observed as internal same-team edges: their Traffic rows are
+// metadata-only (bodies never captured) and carry the INTERNAL chip; the
+// counterparty facet names them `<host> · internal`.
+const internalPeers = computed(() => {
+  const s = new Set<string>();
+  for (const c of calls.value) if (c.edge_class === 'internal' && c.peer_host) s.add(c.peer_host);
+  return s;
+});
 
 const filtersActive = computed(
   () =>
@@ -527,12 +650,20 @@ const mcpOverview = computed(() =>
   }))
 );
 
-// Local notices (deck §2): stale_client + DESCRIPTION-only definition changes.
+// Local notices (deck §2): stale_client ONLY since qfix2-2026-08-26. A
+// DESCRIPTION definition change is now flaggable, so it cannot sit under a band
+// whose sub-line promises "Nothing here can be flagged" — it lives on the
+// Contracts tab with a Flag control, like every other definition change.
 // Visible to you only; these items NEVER carry a flag control.
+//
+// Nor an acknowledged state: ackable() (extension/viniferaui/acks.go) requires
+// kind=definition_change, so a stale_client finding can never be acknowledged
+// and the band carries no acked rendering. The band's items used to be able to
+// be acked back when DESCRIPTION lived here.
 const localNotices = computed(() =>
   mcpFindings.value
     .filter((f) => isLocalNotice(f))
-    .map((f) => ({ id: f.id, line: noticeLine(f, mcpServerName(f.integration), providerNameFor(f)) }))
+    .map((f) => ({ id: f.id, line: noticeLine(f, mcpServerName(f.integration)) }))
 );
 // The band's sub-line: named only while every notice points at ONE provider;
 // notices spanning several providers fall back to the neutral copy.
@@ -546,10 +677,47 @@ const mcpContractFindings = computed(() =>
   mcpFindings.value.filter((f) => f.kind === 'output_mismatch' || f.kind === 'definition_change')
 );
 
-// Contracts tab badge: live HTTP drift + flaggable MCP findings.
-const contractTabCount = computed(
-  () => liveFindings.value.length + mcpFindings.value.filter((f) => isFlaggableMcp(f)).length
+// Contracts tab pills (two-tier): red = breaking-severity rows (all sources —
+// severity decides the tier, never the protocol); amber = informational rows
+// (NON-BREAKING + DESCRIPTION) not yet acknowledged. Invariant: red + amber +
+// acknowledged = the rows listed on the tab.
+const contractTabRows = computed(() => [...liveFindings.value, ...mcpContractFindings.value]);
+const contractBreakingCount = computed(() => contractTabRows.value.filter((f) => isBreakingFinding(f)).length);
+const contractInfoCount = computed(
+  () => contractTabRows.value.filter((f) => !isBreakingFinding(f) && !isAcked(f)).length
 );
+
+// Per-card chip counts — the same taxonomy as the tab pills, so the sum of
+// card chips always equals the pills.
+function cardBreakingCount(p: ContractCard): number {
+  return p.findings.filter((f) => isBreakingFinding(f)).length;
+}
+function cardInfoCount(p: ContractCard): number {
+  return p.findings.filter((f) => !isBreakingFinding(f) && !isAcked(f)).length;
+}
+function cardInfoTitle(p: ContractCard): string {
+  const info = p.findings.filter((f) => !isBreakingFinding(f) && !isAcked(f));
+  const description = info.filter((f) => definitionClass(f) === 'DESCRIPTION').length;
+  return informationalChipTitle(info.length - description, description);
+}
+
+// ─── Local acknowledge (qfix-2026-08-25) ─────────────────────────────────
+// POST /api/findings/{id}/ack|unack — local-only (nothing is sent to the CP);
+// the refreshed /api/findings join carries acked/acked_at back.
+const ackBusy = ref<Record<string, boolean>>({});
+const ackError = ref<Record<string, string>>({});
+async function setAck(f: Finding, ack: boolean) {
+  ackBusy.value = { ...ackBusy.value, [f.id]: true };
+  ackError.value = { ...ackError.value, [f.id]: '' };
+  try {
+    await apiPost(`/api/findings/${encodeURIComponent(f.id)}/${ack ? 'ack' : 'unack'}`);
+    await refresh();
+  } catch (e) {
+    ackError.value = { ...ackError.value, [f.id]: e instanceof ApiError ? e.message : 'Could not reach this collector.' };
+  } finally {
+    ackBusy.value = { ...ackBusy.value, [f.id]: false };
+  }
+}
 
 // Drifted MCP tools: "<integration> <tool>" for every output_mismatch.
 const mcpDriftedTools = computed(() => {
@@ -698,7 +866,9 @@ watch(tab, (t) => {
     <header class="topbar">
       <div class="brand">Vinifera<span>Collector</span></div>
       <div class="meta" v-if="health">
-        <span class="pill">{{ health.integration }}</span>
+        <!-- Org identity only — never the integration slug (it scopes a spec,
+             not this org; it lives on the Overview headline + its Contracts card). -->
+        <span v-if="orgPillName" class="pill" title="Your organization — shown to the provider on every thread.">{{ orgPillName }}</span>
         <span v-if="!health.cp_configured" class="pill warn">control plane not configured</span>
         <button
           v-else
@@ -715,6 +885,18 @@ watch(tab, (t) => {
 
     <p v-if="loadError" class="error banner">Failed to load: {{ loadError }}</p>
 
+    <!-- One-time light-default notice (ux-design-v2 §3.4). Reuses the shipped
+         dismissible-banner component — no new component, no modal, no
+         interstitial. Above the tab strip so it shows on whichever tab is
+         opened first, exactly once per browser. -->
+    <div v-if="showThemeFlipNotice" class="connect-banner info theme-flip-banner">
+      <span>Vinifera is light by default now. Dark is in Settings → Appearance.</span>
+      <span class="connect-banner-actions">
+        <button type="button" class="btn small" @click="openAppearance">Open Appearance</button>
+        <button type="button" class="btn ghost small" aria-label="Dismiss" @click="dismissThemeFlipNotice">Dismiss</button>
+      </span>
+    </div>
+
     <nav class="tabs" role="tablist">
       <button role="tab" :class="{ active: tab === 'overview' }" @click="tab = 'overview'">
         Overview
@@ -724,7 +906,9 @@ watch(tab, (t) => {
       </button>
       <button role="tab" :class="{ active: tab === 'contract' }" @click="tab = 'contract'">
         Contracts
-        <span v-if="contractTabCount" class="tab-count bad">{{ contractTabCount }}</span>
+        <!-- red = act (breaking) · amber = review (informational, un-acked) -->
+        <span v-if="contractBreakingCount" class="tab-count bad" :title="breakingCountTitle(contractBreakingCount)">{{ contractBreakingCount }}</span>
+        <span v-if="contractInfoCount" class="tab-count warn" :title="informationalCountTitle(contractInfoCount)">{{ contractInfoCount }}</span>
       </button>
       <button role="tab" :class="{ active: tab === 'threads' }" @click="tab = 'threads'">
         Threads
@@ -759,8 +943,10 @@ watch(tab, (t) => {
         </div>
       </section>
 
-      <!-- Local notices band (deck §2): stale-client + description-only items.
-           Visible to you only; NO flag control here, ever. -->
+      <!-- Local notices band (deck §2): stale-client items ONLY since
+           qfix2-2026-08-26 — description-only changes moved to the Contracts
+           tab when they became flaggable. Visible to you only; NO flag control
+           here, ever, and nothing here is ackable either. -->
       <section v-if="localNotices.length" class="local-notices">
         <div class="ln-head">
           <span class="ln-title">{{ LOCAL_NOTICES_TITLE }}</span>
@@ -859,12 +1045,16 @@ watch(tab, (t) => {
             <span v-if="p.peerHost" class="prov-host mono">{{ p.peerHost }}</span>
             <span v-if="p.spec" class="fmt-badge">{{ p.spec.format }}</span>
             <span v-if="p.spec?.version" class="prov-ver">v{{ p.spec.version }}</span>
+            <!-- The integration slug lives here (it scopes THIS contract), not in the header.
+                 On EVERY card that has one: the two MCP servers share a name (`acme-tools-mcp`), so
+                 the slug is what tells `acme-tools` from `acme-tools-stdio`. -->
+            <span v-if="p.spec?.integration" class="prov-integration mono">integration: {{ p.spec.integration }}</span>
             <span class="prov-status">
-              <span v-if="p.findings.length" class="tag drift">
-                {{ p.findings.length }} drift finding{{ p.findings.length === 1 ? '' : 's' }}
-              </span>
-              <span v-else-if="p.spec" class="tag ok">conforming</span>
-              <span v-else class="tag none">no contract loaded</span>
+              <!-- Tier-split chips — same taxonomy as the tab pills, so the sums always agree. -->
+              <span v-if="cardBreakingCount(p)" class="tag drift">{{ breakingChipLabel(cardBreakingCount(p)) }}</span>
+              <span v-if="cardInfoCount(p)" class="tag warn" :title="cardInfoTitle(p)">{{ informationalChipLabel(cardInfoCount(p)) }}</span>
+              <span v-if="!cardBreakingCount(p) && !cardInfoCount(p) && p.spec" class="tag ok">conforming</span>
+              <span v-else-if="!cardBreakingCount(p) && !cardInfoCount(p)" class="tag none">no contract loaded</span>
             </span>
           </div>
 
@@ -902,13 +1092,16 @@ watch(tab, (t) => {
             </div>
           </div>
 
-          <article v-for="f in p.findings" :key="f.id" class="finding nested">
+          <!-- Acked rows stay in place, dimmed — evidence is never hidden. -->
+          <article v-for="f in p.findings" :key="f.id" class="finding nested" :class="{ acked: isAcked(f) }">
             <div class="finding-head">
-              <!-- definition_change rows carry the classifier's class badge (deck §3). -->
+              <!-- definition_change rows carry the classifier's class badge (deck §3):
+                   BREAKING red filled · NON-BREAKING amber filled · DESCRIPTION amber outline —
+                   each badge matches the tab pill that counts it. -->
               <span
                 v-if="f.kind === 'definition_change'"
                 class="badge"
-                :class="{ breaking: definitionClass(f) === 'BREAKING', info: definitionClass(f) === 'NON-BREAKING', warning: definitionClass(f) === 'DESCRIPTION' }"
+                :class="{ breaking: definitionClass(f) === 'BREAKING', warning: definitionClass(f) === 'NON-BREAKING', description: definitionClass(f) === 'DESCRIPTION' }"
               >{{ definitionClass(f) }}</span>
               <span v-else class="badge" :class="f.severity">{{ f.severity }}</span>
               <span class="endpoint">{{ f.endpoint }}</span>
@@ -920,8 +1113,10 @@ watch(tab, (t) => {
                 <span v-else class="occ single">1 call</span>
               </template>
             </div>
-            <!-- definition_change: their tools/list at T1 vs at T2 (deck §3). -->
-            <div v-if="f.kind === 'definition_change'" class="drift-row">
+            <!-- definition_change: their tools/list at T1 vs at T2 (deck §3).
+                 DESCRIPTION rows render the diff PLAIN — a wording change is
+                 not a severity diff. -->
+            <div v-if="f.kind === 'definition_change'" class="drift-row" :class="{ plain: definitionClass(f) === 'DESCRIPTION' }">
               <div class="col">
                 <div class="k">{{ beforeColLabel(f.spec_version_from || '', snapshotTimes(f.detail).from) }}</div>
                 <div class="v expected">{{ f.expected }}</div>
@@ -974,22 +1169,51 @@ watch(tab, (t) => {
                   {{ chipLabel(threadsByFinding[f.id]) }}
                 </span>
                 <button type="button" class="btn small" :disabled="openingThread === threadsByFinding[f.id].thread_id" @click="openChipThread(threadsByFinding[f.id].thread_id)">
-                  {{ openingThread === threadsByFinding[f.id].thread_id ? 'Opening…' : 'Open thread' }}
+                  {{ openingThread === threadsByFinding[f.id].thread_id ? 'Opening…' : 'View thread' }}
                 </button>
                 <button type="button" class="btn ghost small" @click="goToThread(threadsByFinding[f.id].thread_id)">Threads ›</button>
                 <span v-if="chipError[threadsByFinding[f.id].thread_id]" class="error small-err">{{ chipError[threadsByFinding[f.id].thread_id] }}</span>
               </template>
-              <!-- Evidence rule (v0.5 §6): local notices NEVER carry a flag control. -->
-              <span v-else-if="isLocalNotice(f)" class="hint-inline">{{ LOCAL_NOTE_NOT_FLAGGABLE }}</span>
-              <!-- Flaggable definition_change: call-less — the flag POST refuses a
-                   finding without a call (KNOWN v0.5 limitation), so the control
-                   stays disabled with the honest reason instead of failing late. -->
-              <template v-else-if="f.kind === 'definition_change'">
-                <button type="button" class="btn primary flag" disabled title="Flagging this needs a failing call — not available yet for definition changes.">Flag this</button>
-                <span class="hint-inline">{{ defChangeNoCallSub(providerNameFor(f)) }}</span>
+              <!-- Acknowledged (DESCRIPTION / NON-BREAKING only): the footer swaps
+                   to the acked line + Undo. Local-only; never touches the CP. -->
+              <template v-else-if="isAcked(f)">
+                <span class="hint-inline">{{ ackedLine(timeAgo(f.acked_at)) }}</span>
+                <button type="button" class="btn ghost small" :disabled="ackBusy[f.id]" :title="UNDO_TITLE" @click="setAck(f, false)">{{ UNDO_LABEL }}</button>
+                <span v-if="ackError[f.id]" class="error small-err">{{ ackError[f.id] }}</span>
               </template>
-              <button v-else-if="f.source_call_id" type="button" class="btn primary flag" @click="openSheet(f)">Flag this</button>
-              <span v-else class="hint-inline">Informational — spec-version findings have no failing call to share.</span>
+              <!-- Evidence rule (v0.5 §6): local notices NEVER carry a flag control.
+                   stale_client only — and it never reaches the Contracts tab
+                   (mcpContractFindings excludes it), so this branch is a GUARD,
+                   not a surface: it renders nothing, and its whole job is to
+                   swallow a stale_client row before any Flag control below can
+                   claim it. Deliberately empty — do not give it content. -->
+              <template v-else-if="isLocalNotice(f)"><!-- no control, by design --></template>
+              <!-- Thread state comes from the control plane and nowhere else.
+                   Until the list has been answered once, this finding may well
+                   already be in a thread — offering Create thread would be a
+                   claim we cannot make. Say what we don't know instead. -->
+              <template v-else-if="!threadsKnown"><span class="hint-inline">{{ THREAD_STATE_UNKNOWN }}</span></template>
+              <!-- definition_change, EVERY class incl. DESCRIPTION (ux-design-v2
+                   §2.7): flaggable and CALL-LESS. The control is never born
+                   disabled — the relay lifted 400 finding_has_no_call for this
+                   kind. `Flag this` keeps primary styling; the shared hint says
+                   what stands in for the call. -->
+              <template v-else-if="f.kind === 'definition_change'">
+                <button type="button" class="btn primary flag" @click="openSheet(f)">Flag this</button>
+                <span class="hint-inline">{{ defChangeNoCallSub(providerNameFor(f)) }}</span>
+                <button v-if="isAckable(f)" type="button" class="btn ghost small" :disabled="ackBusy[f.id]" :title="ACK_TITLE" @click="setAck(f, true)">{{ ACK_LABEL }}</button>
+                <span v-if="ackError[f.id]" class="error small-err">{{ ackError[f.id] }}</span>
+              </template>
+              <!-- The !isLocalNotice guards are redundant with the branch above
+                   and deliberately so: a stale_client row must NEVER reach a
+                   Flag control, and one guard is one edit away from being lost.
+                   The trailing hint is likewise a fallback no row reaches today
+                   (contractTabRows is live-vs-spec + output_mismatch +
+                   definition_change, and the first two always carry their call)
+                   — it is what a call-less kind arriving here would say, rather
+                   than an empty actions row. -->
+              <button v-else-if="f.source_call_id && !isLocalNotice(f)" type="button" class="btn primary flag" @click="openSheet(f)">Flag this</button>
+              <span v-else-if="!isLocalNotice(f)" class="hint-inline">Informational — spec-version findings have no failing call to share.</span>
             </div>
           </article>
         </article>
@@ -999,7 +1223,7 @@ watch(tab, (t) => {
     <!-- ───────────────────────── THREADS ───────────────────────── -->
     <div v-show="tab === 'threads'">
       <div v-if="showAddressNudge" class="connect-banner info">
-        <span>Add this collector's address so email links can deep-link back here.</span>
+        <span>Reply notification emails can link straight back to the thread here. Add this collector's address to turn that on.</span>
         <span class="connect-banner-actions">
           <button type="button" class="btn small" @click="addCollectorAddress">Add address</button>
           <button type="button" class="btn ghost small" aria-label="Dismiss" @click="dismissAddressNudge">Dismiss</button>
@@ -1008,10 +1232,13 @@ watch(tab, (t) => {
       <ThreadsTab
         :rows="threads"
         :loaded="threadsLoaded"
-        :connected="connectStatus === 'connected'"
         :highlight-id="highlightThreadId"
         :load-error="threadsError"
+        :notice="threadsNotice"
+        :total="threadsTotal"
+        :has-more="threadsHasMore"
         @refresh="loadThreads"
+        @connect="goToSettings"
       />
     </div>
 
@@ -1031,6 +1258,21 @@ watch(tab, (t) => {
           @update:state="onConnectUpdated"
           @dismiss-address-nudge="dismissAddressNudge"
         />
+      </section>
+      <section>
+        <h2>Appearance</h2>
+        <div class="theme-field">
+          <span class="theme-label">Theme</span>
+          <!-- Exactly two segments (ux-design-v2 §3.2). The System segment and
+               the OS-setting helper line beside it are DELETED, not re-worded —
+               the replacement states the two consequences that matter: what the
+               default is, and that the choice is per-browser. -->
+          <div class="seg" role="group" aria-label="Theme">
+            <button type="button" :class="{ active: themePref === 'light' }" :aria-pressed="themePref === 'light'" @click="setTheme('light')">Light</button>
+            <button type="button" :class="{ active: themePref === 'dark' }" :aria-pressed="themePref === 'dark'" @click="setTheme('dark')">Dark</button>
+          </div>
+          <span class="theme-help">Light by default. Dark is remembered on this browser only.</span>
+        </div>
       </section>
     </div>
 
@@ -1058,7 +1300,7 @@ watch(tab, (t) => {
             </select>
             <select v-model="fPeer" class="tr-select" aria-label="Filter by counterparty">
               <option value="">counterparty: all</option>
-              <option v-for="p in peerOptions" :key="p" :value="p">{{ p }}</option>
+              <option v-for="p in peerOptions" :key="p" :value="p">{{ internalPeers.has(p) ? p + ' · internal' : p }}</option>
             </select>
             <select v-model="fMethod" class="tr-select" aria-label="Filter by method">
               <option value="">method: all</option>
@@ -1156,7 +1398,14 @@ watch(tab, (t) => {
                 <span v-if="!c.correlation?.request_id && !c.correlation?.client_request_id && !c.correlation?.idempotency_key" class="dim">—</span>
               </span>
               <span class="c-mark">
-                <span v-if="isDrifted(c)" class="tag drift">drifted</span>
+                <!-- Internal same-team rows are metadata-only: nothing was
+                     validated, so no contract-status claim — an honest chip instead. -->
+                <span
+                  v-if="c.edge_class === 'internal'"
+                  class="tag none"
+                  title="Internal same-team call — metadata only. Bodies are never captured or shared. Shown so the traffic log is complete."
+                >internal</span>
+                <span v-else-if="isDrifted(c)" class="tag drift">drifted</span>
                 <span v-else class="tag ok">conforming</span>
               </span>
             </div>
@@ -1232,7 +1481,45 @@ watch(tab, (t) => {
 </template>
 
 <style>
+/* Theme tokens (ux-design-v2 §3.3). LIGHT is the base palette — key-absent
+   means light, matching the thread page — and the DARK palette is applied under
+   [data-theme="dark"] ONLY.
+
+   The `prefers-color-scheme` media block that served the deleted System state
+   is GONE on purpose: leaving it in place while defaulting to light would give
+   a dark-OS user a dark first paint and quietly reintroduce System.
+
+   Palette values are a lift-and-shift — nothing re-picked, no new tokens.
+   --warn is the amber FILL; --warn-text is the amber TEXT/BORDER role (the
+   fill fails contrast as text on light surfaces). Same split for green:
+   --ok is the green FILL; --ok-text is the green TEXT/BORDER role — on light,
+   #157f5f is only 4.38:1 on --panel2, so the ink is darkened to #116b50
+   (5.7:1) while fills keep the palette value (ux-design §6.1: split fill vs
+   ink tokens rather than nudging shared values). Light --warn-text is #8a5c00
+   (not the table's #9a6700, which is 4.30:1 on --panel2 — fails 4.5:1).
+   --on-* are the inks used on filled accent/danger/warn/ok surfaces. */
 :root {
+  color-scheme: light;
+  --bg: #f6f8fa;
+  --panel: #ffffff;
+  --panel2: #eef1f5;
+  --ink: #1a222c;
+  --muted: #5b6878;
+  --line: #d5dce4;
+  --accent: #2f6fed;
+  --danger: #c62f3d;
+  --danger-bg: #fbe9ea;
+  --ok: #157f5f;
+  --ok-text: #116b50;
+  --warn: #f4b740;
+  --warn-text: #8a5c00;
+  --on-accent: #ffffff;
+  --on-danger: #ffffff;
+  --on-warn: #201800;
+  --on-ok: #ffffff;
+}
+:root[data-theme='dark'] {
+  color-scheme: dark;
   --bg: #0f1216;
   --panel: #171b21;
   --panel2: #1d232b;
@@ -1243,7 +1530,13 @@ watch(tab, (t) => {
   --danger: #ff6b6b;
   --danger-bg: #2a1618;
   --ok: #46d19e;
+  --ok-text: #46d19e;
   --warn: #f4b740;
+  --warn-text: #f4b740;
+  --on-accent: #04122e;
+  --on-danger: #200;
+  --on-warn: #201800;
+  --on-ok: #04231a;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, sans-serif; }
@@ -1253,7 +1546,7 @@ body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 syste
 .brand span { color: var(--muted); font-weight: 500; margin-left: 0.35rem; }
 .meta { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 .pill { background: var(--panel2); border: 1px solid var(--line); color: var(--muted); border-radius: 999px; padding: 0.15rem 0.6rem; font-size: 0.8rem; }
-.pill.warn { color: var(--warn); border-color: var(--warn); }
+.pill.warn { color: var(--warn-text); border-color: var(--warn-text); }
 .banner { margin: 1rem 0 0; }
 
 /* Tabs */
@@ -1262,7 +1555,8 @@ body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 syste
 .tabs button:hover { color: var(--ink); }
 .tabs button.active { color: var(--ink); border-bottom-color: var(--accent); }
 .tab-count { background: var(--panel2); border: 1px solid var(--line); color: var(--muted); border-radius: 999px; font-size: 0.72rem; font-weight: 700; padding: 0.02rem 0.4rem; min-width: 1.2rem; text-align: center; }
-.tab-count.bad { background: var(--danger); border-color: var(--danger); color: #200; }
+.tab-count.bad { background: var(--danger); border-color: var(--danger); color: var(--on-danger); }
+.tab-count.warn { background: var(--warn); border-color: var(--warn); color: var(--on-warn); }
 
 /* Health */
 .headline { margin: 1rem 0; padding: 1rem 1.15rem; border-radius: 12px; border: 1px solid var(--line); background: var(--panel); }
@@ -1270,7 +1564,7 @@ body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 syste
 .hl-you { font-size: 1.15rem; }
 .hl-sub { color: var(--muted); font-size: 0.85rem; margin-top: 0.3rem; }
 .headline.drift .hl-you strong { color: var(--danger); }
-.headline.ok .hl-you strong { color: var(--ok); }
+.headline.ok .hl-you strong { color: var(--ok-text); }
 .hint { color: var(--muted); font-size: 0.88rem; margin-top: 1rem; }
 
 /* Shared */
@@ -1284,17 +1578,21 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .finding { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 1rem 1.1rem; margin-bottom: 0.9rem; }
 .finding-head { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
 .badge { text-transform: uppercase; font-size: 0.68rem; letter-spacing: 0.05em; padding: 0.15rem 0.45rem; border-radius: 5px; font-weight: 700; }
-.badge.breaking { background: var(--danger); color: #200; }
-.badge.warning { background: var(--warn); color: #201800; }
-.badge.info { background: var(--accent); color: #04122e; }
+.badge.breaking { background: var(--danger); color: var(--on-danger); }
+.badge.warning { background: var(--warn); color: var(--on-warn); }
+.badge.info { background: var(--accent); color: var(--on-accent); }
+/* DESCRIPTION: amber outline — informational, never a severity claim. */
+.badge.description { background: transparent; color: var(--warn-text); border: 1px solid var(--warn-text); }
 .endpoint { font-weight: 600; }
 .rule { color: var(--muted); font-family: ui-monospace, monospace; font-size: 0.85rem; }
 .drift-row { display: flex; align-items: stretch; gap: 0.75rem; margin-top: 0.85rem; flex-wrap: wrap; }
 .col { flex: 1; min-width: 140px; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 0.5rem 0.65rem; }
 .col .k { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
 .col .v { margin-top: 0.2rem; font-family: ui-monospace, monospace; word-break: break-word; }
-.v.expected { color: var(--ok); }
+.v.expected { color: var(--ok-text); }
 .v.actual { color: var(--danger); }
+/* DESCRIPTION rows: a wording change is not a severity diff — plain ink. */
+.drift-row.plain .v.expected, .drift-row.plain .v.actual { color: var(--ink); }
 .arrow { align-self: center; color: var(--muted); font-size: 1.2rem; }
 .detail { color: var(--muted); margin: 0.75rem 0 0; }
 .corr { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; margin-top: 0.85rem; padding-top: 0.75rem; border-top: 1px dashed var(--line); }
@@ -1305,25 +1603,27 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 /* Buttons (shared by the Connect panel, Flag sheet and Threads tab) */
 .btn { background: var(--panel2); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 0.42rem 0.85rem; font: inherit; font-size: 0.88rem; font-weight: 600; cursor: pointer; }
 .btn:hover { border-color: var(--muted); }
-.btn.primary { background: var(--accent); color: #04122e; border-color: var(--accent); }
+.btn.primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 .btn.primary:hover { filter: brightness(1.08); }
 .btn.ghost { background: transparent; color: var(--muted); }
 .btn.ghost:hover { color: var(--ink); }
 .btn.small { padding: 0.28rem 0.65rem; font-size: 0.8rem; }
-.btn.attention { color: var(--warn); border-color: var(--warn); }
+.btn.attention { color: var(--warn-text); border-color: var(--warn-text); }
 .btn:disabled { opacity: 0.6; cursor: default; }
-.chip { display: inline-flex; align-items: center; font-size: 0.8rem; font-weight: 600; color: var(--ok); border: 1px solid var(--ok); border-radius: 999px; padding: 0.15rem 0.6rem; }
-.chip.attention { color: var(--warn); border-color: var(--warn); }
+.chip { display: inline-flex; align-items: center; font-size: 0.8rem; font-weight: 600; color: var(--ok-text); border: 1px solid var(--ok-text); border-radius: 999px; padding: 0.15rem 0.6rem; }
+.chip.attention { color: var(--warn-text); border-color: var(--warn-text); }
 .hint-inline { color: var(--muted); font-size: 0.82rem; }
 .small-err { font-size: 0.82rem; }
 .pill-btn { cursor: pointer; font: inherit; font-size: 0.8rem; }
-.pill.ok { color: var(--ok); border-color: var(--ok); }
+.pill.ok { color: var(--ok-text); border-color: var(--ok-text); }
 .tab-right { margin-left: auto; }
 .tab-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); display: inline-block; }
 .tab-dot.disconnected { background: var(--muted); }
-.connect-banner { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin: 0.75rem 0 0; padding: 0.6rem 0.9rem; border: 1px solid var(--warn); border-radius: 10px; background: var(--panel); font-size: 0.88rem; }
+.connect-banner { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin: 0.75rem 0 0; padding: 0.6rem 0.9rem; border: 1px solid var(--warn-text); border-radius: 10px; background: var(--panel); font-size: 0.88rem; }
 .connect-banner-actions { display: flex; gap: 0.5rem; }
 .connect-banner.info { border-color: var(--line); color: var(--muted); }
+/* The one-time theme-flip notice sits above the tab strip, not inside a tab. */
+.theme-flip-banner { margin-top: 1rem; }
 .error { color: var(--danger); }
 
 /* Traffic toolbar: search + facet filters + live/pause control */
@@ -1337,9 +1637,9 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .tr-clear { background: transparent; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); font: inherit; font-size: 0.8rem; padding: 0.3rem 0.6rem; cursor: pointer; }
 .tr-clear:hover { color: var(--ink); border-color: var(--muted); }
 .tr-count { color: var(--muted); font-size: 0.8rem; font-variant-numeric: tabular-nums; white-space: nowrap; margin-left: auto; }
-.live-btn { display: inline-flex; align-items: center; gap: 0.4rem; background: var(--panel); border: 1px solid var(--ok); border-radius: 999px; color: var(--ok); font: inherit; font-size: 0.8rem; font-weight: 700; padding: 0.3rem 0.75rem; cursor: pointer; white-space: nowrap; }
+.live-btn { display: inline-flex; align-items: center; gap: 0.4rem; background: var(--panel); border: 1px solid var(--ok-text); border-radius: 999px; color: var(--ok-text); font: inherit; font-size: 0.8rem; font-weight: 700; padding: 0.3rem 0.75rem; cursor: pointer; white-space: nowrap; }
 .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); animation: live-pulse 1.6s ease-in-out infinite; }
-.live-btn.paused { border-color: var(--warn); color: var(--warn); }
+.live-btn.paused { border-color: var(--warn-text); color: var(--warn-text); }
 .live-btn.paused .live-dot { background: var(--warn); animation: none; }
 @keyframes live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
 .pending-bar { display: block; width: 100%; background: var(--panel2); border: 1px solid var(--accent); border-radius: 8px; color: var(--accent); font: inherit; font-size: 0.82rem; font-weight: 700; padding: 0.45rem 0.75rem; margin: 0 0 0.5rem; cursor: pointer; text-align: center; }
@@ -1365,7 +1665,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .c-when { color: var(--muted); white-space: nowrap; }
 .c-call { display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
 .method { font-weight: 700; font-size: 0.72rem; padding: 0.1rem 0.4rem; border-radius: 4px; background: var(--panel2); border: 1px solid var(--line); color: var(--muted); text-transform: uppercase; }
-.method.post { color: var(--ok); border-color: var(--ok); }
+.method.post { color: var(--ok-text); border-color: var(--ok-text); }
 .method.get { color: var(--accent); border-color: var(--accent); }
 .method.delete { color: var(--danger); border-color: var(--danger); }
 .route { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1375,15 +1675,16 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .c-corr span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .c-corr .dim { color: var(--muted); }
 .tag { font-size: 0.72rem; font-weight: 700; padding: 0.12rem 0.5rem; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.03em; }
-.tag.ok { color: var(--ok); border: 1px solid var(--ok); }
-.tag.drift { background: var(--danger); color: #200; }
+.tag.ok { color: var(--ok-text); border: 1px solid var(--ok-text); }
+.tag.drift { background: var(--danger); color: var(--on-danger); }
+.tag.warn { background: var(--warn); color: var(--on-warn); }
 .tag.none { color: var(--muted); border: 1px solid var(--line); }
 
 /* Traffic counterparty cell */
 .c-peer { display: flex; align-items: center; gap: 0.45rem; min-width: 0; }
 .dir-chip { font-size: 0.64rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; border-radius: 4px; padding: 0.08rem 0.35rem; flex: none; }
 .dir-chip.out { color: var(--accent); border: 1px solid var(--accent); }
-.dir-chip.in { color: var(--ok); border: 1px solid var(--ok); }
+.dir-chip.in { color: var(--ok-text); border: 1px solid var(--ok-text); }
 .peer-host { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-size: 0.82rem; }
 
 /* Contract cards (self + provider) */
@@ -1400,12 +1701,15 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .doc-link:hover { border-color: var(--accent); }
 .prov-meta { color: var(--muted); font-size: 0.8rem; }
 .prov-nospec { color: var(--muted); font-size: 0.88rem; margin: 0.6rem 0 0; }
+.prov-integration { color: var(--muted); font-size: 0.78rem; }
 .finding.nested { background: var(--panel2); margin: 0.75rem 0 0; }
+/* Acked rows: dimmed in place (matches the disabled idiom); evidence stays visible. */
+.finding.acked { opacity: 0.55; }
 
 .tr-detail { border-top: 1px dashed var(--line); background: var(--bg); padding: 0.85rem 0.9rem 1.1rem; }
 .meta-line { color: var(--muted); font-size: 0.82rem; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.75rem; }
 .meta-line .dim { opacity: 0.5; }
-.redacted-tag { color: var(--warn); }
+.redacted-tag { color: var(--warn-text); }
 .reqres { display: grid; grid-template-columns: 1fr 1fr; gap: 0.85rem; }
 .rr-col { min-width: 0; }
 .rr-title { font-weight: 700; font-size: 0.85rem; margin-bottom: 0.4rem; }
@@ -1422,8 +1726,8 @@ pre.body { background: var(--panel2); border: 1px solid var(--line); border-radi
 .edge-title { font-size: 0.95rem; margin: 0 0 0.75rem; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
 .edge-title small { color: var(--muted); font-weight: 400; }
 .dir-badge { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; padding: 0.15rem 0.5rem; border-radius: 5px; }
-.dir-badge.out { background: var(--accent); color: #04122e; }
-.dir-badge.in { background: var(--ok); color: #04231a; }
+.dir-badge.out { background: var(--accent); color: var(--on-accent); }
+.dir-badge.in { background: var(--ok); color: var(--on-ok); }
 .edge-table { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .edge-head, .edge-row { display: grid; grid-template-columns: 2.4fr 1fr; gap: 0.5rem; align-items: center; padding: 0.4rem 0.7rem; }
 .edge-head { color: var(--muted); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; background: var(--panel2); border-bottom: 1px solid var(--line); }
@@ -1435,7 +1739,7 @@ pre.body { background: var(--panel2); border: 1px solid var(--line); border-radi
 .edge-row .num { text-align: right; font-variant-numeric: tabular-nums; }
 .edge-row .unit { color: var(--muted); font-size: 0.72rem; margin-left: 0.12rem; }
 .empty.small { font-size: 0.85rem; }
-.occ { font-size: 0.72rem; color: var(--warn); font-weight: 700; border: 1px solid var(--warn); border-radius: 999px; padding: 0.05rem 0.45rem; }
+.occ { font-size: 0.72rem; color: var(--warn-text); font-weight: 700; border: 1px solid var(--warn-text); border-radius: 999px; padding: 0.05rem 0.45rem; }
 .occ.single { color: var(--muted); border-color: var(--line); font-weight: 500; }
 
 /* ─── MCP surfaces (v0.5) ─── */
@@ -1455,9 +1759,19 @@ pre.body { background: var(--panel2); border: 1px solid var(--line); border-radi
 .tool-row:first-child { border-top: 0; }
 .tool-line { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
 .tool-name { font-size: 0.85rem; }
-.tool-tag { font-size: 0.72rem; color: var(--ok); border: 1px solid var(--ok); border-radius: 999px; padding: 0.05rem 0.45rem; }
+.tool-tag { font-size: 0.72rem; color: var(--ok-text); border: 1px solid var(--ok-text); border-radius: 999px; padding: 0.05rem 0.45rem; }
 .tool-tag.partial { color: var(--muted); border-color: var(--line); }
 .tool-note { color: var(--muted); font-size: 0.8rem; margin: 0.3rem 0 0; }
+
+/* Appearance (Settings) */
+.theme-field { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+.theme-label { font-size: 0.88rem; font-weight: 600; }
+.theme-help { color: var(--muted); font-size: 0.82rem; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { background: var(--panel); border: 0; border-left: 1px solid var(--line); color: var(--muted); font: inherit; font-size: 0.85rem; font-weight: 600; padding: 0.35rem 0.85rem; cursor: pointer; }
+.seg button:first-child { border-left: 0; }
+.seg button:hover { color: var(--ink); }
+.seg button.active { background: var(--accent); color: var(--on-accent); }
 
 @media (max-width: 720px) {
   .tr-head { display: none; }

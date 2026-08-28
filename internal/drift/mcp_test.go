@@ -189,6 +189,11 @@ func TestMCPGolden_OutputMismatch(t *testing.T) {
 	if doc, err := json.Marshal(f); err != nil || !strings.Contains(string(doc), `"snapshot_observed_at":"`+snap.ObservedAt+`"`) {
 		t.Errorf("marshalled finding must carry snapshot_observed_at (err=%v): %s", err, doc)
 	}
+	// snapshot_observed_from is a definition_change-only field: an
+	// output_mismatch has no BEFORE snapshot to name.
+	if f.SnapshotObservedFrom != "" {
+		t.Errorf("output_mismatch must not carry snapshot_observed_from, got %q", f.SnapshotObservedFrom)
+	}
 
 	// A second drifting call carries the SAME signature — the store collapses
 	// it into one finding with occurrence_count 2 (per-signature dedup).
@@ -347,6 +352,9 @@ func TestStaleClient_ToolNotListed(t *testing.T) {
 	if f.SnapshotObservedAt != "" {
 		t.Errorf("stale_client must not carry snapshot_observed_at, got %q", f.SnapshotObservedAt)
 	}
+	if f.SnapshotObservedFrom != "" {
+		t.Errorf("stale_client must not carry snapshot_observed_from, got %q", f.SnapshotObservedFrom)
+	}
 }
 
 // TestStaleClient_ArgsViolation: arguments violating the CURRENT inputSchema
@@ -455,10 +463,22 @@ func TestDefinitionChange_Classes(t *testing.T) {
 	if br.SnapshotObservedAt != v2.ObservedAt {
 		t.Errorf("snapshot_observed_at = %q, want the after snapshot's ObservedAt %q", br.SnapshotObservedAt, v2.ObservedAt)
 	}
+	// snapshot_observed_from (additive, optional — CONTRACTS §4): the BEFORE
+	// snapshot's — the structured sibling that replaces regexing the Detail.
+	if br.SnapshotObservedFrom != v1.ObservedAt {
+		t.Errorf("snapshot_observed_from = %q, want the before snapshot's ObservedAt %q", br.SnapshotObservedFrom, v1.ObservedAt)
+	}
+	if doc, err := json.Marshal(br); err != nil || !strings.Contains(string(doc), `"snapshot_observed_from":"`+v1.ObservedAt+`"`) {
+		t.Errorf("marshalled definition_change must carry snapshot_observed_from (err=%v): %s", err, doc)
+	}
 
 	check("create_refund", diff.RuleInputRequiredPropertyAdded, "input.reason", model.SeverityBreaking, true)
 	check("list_transactions", diff.RuleOutputSchemaDeclared, "output", model.SeverityInfo, true)
-	desc := check("create_refund", diff.RuleDescriptionChanged, "description", model.SeverityWarning, false)
+	// DESCRIPTION is FLAGGABLE since qfix2-2026-08-26 (ux-design-v2 §2.7): the
+	// evidence rule is amended, not broken — a description change is the
+	// provider's own published text, before and after. It still never
+	// auto-flags; only a human pressing the control sends it.
+	desc := check("create_refund", diff.RuleDescriptionChanged, "description", model.SeverityWarning, true)
 	if desc.Rule != model.RuleDescriptionChanged {
 		t.Errorf("model.RuleDescriptionChanged mirror out of sync: %q vs %q", desc.Rule, model.RuleDescriptionChanged)
 	}

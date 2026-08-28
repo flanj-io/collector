@@ -47,10 +47,12 @@ API + the flag action.
     every 5s while pending).
   - `POST /api/flag {finding_id, message?, provider_display_name?}` — **Create
     thread**: `403 {error: not_flaggable}` for LOCAL-ONLY finding kinds
-    (`model.Finding.Flaggable()` — `stale_client` always; `definition_change`
-    when the change is DESCRIPTION-only): the v0.5 evidence rule is enforced
-    server-side in the relay, never just by UI absence, so a hand-crafted
-    request cannot promote a local notice. `412 {error: not_connected |
+    (`model.Finding.Flaggable()` — `stale_client`, and only `stale_client`): the
+    evidence rule is enforced server-side in the relay, never just by UI
+    absence, so a hand-crafted request cannot promote a local notice. A
+    `definition_change` is CALL-LESS by nature, so `400 finding_has_no_call` is
+    lifted for that kind (qfix2-2026-08-26) and the body omits `call`; every
+    other kind still needs its failing call. `412 {error: not_connected |
     contact_unconfirmed}` before Connect /
     the FIRST confirmation — the gate is "a confirmed contact exists"
     (`confirmed_contact_email` non-null), so a new pending contact never blocks
@@ -58,20 +60,41 @@ API + the flag action.
     unlocks the moment the click lands); otherwise assembles the CP
     flag body from the stored call + finding (`internal/promote`), POSTs it with
     the collector key, persists a per-finding thread record (`threads.go`,
-    settings KV `thread.finding.<id>` + `threads.index` — ids, endpoint,
-    provider, the current thread link; the index is a read-modify-write with a
-    re-read-before-write + verify retry ×3, residual lost-update race documented
-    on `saveThread`) and marks the call promoted →
+    settings KV `thread.finding.<finding_id>` — ids, endpoint, provider, the
+    current thread link — plus the reverse pointer `thread.id.<thread_id>` →
+    the finding id) and marks the call promoted →
     `{thread_id, thread_public_id, thread_url, state, status, finding_id}`.
+    **Every thread write in `threads.go` is a single blind `PutSetting`, never a
+    read-modify-write** — the KV has no compare-and-swap, so a read-then-write on
+    a key two pods share is a lost update waiting to happen. The pointer is only
+    ever written with a REAL finding id (an empty one would orphan the record
+    that holds the live link), and `findThreadByID` verifies the record it loads
+    still names the thread that was asked for: `thread.finding.<id>` is rewritten
+    in place on re-flag and the KV has no delete, so a superseded pointer
+    survives and must resolve to "no local record", never to the new thread.
     No email field; nothing is emailed.
-  - `GET /api/threads` — every thread this collector created, each with its CP
-    `summary` (fetched in parallel; CP failure → `summary:null` + `error`).
-    `GET /api/threads/{id}/summary`.
+  - `GET /api/threads` — ONE call to the CP's §5.5a list (Bearer collector key,
+    most-recently-active first), each row joined to the local record by thread
+    id. The envelope is the collector's own internal shape:
+    `{threads, count, total, limit, has_more}` — §5.5a has no cursor, so
+    `has_more` is what stops 200 rows from silently becoming the whole truth.
+    The list path WRITES NOTHING except recovering a missing pointer from the
+    legacy `threads.index` (lazy, per listed thread, a single blind write of the
+    real finding id; the legacy array is never cleared — a previous version
+    still lists from it). A row with no local record still renders, with an
+    empty `thread_url` the UI turns into a disabled Copy thread link. Not
+    connected → `412 not_connected`, no CP configured → `503 cp_not_configured`
+    (the same codes as the summary route): an empty list would tell a collector
+    that HAS threads that it has none. CP failure → the CP's code / `502
+    cp_unreachable`, never a stale list. `GET /api/threads/{id}/summary`.
   - `POST /api/threads/{id}/open` → `{owner_url, expires_at}` — a 10-minute
     single-use owner handoff the UI opens in a new tab (never stored/logged);
     `/close` · `/reopen` → the CP's `{state, closed_at, reopened_at}`;
-    `/replace-link` → `{thread_url, expires_at, revoked}` (revoke + mint; the
-    persisted link is updated).
+    `/replace-link` → `{thread_url, expires_at, revoked}` (revoke + mint). The
+    CP kills every outstanding token the moment it mints the new one, so the new
+    link is persisted for EVERY row: onto the finding record when there is one,
+    otherwise onto `thread.link.<thread_id>` — a key only that thread's Replace
+    link writes, blind.
   - `GET /api/health` also carries `connect_status` (from the store only) and
     the configured display names.
 

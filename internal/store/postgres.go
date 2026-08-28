@@ -307,6 +307,28 @@ func (p *postgresStore) InsertFinding(f model.Finding) error {
 
 	// Repeat occurrence — a single atomic counter bump; the stored doc stays
 	// frozen as the first occurrence's JSON (stable finding id → stable flag key).
+	//
+	// EXCEPT for a definition_change whose evidence has moved on: its doc is
+	// rewritten in the same statement, keeping the id, signature and first_seen
+	// (refreshedFindingDoc explains why). The row was read inside this tx, so a
+	// concurrent writer's refresh cannot be lost between read and write.
+	var storedDoc string
+	if err := tx.QueryRow(p.rebind(`SELECT doc FROM findings WHERE signature=? FOR UPDATE`), f.Signature).Scan(&storedDoc); err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("read finding doc: %w", err)
+	}
+	if next, ok := refreshedFindingDoc(storedDoc, f); ok {
+		if _, err := tx.Exec(p.rebind(
+			`UPDATE findings SET occurrence_count = occurrence_count + 1, last_seen = GREATEST(last_seen, ?),
+			   severity=?, detected_at=?, doc=? WHERE signature=?`),
+			seen, f.Severity, f.DetectedAt, next, f.Signature,
+		); err != nil {
+			return fmt.Errorf("refresh finding evidence: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("refresh finding evidence: commit: %w", err)
+		}
+		return nil
+	}
 	if _, err := tx.Exec(p.rebind(
 		`UPDATE findings SET occurrence_count = occurrence_count + 1, last_seen = GREATEST(last_seen, ?) WHERE signature=?`),
 		seen, f.Signature,

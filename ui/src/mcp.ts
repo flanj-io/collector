@@ -2,14 +2,16 @@
 // here is VERBATIM deck copy ("v0.5 MCP surfaces — UX copy deck") with the
 // placeholders filled in. No DOM, no fetch — unit-tested with vitest.
 //
-// Flaggability (spec §1/§6 evidence rule, enforced server-side by the relay):
+// Flaggability (spec §1/§6 evidence rule, AMENDED qfix2-2026-08-26 —
+// ux-design-v2 §2.7; enforced server-side by the relay):
 //   output_mismatch                    → flaggable (has a source call)
-//   definition_change BREAKING/NON-BR. → flaggable in principle, but call-less —
-//     the relay/CP refuse a finding without a call (400 finding_has_no_call),
-//     a KNOWN v0.5 limitation; the UI keeps the Flag control disabled with the
-//     honest deck reason instead of pretending.
-//   definition_change DESCRIPTION      → local note, NO flag control anywhere
-//   stale_client                       → local notice, NO flag control anywhere
+//   definition_change, EVERY class     → flaggable, and CALL-LESS: no call is
+//     shared, because the evidence is the provider's own published definitions,
+//     before and after. The control is never born disabled.
+//   stale_client                       → local notice, NO flag control anywhere,
+//     ever. Consumer-side; it fails the evidence rule.
+// Nothing auto-flags: a finding only leaves this collector when a human presses
+// the control.
 
 import { requestIdsLine } from './threads';
 import type { Correlation, Finding, RedactedCall } from './types';
@@ -40,14 +42,112 @@ export function definitionClass(f: Pick<Finding, 'kind' | 'severity' | 'rule'>):
   return f.severity === 'breaking' ? 'BREAKING' : 'NON-BREAKING';
 }
 
-/** Local-only items: never a flag control, anywhere (spec §6 evidence rule). */
+/**
+ * Local-only items: never a flag control, anywhere (spec §6 evidence rule).
+ * Since qfix2-2026-08-26 this is stale_client and ONLY stale_client — a
+ * DESCRIPTION definition change is now flaggable, so it is no longer a local
+ * notice and no longer appears in the Overview "Local notices" band (whose own
+ * sub-line promises that nothing in it can be flagged).
+ */
 export function isLocalNotice(f: Pick<Finding, 'kind' | 'severity' | 'rule'>): boolean {
-  return f.kind === 'stale_client' || definitionClass(f) === 'DESCRIPTION';
+  return f.kind === 'stale_client';
+}
+
+/** A DESCRIPTION-class definition change — the one finding class that carries
+ *  the mute-risk guard line on the flag sheet (§2.7.4). */
+export function isDescriptionChange(f: Pick<Finding, 'kind' | 'severity' | 'rule'>): boolean {
+  return definitionClass(f) === 'DESCRIPTION';
 }
 
 /** Cross-org flaggable kinds (the relay enforces the same rule server-side). */
 export function isFlaggableMcp(f: Pick<Finding, 'kind' | 'severity' | 'rule'>): boolean {
   return isMcpFinding(f) && !isLocalNotice(f);
+}
+
+// ─── Badge tiers + local acknowledge (qfix-2026-08-25) ───────────────────────
+// Two-tier taxonomy: red = breaking-severity (act), amber = informational
+// (review) = NON-BREAKING + DESCRIPTION. Severity decides the tier, never the
+// protocol. Acknowledge is LOCAL ONLY (wire key `ack`): it clears an
+// informational finding out of the amber counts on this collector — nothing is
+// sent to the control plane, and it is never a path to flagging.
+
+/** Red tier: breaking-severity findings, all sources (REST live-vs-spec
+ *  BREAKING + MCP BREAKING incl. output_mismatch). */
+export function isBreakingFinding(f: Pick<Finding, 'severity'>): boolean {
+  return f.severity === 'breaking';
+}
+
+/** Ackable: informational definition changes only — DESCRIPTION or
+ *  NON-BREAKING. BREAKING rows are never ackable (resolved by a fix or a
+ *  thread, not muted); stale_client keeps no control at all. The relay
+ *  enforces the same rule server-side (403 not_ackable). */
+export function isAckable(f: Pick<Finding, 'kind' | 'severity' | 'rule'>): boolean {
+  const cls = definitionClass(f);
+  return cls === 'DESCRIPTION' || cls === 'NON-BREAKING';
+}
+
+/**
+ * The evidence version an acknowledgement on this finding binds to: the AFTER
+ * snapshot hash for a definition_change, empty for every other kind (mirrors
+ * ackEvidenceVersion in extension/viniferaui/acks.go).
+ */
+export function ackEvidenceVersion(f: Pick<Finding, 'kind' | 'spec_version_to'>): string {
+  return f.kind === 'definition_change' ? f.spec_version_to || '' : '';
+}
+
+/**
+ * Acknowledged on this collector (from the read-API join).
+ *
+ * The collector applies the evidence-version rule server-side; this repeats it
+ * client-side on purpose (ux-design-v2 §2.8, §7 risk 2 — the highest-severity
+ * item in the slice). A SECOND definition change on the same tool and field has
+ * the IDENTICAL signature, so a signature-only ack would render it silently
+ * pre-acknowledged and a breaking change could sit unseen. Two independent
+ * checks means one of them failing cannot hide a new change.
+ */
+export function isAcked(
+  f: Pick<Finding, 'kind' | 'acked' | 'acked_evidence_version' | 'spec_version_to'>
+): boolean {
+  if (f.acked !== true) return false;
+  return (f.acked_evidence_version || '') === ackEvidenceVersion(f);
+}
+
+export const ACK_LABEL = 'Acknowledge';
+export const ACK_TITLE = 'Local only — clears it from the counts on this collector. Nothing is sent anywhere.';
+export const UNDO_LABEL = 'Undo';
+export const UNDO_TITLE = 'Puts it back in the count.';
+
+/** Acked footer line: `Acknowledged 5m ago.` */
+export function ackedLine(relative: string): string {
+  return `Acknowledged ${relative}.`;
+}
+
+/** Red tab-pill title: `7 breaking findings`. */
+export function breakingCountTitle(n: number): string {
+  return `${n} breaking finding${n === 1 ? '' : 's'}`;
+}
+
+/** Amber tab-pill title: `2 non-breaking — acknowledge to clear`. */
+export function informationalCountTitle(n: number): string {
+  return `${n} non-breaking — acknowledge to clear`;
+}
+
+/** Red card chip: `1 BREAKING`. */
+export function breakingChipLabel(n: number): string {
+  return `${n} BREAKING`;
+}
+
+/** Amber card chip: `2 NON-BREAKING`. */
+export function informationalChipLabel(n: number): string {
+  return `${n} NON-BREAKING`;
+}
+
+/** Amber card chip title: `1 non-breaking change · 1 description change`. */
+export function informationalChipTitle(nonBreaking: number, description: number): string {
+  const parts: string[] = [];
+  if (nonBreaking > 0) parts.push(`${nonBreaking} non-breaking change${nonBreaking === 1 ? '' : 's'}`);
+  if (description > 0) parts.push(`${description} description change${description === 1 ? '' : 's'}`);
+  return parts.join(' · ');
 }
 
 // ─── Deck §1 — Edges ─────────────────────────────────────────────────────────
@@ -72,7 +172,18 @@ function serverLead(s: McpServerRef): string {
 
 /**
  * The per-server MCP health headline. Priority: output mismatch (drift) →
- * breaking definition change (no calls affected yet) → clean.
+ * breaking definition change (no calls affected yet) → description change →
+ * clean.
+ *
+ * The DESCRIPTION clause exists because qfix2-2026-08-26 moved description
+ * changes OUT of the Overview "Local notices" band (they are flaggable now, and
+ * that band promises nothing in it can be flagged). Without a clause here a
+ * server whose only drift is a wording change would report "no drift detected"
+ * in GREEN on Overview while the Contracts tab showed an amber row with a
+ * primary `Flag this` — the tab and the headline contradicting each other
+ * (ux-design-v2 §7 risk 3: that band must never render green). Description
+ * drift is not an alarm, so the line says plainly what did and did not change;
+ * it is simply not `ok`.
  */
 export function mcpHeadline(
   s: McpServerRef,
@@ -97,6 +208,11 @@ export function mcpHeadline(
     const tools = Array.from(new Set(breaking.map((f) => f.endpoint))).join(', ');
     return { text: serverLead(s) + `definition change on ${tools} — breaking, no calls affected yet.`, ok: false };
   }
+  const described = findings.filter((f) => f.kind === 'definition_change' && definitionClass(f) === 'DESCRIPTION');
+  if (described.length > 0) {
+    const tools = Array.from(new Set(described.map((f) => f.endpoint))).join(', ');
+    return { text: serverLead(s) + `definition change on ${tools} — description only, no schema change.`, ok: false };
+  }
   return { text: serverLead(s) + 'no drift detected.', ok: true };
 }
 
@@ -117,16 +233,18 @@ export function localNoticesSubFor(providers: string[]): string {
   return localNoticesSub(named.length === 1 ? named[0] : 'the provider');
 }
 
-/** One local-notice line (stale_client / DESCRIPTION-only definition change). */
-export function noticeLine(f: Finding, server: string, provider: string): string {
-  if (f.kind === 'stale_client') {
-    if (f.rule === 'tool-not-listed') {
-      return `Your agent still calls ${f.endpoint} — ${server} no longer lists it. Update your client.`;
-    }
-    const path = f.field_path ? '$.' + f.field_path : f.location || '';
-    return `Your agent's arguments to ${f.endpoint} no longer match the current inputSchema at ${path}. Update your client.`;
+/**
+ * One local-notice line. stale_client only since qfix2-2026-08-26: the
+ * DESCRIPTION line used to live here and closed by calling itself a local note,
+ * which the policy change made false. It is deleted rather than re-worded — a
+ * description change now belongs on the Contracts tab, with a flag control.
+ */
+export function noticeLine(f: Finding, server: string): string {
+  if (f.rule === 'tool-not-listed') {
+    return `Your agent still calls ${f.endpoint} — ${server} no longer lists it. Update your client.`;
   }
-  return `Description changed on ${f.endpoint} — schema unchanged. This can change which tools your model picks. Wording is ${provider}'s to change, so this stays a local note.`;
+  const path = f.field_path ? '$.' + f.field_path : f.location || '';
+  return `Your agent's arguments to ${f.endpoint} no longer match the current inputSchema at ${path}. Update your client.`;
 }
 
 // ─── Deck §3 — Contracts ─────────────────────────────────────────────────────
@@ -188,8 +306,6 @@ export function defChangeDetail(t1: string, t2: string, provider: string): strin
   return `Their tools/list at ${t1} vs at ${t2} — both ${provider}'s own words.`;
 }
 
-export const LOCAL_NOTE_NOT_FLAGGABLE = 'Local note — not flaggable.';
-
 // ─── Deck §4 — Traffic ───────────────────────────────────────────────────────
 
 export const MCP_TOOL_CHIP = 'TOOL';
@@ -248,15 +364,39 @@ function pathOf(f: Pick<Finding, 'field_path' | 'location'>): string {
   return f.field_path ? '$.' + f.field_path : f.location || '';
 }
 
-/** Evidence line body (rendered after the "Evidence (1):" label). */
-export function mcpEvidenceLine(f: Finding, server: string): string {
+/**
+ * The AFTER snapshot's observation time on a definition_change: the structured
+ * field when the collector supplied it, else parsed out of the detail line.
+ */
+export function afterObservedAt(f: Pick<Finding, 'snapshot_observed_at' | 'detail'>): string {
+  return f.snapshot_observed_at || snapshotTimes(f.detail).to;
+}
+
+/**
+ * Evidence line body (rendered after the "Evidence (1):" label).
+ *
+ * DESCRIPTION gets its own variant (ux-design-v2 §2.7.4): the claim it makes is
+ * "your own two published versions", not "a definition change of class X" —
+ * which is what lets a subjective finding cross the org boundary honestly.
+ */
+export function mcpEvidenceLine(f: Finding, server: string, fmtDate: (iso: string) => string = (x) => x): string {
   if (f.kind === 'definition_change') {
+    if (isDescriptionChange(f)) {
+      return `${f.endpoint} — description changed in your tools/list on ${fmtDate(afterObservedAt(f))}. Both versions are your own published text.`;
+    }
     const cls = definitionClass(f);
     const t = snapshotTimes(f.detail);
     return `${f.endpoint} on ${server} — definition change (${cls}): ${f.rule}. Two tools/list snapshots, ${t.from} → ${t.to}.`;
   }
   return `${f.endpoint} on ${server} — output mismatch at ${pathOf(f)}: declared ${typeOf(f.expected)}, got ${typeOf(f.actual)}`;
 }
+
+/**
+ * The mute-risk guard (ux-design-v2 §2.7.4), rendered directly above the
+ * primary button on the DESCRIPTION class ONLY. It stops a subjective finding
+ * from landing at the provider as an accusation.
+ */
+export const FLAG_DESCRIPTION_GUARD = "This isn't a bug report — you're asking whether the change was intended.";
 
 /** IDs line for an output_mismatch flag (the JSON-RPC id is client-generated). */
 export function mcpIdsLine(provider: string): string {
@@ -287,20 +427,27 @@ export function defChangeNoCallSub(provider: string): string {
  * "What leaves this collector" (deck §5) — the lead before the
  * `<C> · <E>` names; the tail after them.
  */
-export function mcpDisclosureLead(f: Pick<Finding, 'kind'>, tool: string): string {
+export function mcpDisclosureLead(f: Pick<Finding, 'kind' | 'severity' | 'rule'>, tool: string): string {
   if (f.kind === 'definition_change') {
+    if (isDescriptionChange(f)) {
+      return 'The two published descriptions, when each was observed, the endpoint, your message, and';
+    }
     return `The before/after fragments of ${tool}'s definition, the finding, the two snapshot hashes and observed-at times, the server name and version, your message, and`;
   }
   return "This redacted tool call and result, the finding, the tool's declared output schema, the JSON-RPC id, the tool and server name, your message, and";
 }
 
-export function mcpDisclosureTail(f: Pick<Finding, 'kind'>): string {
-  return f.kind === 'definition_change' ? 'No call data is involved, so none leaves.' : 'Raw calls never leave.';
+export function mcpDisclosureTail(f: Pick<Finding, 'kind' | 'severity' | 'rule'>): string {
+  if (f.kind !== 'definition_change') return 'Raw calls never leave.';
+  return isDescriptionChange(f) ? 'Raw calls never leave.' : 'No call data is involved, so none leaves.';
 }
 
 /** Prefilled, editable, optional message for the Flag sheet (deck §5). */
 export function mcpDefaultMessage(f: Finding, fmtDate: (iso: string) => string): string {
   if (f.kind === 'definition_change') {
+    if (isDescriptionChange(f)) {
+      return `Your tools/list description for ${f.endpoint} changed on ${fmtDate(afterObservedAt(f))}. The schema didn't change, but the wording did, and our agent picks tools from that text. Can you confirm the new wording is intended and stable?`;
+    }
     const t = snapshotTimes(f.detail);
     return `Your tools/list changed ${f.endpoint} between ${fmtDate(t.from)} and ${fmtDate(t.to)} — ${f.rule}. Was this intentional? Anything we should migrate to?`;
   }

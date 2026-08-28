@@ -11,16 +11,16 @@ import (
 
 // stubCP records one request and answers with the given status + body.
 type stubCP struct {
-	method, path, auth, ctype string
-	body                      map[string]any
-	srv                       *httptest.Server
+	method, path, query, auth, ctype string
+	body                             map[string]any
+	srv                              *httptest.Server
 }
 
 func newStubCP(t *testing.T, status int, reply string) *stubCP {
 	t.Helper()
 	s := &stubCP{}
 	s.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		s.method, s.path = r.Method, r.URL.Path
+		s.method, s.path, s.query = r.Method, r.URL.Path, r.URL.RawQuery
 		s.auth = r.Header.Get("Authorization")
 		s.ctype = r.Header.Get("Content-Type")
 		if r.Body != nil {
@@ -169,6 +169,73 @@ func TestThreadMutations(t *testing.T) {
 			t.Errorf("summary=%+v", out)
 		}
 	})
+}
+
+// TestListThreads is CONTRACTS-CP §5.5a: GET /api/v1/threads?limit=<n>, Bearer
+// collector key, an ENVELOPE (never a bare array), rows that are byte-for-byte
+// the §5.5 summary object, and never a token.
+func TestListThreads(t *testing.T) {
+	const body = `{"threads":[` +
+		`{"id":"t2","thread_public_id":"pub2","state":"closed","closed_at":"2026-08-24T09:00:00Z","reopened_at":null,"turn":"replied_while_closed",` +
+		`"consumer_display_name":"Acme Consumer Ltd","provider_display_name":"Globex","endpoint":"POST /v1/refunds","evidence_count":2,` +
+		`"opened_count":5,"knock_count":1,"message_count":4,"last_reply_at":"2026-08-24T08:00:00Z","fixed_claim":null,` +
+		`"link":{"status":"expired","expires_at":"2026-08-24T00:00:00Z"},"archived":true,"created_at":"2026-08-20T10:00:00Z","updated_at":"2026-08-24T09:00:00Z"},` +
+		`{"id":"t1","thread_public_id":"pub1","state":"open","closed_at":null,"reopened_at":null,"turn":"waiting_on_provider",` +
+		`"consumer_display_name":"Acme Consumer Ltd","provider_display_name":"Acme Payments","endpoint":"POST /v1/charges","evidence_count":1,` +
+		`"opened_count":3,"knock_count":0,"message_count":2,"last_reply_at":null,"fixed_claim":{"display_name":"Dana (Acme)","at":"x"},` +
+		`"link":{"status":"active","expires_at":"2026-09-22T00:00:00Z"},"archived":false,"created_at":"2026-08-23T10:00:00Z","updated_at":"2026-08-23T11:00:00Z"}` +
+		`],"count":2,"total":7,"limit":2,"has_more":true}`
+	cp := newStubCP(t, 200, body)
+	out, status, err := NewClient(cp.srv.URL, "deploy_secret", "v").WithCollectorKey("ckey_secret").ListThreads(context.Background(), 2)
+	if err != nil || status != 200 {
+		t.Fatalf("ListThreads: %v (%d)", err, status)
+	}
+	if cp.method != "GET" || cp.path != "/api/v1/threads" || cp.query != "limit=2" {
+		t.Errorf("%s %s?%s", cp.method, cp.path, cp.query)
+	}
+	if cp.auth != "Bearer ckey_secret" {
+		t.Errorf("the list is collector-key authorized, got %q", cp.auth)
+	}
+	if out.Count != 2 || out.Total != 7 || out.Limit != 2 || !out.HasMore || len(out.Threads) != 2 {
+		t.Fatalf("envelope=%+v", out)
+	}
+	// Order is the CP's — most-recently-active first, decoded as sent.
+	if out.Threads[0].ID != "t2" || out.Threads[1].ID != "t1" {
+		t.Errorf("order not preserved: %s, %s", out.Threads[0].ID, out.Threads[1].ID)
+	}
+	// An archived row is INCLUDED and flagged, never dropped.
+	if !out.Threads[0].Archived || out.Threads[0].Turn != "replied_while_closed" || out.Threads[0].Link == nil || out.Threads[0].Link.Status != "expired" {
+		t.Errorf("archived row=%+v", out.Threads[0])
+	}
+	r1 := out.Threads[1]
+	if r1.ConsumerDisplayName != "Acme Consumer Ltd" || r1.ProviderDisplayName != "Acme Payments" || r1.Endpoint != "POST /v1/charges" ||
+		r1.EvidenceCount != 1 || r1.OpenedCount != 3 || r1.MessageCount != 2 || r1.LastReplyAt != nil ||
+		r1.FixedClaim == nil || r1.FixedClaim.DisplayName != "Dana (Acme)" || r1.CreatedAt != "2026-08-23T10:00:00Z" || r1.UpdatedAt != "2026-08-23T11:00:00Z" {
+		t.Errorf("row=%+v", r1)
+	}
+
+	// limit <= 0 omits the parameter entirely (the CP applies its default 50).
+	cp2 := newStubCP(t, 200, `{"threads":[],"count":0,"total":0,"limit":50,"has_more":false}`)
+	if _, _, err := NewClient(cp2.srv.URL, "d", "v").WithCollectorKey("k").ListThreads(context.Background(), 0); err != nil {
+		t.Fatalf("ListThreads(0): %v", err)
+	}
+	if cp2.query != "" {
+		t.Errorf("limit<=0 must send no query, got %q", cp2.query)
+	}
+	if ListThreadsMaxLimit != 200 {
+		t.Errorf("§5.5a hard cap is 200, got %d", ListThreadsMaxLimit)
+	}
+
+	// A CP error is typed, and the key never reaches the error string.
+	cp3 := newStubCP(t, 400, `{"error":"invalid_limit","message":"limit must be 1..200"}`)
+	_, _, err = NewClient(cp3.srv.URL, "deploy_secret", "v").WithCollectorKey("ckey_secret").ListThreads(context.Background(), 201)
+	ce := AsCPError(err)
+	if ce == nil || ce.Status != 400 || ce.Code != "invalid_limit" {
+		t.Fatalf("400 not typed: %v", err)
+	}
+	if strings.Contains(err.Error(), "secret") {
+		t.Errorf("bearer leaked into error: %v", err)
+	}
 }
 
 // TestCPError proves 412/403 bodies become typed errors carrying the CP's
