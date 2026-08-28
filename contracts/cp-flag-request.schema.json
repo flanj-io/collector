@@ -58,6 +58,14 @@
     "message": {
       "type": "string"
     },
+    "evidence_origin": {
+      "type": "string",
+      "enum": [
+        "finding",
+        "call_pick"
+      ],
+      "description": "OPTIONAL, additive (slice2-2026-08-28): how the evidence call was chosen. Absent means \"finding\" — the flag came off a finding row, so the promoted call's bodies start WITHHELD from the provider. \"call_pick\" — the operator chose the call while looking at it, so it starts revealed. The CP reads unknown values as \"finding\" (tolerant)."
+    },
     "call": {
       "description": "The redacted evidence call. REQUIRED for every finding kind except `definition_change`, which is call-less by nature (qfix2-2026-08-26).",
       "$ref": "https://vinifera.io/contracts/v1/redacted-call.schema.json"

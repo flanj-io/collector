@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
-  canCopyLink,
   canCreateThread,
   chipLabel,
   correlationCount,
   defaultFlagMessage,
   evidenceLine,
   fieldName,
+  findingIdFromHash,
   knockNote,
   linkLabel,
   linkNeedsAttention,
@@ -15,8 +15,7 @@ import {
   requestIdsLine,
   threadIdFromHash,
   timeAgo,
-  NO_LINK_COPY_NOTE,
-  NO_LINK_COPY_TITLE,
+  THREADS_READ_ONLY_NOTE,
   truncationNote,
   turnLabel,
   type ThreadRow,
@@ -94,9 +93,9 @@ describe('linkLabel + knock note + amber policy', () => {
     expect(linkLabel({ ...base, link: { status: 'expired' } }, d)).toBe('Expired');
     expect(linkLabel(null, d)).toBe('—');
   });
-  it('knock note: the safe re-share sentence, muted, only when knocked', () => {
-    expect(knockNote(2)).toBe('2 tried an old link — re-share with Copy thread link, or Replace link to cut off old copies.');
-    expect(knockNote(1)).toBe('1 tried an old link — re-share with Copy thread link, or Replace link to cut off old copies.');
+  it('knock note points at the thread page — the tab is read-only, so it must not name removed controls (UX-gate 2026-08-29)', () => {
+    expect(knockNote(2)).toBe('2 tried an old link — open the thread page (View thread) to copy or replace the link.');
+    expect(knockNote(1)).toBe('1 tried an old link — open the thread page (View thread) to copy or replace the link.');
   });
   it('amber = review NOW: expired, replaced, expiring within 72h — knocks alone never', () => {
     const now = Date.parse('2026-08-25T00:00:00Z');
@@ -118,10 +117,11 @@ describe('chipLabel', () => {
 });
 
 // The row model is a CP §5.5a summary merged with the collector's local
-// pointer. Everything the tab renders must survive a row whose local record is
-// missing — the thread exists on the control plane, only OUR copy of the link
-// is gone, so the row renders and Copy thread link is the single control that
-// goes quiet.
+// pointer. Everything the READ-ONLY tab renders must survive a row whose local
+// record is missing — the thread exists on the control plane, and every column
+// comes from the CP row alone. (The canCopyLink family retired with slice 2:
+// copying/replacing the link happens on the thread page, so the tab no longer
+// touches thread_url at all.)
 describe('merged row (CP summary + local pointer)', () => {
   it('renders every column from the CP row alone', () => {
     // chipLabel is deliberately NOT asserted here: the finding chip is keyed by
@@ -134,25 +134,19 @@ describe('merged row (CP summary + local pointer)', () => {
     expect(turnLabel(base, '')).toBe('Waiting on Acme Payments');
     expect(turnLabel({ ...base, turn: 'provider_replied' }, '')).toBe('Acme Payments replied');
   });
-  it('Copy thread link needs the local copy of the link, nothing else does', () => {
-    expect(canCopyLink(merged)).toBe(true);
-    expect(canCopyLink(orphan)).toBe(false);
-    expect(canCopyLink({ thread_url: '' })).toBe(false);
-  });
   // Archived rows are INCLUDED by §5.5a and flagged, never dropped — an
   // archived thread still renders its real state, not a special one.
   it('renders an archived row like any other', () => {
     expect(turnLabel({ ...base, archived: true, state: 'closed' }, 'Acme Payments')).toBe('Closed');
     expect(turnLabel({ ...base, archived: true }, 'Acme Payments')).toBe('Waiting on Acme Payments');
-    const archived: ThreadRow = { ...merged, summary: { ...base, archived: true } };
-    expect(canCopyLink(archived)).toBe(true);
   });
-  // Replace link mints a fresh link and the collector persists it for ANY row,
-  // including one with no local record — so the row the CP listed without a
-  // link copy becomes copyable, no reload needed.
-  it('a replaced link makes an orphan row copyable', () => {
-    expect(canCopyLink(orphan)).toBe(false);
-    expect(canCopyLink({ ...orphan, thread_url: 'https://cp/t/p1#k=fresh' })).toBe(true);
+});
+
+// The tab is read-only since slice 2: thread operations live on the thread
+// page, and the always-visible line under the header is the exact deck copy.
+describe('the read-only header line', () => {
+  it('is the deck sentence, verbatim', () => {
+    expect(THREADS_READ_ONLY_NOTE).toBe('Close, reopen and link changes happen on the thread page — View thread opens it.');
   });
 });
 
@@ -167,16 +161,6 @@ describe('truncationNote', () => {
   // same fact. Two phrasings of one idea is how the two surfaces drift apart.
   it('is the sentence the participant inbox says too', () => {
     expect(truncationNote(3, 9)).toBe("Showing the 3 most recently active threads of 9. The rest aren't on this page.");
-  });
-});
-
-// A disabled control explained only by a `title` explains itself to nobody using a keyboard, a
-// screen reader or a touch screen — the note is the accessible half of the same fact.
-describe('the no-link-copy copy', () => {
-  it('names the control without the confirm-ellipsis inside the prose', () => {
-    expect(NO_LINK_COPY_TITLE).toBe('This collector has no copy of the link. Replace link makes a new one and keeps it here.');
-    expect(NO_LINK_COPY_NOTE).toBe('No copy of the link on this collector — Replace link makes a new one.');
-    for (const copy of [NO_LINK_COPY_TITLE, NO_LINK_COPY_NOTE]) expect(copy).not.toContain('Replace link…');
   });
 });
 
@@ -244,6 +228,23 @@ describe('misc', () => {
     expect(threadIdFromHash('#threads/0191-abc')).toBe('0191-abc');
     expect(threadIdFromHash('#threads')).toBeNull();
     expect(threadIdFromHash('')).toBeNull();
+    // a malformed %-sequence must decode to null, never throw out of applyHash
+    expect(threadIdFromHash('#threads/%E0%A4%A')).toBeNull();
+    expect(threadIdFromHash('#threads/%')).toBeNull();
+  });
+  // The CP findings index deep-links to `<local_ui_url>/#contracts/<finding_id>`
+  // — the Contracts tab's mirror of the threads deep link.
+  it('contracts deep link hash', () => {
+    expect(findingIdFromHash('#contracts/0191-def')).toBe('0191-def');
+    expect(findingIdFromHash('#contracts/0191%2Fx')).toBe('0191/x');
+    expect(findingIdFromHash('#contracts')).toBeNull();
+    expect(findingIdFromHash('#threads/0191-abc')).toBeNull();
+    expect(findingIdFromHash('')).toBeNull();
+    // a malformed %-sequence must decode to null, never throw out of applyHash
+    expect(findingIdFromHash('#contracts/%E0%A4%A')).toBeNull();
+    expect(findingIdFromHash('#contracts/%')).toBeNull();
+    // and the two never claim each other's hash
+    expect(threadIdFromHash('#contracts/0191-def')).toBeNull();
   });
   it('needsCollectorAddress: only when Connected with no local_ui_url', () => {
     expect(needsCollectorAddress(null)).toBe(false);

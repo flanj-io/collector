@@ -51,6 +51,10 @@ type stubCP struct {
 	// test can be a collector with more threads than §5.5a's hard cap.
 	listTotal   int
 	listHasMore bool
+	// Finding-shape sync (POST /api/v1/findings): every raw request body, in
+	// order, plus the call count — sync_test.go asserts on the BYTES.
+	findingsCalls  int
+	findingsBodies [][]byte
 }
 
 // summaryRow is the §5.5 summary object — the SAME row §5.5a lists.
@@ -171,6 +175,23 @@ func newStubCP(t *testing.T) *stubCP {
 		jsonOut(w, status, map[string]any{"thread_id": "thr_1", "thread_public_id": "pub_thr_1", "thread_url": fmt.Sprintf("https://cp.test/t/pub_thr_1#k=tok_%d", s.flagCalls),
 			"peek_url": fmt.Sprintf("https://cp.test/t/pub_thr_1#k=tok_%d", s.flagCalls), "magic_token": "x", "state": "open", "status": st})
 	})
+	// CONTRACTS §5: the shape-only finding sync — collector key required; the
+	// stub records the raw body so tests can assert on the wire bytes.
+	mux.HandleFunc("POST /api/v1/findings", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if !keyed(w, r) {
+			return
+		}
+		raw, _ := io.ReadAll(r.Body)
+		s.findingsCalls++
+		s.findingsBodies = append(s.findingsBodies, append([]byte(nil), raw...))
+		var b struct {
+			Findings []json.RawMessage `json:"findings"`
+		}
+		_ = json.Unmarshal(raw, &b)
+		jsonOut(w, 200, map[string]any{"received": len(b.Findings), "stored": len(b.Findings)})
+	})
 	// CONTRACTS-CP §5.5a: the collector-key-scoped thread list, an ENVELOPE.
 	mux.HandleFunc("GET /api/v1/threads", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
@@ -257,9 +278,8 @@ func newRig(t *testing.T) *testRig {
 	ext := &uiExtension{
 		cfg:       &Config{UIEndpoint: "127.0.0.1:0", IntegrationID: "acme-payments", ConsumerDisplayName: "Cfg Consumer"},
 		telemetry: component.TelemetrySettings{Logger: zap.New(core)},
-		st:        st,
+		st:        st, // pre-resolved: resolveStore returns it without touching the (nil) host
 	}
-	ext.stOnce.Do(func() {})
 	return &testRig{ext: ext, st: st, cp: cp, logs: logs}
 }
 

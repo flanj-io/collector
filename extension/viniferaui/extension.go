@@ -21,26 +21,36 @@ type uiExtension struct {
 	telemetry component.TelemetrySettings
 
 	host   component.Host
-	stOnce sync.Once
+	stMu   sync.Mutex
 	st     store.Store     // interface-typed: the nil check in storeOrError must never see a typed-nil pointer
 	cp     *promote.Client // deploy-token client; per-request copies carry the collector key (keyedClient)
 	me     meCache
 	server *http.Server
+
+	// Finding-shape sync ticker (sync.go): started in Start, stopped (and
+	// waited for — no goroutine leak) in Shutdown.
+	syncCancel context.CancelFunc
+	syncDone   chan struct{}
 }
 
 // resolveStore finds the single-owner store extension lazily. Extensions can
 // start in any order, so the store may not have opened its connection when the
-// UI's Start runs — but every extension has started by the time the first HTTP
-// request arrives, so resolving on first use is race-free.
+// UI's Start runs — every extension has started by the time the first HTTP
+// request arrives. The finding-sync ticker can fire BEFORE that moment, so an
+// unresolved lookup is retried on the next call, never latched: caching a nil
+// here would blind every later request.
 func (e *uiExtension) resolveStore() store.Store {
-	e.stOnce.Do(func() {
-		for _, ext := range e.host.GetExtensions() {
-			if p, ok := ext.(store.Provider); ok {
-				e.st = p.Store()
-				return
-			}
+	e.stMu.Lock()
+	defer e.stMu.Unlock()
+	if e.st != nil || e.host == nil {
+		return e.st
+	}
+	for _, ext := range e.host.GetExtensions() {
+		if p, ok := ext.(store.Provider); ok {
+			e.st = p.Store()
+			break
 		}
-	})
+	}
 	return e.st
 }
 
@@ -69,11 +79,13 @@ func (e *uiExtension) Start(ctx context.Context, host component.Host) error {
 		}
 	}()
 	e.telemetry.Logger.Info("vinifera UI serving on http://" + e.cfg.UIEndpoint)
+	e.startFindingSync()
 	return nil
 }
 
-// Shutdown stops the UI server.
+// Shutdown stops the finding-sync ticker and the UI server.
 func (e *uiExtension) Shutdown(ctx context.Context) error {
+	e.stopFindingSync()
 	if e.server == nil {
 		return nil
 	}

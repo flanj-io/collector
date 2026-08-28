@@ -36,6 +36,8 @@ func NewFactory() extension.Factory {
 func createDefaultConfig() component.Config {
 	return &Config{
 		UIEndpoint: "127.0.0.1:5335",
+		// Shape-only findings sync is on unless finding_sync: false (CONTRACTS §8).
+		FindingSync: true,
 	}
 }
 
