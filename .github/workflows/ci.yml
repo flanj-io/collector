@@ -75,9 +75,32 @@ jobs:
   docker-build:
     # The single-binary artifact is built entirely in Docker (multi-stage: node builds the Vue UI ->
     # go builds the collector embedding it). No host Go needed for the artifact.
+    #
+    # The UI vitest suite runs here rather than in its own job: the Dockerfile's ui stage only ever
+    # runs `npm run build`, so ui/src/*.test.ts executed nowhere in CI. Hosting it in this job reuses
+    # the checkout, leaves notify-e2e's `needs` untouched, and fails before the expensive image
+    # build. node-version matches the Dockerfile's node:22-alpine ui stage (vite >=8 needs >=22.12).
+    #
+    # `npm run typecheck` (vue-tsc) rides along for the same reasons, and covers what vitest cannot:
+    # vite build does not type-check, and the vitest suite only loads the .ts unit files, so a type
+    # error inside a .vue <template> — a renamed field, a wrong prop, a null deref — used to ship
+    # green. ui/package.json pins typescript to the 5.x line on purpose: npm's `latest` is now
+    # TypeScript 7 (the native port), which no longer exports ./lib/tsc and makes vue-tsc die with
+    # ERR_PACKAGE_PATH_NOT_EXPORTED. Do not widen that range without re-running the typecheck.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - name: Install UI deps
+        working-directory: ./ui
+        run: npm ci
+      - name: UI unit tests (Vue SPA — vitest)
+        working-directory: ./ui
+        run: npm test
+      - name: UI typecheck (vue-tsc — the only thing that reads .vue templates)
+        working-directory: ./ui
+        run: npm run typecheck
       - uses: docker/setup-buildx-action@v4
       - name: Build collector image
         run: docker build -t flanj-collector:ci .

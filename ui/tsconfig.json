@@ -1,0 +1,42 @@
+{
+  // Type-check only. `npm run typecheck` (vue-tsc --noEmit) is the only thing
+  // that reads this file for checking — vite build (esbuild) strips types
+  // without checking them, and vitest only ever loads the .ts unit files. This
+  // is therefore the ONLY thing in the repo that reads a .vue <template>.
+  //
+  // Careful: esbuild also reads a few of these keys when transpiling, so this
+  // file is not purely advisory. `useDefineForClassFields` is pinned to false
+  // deliberately — see below.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["vite/client", "node"],
+
+    "strict": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "verbatimModuleSyntax": true,
+
+    // Pinned to the value esbuild used before this file existed (it derives the
+    // default from `target`, and ES2022 would flip it to true). Leaving it to
+    // default would switch class fields from assignment to Object.defineProperty
+    // semantics and change the shipped bundle — adding a tsconfig for type
+    // checking must not touch the build.
+    "useDefineForClassFields": false
+  },
+  "vueCompilerOptions": {
+    // Off by default in Vue Language Tools 3. Without them a template may pass a
+    // prop the child does not declare, listen for an event it never emits, or
+    // name a component/directive that is not in scope — the "renamed field"
+    // class this check exists to catch.
+    "checkUnknownProps": true,
+    "checkUnknownEvents": true,
+    "checkUnknownComponents": true,
+    "checkUnknownDirectives": true
+  },
+  "include": ["src/**/*.ts", "src/**/*.vue", "vite.config.ts"]
+}
