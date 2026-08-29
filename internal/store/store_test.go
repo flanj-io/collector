@@ -7,13 +7,13 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/vinifera-io/collector/internal/model"
+	"github.com/flanj-io/collector/internal/model"
 )
 
 // testBackend opens stores for one backend under test. open gives a FRESH
 // store (empty data); reopen reconnects to the SAME data after Close — the
 // restart simulation. The sqlite backend always runs; the postgres backend
-// runs when VINIFERA_TEST_PG_DSN points at a scratch database (see CI).
+// runs when FLANJ_TEST_PG_DSN points at a scratch database (see CI).
 type testBackend struct {
 	name  string
 	pgDSN string // "" = sqlite
@@ -23,7 +23,7 @@ type testBackend struct {
 func forEachBackend(t *testing.T, fn func(t *testing.T, b *testBackend)) {
 	t.Helper()
 	backends := []*testBackend{{name: "sqlite"}}
-	if dsn := os.Getenv("VINIFERA_TEST_PG_DSN"); dsn != "" {
+	if dsn := os.Getenv("FLANJ_TEST_PG_DSN"); dsn != "" {
 		backends = append(backends, &testBackend{name: "postgres", pgDSN: dsn})
 	}
 	for _, b := range backends {
@@ -36,7 +36,7 @@ func (b *testBackend) open(t *testing.T, maxRows int, maxBytes int64) Store {
 	if b.pgDSN != "" {
 		resetPG(t, b.pgDSN)
 	} else {
-		b.path = filepath.Join(t.TempDir(), "vinifera.db")
+		b.path = filepath.Join(t.TempDir(), "flanj.db")
 	}
 	return b.reopen(t, maxRows, maxBytes)
 }

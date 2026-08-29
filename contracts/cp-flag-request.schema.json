@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://vinifera.io/contracts/v1/cp-flag-request.schema.json",
+  "$id": "https://flanj.io/contracts/v1/cp-flag-request.schema.json",
   "title": "CP POST /api/v1/flags request body",
   "type": "object",
   "additionalProperties": false,
@@ -68,10 +68,10 @@
     },
     "call": {
       "description": "The redacted evidence call. REQUIRED for every finding kind except `definition_change`, which is call-less by nature (qfix2-2026-08-26).",
-      "$ref": "https://vinifera.io/contracts/v1/redacted-call.schema.json"
+      "$ref": "https://flanj.io/contracts/v1/redacted-call.schema.json"
     },
     "finding": {
-      "$ref": "https://vinifera.io/contracts/v1/finding.schema.json"
+      "$ref": "https://flanj.io/contracts/v1/finding.schema.json"
     }
   }
 }

@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vinifera-io/collector/internal/model"
-	"github.com/vinifera-io/collector/internal/redact"
+	"github.com/flanj-io/collector/internal/model"
+	"github.com/flanj-io/collector/internal/redact"
 )
 
 // The drift detector runs AFTER the redaction floor (privacy first — drift only ever

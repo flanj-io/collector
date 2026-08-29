@@ -14,7 +14,7 @@ import (
 	"net/http"
 	"unicode/utf8"
 
-	"github.com/vinifera-io/collector/internal/model"
+	"github.com/flanj-io/collector/internal/model"
 )
 
 // FindingsSyncMaxItems is the control plane's per-request cap (CONTRACTS §5):

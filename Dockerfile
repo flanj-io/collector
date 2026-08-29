@@ -1,4 +1,4 @@
-# Vinifera Collector — multi-stage build.
+# Flanj Collector — multi-stage build.
 #
 #   1. ui      : node builds the Vue/Vite SPA -> dist/
 #   2. build   : golang + ocb build the collector binary, embedding the SPA
@@ -34,8 +34,8 @@ COPY config ./config
 COPY builder-config.yaml ./
 
 # Bring in the built SPA so go:embed all:web/dist embeds the real assets.
-RUN rm -rf extension/viniferaui/web/dist
-COPY --from=ui /ui/dist ./extension/viniferaui/web/dist
+RUN rm -rf extension/flanjui/web/dist
+COPY --from=ui /ui/dist ./extension/flanjui/web/dist
 
 # Install the pinned builder and compile the distribution.
 RUN go install go.opentelemetry.io/collector/cmd/builder@v0.159.0
@@ -43,16 +43,16 @@ RUN builder --config builder-config.yaml
 
 # ---- 3. runtime -----------------------------------------------------------
 FROM gcr.io/distroless/static-debian12:nonroot AS runtime
-COPY --from=build /src/_build/vinifera-collector /vinifera-collector
-COPY --from=build /src/config/config.example.yaml /etc/vinifera/config.yaml
+COPY --from=build /src/_build/flanj-collector /flanj-collector
+COPY --from=build /src/config/config.example.yaml /etc/flanj/config.yaml
 # Tiered-topology role configs (docs/STORE.md "Topologies"): select a role with
-# `--config /etc/vinifera/front.yaml` (N stateless fronts: otlp -> redaction ->
-# drift -> otlphttp) or `--config /etc/vinifera/store.yaml` (the ONE store pod:
+# `--config /etc/flanj/front.yaml` (N stateless fronts: otlp -> redaction ->
+# drift -> otlphttp) or `--config /etc/flanj/store.yaml` (the ONE store pod:
 # otlp -> redaction -> store + UI). The default CMD stays the single-pod config.
-COPY --from=build /src/config/config.front.example.yaml /etc/vinifera/front.yaml
-COPY --from=build /src/config/config.store.example.yaml /etc/vinifera/store.yaml
-COPY --from=build /src/contracts/spec-v1.yaml /etc/vinifera/spec-v1.yaml
-COPY --from=build /src/contracts/spec-v2.yaml /etc/vinifera/spec-v2.yaml
+COPY --from=build /src/config/config.front.example.yaml /etc/flanj/front.yaml
+COPY --from=build /src/config/config.store.example.yaml /etc/flanj/store.yaml
+COPY --from=build /src/contracts/spec-v1.yaml /etc/flanj/spec-v1.yaml
+COPY --from=build /src/contracts/spec-v2.yaml /etc/flanj/spec-v2.yaml
 
 # OTLP/HTTP ingest. The UI (127.0.0.1:5335) is loopback-only and deliberately
 # NOT exposed — reach it via `kubectl port-forward` / an SSH tunnel.
@@ -61,5 +61,5 @@ EXPOSE 4318
 # /data is the persistent volume (PVC) mount point for the embedded store.
 VOLUME ["/data"]
 
-ENTRYPOINT ["/vinifera-collector"]
-CMD ["--config", "/etc/vinifera/config.yaml"]
+ENTRYPOINT ["/flanj-collector"]
+CMD ["--config", "/etc/flanj/config.yaml"]

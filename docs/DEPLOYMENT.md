@@ -1,5 +1,20 @@
 # Deploying the collector — shapes, flows, Kubernetes sketches
 
+> **BREAKING — Vinifera → Flanj rename.** If you deployed under the old brand, every
+> brand-carrying identifier changed and existing manifests/configs will not start until updated:
+>
+> - **Env vars:** `VINIFERA_PG_DSN` → `FLANJ_PG_DSN`, `VINIFERA_STORE_ENDPOINT` → `FLANJ_STORE_ENDPOINT`.
+> - **Config component keys:** `viniferastore|viniferaui|viniferadrift|viniferaredaction` →
+>   `flanjstore|flanjui|flanjdrift|flanjredaction` — the collector refuses to load an old config.
+> - **Baked config paths:** `/etc/vinifera/{config,front,store}.yaml` → `/etc/flanj/…` (fix `--config` args).
+> - **Image / Service names:** `vinifera-collector` → `flanj-collector`, `vinifera-store` → `flanj-store`
+>   (the fronts' default store endpoint follows the new Service name).
+> - **Wire:** OTLP attributes `vinifera.*` → `flanj.*` (upgrade the SDK in the same window) and
+>   headers `X-Vinifera-*` → `X-Flanj-*`.
+> - **SQLite path examples** moved `/data/vinifera.db` → `/data/flanj.db`. The filename is your
+>   config, not a contract: keep `db_path` pointing at your existing PVC file — do NOT lose the store
+>   by switching the path on an existing deployment.
+
 Companion to [STORE.md](STORE.md) (backends, window, migration, topology
 invariants). This page is the *operator's* view: which shape to run, what flows
 through it, and the Kubernetes objects each shape needs. A Helm chart that
@@ -21,18 +36,18 @@ stage runs differs.
 
 ```
  SDK (egress + ingress capture, redaction-at-source)
-  │  OTLP/HTTP  vinifera.* log records, record.type=call
+  │  OTLP/HTTP  flanj.* log records, record.type=call
   ▼
- [otlp receiver] → [viniferaredaction] → [viniferadrift] ──┐
-   defense-in-depth floor     stamps vinifera.call.id,      │ calls + findings (+ spec_info)
+ [otlp receiver] → [flanjredaction] → [flanjdrift] ──┐
+   defense-in-depth floor     stamps flanj.call.id,      │ calls + findings (+ spec_info)
    (idempotent, add-only)     emits finding records,        │ as OTLP log records
                               emits spec_info records       │
                                                             ▼
-                              single pod: [viniferastore exporter] ─► store (sqlite | postgres)
+                              single pod: [flanjstore exporter] ─► store (sqlite | postgres)
                               tiered:     [otlphttp exporter] ─► store pod :4318
-                                            └─► [otlp receiver] → [viniferaredaction] → [viniferastore exporter] ─► store
+                                            └─► [otlp receiver] → [flanjredaction] → [flanjstore exporter] ─► store
                                                             │
-                                    viniferaui (127.0.0.1:5335): Overview / Traffic / Contracts / Threads / Settings
+                                    flanjui (127.0.0.1:5335): Overview / Traffic / Contracts / Threads / Settings
                                                             │  relay: connect · flag · threads — outbound only
                                                             ▼
                                                 control plane  register (once) · POST /api/v1/flags → thread + thread link · thread state
@@ -51,7 +66,7 @@ edge; repeats bump `occurrence_count`); `spec_info` → upsert by integration.
 
 ## Single pod
 
-- Container: `vinifera-collector`, default `CMD --config /etc/vinifera/config.yaml`
+- Container: `flanj-collector`, default `CMD --config /etc/flanj/config.yaml`
   (mount your own over it, or a ConfigMap). `EXPOSE 4318` (OTLP from the SDK).
 - State: `/data` on a PVC (sqlite). `user` is `nonroot` (uid 65532) — pre-chown
   the volume or use an fsGroup.
@@ -65,7 +80,7 @@ edge; repeats bump `occurrence_count`); `spec_info` → upsert by integration.
 ## N pods + shared postgres
 
 - Same container and config as single pod with `backend: postgres` and
-  `dsn: ${env:VINIFERA_PG_DSN}` (Secret). No PVC. `Deployment` with any replica
+  `dsn: ${env:FLANJ_PG_DSN}` (Secret). No PVC. `Deployment` with any replica
   count; every pod identical config. The SDK `Service` load-balances across pods;
   cross-pod dedup/pin/evict is the store's job (STORE.md "Multi-pod semantics").
 - UI on any pod shows the whole picture (shared data); port-forward any one.
@@ -78,8 +93,8 @@ Role configs are baked into the image — no ConfigMap needed for a first run:
 
 | Role | Args | Env | Objects |
 |---|---|---|---|
-| front | `--config /etc/vinifera/front.yaml` | `VINIFERA_STORE_ENDPOINT=http://vinifera-store:4318` | `Deployment` (replicas or `HorizontalPodAutoscaler` on cpu/memory), `Service vinifera-collector:4318` ← the SDK's target |
-| store | `--config /etc/vinifera/store.yaml` | `CP_DEPLOY_TOKEN` (Secret); postgres: `VINIFERA_PG_DSN` | `StatefulSet` replicas **1** + PVC (sqlite) — or `Deployment` with postgres; `Service vinifera-store:4318` (ClusterIP) ← the fronts' target |
+| front | `--config /etc/flanj/front.yaml` | `FLANJ_STORE_ENDPOINT=http://flanj-store:4318` | `Deployment` (replicas or `HorizontalPodAutoscaler` on cpu/memory), `Service flanj-collector:4318` ← the SDK's target |
+| store | `--config /etc/flanj/store.yaml` | `CP_DEPLOY_TOKEN` (Secret); postgres: `FLANJ_PG_DSN` | `StatefulSet` replicas **1** + PVC (sqlite) — or `Deployment` with postgres; `Service flanj-store:4318` (ClusterIP) ← the fronts' target |
 
 Mount your own `front.yaml`/`store.yaml` when you need your spec paths,
 `integration_id`, display names, `cp_base_url` — the baked files are the
@@ -100,7 +115,7 @@ Flow specifics:
   postgres) next to the evidence — nothing to mount or copy, and a replaced pod
   is still Connected. `cp_deploy_token` is only used for that first
   registration.
-- UI: `kubectl port-forward sts/vinifera-store 5335:5335`.
+- UI: `kubectl port-forward sts/flanj-store 5335:5335`.
 - Store pod `:4318` is intra-cluster ingest; keep it ClusterIP (optionally a
   NetworkPolicy allowing only the front pods).
 - Probes: `tcpSocket: 4318` on both roles.
@@ -117,15 +132,15 @@ At the point a single store writer is the limit, switch the store role to
 | Variable | Used by | Meaning |
 |---|---|---|
 | `CP_DEPLOY_TOKEN` | single pod, store pod | bearer token for the control plane (the only outbound auth) |
-| `VINIFERA_STORE_ENDPOINT` | front | the store pod's base URL (default `http://vinifera-store:4318`) |
-| `VINIFERA_PG_DSN` | single pod / store pod with `backend: postgres` | postgres connection string (logged redacted only) |
+| `FLANJ_STORE_ENDPOINT` | front | the store pod's base URL (default `http://flanj-store:4318`) |
+| `FLANJ_PG_DSN` | single pod / store pod with `backend: postgres` | postgres connection string (logged redacted only) |
 
 Any key in the YAML can use `${env:NAME}` / `${env:NAME:-default}` (OpenTelemetry
 collector confmap).
 
 ## Proven by the e2e harness
 
-The three shapes are exercised end-to-end in `vinifera-io/e2e`: `make gate` /
+The three shapes are exercised end-to-end in `flanj-io/e2e`: `make gate` /
 `make stress` (single pod), `make gate-postgres` / `make stress-postgres` (N
 pods, shared postgres), `make gate-tiered` / `make stress-tiered` (2 fronts → 1
 store pod) — the same gate-2 loop, the contracts check and the exact-count

@@ -9,8 +9,8 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/vinifera-io/collector/internal/edge"
-	"github.com/vinifera-io/collector/internal/model"
+	"github.com/flanj-io/collector/internal/edge"
+	"github.com/flanj-io/collector/internal/model"
 )
 
 // sqliteStore is the embedded default backend: one WAL file, one pod. The

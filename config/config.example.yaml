@@ -1,13 +1,13 @@
-# Example Vinifera Collector configuration.
+# Example Flanj Collector configuration.
 #
 # The pipeline is the v0 vertical slice:
 #   OTLP/HTTP logs (:4318)
-#     -> viniferaredaction  (defense-in-depth redaction floor)
-#     -> viniferadrift      (OPTIONAL live-vs-spec + version-diff findings)
-#     -> viniferastore      (writes calls + findings; auto-discovers edges)
-# The viniferastore EXTENSION owns the single store handle (sqlite file or postgres database);
+#     -> flanjredaction  (defense-in-depth redaction floor)
+#     -> flanjdrift      (OPTIONAL live-vs-spec + version-diff findings)
+#     -> flanjstore      (writes calls + findings; auto-discovers edges)
+# The flanjstore EXTENSION owns the single store handle (sqlite file or postgres database);
 # the exporter and UI share it.
-# The viniferaui EXTENSION serves the localhost UI + the flag action.
+# The flanjui EXTENSION serves the localhost UI + the flag action.
 #
 # NO TARGET LIST IS CONFIGURED. Integration edges are auto-discovered from
 # observed traffic, keyed by (peer.host, direction), and classified external vs
@@ -23,31 +23,31 @@
 # the role configs instead: config.front.example.yaml (stateless front: otlp ->
 # redaction -> drift -> otlphttp to the store pod) and config.store.example.yaml
 # (the one store pod: otlp -> redaction -> store + UI). Baked into the image as
-# /etc/vinifera/front.yaml and /etc/vinifera/store.yaml.
+# /etc/flanj/front.yaml and /etc/flanj/store.yaml.
 
 extensions:
   # The store extension owns the single in-process store handle. Two backends
   # (docs/STORE.md): embedded sqlite (default — one pod per db file, db_path on
   # a PVC) or a shared postgres database (multiple collector pods, no PVC).
-  viniferastore:
+  flanjstore:
     backend: sqlite # default; may be omitted
-    db_path: /data/vinifera.db # required iff backend=sqlite — MUST be on a persistent volume (PVC)
+    db_path: /data/flanj.db # required iff backend=sqlite — MUST be on a persistent volume (PVC)
     window_max_rows: 10000
     window_max_bytes: 268435456 # 256 MiB
     # --- postgres variant (multi-pod / BYO-DB) --------------------------------
     # backend: postgres
-    # dsn: ${env:VINIFERA_PG_DSN} # required iff backend=postgres; logged redacted only
-    # db_path: /data/vinifera.db  # OPTIONAL here: one-shot import of the legacy
+    # dsn: ${env:FLANJ_PG_DSN} # required iff backend=postgres; logged redacted only
+    # db_path: /data/flanj.db  # OPTIONAL here: one-shot import of the legacy
     #                             # sqlite file's evidence at start, then renamed
     #                             # *.migrated (see docs/STORE.md)
 
   # localhost UI + read API + POST /api/flag -> control plane.
-  viniferaui:
+  flanjui:
     ui_endpoint: 127.0.0.1:5335 # loopback only — the collector is outbound-only
     integration_id: acme-payments
     consumer_display_name: Acme Consumer Ltd
     provider_display_name: Acme Payments # who the flag is about; defaults to humanized integration_id
-    cp_base_url: https://cp.vinifera.test
+    cp_base_url: https://cp.flanj.test
     cp_deploy_token: ${env:CP_DEPLOY_TOKEN} # used once, for Connect (register); the per-deployment collector key it returns lives in the store
     finding_sync: true # default true — periodic shape-only findings sync to the control plane (id/signature/kind/severity/endpoint/rule/counts/timestamps; expected/actual/detail never leave this collector); false disables the loop
 
@@ -59,33 +59,33 @@ receivers:
 
 processors:
   # The floor is always on; the only knob is `enable_ip: true` (optional IPv4/IPv6 rule, off by default).
-  viniferaredaction: {}
+  flanjredaction: {}
 
   # OPTIONAL drift enhancer. Omit the whole block (or leave spec_path empty) to run
   # capture + edge discovery with no detection. When a spec IS loaded it validates every
   # outbound call, or only the edge named by peer_host.
-  viniferadrift:
+  flanjdrift:
     integration_id: acme-payments # OPTIONAL — labels findings from this spec
-    spec_path: /etc/vinifera/spec-v1.yaml # OPTIONAL — empty disables live-vs-spec (validates OUTBOUND calls)
-    spec_v2_path: /etc/vinifera/spec-v2.yaml # optional — enables the version-diff finding
+    spec_path: /etc/flanj/spec-v1.yaml # OPTIONAL — empty disables live-vs-spec (validates OUTBOUND calls)
+    spec_v2_path: /etc/flanj/spec-v2.yaml # optional — enables the version-diff finding
     peer_host: api.acme.test # optional — scope this spec to one discovered edge by host
     # The contract YOU publish as a provider: validates your INBOUND responses so
     # providers see their own drift, not just their dependencies'.
-    # self_spec_path: /etc/vinifera/self-spec.yaml # OPTIONAL — empty disables self validation
+    # self_spec_path: /etc/flanj/self-spec.yaml # OPTIONAL — empty disables self validation
     #                                               # (mount your own spec; the image bakes none)
     # self_integration_id: self # optional — labels self findings (default "self"; must differ from integration_id)
 
 exporters:
-  # Discovers the viniferastore extension via the collector host; nothing to tune.
-  viniferastore: {}
+  # Discovers the flanjstore extension via the collector host; nothing to tune.
+  flanjstore: {}
 
 service:
-  extensions: [viniferastore, viniferaui]
+  extensions: [flanjstore, flanjui]
   pipelines:
     logs:
       receivers: [otlp]
-      processors: [viniferaredaction, viniferadrift]
-      exporters: [viniferastore]
+      processors: [flanjredaction, flanjdrift]
+      exporters: [flanjstore]
   telemetry:
     logs:
       level: info

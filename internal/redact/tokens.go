@@ -15,7 +15,7 @@ const (
 	tokenClose = "⟧" // ⟧
 )
 
-// Pattern ids (stable — surfaced in vinifera.redaction.patterns).
+// Pattern ids (stable — surfaced in flanj.redaction.patterns).
 const (
 	PAN   = "PAN"
 	EMAIL = "EMAIL"
@@ -28,7 +28,7 @@ const (
 )
 
 // ReportOrder is the canonical order in which fired pattern ids are reported in
-// Result.Patterns / RedactValue hits (and thence vinifera.redaction.patterns).
+// Result.Patterns / RedactValue hits (and thence flanj.redaction.patterns).
 // Matches the ordering asserted by the golden vectors (e.g. combined bodies report
 // ["PAN","EMAIL","CVV"]). Independent of the APPLICATION order in DefaultRecognizers.
 var ReportOrder = []string{PAN, EMAIL, IBAN, SSN, PHONE, CVV, TOKEN, IP}

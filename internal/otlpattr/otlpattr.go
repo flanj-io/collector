@@ -1,4 +1,4 @@
-// Package otlpattr maps between the frozen vinifera.* OTLP log attributes
+// Package otlpattr maps between the frozen flanj.* OTLP log attributes
 // (contracts §2) and the collector's in-process record types. Calls arrive from
 // the SDK as attributes; findings are carried through the internal pipeline as a
 // single JSON attribute so the store exporter can reconstruct them.
@@ -12,89 +12,89 @@ import (
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 
-	"github.com/vinifera-io/collector/internal/edge"
-	"github.com/vinifera-io/collector/internal/model"
+	"github.com/flanj-io/collector/internal/edge"
+	"github.com/flanj-io/collector/internal/model"
 )
 
 // Frozen attribute keys (contracts §2).
 const (
-	AttrCaptureVersion = "vinifera.capture.version"
-	AttrRecordType     = "vinifera.record.type"
-	AttrDirection      = "vinifera.direction"
-	AttrPeerHost       = "vinifera.peer.host"
+	AttrCaptureVersion = "flanj.capture.version"
+	AttrRecordType     = "flanj.record.type"
+	AttrDirection      = "flanj.direction"
+	AttrPeerHost       = "flanj.peer.host"
 	// AttrPeerAddr is the optional socket address (IP) of the peer — transport
 	// detail alongside the peer.host identity; omitted when unknown.
-	AttrPeerAddr       = "vinifera.peer.addr"
-	AttrEdgeClass      = "vinifera.edge.class"
-	AttrCaptureBodies  = "vinifera.capture.bodies"
-	AttrIntegration    = "vinifera.integration"
-	AttrMethod         = "vinifera.http.method"
-	AttrRoute          = "vinifera.http.route"
-	AttrTarget         = "vinifera.http.target"
-	AttrURLFull        = "vinifera.http.url.full"
-	AttrStatusCode     = "vinifera.http.status_code"
-	AttrReqContentType = "vinifera.http.request.content_type"
-	AttrReqBody        = "vinifera.http.request.body"
-	AttrReqBodyTrunc   = "vinifera.http.request.body.truncated"
-	AttrReqHeaders     = "vinifera.http.request.headers"
-	AttrRespContent    = "vinifera.http.response.content_type"
-	AttrRespBody       = "vinifera.http.response.body"
-	AttrRespBodyTrunc  = "vinifera.http.response.body.truncated"
-	AttrRespHeaders    = "vinifera.http.response.headers"
-	AttrCorrRequestID  = "vinifera.corr.request_id"
-	AttrCorrIdemKey    = "vinifera.corr.idempotency_key"
-	AttrCorrTraceID    = "vinifera.corr.trace_id"
-	AttrCorrSpanID     = "vinifera.corr.span_id"
-	AttrDurationMS     = "vinifera.http.duration_ms"
-	AttrRedactApplied  = "vinifera.redaction.applied"
-	AttrRedactPatterns = "vinifera.redaction.patterns"
-	AttrRedactSpecAwr  = "vinifera.redaction.spec_aware"
+	AttrPeerAddr       = "flanj.peer.addr"
+	AttrEdgeClass      = "flanj.edge.class"
+	AttrCaptureBodies  = "flanj.capture.bodies"
+	AttrIntegration    = "flanj.integration"
+	AttrMethod         = "flanj.http.method"
+	AttrRoute          = "flanj.http.route"
+	AttrTarget         = "flanj.http.target"
+	AttrURLFull        = "flanj.http.url.full"
+	AttrStatusCode     = "flanj.http.status_code"
+	AttrReqContentType = "flanj.http.request.content_type"
+	AttrReqBody        = "flanj.http.request.body"
+	AttrReqBodyTrunc   = "flanj.http.request.body.truncated"
+	AttrReqHeaders     = "flanj.http.request.headers"
+	AttrRespContent    = "flanj.http.response.content_type"
+	AttrRespBody       = "flanj.http.response.body"
+	AttrRespBodyTrunc  = "flanj.http.response.body.truncated"
+	AttrRespHeaders    = "flanj.http.response.headers"
+	AttrCorrRequestID  = "flanj.corr.request_id"
+	AttrCorrIdemKey    = "flanj.corr.idempotency_key"
+	AttrCorrTraceID    = "flanj.corr.trace_id"
+	AttrCorrSpanID     = "flanj.corr.span_id"
+	AttrDurationMS     = "flanj.http.duration_ms"
+	AttrRedactApplied  = "flanj.redaction.applied"
+	AttrRedactPatterns = "flanj.redaction.patterns"
+	AttrRedactSpecAwr  = "flanj.redaction.spec_aware"
 	// AttrRedactFields is the optional JSON array of whole-value body redactions
 	// with the original value's captured properties (CONTRACTS §2, entries
 	// {part,path,pattern,props}; sorted by part then path; omitted when empty).
-	AttrRedactFields = "vinifera.redaction.fields"
+	AttrRedactFields = "flanj.redaction.fields"
 
 	// v0.5 MCP attributes (CONTRACTS §2 "MCP tool-call records" +
 	// "`contract_snapshot` records", Step B — parsed here since Step C).
 	// AttrTransport is "mcp" on MCP records; absent = HTTP.
-	AttrTransport = "vinifera.transport"
+	AttrTransport = "flanj.transport"
 	// AttrMCPToolName is the called tool — the operation id detection matches
 	// against the contract (Operation.ID / Match.ToolName).
-	AttrMCPToolName = "vinifera.mcp.tool.name"
+	AttrMCPToolName = "flanj.mcp.tool.name"
 	// AttrMCPIsError is the CallToolResult's isError (also true when the call
 	// itself rejected). Feeds the error-rate metric; never a finding on its own.
-	AttrMCPIsError = "vinifera.mcp.is_error"
+	AttrMCPIsError = "flanj.mcp.is_error"
 	// AttrMCPServerName / AttrMCPServerVersion / AttrMCPProtocolVersion carry
 	// the server identity from initialize, when the client surfaces it.
-	AttrMCPServerName      = "vinifera.mcp.server.name"
-	AttrMCPServerVersion   = "vinifera.mcp.server.version"
-	AttrMCPProtocolVersion = "vinifera.mcp.protocol.version"
+	AttrMCPServerName      = "flanj.mcp.server.name"
+	AttrMCPServerVersion   = "flanj.mcp.server.version"
+	AttrMCPProtocolVersion = "flanj.mcp.protocol.version"
 	// AttrMCPSessionID is the Mcp-Session-Id when the transport exposes one.
-	AttrMCPSessionID = "vinifera.mcp.session.id"
+	AttrMCPSessionID = "flanj.mcp.session.id"
 	// AttrCorrClientRequestID is the JSON-RPC id observed on the client's OWN
 	// outgoing message — CLIENT-generated, labeled as such, never merged into
 	// AttrCorrRequestID (which stays provider-issued only).
-	AttrCorrClientRequestID = "vinifera.corr.client_request_id"
+	AttrCorrClientRequestID = "flanj.corr.client_request_id"
 	// AttrMCPContractSnapshot is the floor-redacted JSON of one COMPLETE
 	// observed tools/list ({"tools":[…], "serverInfo"?, "protocolVersion"?,
 	// "capabilities"?}; tools decodable by contract.ParseToolsList).
-	AttrMCPContractSnapshot = "vinifera.mcp.contract_snapshot"
+	AttrMCPContractSnapshot = "flanj.mcp.contract_snapshot"
 	// AttrMCPToolCount is the number of tools in the snapshot.
-	AttrMCPToolCount = "vinifera.mcp.tool.count"
+	AttrMCPToolCount = "flanj.mcp.tool.count"
 
 	// Internal-only: the whole finding JSON carried on a finding log record.
-	AttrFindingJSON = "vinifera.finding.json"
+	AttrFindingJSON = "flanj.finding.json"
 
 	// Internal-only: the contract metadata (model.SpecInfo) JSON carried on a
 	// spec_info log record; the raw spec document travels in the record Body
 	// as bytes. Emitted by the drift processor so a store pod behind an
 	// otlphttp hop learns which contracts the front collectors loaded.
-	AttrSpecInfoJSON = "vinifera.spec_info.json"
+	AttrSpecInfoJSON = "flanj.spec_info.json"
 
 	// Internal-only: the canonical store id for a call, stamped once by the drift
 	// processor so the finding's source_call_id and the exporter's stored call
 	// share the same id (they each reconstruct the call independently).
-	AttrCallID = "vinifera.call.id"
+	AttrCallID = "flanj.call.id"
 
 	RecordTypeCall     = "call"
 	RecordTypeFinding  = "finding"
@@ -115,7 +115,7 @@ var bodyAttrs = []string{AttrReqBody, AttrRespBody, AttrReqHeaders, AttrRespHead
 // BodyAttrs returns the attribute keys carrying redactable free text.
 func BodyAttrs() []string { return bodyAttrs }
 
-// RecordType reads vinifera.record.type (defaults to "call" when absent).
+// RecordType reads flanj.record.type (defaults to "call" when absent).
 func RecordType(lr plog.LogRecord) string {
 	if v, ok := lr.Attributes().Get(AttrRecordType); ok {
 		return v.Str()
@@ -123,7 +123,7 @@ func RecordType(lr plog.LogRecord) string {
 	return RecordTypeCall
 }
 
-// Transport reads vinifera.transport ("" = HTTP, TransportMCP = MCP).
+// Transport reads flanj.transport ("" = HTTP, TransportMCP = MCP).
 func Transport(lr plog.LogRecord) string {
 	if v, ok := lr.Attributes().Get(AttrTransport); ok {
 		return v.Str()
@@ -179,7 +179,7 @@ func CallFromRecord(lr plog.LogRecord) model.RedactedCall {
 	if v, ok := m.Get(AttrRedactPatterns); ok {
 		_ = json.Unmarshal([]byte(v.Str()), &patterns)
 	}
-	// vinifera.redaction.fields is optional: absent = empty (older SDKs in the
+	// flanj.redaction.fields is optional: absent = empty (older SDKs in the
 	// compatibility window emit none; drift then keeps token-skipping).
 	var fields []model.RedactedFieldRecord
 	if v, ok := m.Get(AttrRedactFields); ok {
@@ -287,7 +287,7 @@ func ContractSnapshotFromRecord(lr plog.LogRecord) (ContractSnapshot, error) {
 }
 
 // EnsureCallID returns the record's stable call id, generating and stamping one
-// (vinifera.call.id) if absent. Call this once, upstream of both the drift
+// (flanj.call.id) if absent. Call this once, upstream of both the drift
 // detector and the store exporter, so the finding's source_call_id matches the
 // stored call's id.
 func EnsureCallID(lr plog.LogRecord) string {
@@ -368,6 +368,6 @@ type sentinel string
 
 func (s sentinel) Error() string { return string(s) }
 
-const errNoFinding = sentinel("record carries no vinifera.finding.json attribute")
-const errNoSpecInfo = sentinel("record carries no vinifera.spec_info.json attribute")
-const errNoSnapshot = sentinel("record carries no vinifera.mcp.contract_snapshot attribute")
+const errNoFinding = sentinel("record carries no flanj.finding.json attribute")
+const errNoSpecInfo = sentinel("record carries no flanj.spec_info.json attribute")
+const errNoSnapshot = sentinel("record carries no flanj.mcp.contract_snapshot attribute")

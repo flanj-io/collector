@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/vinifera-io/collector/internal/model"
+	"github.com/flanj-io/collector/internal/model"
 )
 
 // The v0.1a control-plane client surface (CONTRACTS §5, collector-facing subset).
@@ -118,7 +118,7 @@ type LinkStatus struct {
 //
 // It carries NO finding id, NO thread_url and NO token — a row is a state row,
 // never a way to re-obtain access. The collector joins its own local fields on
-// by thread id (extension/viniferaui/threads.go).
+// by thread id (extension/flanjui/threads.go).
 type ThreadSummary struct {
 	ID                  string      `json:"id"`
 	ThreadPublicID      string      `json:"thread_public_id"`
@@ -286,8 +286,8 @@ func (c *Client) do(ctx context.Context, method, path, bearer string, req any, o
 	}
 	httpReq.Header.Set("Accept", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+bearer)
-	httpReq.Header.Set("X-Vinifera-Collector-Version", c.CollectorVersion)
-	httpReq.Header.Set("X-Vinifera-Schema-Version", fmt.Sprintf("%d", model.SchemaVersion))
+	httpReq.Header.Set("X-Flanj-Collector-Version", c.CollectorVersion)
+	httpReq.Header.Set("X-Flanj-Schema-Version", fmt.Sprintf("%d", model.SchemaVersion))
 
 	client := c.HTTP
 	if client == nil {

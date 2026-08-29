@@ -3,7 +3,7 @@ info:
   title: Acme Payments API
   version: "1.0.0"
   description: >
-    Mock provider spec used by Vinifera v0. The consumer's live traffic is validated against THIS
+    Mock provider spec used by Flanj v0. The consumer's live traffic is validated against THIS
     document. The flagship drift: the live /v1/charges response returns `amount` as a string, but this
     spec declares it an integer -> a live-traffic-vs-spec type mismatch (the provider breaching its own
     published contract).

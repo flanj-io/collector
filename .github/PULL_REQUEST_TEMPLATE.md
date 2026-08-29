@@ -1,4 +1,4 @@
-<!-- Thanks for contributing to the Vinifera Collector! Please fill this out so we can review quickly. -->
+<!-- Thanks for contributing to the Flanj Collector! Please fill this out so we can review quickly. -->
 
 ## What & why
 

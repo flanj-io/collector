@@ -14,13 +14,13 @@ import (
 	"strings"
 )
 
-// Edge classes (CONTRACTS §2 vinifera.edge.class).
+// Edge classes (CONTRACTS §2 flanj.edge.class).
 const (
 	ClassExternal = "external"
 	ClassInternal = "internal"
 )
 
-// Directions (CONTRACTS §2 vinifera.direction).
+// Directions (CONTRACTS §2 flanj.direction).
 const (
 	DirectionClient = "client" // egress — this org is the CONSUMER on the edge
 	DirectionServer = "server" // ingress — this org is the PROVIDER on the edge
@@ -57,7 +57,7 @@ func Orientation(direction string) string {
 
 // Classify returns ClassInternal or ClassExternal for a peer host (which may
 // carry a :port). The heuristic is intentionally identical to the SDK's so a
-// missing vinifera.edge.class can be reconstructed deterministically.
+// missing flanj.edge.class can be reconstructed deterministically.
 func Classify(host string) string {
 	h := normalizeHost(host)
 	if h == "" {

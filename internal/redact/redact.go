@@ -1,5 +1,5 @@
-// Package redact is the collector's Go implementation of the Vinifera redaction
-// floor — the byte-for-byte mirror of the SDK's @vinifera/redaction-patterns
+// Package redact is the collector's Go implementation of the Flanj redaction
+// floor — the byte-for-byte mirror of the SDK's @flanj/redaction-patterns
 // (sdk/packages/redaction-patterns). The floor owns: deep traversal (every string,
 // keys included, undocumented fields included), Luhn-gated PAN detection (never
 // brand/BIN-gated), base64 decode-then-scan, candidate anchoring against word

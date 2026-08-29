@@ -14,7 +14,7 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
-	"github.com/vinifera-io/collector/internal/model"
+	"github.com/flanj-io/collector/internal/model"
 )
 
 func contractsDir() string { return filepath.Join("..", "..", "contracts") }
@@ -52,7 +52,7 @@ func flagSchema(t *testing.T) *jsonschema.Schema {
 			t.Fatalf("add resource %s: %v", name, err)
 		}
 	}
-	sch, err := c.Compile("https://vinifera.io/contracts/v1/cp-flag-request.schema.json")
+	sch, err := c.Compile("https://flanj.io/contracts/v1/cp-flag-request.schema.json")
 	if err != nil {
 		t.Fatalf("compile flag schema: %v", err)
 	}
@@ -101,8 +101,8 @@ func TestFlagBody_ConformsToSchema(t *testing.T) {
 			return
 		}
 		gotAuth = r.Header.Get("Authorization")
-		gotColVer = r.Header.Get("X-Vinifera-Collector-Version")
-		gotSchemaVer = r.Header.Get("X-Vinifera-Schema-Version")
+		gotColVer = r.Header.Get("X-Flanj-Collector-Version")
+		gotSchemaVer = r.Header.Get("X-Flanj-Schema-Version")
 		gotBody, _ = io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)

@@ -2,7 +2,7 @@
 
 ## Reporting a Vulnerability
 
-We take the security of Vinifera seriously — this project sits in the path of real API traffic
+We take the security of Flanj seriously — this project sits in the path of real API traffic
 that routinely carries sensitive and regulated data, and its whole reason for being is to keep that data
 from leaking.
 
@@ -12,7 +12,7 @@ Instead, report them privately via one of:
 
 - GitHub's [private vulnerability reporting](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability)
   ("Report a vulnerability" under the **Security** tab), or
-- email **security@vinifera.io**.
+- email **security@flanj.io**.
 
 Please include:
 

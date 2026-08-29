@@ -10,10 +10,10 @@ import (
 
 	"go.opentelemetry.io/collector/pdata/plog"
 
-	"github.com/vinifera-io/collector/contract/diff"
-	"github.com/vinifera-io/collector/internal/model"
-	"github.com/vinifera-io/collector/internal/otlpattr"
-	"github.com/vinifera-io/collector/internal/redact"
+	"github.com/flanj-io/collector/contract/diff"
+	"github.com/flanj-io/collector/internal/model"
+	"github.com/flanj-io/collector/internal/otlpattr"
+	"github.com/flanj-io/collector/internal/redact"
 )
 
 // loadFixtureRecord parses the first log record of an OTLP/HTTP-JSON fixture

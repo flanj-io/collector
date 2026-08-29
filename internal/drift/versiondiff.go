@@ -9,8 +9,8 @@ import (
 	"github.com/oasdiff/oasdiff/diff"
 	"github.com/oasdiff/oasdiff/load"
 
-	"github.com/vinifera-io/collector/internal/model"
-	"github.com/vinifera-io/collector/internal/otlpattr"
+	"github.com/flanj-io/collector/internal/model"
+	"github.com/flanj-io/collector/internal/otlpattr"
 )
 
 // DetectVersionDiff diffs spec v1 -> v2 and emits one breaking Finding per
@@ -36,7 +36,7 @@ func DetectVersionDiff(pathV1, pathV2, integration string) ([]model.Finding, err
 
 	// Severity override (contract-driven): oasdiff ships
 	// `response-property-enum-value-removed` at INFO because narrowing a response
-	// enum is not breaking for a generic client. Vinifera treats a removed
+	// enum is not breaking for a generic client. Flanj treats a removed
 	// response enum value as a BREAKING contract change — a value the consumer's
 	// code may branch on has silently disappeared from the provider's declared
 	// surface. Promoting it to ERR is what makes it a `severity=breaking` finding

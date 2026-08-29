@@ -10,8 +10,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/vinifera-io/collector/contract"
-	"github.com/vinifera-io/collector/contract/openapi"
+	"github.com/flanj-io/collector/contract"
+	"github.com/flanj-io/collector/contract/openapi"
 )
 
 func fixturesDir() string { return filepath.Join("..", "contracts") }

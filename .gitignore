@@ -1,12 +1,12 @@
 _build/
-/vinifera-collector
+/flanj-collector
 bin/
 node_modules/
 ui/dist/
 ui/node_modules/
 # Built SPA assets are embedded at Docker build time; only the placeholder
 # index.html is tracked so `go:embed all:web/dist` compiles in local dev.
-extension/viniferaui/web/dist/assets/
+extension/flanjui/web/dist/assets/
 *.db
 *.db-wal
 *.db-shm

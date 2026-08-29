@@ -49,7 +49,7 @@ describe('theme preference (Light / Dark, default Light — ux-design-v2 §3)', 
     expect(root.get('data-theme')).toBe('light');
   });
 
-  it('persists under vinifera.theme; Light is written explicitly, not by absence', () => {
+  it('persists under flanj.theme; Light is written explicitly, not by absence', () => {
     const s = fakeStorage();
     expect(loadThemePref(s)).toBe('light'); // key absent = light
     saveThemePref('dark', s);

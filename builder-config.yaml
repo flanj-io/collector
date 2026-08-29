@@ -1,4 +1,4 @@
-# ocb (OpenTelemetry Collector Builder) manifest for the Vinifera Collector.
+# ocb (OpenTelemetry Collector Builder) manifest for the Flanj Collector.
 #
 # THE VERSION TRIAD IS THE #1 BUILD HAZARD (CONTRACTS §1). ocb, the beta
 # components, and the stable components must stay in lockstep:
@@ -8,12 +8,12 @@
 # otlpreceiver is CORE (go.opentelemetry.io/collector/receiver/otlpreceiver), NOT contrib.
 #
 # The five custom components are local Go modules, wired in via gomod + a replace
-# that points at the in-repo source. The root module (github.com/vinifera-io/collector)
+# that points at the in-repo source. The root module (github.com/flanj-io/collector)
 # is also replaced locally because the components import its internal/ packages
 # (redact, drift, store, promote, model, otlpattr).
 dist:
-  name: vinifera-collector
-  description: Vinifera Collector — OTLP in, redact + detect drift near source, embedded rolling-window store, localhost UI. Outbound-only. ELv2.
+  name: flanj-collector
+  description: Flanj Collector — OTLP in, redact + detect drift near source, embedded rolling-window store, localhost UI. Outbound-only. ELv2.
   output_path: ./_build
   otelcol_version: 0.159.0
 
@@ -23,14 +23,14 @@ receivers:
 
 processors:
   # Defense-in-depth redaction floor (idempotent, add-only).
-  - gomod: github.com/vinifera-io/collector/processor/viniferaredaction v0.0.0
+  - gomod: github.com/flanj-io/collector/processor/flanjredaction v0.0.0
   # Technical-adherence drift: live-vs-spec (kin-openapi) + version-diff (oasdiff).
-  - gomod: github.com/vinifera-io/collector/processor/viniferadrift v0.0.0
+  - gomod: github.com/flanj-io/collector/processor/flanjdrift v0.0.0
 
 exporters:
   # Writes call + finding (+ spec_info) records into the shared store. Used by the
   # single-pod collector AND by the store pod of the tiered topology.
-  - gomod: github.com/vinifera-io/collector/exporter/viniferastore v0.0.0
+  - gomod: github.com/flanj-io/collector/exporter/flanjstore v0.0.0
   # Core OTLP/HTTP exporter — the FRONT collectors of the tiered topology forward
   # their (redacted, drift-detected) records to the store pod with it. Same beta
   # pin as the receiver (the version triad must not move). docs/STORE.md.
@@ -38,16 +38,16 @@ exporters:
 
 extensions:
   # SINGLE SQLite owner (WAL, ring-buffer). Shared via host.GetExtensions().
-  - gomod: github.com/vinifera-io/collector/extension/viniferastore v0.0.0
+  - gomod: github.com/flanj-io/collector/extension/flanjstore v0.0.0
   # localhost UI + read API + POST /api/flag -> control plane.
-  - gomod: github.com/vinifera-io/collector/extension/viniferaui v0.0.0
+  - gomod: github.com/flanj-io/collector/extension/flanjui v0.0.0
 
 # Replaces are written verbatim into ./_build/go.mod, so they are relative to
 # that directory (one level under the repo root) — hence the ../ prefix.
 replaces:
-  - github.com/vinifera-io/collector => ../
-  - github.com/vinifera-io/collector/processor/viniferaredaction => ../processor/viniferaredaction
-  - github.com/vinifera-io/collector/processor/viniferadrift => ../processor/viniferadrift
-  - github.com/vinifera-io/collector/exporter/viniferastore => ../exporter/viniferastore
-  - github.com/vinifera-io/collector/extension/viniferastore => ../extension/viniferastore
-  - github.com/vinifera-io/collector/extension/viniferaui => ../extension/viniferaui
+  - github.com/flanj-io/collector => ../
+  - github.com/flanj-io/collector/processor/flanjredaction => ../processor/flanjredaction
+  - github.com/flanj-io/collector/processor/flanjdrift => ../processor/flanjdrift
+  - github.com/flanj-io/collector/exporter/flanjstore => ../exporter/flanjstore
+  - github.com/flanj-io/collector/extension/flanjstore => ../extension/flanjstore
+  - github.com/flanj-io/collector/extension/flanjui => ../extension/flanjui
