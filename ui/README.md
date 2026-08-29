@@ -62,8 +62,19 @@ npm install
 npm run dev        # Vite on :5336, proxying /api -> a running collector (:5335)
 npm run build      # -> dist/  (embedded by the extension)
 npm test           # vitest over the pure helpers
+npm run typecheck  # vue-tsc over src/ INCLUDING the .vue templates
 npm run dev:mock   # proxy /api to :5399 (bring your own mock relay)
 ```
+
+`npm run typecheck` is the only check that reads a `<template>`: `vite build` strips types
+without checking them and `npm test` only loads the `.ts` unit files, so before it existed a
+wrong prop, a renamed field or a null deref inside a template shipped green. CI runs it in the
+`docker-build` job next to the vitest step. `tsconfig.json` turns on the `checkUnknown*`
+template options (off by default in Vue Language Tools 3) and pins
+`useDefineForClassFields: false` — esbuild reads that key, and letting it default off `target`
+would change the shipped bundle's class-field emit. `typescript` is held on the 5.x line
+deliberately: npm's `latest` is now TypeScript 7, which drops the `./lib/tsc` export `vue-tsc`
+loads and fails with `ERR_PACKAGE_PATH_NOT_EXPORTED`.
 
 ## Build → embed pipeline
 

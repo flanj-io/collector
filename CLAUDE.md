@@ -49,7 +49,9 @@ dedup by `signature`, so one drift = one finding (with an `occurrence_count`) = 
 - **The ocb version triad is the #1 build hazard** — keep identical: ocb `v0.159.0`, beta components
   `v0.159.0`, stable components (`component`, `extension`, `pdata`) `v1.65.0`; `config/confighttp` is beta (`v0.159.0`). `otlpreceiver` is **core**, not contrib.
 - `docker build -t flanj-collector .` (multi-stage: node builds UI → go builds binary embedding it).
-- `go test ./...` (unit + contract tests for the custom components; the component modules — e.g. `extension/flanjui` — are their own Go modules, run `go test ./...` inside them too). `cd ui && npm run dev` (UI dev server against a running collector); `npm test` (vitest, pure helpers); `npm run build`.
+- `go test ./...` (unit + contract tests for the custom components; the component modules — e.g. `extension/flanjui` — are their own Go modules, run `go test ./...` inside them too). `cd ui && npm run dev` (UI dev server against a running collector); `npm test` (vitest, pure helpers);
+  `npm run typecheck` (vue-tsc — the ONLY check that reads the `.vue` templates; `npm run build` does not
+  type-check and vitest only loads the `.ts` files); `npm run build`.
 
 ## Layout
 
