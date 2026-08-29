@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"sync"
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/extension"
@@ -47,11 +48,22 @@ func create(_ context.Context, set extension.Settings, cfg component.Config) (ex
 type storeExtension struct {
 	cfg    *Config
 	logger *zap.Logger
-	st     store.Store
+
+	// mu guards st: extensions start in an unspecified order, so another
+	// extension's background goroutine (the UI's finding-sync ticker fires
+	// immediately on its Start) can call Store() while this extension's Start
+	// is still writing the handle.
+	mu sync.Mutex
+	st store.Store
 }
 
-// Store exposes the shared store (store.Provider).
-func (e *storeExtension) Store() store.Store { return e.st }
+// Store exposes the shared store (store.Provider). Nil until Start has opened
+// the backend — a true nil interface, never a typed-nil pointer.
+func (e *storeExtension) Store() store.Store {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.st
+}
 
 // Start opens the single owning connection for the configured backend.
 func (e *storeExtension) Start(_ context.Context, _ component.Host) error {
@@ -94,7 +106,9 @@ func (e *storeExtension) Start(_ context.Context, _ component.Host) error {
 	if err != nil {
 		return fmt.Errorf("viniferastore extension: open store: %w", err)
 	}
+	e.mu.Lock()
 	e.st = st
+	e.mu.Unlock()
 	if e.logger != nil {
 		e.logger.Info("vinifera store opened",
 			zap.String("backend", backend),
@@ -127,10 +141,13 @@ func redactDSN(dsn string) string {
 
 // Shutdown closes the connection.
 func (e *storeExtension) Shutdown(context.Context) error {
-	if e.st == nil {
+	e.mu.Lock()
+	st := e.st
+	e.mu.Unlock()
+	if st == nil {
 		return nil
 	}
-	return e.st.Close()
+	return st.Close()
 }
 
 // compile-time assertions.

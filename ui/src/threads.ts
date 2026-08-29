@@ -36,12 +36,12 @@ export interface ThreadSummary {
  *  control plane cannot carry joined on by the collector — `finding_id` (the
  *  finding chip), `integration`, and `thread_url`.
  *
- *  `thread_url` is EMPTY when this collector holds no copy of the link for a
- *  thread the CP listed (a wiped local store). The thread-link token lives only
- *  in a URL fragment and never comes back from the CP, so there is nothing to
- *  copy: the row still renders and Copy thread link is disabled, never hidden.
- *  Replace link makes a fresh one and the collector persists it for ANY row, so
- *  the disabled state is recoverable in one click. */
+ *  `thread_url` is the collector's own stored copy of the thread link, EMPTY
+ *  when it holds none for a thread the CP listed (a wiped local store) — the
+ *  token lives only in a URL fragment and never comes back from the CP. The
+ *  read-only tab no longer renders it: copying and replacing the link happen
+ *  on the thread page (View thread), and the relay keeps persisting the link
+ *  the flag POST returned so nothing is lost. */
 export interface ThreadRow {
   thread_id: string;
   thread_public_id: string;
@@ -67,20 +67,10 @@ export interface ThreadListResponse {
   has_more: boolean;
 }
 
-/** Copy thread link needs the collector's own copy of the link. See ThreadRow. */
-export function canCopyLink(row: Pick<ThreadRow, 'thread_url'>): boolean {
-  return !!row.thread_url;
-}
-
-/** Why Copy thread link is disabled — and the one click that fixes it. The ellipsis is a UI
- *  convention meaning "opens a confirm", not part of the control's name, so it stays on the BUTTON
- *  and out of the prose. */
-export const NO_LINK_COPY_TITLE = 'This collector has no copy of the link. Replace link makes a new one and keeps it here.';
-
-/** The same fact, rendered in the row's link facts. A disabled button is out of the tab order, so a
- *  `title` alone reaches no keyboard user, no screen reader and no touch device — the row already
- *  has the slot for it, next to the knock note. */
-export const NO_LINK_COPY_NOTE = 'No copy of the link on this collector — Replace link makes a new one.';
+/** The Threads tab is READ-ONLY (slice 2, D1): thread operations live on the
+ *  thread page, and View thread is the only row action. This muted line under
+ *  the tab header says so — always visible, exact deck copy. */
+export const THREADS_READ_ONLY_NOTE = 'Close, reopen and link changes happen on the thread page — View thread opens it.';
 
 /** Shown when the control plane has more threads than one page can carry: say
  *  what is on screen and what is not. There is no cursor to page with. The
@@ -164,12 +154,14 @@ export function linkLabel(summary: ThreadSummary | null | undefined, fmtDate: (i
   }
 }
 
-/** The muted knock note under an active link (shown only when knock_count > 0):
- *  the discoverability fix for safe re-sharing. Muted, never amber — the
- *  counter is lifetime and never resets on Replace, so an amber knock would be
- *  a permanent alarm. */
+/** The muted knock note under an active link (shown only when knock_count > 0).
+ *  Since the tab went read-only (D1) the copy/replace controls live on the
+ *  thread page, so the note points there instead of naming removed buttons
+ *  (UX-gate amendment, 2026-08-29). Muted, never amber — the counter is
+ *  lifetime and never resets on Replace, so an amber knock would be a
+ *  permanent alarm. */
 export function knockNote(n: number): string {
-  return n + ' tried an old link — re-share with Copy thread link, or Replace link to cut off old copies.';
+  return n + ' tried an old link — open the thread page (View thread) to copy or replace the link.';
 }
 
 /** Amber window before expiry: a link expiring within 72h needs review now. */
@@ -272,8 +264,30 @@ export function timeAgo(iso?: string | null, now: number = Date.now()): string {
   return Math.round(h / 24) + 'd ago';
 }
 
-/** `#threads/<thread_id>` deep link → the id, else null. */
+/** `#threads/<thread_id>` deep link → the id, else null. A malformed
+ *  %-sequence decodes to null instead of throwing — applyHash runs in
+ *  onMounted, and an uncaught URIError there kills the whole dashboard. */
 export function threadIdFromHash(hash: string): string | null {
   const m = /^#threads\/([^/?#]+)/.exec(hash || '');
-  return m ? decodeURIComponent(m[1]) : null;
+  if (!m) return null;
+  try {
+    return decodeURIComponent(m[1]);
+  } catch {
+    return null;
+  }
+}
+
+/** `#contracts/<finding_id>` deep link → the finding id, else null. The control
+ *  plane's findings index links here (`<local_ui_url>/#contracts/<finding_id>`)
+ *  to open the Contracts tab on that finding's row — the mirror of
+ *  threadIdFromHash for the Threads tab. A malformed %-sequence decodes to
+ *  null instead of throwing (same rule as threadIdFromHash). */
+export function findingIdFromHash(hash: string): string | null {
+  const m = /^#contracts\/([^/?#]+)/.exec(hash || '');
+  if (!m) return null;
+  try {
+    return decodeURIComponent(m[1]);
+  } catch {
+    return null;
+  }
 }

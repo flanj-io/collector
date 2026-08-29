@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { ApiError, apiGet, apiPost, openThreadInNewTab } from './api';
 import ConnectPanel from './ConnectPanel.vue';
 import FlagSheet from './FlagSheet.vue';
@@ -7,6 +7,7 @@ import ThreadsTab from './ThreadsTab.vue';
 import {
   THREAD_STATE_UNKNOWN,
   chipLabel,
+  findingIdFromHash,
   needsCollectorAddress,
   threadIdFromHash,
   timeAgo,
@@ -128,6 +129,10 @@ const threadsTotal = ref(0);
 const threadsHasMore = ref(false);
 const sheetFinding = ref<Finding | null>(null);
 const highlightThreadId = ref<string | null>(null);
+// `#contracts/<finding_id>` deep link IN (the control plane's findings index
+// links here): the Contracts tab opens with that finding's row highlighted and
+// scrolled into view — the mirror of the Threads tab's `#threads/<id>`.
+const highlightFindingId = ref<string | null>(null);
 const connectBannerDismissed = ref(localStorage.getItem('vinifera.connect.banner.dismissed') === '1');
 // Post-Connect nudge (v0.1b): Connected but no collector address yet — email
 // links can't deep-link back here. One dismissible line on the Connect panel
@@ -277,15 +282,32 @@ function goToThread(threadId: string) {
 
 function applyHash() {
   const id = threadIdFromHash(window.location.hash);
+  const findingId = findingIdFromHash(window.location.hash);
   if (id) {
     highlightThreadId.value = id;
     tab.value = 'threads';
+  } else if (findingId) {
+    highlightFindingId.value = findingId;
+    tab.value = 'contract';
   } else if (window.location.hash === '#threads') {
     tab.value = 'threads';
+  } else if (window.location.hash === '#contracts') {
+    tab.value = 'contract';
   } else if (window.location.hash === '#settings') {
     tab.value = 'settings';
   }
 }
+
+// Scroll the deep-linked finding row into view once findings have loaded and
+// rendered (same pattern as the Threads tab's highlight scroll).
+watch(
+  () => [highlightFindingId.value, findings.value.length],
+  () => {
+    if (!highlightFindingId.value) return;
+    nextTick(() => document.getElementById('finding-' + highlightFindingId.value)?.scrollIntoView({ block: 'center' }));
+  },
+  { immediate: true }
+);
 
 const tab = ref<Tab>('overview');
 const expanded = ref<Record<string, boolean>>({});
@@ -858,6 +880,7 @@ watch(tab, (t) => {
   if (t === 'threads' || t === 'contract') loadThreads();
   if (t === 'settings') loadConnect();
   if (t !== 'threads' && threadIdFromHash(window.location.hash)) history.replaceState(null, '', window.location.pathname);
+  if (t !== 'contract' && findingIdFromHash(window.location.hash)) history.replaceState(null, '', window.location.pathname);
 });
 </script>
 
@@ -1092,8 +1115,10 @@ watch(tab, (t) => {
             </div>
           </div>
 
-          <!-- Acked rows stay in place, dimmed — evidence is never hidden. -->
-          <article v-for="f in p.findings" :key="f.id" class="finding nested" :class="{ acked: isAcked(f) }">
+          <!-- Acked rows stay in place, dimmed — evidence is never hidden.
+               The id is the `#contracts/<finding_id>` deep-link anchor: the
+               control plane's findings index lands on this exact row. -->
+          <article v-for="f in p.findings" :id="'finding-' + f.id" :key="f.id" class="finding nested" :class="{ acked: isAcked(f), highlight: f.id === highlightFindingId }">
             <div class="finding-head">
               <!-- definition_change rows carry the classifier's class badge (deck §3):
                    BREAKING red filled · NON-BREAKING amber filled · DESCRIPTION amber outline —
@@ -1237,7 +1262,6 @@ watch(tab, (t) => {
         :notice="threadsNotice"
         :total="threadsTotal"
         :has-more="threadsHasMore"
-        @refresh="loadThreads"
         @connect="goToSettings"
       />
     </div>
@@ -1705,6 +1729,9 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .finding.nested { background: var(--panel2); margin: 0.75rem 0 0; }
 /* Acked rows: dimmed in place (matches the disabled idiom); evidence stays visible. */
 .finding.acked { opacity: 0.55; }
+/* The #contracts/<finding_id> deep-link target — same accent bar as the
+   Threads tab's highlighted row. */
+.finding.highlight { box-shadow: inset 3px 0 0 var(--accent); }
 
 .tr-detail { border-top: 1px dashed var(--line); background: var(--bg); padding: 0.85rem 0.9rem 1.1rem; }
 .meta-line { color: var(--muted); font-size: 0.82rem; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.75rem; }

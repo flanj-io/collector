@@ -49,6 +49,7 @@ extensions:
     provider_display_name: Acme Payments # who the flag is about; defaults to humanized integration_id
     cp_base_url: https://cp.vinifera.test
     cp_deploy_token: ${env:CP_DEPLOY_TOKEN} # used once, for Connect (register); the per-deployment collector key it returns lives in the store
+    finding_sync: true # default true — periodic shape-only findings sync to the control plane (id/signature/kind/severity/endpoint/rule/counts/timestamps; expected/actual/detail never leave this collector); false disables the loop
 
 receivers:
   otlp:

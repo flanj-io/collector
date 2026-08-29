@@ -3,7 +3,7 @@ module github.com/vinifera-io/collector/processor/viniferadrift
 go 1.26.0
 
 require (
-	github.com/getkin/kin-openapi v0.146.0
+	github.com/getkin/kin-openapi v0.147.0
 	github.com/vinifera-io/collector v0.0.0
 	go.opentelemetry.io/collector/component v1.65.0
 	go.opentelemetry.io/collector/consumer v1.65.0
@@ -59,7 +59,7 @@ require (
 	modernc.org/libc v1.74.4 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-	modernc.org/sqlite v1.56.0 // indirect
+	modernc.org/sqlite v1.57.0 // indirect
 )
 
 replace github.com/vinifera-io/collector => ../../
