@@ -18,7 +18,7 @@ import (
 
 	"github.com/getkin/kin-openapi/openapi3"
 
-	"github.com/vinifera-io/collector/contract"
+	"github.com/flanj-io/collector/contract"
 )
 
 // LoadFile reads and validates an OpenAPI document from disk.

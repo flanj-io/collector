@@ -2,7 +2,7 @@
 * @IdanBerko
 
 # Redaction + detection are the security- and correctness-critical cores.
-/processor/viniferaredaction/ @IdanBerko
-/processor/viniferadrift/ @IdanBerko
+/processor/flanjredaction/ @IdanBerko
+/processor/flanjdrift/ @IdanBerko
 /internal/redact/ @IdanBerko
 /builder-config.yaml @IdanBerko

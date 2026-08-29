@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Connect panel (v0.1a): registers this collector with the Vinifera network —
+// Connect panel (v0.1a): registers this collector with the Flanj network —
 // org name + a contact email the control plane confirms with one click. Shown
 // on the Settings tab and inline in the Flag sheet. Local data viewing is never
 // gated on it; only creating a thread link is.
@@ -140,7 +140,7 @@ function cancelEdit() {
 <template>
   <div class="connect" :class="{ inline }">
     <template v-if="!inline">
-      <h3 class="connect-title">Connect to Vinifera network</h3>
+      <h3 class="connect-title">Connect to Flanj network</h3>
       <p class="connect-sub">We turn a detection into something you can act on with your vendor. Required to create thread links. Viewing your own traffic and findings never needs it.</p>
     </template>
 
@@ -167,7 +167,7 @@ function cancelEdit() {
     <!-- pending -->
     <div v-else-if="status === 'pending' && !editing" class="connect-state pending">
       <p class="connect-line">
-        Check your inbox — we sent "Confirm your Vinifera contact" to <strong>{{ state?.contact_email }}</strong>. The link works once, for 72 hours.
+        Check your inbox — we sent "Confirm your Flanj contact" to <strong>{{ state?.contact_email }}</strong>. The link works once, for 72 hours.
       </p>
       <p v-if="resent" class="connect-note">Sent again to {{ state?.contact_email }}.</p>
       <p v-if="errorMsg" class="error">{{ errorMsg }}</p>

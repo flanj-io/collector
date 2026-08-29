@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vinifera-io/collector/internal/model"
+	"github.com/flanj-io/collector/internal/model"
 )
 
 // shapeSentinelFinding is a stored finding whose observed values carry sentinel
@@ -203,8 +203,8 @@ func TestPostFindings(t *testing.T) {
 	s.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.method, s.path = r.Method, r.URL.Path
 		s.auth = r.Header.Get("Authorization")
-		gotVersion = r.Header.Get("X-Vinifera-Collector-Version")
-		gotSchema = r.Header.Get("X-Vinifera-Schema-Version")
+		gotVersion = r.Header.Get("X-Flanj-Collector-Version")
+		gotSchema = r.Header.Get("X-Flanj-Schema-Version")
 		_ = json.NewDecoder(r.Body).Decode(&s.body)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)

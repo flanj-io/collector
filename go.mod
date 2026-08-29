@@ -1,4 +1,4 @@
-module github.com/vinifera-io/collector
+module github.com/flanj-io/collector
 
 go 1.26.0
 

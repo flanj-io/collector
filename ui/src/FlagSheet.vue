@@ -5,7 +5,7 @@
 // confirmed contact — the sheet polls and unlocks the moment the click lands),
 // compose (evidence line, "what leaves this collector", the optional message,
 // Create thread) and the success state (the link, Copy thread link, Copy link +
-// message, View thread). Nothing is emailed by Vinifera on flag.
+// message, View thread). Nothing is emailed by Flanj on flag.
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { ApiError, apiPost, openThreadInNewTab } from './api';
 import { copyText, selectInput } from './clipboard';
@@ -48,7 +48,7 @@ const emit = defineEmits<{
   (e: 'update:connect', s: ConnectState): void;
 }>();
 
-const DISCLOSURE_KEY = 'vinifera.flag.disclosure.seen';
+const DISCLOSURE_KEY = 'flanj.flag.disclosure.seen';
 
 // v0.5: MCP findings carry the deck's MCP evidence / IDs / disclosure / prefill
 // copy; HTTP findings keep the v0.1a strings unchanged.
@@ -219,7 +219,7 @@ watch(result, (r) => {
       <template v-if="!connected && !result">
         <h2 id="sheet-title" class="sheet-title">New thread with {{ provider }}</h2>
         <p v-if="connect?.status === 'pending'" class="prompt">
-          Confirm <strong>{{ contactEmail }}</strong> first — we sent "Confirm your Vinifera contact".
+          Confirm <strong>{{ contactEmail }}</strong> first — we sent "Confirm your Flanj contact".
         </p>
         <p v-else class="prompt">
           Connect first. Creating a thread link needs your org name and a confirmed contact email — viewing local data never does.

@@ -133,11 +133,11 @@ const highlightThreadId = ref<string | null>(null);
 // links here): the Contracts tab opens with that finding's row highlighted and
 // scrolled into view — the mirror of the Threads tab's `#threads/<id>`.
 const highlightFindingId = ref<string | null>(null);
-const connectBannerDismissed = ref(localStorage.getItem('vinifera.connect.banner.dismissed') === '1');
+const connectBannerDismissed = ref(localStorage.getItem('flanj.connect.banner.dismissed') === '1');
 // Post-Connect nudge (v0.1b): Connected but no collector address yet — email
 // links can't deep-link back here. One dismissible line on the Connect panel
 // and the Threads tab; the dismissal is remembered (shared by both).
-const addressNudgeDismissed = ref(localStorage.getItem('vinifera.address.nudge.dismissed') === '1');
+const addressNudgeDismissed = ref(localStorage.getItem('flanj.address.nudge.dismissed') === '1');
 const focusAddressTick = ref(0);
 
 const connectStatus = computed(() => connect.value?.status ?? 'disconnected');
@@ -211,7 +211,7 @@ function onConnectUpdated(s: ConnectState) {
 
 function dismissConnectBanner() {
   connectBannerDismissed.value = true;
-  localStorage.setItem('vinifera.connect.banner.dismissed', '1');
+  localStorage.setItem('flanj.connect.banner.dismissed', '1');
 }
 
 const showAddressNudge = computed(
@@ -220,7 +220,7 @@ const showAddressNudge = computed(
 
 function dismissAddressNudge() {
   addressNudgeDismissed.value = true;
-  localStorage.setItem('vinifera.address.nudge.dismissed', '1');
+  localStorage.setItem('flanj.address.nudge.dismissed', '1');
 }
 
 // "Add address" from the Threads tab: jump to Settings with the address field focused.
@@ -314,7 +314,7 @@ const expanded = ref<Record<string, boolean>>({});
 
 // ─── Appearance (Settings): Light / Dark, default LIGHT ───────────────────
 // ux-design-v2 §3: the collector matches the thread page — light by default,
-// dark opt-in, NO System option. Persisted as `vinifera.theme` and applied as
+// dark opt-in, NO System option. Persisted as `flanj.theme` and applied as
 // data-theme on <html>; the dark palette lives under [data-theme="dark"] only
 // and the prefers-color-scheme media query is gone from the stylesheet.
 const themePref = ref<ThemePref>(loadThemePref());
@@ -600,7 +600,7 @@ const cardGroups = computed(() => [
     sub: 'the API you publish — your inbound responses validated against it',
     cards: contractCards.value.self,
     emptyText: contractsKnown.value
-      ? 'No self contract loaded. Point viniferadrift.self_spec_path at the OpenAPI document you publish to catch your own drift before your consumers do.'
+      ? 'No self contract loaded. Point flanjdrift.self_spec_path at the OpenAPI document you publish to catch your own drift before your consumers do.'
       : ''
   },
   {
@@ -609,7 +609,7 @@ const cardGroups = computed(() => [
     sub: 'the contracts your providers publish — your outbound calls validated against them',
     cards: contractCards.value.providers,
     emptyText:
-      'No provider contracts yet. Point viniferadrift.spec_path at a provider’s OpenAPI document, or send traffic through the SDK to discover providers.'
+      'No provider contracts yet. Point flanjdrift.spec_path at a provider’s OpenAPI document, or send traffic through the SDK to discover providers.'
   }
 ]);
 
@@ -678,7 +678,7 @@ const mcpOverview = computed(() =>
 // Contracts tab with a Flag control, like every other definition change.
 // Visible to you only; these items NEVER carry a flag control.
 //
-// Nor an acknowledged state: ackable() (extension/viniferaui/acks.go) requires
+// Nor an acknowledged state: ackable() (extension/flanjui/acks.go) requires
 // kind=definition_change, so a stale_client finding can never be acknowledged
 // and the band carries no acked rendering. The band's items used to be able to
 // be acked back when DESCRIPTION lived here.
@@ -887,7 +887,7 @@ watch(tab, (t) => {
 <template>
   <div class="page">
     <header class="topbar">
-      <div class="brand">Vinifera<span>Collector</span></div>
+      <div class="brand">Flanj<span>Collector</span></div>
       <div class="meta" v-if="health">
         <!-- Org identity only — never the integration slug (it scopes a spec,
              not this org; it lives on the Overview headline + its Contracts card). -->
@@ -913,7 +913,7 @@ watch(tab, (t) => {
          interstitial. Above the tab strip so it shows on whichever tab is
          opened first, exactly once per browser. -->
     <div v-if="showThemeFlipNotice" class="connect-banner info theme-flip-banner">
-      <span>Vinifera is light by default now. Dark is in Settings → Appearance.</span>
+      <span>Flanj is light by default now. Dark is in Settings → Appearance.</span>
       <span class="connect-banner-actions">
         <button type="button" class="btn small" @click="openAppearance">Open Appearance</button>
         <button type="button" class="btn ghost small" aria-label="Dismiss" @click="dismissThemeFlipNotice">Dismiss</button>
@@ -1098,7 +1098,7 @@ watch(tab, (t) => {
           </div>
           <p v-else-if="mcpHosts.has(p.peerHost)" class="prov-nospec">{{ MCP_NO_SPEC_NEEDED }}</p>
           <p v-else class="prov-nospec">
-            No spec loaded for this provider — point <code>viniferadrift.spec_path</code> at its
+            No spec loaded for this provider — point <code>flanjdrift.spec_path</code> at its
             OpenAPI document to validate live traffic against it.
           </p>
 

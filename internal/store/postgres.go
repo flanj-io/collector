@@ -9,8 +9,8 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 
-	"github.com/vinifera-io/collector/internal/edge"
-	"github.com/vinifera-io/collector/internal/model"
+	"github.com/flanj-io/collector/internal/edge"
+	"github.com/flanj-io/collector/internal/model"
 )
 
 // Advisory-lock keys (PostgreSQL advisory locks are scoped to the connected

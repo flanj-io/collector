@@ -5,7 +5,7 @@ package store
 // postgres backend upholds the store invariants (dedup, idempotency, pinning,
 // eviction convergence) without the sqlite backend's process mutex. Postgres
 // only — two handles on one sqlite file would violate its one-pod-per-file
-// contract — and skipped unless VINIFERA_TEST_PG_DSN is set.
+// contract — and skipped unless FLANJ_TEST_PG_DSN is set.
 
 import (
 	"fmt"
@@ -13,15 +13,15 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/vinifera-io/collector/internal/model"
+	"github.com/flanj-io/collector/internal/model"
 )
 
 // pgPods opens n independent store handles on one freshly reset database.
 func pgPods(t *testing.T, n, maxRows int, maxBytes int64) []Store {
 	t.Helper()
-	dsn := os.Getenv("VINIFERA_TEST_PG_DSN")
+	dsn := os.Getenv("FLANJ_TEST_PG_DSN")
 	if dsn == "" {
-		t.Skip("VINIFERA_TEST_PG_DSN not set — skipping postgres multi-pod test")
+		t.Skip("FLANJ_TEST_PG_DSN not set — skipping postgres multi-pod test")
 	}
 	resetPG(t, dsn)
 	pods := make([]Store, n)

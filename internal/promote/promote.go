@@ -16,8 +16,8 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/vinifera-io/collector/internal/model"
-	"github.com/vinifera-io/collector/internal/redact"
+	"github.com/flanj-io/collector/internal/model"
+	"github.com/flanj-io/collector/internal/redact"
 )
 
 // FlagRequest is the POST /api/v1/flags body. It matches

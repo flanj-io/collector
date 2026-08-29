@@ -1,4 +1,4 @@
-# Contributing to the Vinifera Collector
+# Contributing to the Flanj Collector
 
 Thanks for your interest in contributing. This repository is licensed under the **Elastic License 2.0
 (ELv2)** — source-available; self-host/modify/internal-use unrestricted, managed-hosting-to-third-parties

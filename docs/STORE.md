@@ -4,7 +4,7 @@ The store is the collector's **rolling evidence window**: recent redacted calls
 (ring buffer), drift findings (deduped per endpoint), auto-discovered edges, and
 the loaded contract metadata. It is *not* a system of record — evidence worth
 keeping is flagged to the control plane. Two backends implement it; pick per
-deployment in the `viniferastore` extension config.
+deployment in the `flanjstore` extension config.
 
 ## Choosing a backend
 
@@ -23,8 +23,8 @@ platform policy forbids in-cluster state.
 
 ```yaml
 extensions:
-  viniferastore:
-    db_path: /data/vinifera.db   # MUST be on a persistent volume
+  flanjstore:
+    db_path: /data/flanj.db   # MUST be on a persistent volume
     window_max_rows: 10000
     window_max_bytes: 268435456  # 256 MiB
 ```
@@ -38,9 +38,9 @@ supported.
 
 ```yaml
 extensions:
-  viniferastore:
+  flanjstore:
     backend: postgres
-    dsn: ${env:VINIFERA_PG_DSN}  # e.g. postgres://user:pass@host:5432/vinifera?sslmode=require
+    dsn: ${env:FLANJ_PG_DSN}  # e.g. postgres://user:pass@host:5432/flanj?sslmode=require
     window_max_rows: 200000      # size the window to the DB you provisioned
     window_max_bytes: 8589934592 # 8 GiB
 ```
@@ -49,7 +49,7 @@ extensions:
   collector only ever logs the DSN redacted.
 - Use **one database per collector deployment** (the store owns its tables and
   uses database-scoped advisory locks for coordination).
-- Every pod sharing the database must run **identical `viniferastore` config**
+- Every pod sharing the database must run **identical `flanjstore` config**
   (same windows, same DSN).
 - No PVC is needed in this mode.
 
@@ -80,7 +80,7 @@ shape and the Kubernetes objects each needs — in [DEPLOYMENT.md](DEPLOYMENT.md
 | | Single pod | N pods + shared postgres | Tiered: N fronts → 1 store |
 |---|---|---|---|
 | Pipeline | one collector: otlp → redaction → drift → store + UI | N identical collectors, each the full pipeline, `backend: postgres` | **fronts**: otlp → redaction → drift → `otlphttp`; **store pod**: otlp → redaction → store + UI |
-| Config | `/etc/vinifera/config.yaml` | same, `backend: postgres` | `/etc/vinifera/front.yaml` + `/etc/vinifera/store.yaml` (`config/config.*.example.yaml`) |
+| Config | `/etc/flanj/config.yaml` | same, `backend: postgres` | `/etc/flanj/front.yaml` + `/etc/flanj/store.yaml` (`config/config.*.example.yaml`) |
 | State | sqlite on a PVC (or postgres) | postgres only | store pod: sqlite on ONE PVC (or postgres); fronts: none |
 | Scale | 1 | N writers (postgres) | N stateless fronts (HPA on cpu/memory); store = 1 on sqlite, may scale on postgres |
 | UI | the pod | any pod (shared data) | the store pod |
@@ -115,13 +115,13 @@ no custom protocol exists between the tiers.
 
 ### Tiered: invariants
 
-1. **The store pod never runs `viniferadrift`** — it would re-detect every
+1. **The store pod never runs `flanjdrift`** — it would re-detect every
    forwarded call and double the findings' `occurrence_count`. Drift runs
    exactly once per call, on the front.
-2. **Fronts always run `viniferadrift`**, even with no spec: it stamps the
-   canonical `vinifera.call.id`, which makes front→store retries idempotent and
+2. **Fronts always run `flanjdrift`**, even with no spec: it stamps the
+   canonical `flanj.call.id`, which makes front→store retries idempotent and
    ties each finding to its call across the hop.
-3. The store pod keeps `viniferaredaction` on (idempotent, add-only, skips
+3. The store pod keeps `flanjredaction` on (idempotent, add-only, skips
    non-call records): the floor on the last hop before persistence.
 4. All SDK traffic enters via fronts; the store pod's `:4318` is for fronts
    (ClusterIP, intra-cluster). The UI stays loopback on the store pod —
@@ -161,17 +161,17 @@ Switching an existing deployment is a two-line config change — keep `db_path`:
 
 ```yaml
 extensions:
-  viniferastore:
+  flanjstore:
     backend: postgres            # was: (sqlite, implicit)
-    dsn: ${env:VINIFERA_PG_DSN}  # new
-    db_path: /data/vinifera.db   # keep pointing at the old file
+    dsn: ${env:FLANJ_PG_DSN}  # new
+    db_path: /data/flanj.db   # keep pointing at the old file
 ```
 
 At the next start, the collector runs a **one-shot import** of the file's
 durable evidence into postgres — pinned calls (evidence findings reference),
 all findings (stable ids + occurrence counts, so flag idempotency survives),
 discovered edges, and the per-deployment settings — then renames the file to
-`/data/vinifera.db.migrated`.
+`/data/flanj.db.migrated`.
 Unpinned window traffic is deliberately *not* copied: it is a rolling buffer
 and refills within minutes. Loaded contracts re-record themselves at start.
 
@@ -185,7 +185,7 @@ and refills within minutes. Loaded contracts re-record themselves at start.
 
 ## Invariants (do not regress)
 
-1. The `viniferastore` extension is the **single in-process owner** of the
+1. The `flanjstore` extension is the **single in-process owner** of the
    store handle; every component reaches it via `store.Provider`.
 2. sqlite: one pod per file. postgres: N pods per database, and every cross-pod
    race (dedup, pinning, eviction, DDL, migration) is resolved inside

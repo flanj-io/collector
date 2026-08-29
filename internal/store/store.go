@@ -1,6 +1,6 @@
 // Package store is the collector's call/finding/edge store — the rolling
 // evidence window written by the store exporter, read by the UI extension, and
-// stamped with contract metadata by the drift processor. The viniferastore
+// stamped with contract metadata by the drift processor. The flanjstore
 // extension owns the single in-process handle; every other component reaches it
 // via Provider over host.GetExtensions() (collector CLAUDE.md non-negotiable #1).
 //
@@ -28,8 +28,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/vinifera-io/collector/internal/edge"
-	"github.com/vinifera-io/collector/internal/model"
+	"github.com/flanj-io/collector/internal/edge"
+	"github.com/flanj-io/collector/internal/model"
 )
 
 // evictBatchMax caps how many rows a single eviction DELETE may remove. Steady
@@ -39,7 +39,7 @@ import (
 const evictBatchMax = 256
 
 // Store is the backend-agnostic store surface. Both backends satisfy it; the
-// viniferastore extension picks the implementation from its config.
+// flanjstore extension picks the implementation from its config.
 type Store interface {
 	// InsertCall stores a RedactedCall (idempotent on id), discovers/updates the
 	// edge it belongs to, and then runs eviction.

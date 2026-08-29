@@ -4,8 +4,8 @@
 // (leaving that query in place while defaulting to light would give a dark-OS
 // user a dark first paint and quietly reintroduce System).
 //
-// Storage mirrors the thread page's `vinifera.peek.theme` exactly: the same key
-// `vinifera.theme`, values 'light' | 'dark', KEY ABSENT = light. `data-theme` is
+// Storage mirrors the thread page's `flanj.peek.theme` exactly: the same key
+// `flanj.theme`, values 'light' | 'dark', KEY ABSENT = light. `data-theme` is
 // always stamped on <html> — the dark palette lives under [data-theme="dark"]
 // only.
 //
@@ -19,10 +19,10 @@
 
 export type ThemePref = 'light' | 'dark';
 
-export const THEME_STORAGE_KEY = 'vinifera.theme';
+export const THEME_STORAGE_KEY = 'flanj.theme';
 
 /** Per-browser, permanent dismissal of the one-time light-default notice. */
-export const THEME_FLIP_NOTICE_KEY = 'vinifera.theme.flip.dismissed';
+export const THEME_FLIP_NOTICE_KEY = 'flanj.theme.flip.dismissed';
 
 /** Anything unknown (including null / the legacy 'system' value) is Light. */
 export function normalizeTheme(v: string | null | undefined): ThemePref {

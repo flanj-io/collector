@@ -4,7 +4,7 @@
 // finding.schema.json). Readers are tolerant of unknown fields (§7).
 package model
 
-import "github.com/vinifera-io/collector/internal/redact"
+import "github.com/flanj-io/collector/internal/redact"
 
 // SchemaVersion is the frozen contract version carried by every record.
 const SchemaVersion = 1
@@ -16,7 +16,7 @@ type Correlation struct {
 	TraceID        string `json:"trace_id,omitempty"`
 	SpanID         string `json:"span_id,omitempty"`
 	// ClientRequestID is the JSON-RPC id observed on the client's OWN outgoing
-	// MCP message (CONTRACTS §2 vinifera.corr.client_request_id, v0.5). It is
+	// MCP message (CONTRACTS §2 flanj.corr.client_request_id, v0.5). It is
 	// CLIENT-generated: it appears in the provider's logs only if they log it.
 	// Rendered as "JSON-RPC id (client-generated)" and NEVER merged into
 	// RequestID, which stays provider-issued only.
@@ -53,11 +53,11 @@ type RedactedCall struct {
 	Integration   string `json:"integration"`
 	Direction     string `json:"direction"`
 	// PeerHost is the other end's host[:port] — the edge key (CONTRACTS §2
-	// vinifera.peer.host). Local discovery metadata; not part of the frozen
+	// flanj.peer.host). Local discovery metadata; not part of the frozen
 	// RedactedCall surface but carried for edge attribution.
 	PeerHost string `json:"peer_host,omitempty"`
 	// PeerAddr is the peer's socket address (IP) when the SDK captured one
-	// (CONTRACTS §2 vinifera.peer.addr, optional). Transport detail for display;
+	// (CONTRACTS §2 flanj.peer.addr, optional). Transport detail for display;
 	// never an identity or edge key.
 	PeerAddr string `json:"peer_addr,omitempty"`
 	// EdgeClass is the SDK/heuristic classification of PeerHost: external|internal.

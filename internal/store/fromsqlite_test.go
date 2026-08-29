@@ -1,7 +1,7 @@
 package store
 
 // One-shot sqlite → postgres migration tests. Postgres-gated like the rest of
-// the postgres suite: skipped unless VINIFERA_TEST_PG_DSN is set.
+// the postgres suite: skipped unless FLANJ_TEST_PG_DSN is set.
 
 import (
 	"fmt"
@@ -15,7 +15,7 @@ import (
 // Returns the file path and the pinned call / expected finding ids.
 func buildLegacyStore(t *testing.T) (path, pinnedID, findingID string) {
 	t.Helper()
-	path = filepath.Join(t.TempDir(), "vinifera.db")
+	path = filepath.Join(t.TempDir(), "flanj.db")
 	s, err := OpenSQLite(path, 0, 0)
 	if err != nil {
 		t.Fatalf("open legacy sqlite: %v", err)

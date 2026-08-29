@@ -89,7 +89,7 @@ export function isAckable(f: Pick<Finding, 'kind' | 'severity' | 'rule'>): boole
 /**
  * The evidence version an acknowledgement on this finding binds to: the AFTER
  * snapshot hash for a definition_change, empty for every other kind (mirrors
- * ackEvidenceVersion in extension/viniferaui/acks.go).
+ * ackEvidenceVersion in extension/flanjui/acks.go).
  */
 export function ackEvidenceVersion(f: Pick<Finding, 'kind' | 'spec_version_to'>): string {
   return f.kind === 'definition_change' ? f.spec_version_to || '' : '';

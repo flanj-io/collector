@@ -1,12 +1,12 @@
 {
-  "name": "@vinifera/collector-ui",
+  "name": "@flanj/collector-ui",
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "description": "Vinifera Collector local UI — Health divergence + Contract drift, Connect + thread links. Served embedded by the viniferaui extension.",
+  "description": "Flanj Collector local UI — Health divergence + Contract drift, Connect + thread links. Served embedded by the flanjui extension.",
   "scripts": {
     "dev": "vite",
-    "dev:mock": "VINIFERA_API_PROXY=http://127.0.0.1:5399 vite",
+    "dev:mock": "FLANJ_API_PROXY=http://127.0.0.1:5399 vite",
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run"

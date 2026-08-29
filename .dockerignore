@@ -1,6 +1,6 @@
 # Build outputs and caches — never send to the Docker build context.
 _build/
-/vinifera-collector
+/flanj-collector
 bin/
 .gopath/
 .gocache/
@@ -9,7 +9,7 @@ go.mod.test
 ui/dist/
 # The SPA is rebuilt by the node stage and embedded fresh; keep any local build
 # out of the context (the placeholder index.html is restored by the build stage).
-extension/viniferaui/web/dist/assets/
+extension/flanjui/web/dist/assets/
 *.db
 *.db-wal
 *.db-shm

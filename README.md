@@ -1,7 +1,7 @@
-# Vinifera Collector
+# Flanj Collector
 
 A single-binary [OpenTelemetry Collector](https://opentelemetry.io/docs/collector/) distribution for the
-**local, self-hosted** side of Vinifera. It receives captured calls from the [SDK](https://github.com/vinifera-io/sdk),
+**local, self-hosted** side of Flanj. It receives captured calls from the [SDK](https://github.com/flanj-io/sdk),
 re-applies redaction (defense-in-depth), validates live traffic against a provider's OpenAPI spec to
 detect **drift**, stores redacted calls in an embedded rolling-window store, and serves a **local UI** on
 `localhost` — all inside your own environment. **Raw calls never leave.**
@@ -20,6 +20,22 @@ UI embedded in the binary).
 
 **We turn a detection into something you can act on with your vendor.**
 Open-source SDK (Apache-2.0) and source-available collector (ELv2); hosted network layer.
+
+## Renamed: Vinifera → Flanj (BREAKING)
+
+This project was renamed from **Vinifera** to **Flanj** before launch. Every brand-carrying
+identifier changed with it — there are no compatibility aliases:
+
+- **Env vars:** `VINIFERA_*` → `FLANJ_*` (`FLANJ_PG_DSN`, `FLANJ_STORE_ENDPOINT`, `FLANJ_TEST_PG_DSN`, `FLANJ_API_PROXY`).
+- **Collector config keys:** component types `viniferastore|viniferaui|viniferadrift|viniferaredaction` →
+  `flanjstore|flanjui|flanjdrift|flanjredaction` — an existing `config.yaml` fails to load until updated.
+- **Baked config paths:** `/etc/vinifera/*.yaml` → `/etc/flanj/*.yaml` (update `--config` args in your manifests).
+- **OTLP wire attributes:** `vinifera.*` → `flanj.*` — the SDK and collector must be upgraded together.
+- **HTTP headers:** `X-Vinifera-*` → `X-Flanj-*`. **npm scope:** `@vinifera/*` → `@flanj/*`.
+- **Image/binary/Service names:** `vinifera-collector` → `flanj-collector`, `vinifera-store` → `flanj-store`.
+- **Go module path:** `github.com/vinifera-io/collector` → `github.com/flanj-io/collector`.
+
+See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the operator checklist.
 
 ## Status
 

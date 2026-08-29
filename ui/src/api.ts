@@ -1,10 +1,10 @@
 // Thin fetch helpers for the collector's localhost relay. Every mutating route
-// requires `X-Vinifera-UI: 1` + a JSON content type (the relay refuses anything
+// requires `X-Flanj-UI: 1` + a JSON content type (the relay refuses anything
 // else, and the custom header forces a CORS preflight the relay never answers,
 // so a foreign page cannot drive it). Errors come back as `{error, message}`;
 // ApiError carries both so the UI can switch on the code and show the message.
 
-export const UI_HEADERS: Record<string, string> = { 'X-Vinifera-UI': '1', 'Content-Type': 'application/json' };
+export const UI_HEADERS: Record<string, string> = { 'X-Flanj-UI': '1', 'Content-Type': 'application/json' };
 
 export class ApiError extends Error {
   status: number;

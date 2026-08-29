@@ -1,23 +1,23 @@
-# Vinifera Collector — FRONT role of the tiered topology (docs/STORE.md "Topologies").
+# Flanj Collector — FRONT role of the tiered topology (docs/STORE.md "Topologies").
 #
 # N front collectors are STATELESS (no store, no UI, no PVC — scale them with
 # replicas or an HPA). Each one receives the SDK's OTLP, applies the redaction
 # floor and drift detection NEAR THE TRAFFIC, and forwards the resulting records
 # (calls, findings, contract metadata) to the ONE store pod over OTLP/HTTP:
 #
-#   SDK -> OTLP/HTTP (:4318) -> viniferaredaction -> viniferadrift -> otlphttp -> store pod (:4318)
+#   SDK -> OTLP/HTTP (:4318) -> flanjredaction -> flanjdrift -> otlphttp -> store pod (:4318)
 #
 # Invariants:
-#   * A front ALWAYS runs viniferadrift, even with no spec: it stamps the canonical
-#     `vinifera.call.id`, which is what makes front->store retries idempotent and
+#   * A front ALWAYS runs flanjdrift, even with no spec: it stamps the canonical
+#     `flanj.call.id`, which is what makes front->store retries idempotent and
 #     ties each finding to its call across the hop.
-#   * A front has NO viniferastore extension/exporter and NO viniferaui — the store
+#   * A front has NO flanjstore extension/exporter and NO flanjui — the store
 #     pod owns the window (dedup, pinning, eviction) and serves the UI + flag.
 #   * All SDK traffic enters via fronts; the store pod's :4318 is for fronts.
 #
-# Baked into the image as /etc/vinifera/front.yaml — select with
-#   --config /etc/vinifera/front.yaml
-# Every vinifera.* key here is frozen in contracts/CONTRACTS.md §8; `otlphttp` is
+# Baked into the image as /etc/flanj/front.yaml — select with
+#   --config /etc/flanj/front.yaml
+# Every flanj.* key here is frozen in contracts/CONTRACTS.md §8; `otlphttp` is
 # the core OpenTelemetry exporter (its keys are upstream's).
 
 receivers:
@@ -28,16 +28,16 @@ receivers:
 
 processors:
   # The floor is always on; the only knob is `enable_ip: true` (optional, off by default).
-  viniferaredaction: {}
+  flanjredaction: {}
 
   # Drift detection runs HERE, once per call. Specs are optional; the processor
   # must still be in the pipeline (call-id stamping — see invariants above).
-  viniferadrift:
+  flanjdrift:
     integration_id: acme-payments
-    spec_path: /etc/vinifera/spec-v1.yaml # OPTIONAL — empty disables live-vs-spec
-    spec_v2_path: /etc/vinifera/spec-v2.yaml # optional — enables the version-diff finding
+    spec_path: /etc/flanj/spec-v1.yaml # OPTIONAL — empty disables live-vs-spec
+    spec_v2_path: /etc/flanj/spec-v2.yaml # optional — enables the version-diff finding
     # peer_host: api.acme.test          # optional — scope the spec to one edge by host
-    # self_spec_path: /etc/vinifera/self-spec.yaml
+    # self_spec_path: /etc/flanj/self-spec.yaml
     # self_integration_id: self
 
 exporters:
@@ -46,7 +46,7 @@ exporters:
   # queue, so each received request is forwarded whole (calls stay ahead of the
   # findings they produced); the store is order-independent regardless.
   otlphttp:
-    endpoint: ${env:VINIFERA_STORE_ENDPOINT:-http://vinifera-store:4318}
+    endpoint: ${env:FLANJ_STORE_ENDPOINT:-http://flanj-store:4318}
     timeout: 10s
     retry_on_failure:
       enabled: true
@@ -62,7 +62,7 @@ service:
   pipelines:
     logs:
       receivers: [otlp]
-      processors: [viniferaredaction, viniferadrift]
+      processors: [flanjredaction, flanjdrift]
       exporters: [otlphttp]
   telemetry:
     logs:

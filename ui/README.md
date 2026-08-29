@@ -1,6 +1,6 @@
-# ui/ — Vinifera Collector local UI
+# ui/ — Flanj Collector local UI
 
-Vue 3 + Vite single-page app, served **embedded** by the `viniferaui` extension
+Vue 3 + Vite single-page app, served **embedded** by the `flanjui` extension
 (`go:embed`). Built to static assets; no runtime server of its own.
 
 ## What it shows
@@ -33,7 +33,7 @@ Vue 3 + Vite single-page app, served **embedded** by the `viniferaui` extension
 - **Threads** — state of every thread this collector created (provider · endpoint · evidence ·
   status · opened · last reply · link) with Open / Close thread / Reopen / Copy thread link /
   Replace link; `#threads/<thread_id>` deep-links and highlights a row.
-- **Settings** — **Connect to Vinifera network**: org name + contact email (+ your name, this
+- **Settings** — **Connect to Flanj network**: org name + contact email (+ your name, this
   collector's address); one-click email confirmation; Resend / Change contact.
 
 ## Data source
@@ -41,9 +41,9 @@ Vue 3 + Vite single-page app, served **embedded** by the `viniferaui` extension
 Reads the collector's localhost API: `/api/health`, `/api/edges`, `/api/calls`, `/api/findings`,
 `/api/contracts`, `/api/contracts/spec`, `/api/connect`, `/api/threads`; writes through the relay
 (`POST /api/connect`, `/api/flag`, `/api/threads/:id/{open,close,reopen,replace-link}`) — every
-write carries `X-Vinifera-UI: 1` + JSON (`src/api.ts`). Findings link to their source call by
+write carries `X-Flanj-UI: 1` + JSON (`src/api.ts`). Findings link to their source call by
 `source_call_id` to render correlation keys. No user-facing "peek / magic link / invite" wording —
-`extension/viniferaui/naming_test.go` scans these sources.
+`extension/flanjui/naming_test.go` scans these sources.
 
 ## Files
 
@@ -68,5 +68,5 @@ npm run dev:mock   # proxy /api to :5399 (bring your own mock relay)
 ## Build → embed pipeline
 
 The Dockerfile's node stage runs `npm run build` and copies `dist/` over
-`../extension/viniferaui/web/dist`, which the Go build embeds. In the repo only
+`../extension/flanjui/web/dist`, which the Go build embeds. In the repo only
 the placeholder `web/dist/index.html` is tracked; built assets are gitignored.

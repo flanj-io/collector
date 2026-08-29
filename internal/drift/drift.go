@@ -14,10 +14,10 @@ import (
 	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/getkin/kin-openapi/routers/gorillamux"
 
-	contractopenapi "github.com/vinifera-io/collector/contract/openapi"
-	"github.com/vinifera-io/collector/internal/model"
-	"github.com/vinifera-io/collector/internal/otlpattr"
-	"github.com/vinifera-io/collector/internal/redact"
+	contractopenapi "github.com/flanj-io/collector/contract/openapi"
+	"github.com/flanj-io/collector/internal/model"
+	"github.com/flanj-io/collector/internal/otlpattr"
+	"github.com/flanj-io/collector/internal/redact"
 )
 
 // LoadSpecFile reads and validates an OpenAPI document from disk. The OpenAPI

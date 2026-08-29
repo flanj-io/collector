@@ -1,4 +1,4 @@
-# Vinifera Collector — STORE role of the tiered topology (docs/STORE.md "Topologies").
+# Flanj Collector — STORE role of the tiered topology (docs/STORE.md "Topologies").
 #
 # Exactly ONE store pod per deployment (with backend=sqlite; with backend=postgres
 # the store tier may scale too). It receives the front collectors' already
@@ -6,40 +6,40 @@
 # (finding dedup, pin-on-finding, eviction — it is the single writer), and serves
 # the local UI + the flag action:
 #
-#   fronts -> OTLP/HTTP (:4318) -> viniferaredaction -> viniferastore exporter -> store
-#                                                             viniferaui (127.0.0.1:5335)
+#   fronts -> OTLP/HTTP (:4318) -> flanjredaction -> flanjstore exporter -> store
+#                                                             flanjui (127.0.0.1:5335)
 #
 # Invariants:
-#   * The store pod NEVER runs viniferadrift — it would re-detect every forwarded
+#   * The store pod NEVER runs flanjdrift — it would re-detect every forwarded
 #     call and double the findings' occurrence_count. Drift runs exactly once per
 #     call, on the front.
-#   * viniferaredaction stays on (idempotent, add-only, skips non-call records): the
+#   * flanjredaction stays on (idempotent, add-only, skips non-call records): the
 #     floor on the last hop before persistence, even if something bypasses a front.
 #   * sqlite: db_path on a PVC, one pod per file. postgres: dsn, no PVC.
 #
-# Baked into the image as /etc/vinifera/store.yaml — select with
-#   --config /etc/vinifera/store.yaml
+# Baked into the image as /etc/flanj/store.yaml — select with
+#   --config /etc/flanj/store.yaml
 # Every key here is frozen in contracts/CONTRACTS.md §8.
 
 extensions:
-  viniferastore:
+  flanjstore:
     backend: sqlite # default; may be omitted
-    db_path: /data/vinifera.db # required iff backend=sqlite — MUST be on a persistent volume (PVC)
+    db_path: /data/flanj.db # required iff backend=sqlite — MUST be on a persistent volume (PVC)
     window_max_rows: 10000
     window_max_bytes: 268435456 # 256 MiB
     # --- postgres variant (BYO-DB; the store tier may then scale) -------------
     # backend: postgres
-    # dsn: ${env:VINIFERA_PG_DSN} # required iff backend=postgres; logged redacted only
-    # db_path: /data/vinifera.db  # OPTIONAL here: one-shot import of a legacy sqlite file
+    # dsn: ${env:FLANJ_PG_DSN} # required iff backend=postgres; logged redacted only
+    # db_path: /data/flanj.db  # OPTIONAL here: one-shot import of a legacy sqlite file
 
   # localhost UI + read API + POST /api/flag -> control plane (reach it via
   # `kubectl port-forward` to the store pod).
-  viniferaui:
+  flanjui:
     ui_endpoint: 127.0.0.1:5335 # loopback only — the collector is outbound-only
     integration_id: acme-payments
     consumer_display_name: Acme Consumer Ltd
     provider_display_name: Acme Payments # who the flag is about; defaults to humanized integration_id
-    cp_base_url: https://cp.vinifera.test
+    cp_base_url: https://cp.flanj.test
     cp_deploy_token: ${env:CP_DEPLOY_TOKEN} # used once, for Connect (register); the per-deployment collector key it returns lives in the store
 
 receivers:
@@ -49,18 +49,18 @@ receivers:
         endpoint: 0.0.0.0:4318
 
 processors:
-  viniferaredaction: {}
+  flanjredaction: {}
 
 exporters:
-  viniferastore: {}
+  flanjstore: {}
 
 service:
-  extensions: [viniferastore, viniferaui]
+  extensions: [flanjstore, flanjui]
   pipelines:
     logs:
       receivers: [otlp]
-      processors: [viniferaredaction]
-      exporters: [viniferastore]
+      processors: [flanjredaction]
+      exporters: [flanjstore]
   telemetry:
     logs:
       level: info

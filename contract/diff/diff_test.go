@@ -7,8 +7,8 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/vinifera-io/collector/contract"
-	"github.com/vinifera-io/collector/contract/openapi"
+	"github.com/flanj-io/collector/contract"
+	"github.com/flanj-io/collector/contract/openapi"
 )
 
 // diffCases mirrors contracts/contract-diff-cases.json.

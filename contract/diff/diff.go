@@ -23,7 +23,7 @@ import (
 	"reflect"
 	"sort"
 
-	"github.com/vinifera-io/collector/contract"
+	"github.com/flanj-io/collector/contract"
 )
 
 // Class is the classification of one definition change.

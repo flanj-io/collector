@@ -36,10 +36,10 @@ import (
 
 	"github.com/getkin/kin-openapi/openapi3"
 
-	"github.com/vinifera-io/collector/contract"
-	"github.com/vinifera-io/collector/contract/diff"
-	"github.com/vinifera-io/collector/internal/model"
-	"github.com/vinifera-io/collector/internal/otlpattr"
+	"github.com/flanj-io/collector/contract"
+	"github.com/flanj-io/collector/contract/diff"
+	"github.com/flanj-io/collector/internal/model"
+	"github.com/flanj-io/collector/internal/otlpattr"
 )
 
 // MCPDetector holds the per-edge MCP contract state: the CURRENT snapshot

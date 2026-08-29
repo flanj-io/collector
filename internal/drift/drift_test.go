@@ -8,8 +8,8 @@ import (
 
 	"go.opentelemetry.io/collector/pdata/plog"
 
-	"github.com/vinifera-io/collector/internal/model"
-	"github.com/vinifera-io/collector/internal/otlpattr"
+	"github.com/flanj-io/collector/internal/model"
+	"github.com/flanj-io/collector/internal/otlpattr"
 )
 
 func contractsDir() string { return filepath.Join("..", "..", "contracts") }

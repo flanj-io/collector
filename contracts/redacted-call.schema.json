@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://vinifera.io/contracts/v1/redacted-call.schema.json",
+  "$id": "https://flanj.io/contracts/v1/redacted-call.schema.json",
   "title": "RedactedCall",
   "type": "object",
   "additionalProperties": true,

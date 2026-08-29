@@ -8,8 +8,8 @@ import (
 
 	"go.opentelemetry.io/collector/pdata/plog"
 
-	"github.com/vinifera-io/collector/contract"
-	"github.com/vinifera-io/collector/internal/model"
+	"github.com/flanj-io/collector/contract"
+	"github.com/flanj-io/collector/internal/model"
 )
 
 func contractsDir() string { return filepath.Join("..", "..", "contracts") }
@@ -170,7 +170,7 @@ func TestContractSnapshotFromRecord_Golden(t *testing.T) {
 	}
 }
 
-// TestCallFromRecord_ClassFallback proves a missing vinifera.edge.class is
+// TestCallFromRecord_ClassFallback proves a missing flanj.edge.class is
 // reconstructed from the peer host via the shared heuristic.
 func TestCallFromRecord_ClassFallback(t *testing.T) {
 	lr := plog.NewLogRecord()
