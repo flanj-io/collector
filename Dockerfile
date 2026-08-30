@@ -21,6 +21,11 @@ FROM golang:1.26 AS build
 ENV CGO_ENABLED=0
 WORKDIR /src
 
+# Release version stamped into the binary (GET /api/health `collector_version`,
+# X-Flanj-Collector-Version on flag POSTs). Set with
+# `docker build --build-arg VERSION=v0.6.0 .`; unset builds report "dev".
+ARG VERSION=dev
+
 # Prime the module cache from the root + component manifests before copying all
 # sources, so dependency downloads cache across rebuilds.
 COPY go.mod go.sum ./
@@ -37,9 +42,11 @@ COPY builder-config.yaml ./
 RUN rm -rf extension/flanjui/web/dist
 COPY --from=ui /ui/dist ./extension/flanjui/web/dist
 
-# Install the pinned builder and compile the distribution.
+# Install the pinned builder and compile the distribution. Passing --ldflags
+# REPLACES ocb's default ("-s -w"), so restate it alongside the version stamp.
 RUN go install go.opentelemetry.io/collector/cmd/builder@v0.159.0
-RUN builder --config builder-config.yaml
+RUN builder --config builder-config.yaml \
+    --ldflags="-s -w -X github.com/flanj-io/collector/extension/flanjui.collectorVersion=${VERSION}"
 
 # ---- 3. runtime -----------------------------------------------------------
 FROM gcr.io/distroless/static-debian12:nonroot AS runtime

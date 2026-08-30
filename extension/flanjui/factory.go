@@ -19,8 +19,10 @@ import (
 
 var typeStr = component.MustNewType("flanjui")
 
-// collectorVersion travels as X-Flanj-Collector-Version on the flag POST. It
-// can be overridden at build time via -ldflags.
+// collectorVersion travels as X-Flanj-Collector-Version on the flag POST and
+// as `collector_version` on GET /api/health. Docker builds stamp it via the
+// VERSION build arg (-ldflags -X, "dev" when unset); this value is only what
+// non-Docker builds (go test, go run) see.
 var collectorVersion = "v0.0.0"
 
 // NewFactory returns the UI extension factory.
