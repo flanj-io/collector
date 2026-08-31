@@ -147,3 +147,27 @@ func relayMessages() []string {
 		msgCallEvicted, msgThreadNotFound, msgWrongOrigin, msgKeyMissing, msgNotAckable, contactUnconfirmedMessage("ops@example.test"),
 	}
 }
+
+// TestThreadsNoticeMirrorInSync makes the ui/src/threads.ts mirror of
+// msgThreadsNotConnected a MECHANICAL guarantee rather than a comment.
+//
+// The SPA no longer provokes the 412 that used to carry this sentence (a
+// refused request is logged by the browser as a failed resource on every poll
+// tick), so it renders the line from its own constant. Two copies of one
+// user-facing string drift silently — and a "keep these in sync" comment is
+// exactly what failed us before. This asserts the Go source of truth appears
+// verbatim in the mirror, so changing one without the other is a red test.
+func TestThreadsNoticeMirrorInSync(t *testing.T) {
+	path := filepath.Join("..", "..", "ui", "src", "threads.ts")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if !strings.Contains(string(raw), msgThreadsNotConnected) {
+		t.Fatalf("ui/src/threads.ts no longer carries msgThreadsNotConnected verbatim.\n"+
+			"want the exact sentence: %q\n"+
+			"Update THREADS_NOT_CONNECTED_NOTICE in threads.ts to match messages.go "+
+			"(the Threads tab renders it locally now, so the two must agree byte-for-byte).",
+			msgThreadsNotConnected)
+	}
+}

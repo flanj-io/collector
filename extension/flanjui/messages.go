@@ -11,6 +11,13 @@ const (
 	// msgThreadsNotConnected is the LIST answer, and it deliberately does not say
 	// "no threads": the threads live on the control plane, so a collector without
 	// a key cannot tell an empty list from a list it can't read.
+	//
+	// The UI no longer PROVOKES this 412: a refused request is logged by the
+	// browser as a failed resource on every poll tick, so the SPA gates the poll
+	// on the connect state it already holds and mirrors this string as
+	// THREADS_NOT_CONNECTED_NOTICE in ui/src/threads.ts. The route keeps
+	// answering 412 (the contract, and any other client), but change this line
+	// and the mirror changes with it.
 	msgThreadsNotConnected = "Not connected — this collector can't list threads. Connect in Settings to see them."
 	msgContactUnconfirmed  = "Confirm your contact email first — we sent \"Confirm your Flanj contact\"."
 	msgCPUnreachableFlag   = "Couldn't reach the control plane — nothing was created or shared."

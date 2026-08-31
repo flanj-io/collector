@@ -5,7 +5,9 @@ import ConnectPanel from './ConnectPanel.vue';
 import FlagSheet from './FlagSheet.vue';
 import ThreadsTab from './ThreadsTab.vue';
 import {
+  THREADS_NOT_CONNECTED_NOTICE,
   THREAD_STATE_UNKNOWN,
+  cannotListThreads,
   chipLabel,
   findingIdFromHash,
   needsCollectorAddress,
@@ -162,12 +164,26 @@ const consumerName = computed(() => connect.value?.consumer_display_name || heal
 // label, not an identity; it stays on the Overview headline + its Contracts card).
 const orgPillName = computed(() => connect.value?.consumer_display_name || health.value?.consumer_display_name || '');
 
-async function loadConnect() {
-  try {
-    connect.value = await apiGet<ConnectState>('/api/connect');
-  } catch {
-    /* keep the last known state; the health poll still reports the store's view */
+// One in-flight `GET /api/connect` at a time. loadThreads now waits on the
+// connect answer before deciding whether the list is askable at all, and mount
+// and focus each call both — without the dedupe that would be two identical
+// requests for one page load.
+let connectInFlight: Promise<void> | null = null;
+
+function loadConnect(): Promise<void> {
+  if (!connectInFlight) {
+    connectInFlight = apiGet<ConnectState>('/api/connect')
+      .then((s) => {
+        connect.value = s;
+      })
+      .catch(() => {
+        /* keep the last known state; the health poll still reports the store's view */
+      })
+      .finally(() => {
+        connectInFlight = null;
+      });
   }
+  return connectInFlight;
 }
 
 // The list is the control plane's (CONTRACTS-CP §5.5a), relayed by the
@@ -176,6 +192,26 @@ async function loadConnect() {
 // list — and the 5s poll is the retry. The relay's own message (the deck's
 // "Couldn't reach the control plane.") is shown when it sent one.
 async function loadThreads() {
+  // Do not ask for a list this collector cannot produce. `GET /api/threads`
+  // answers 412 not_connected for exactly the state `/api/connect` reports as
+  // `disconnected` (threads.ts cannotListThreads), and the browser logs every
+  // 4xx as "Failed to load resource" — a line no JS can suppress, repeated on
+  // every 15s tick, for a designed state the tab already renders correctly.
+  // While disconnected we refresh CONNECT instead (a 200, and it keeps the
+  // header pill and this decision fresh) and show the relay's own line.
+  // Connect state we have not seen yet is not disconnected: we wait for the
+  // answer rather than flash the notice at a connected collector.
+  if (cannotListThreads(connect.value) || connect.value === null) await loadConnect();
+  if (cannotListThreads(connect.value)) {
+    threads.value = [];
+    threadsTotal.value = 0;
+    threadsHasMore.value = false;
+    threadsNotice.value = THREADS_NOT_CONNECTED_NOTICE;
+    threadsError.value = '';
+    threadsKnown.value = true;
+    threadsLoaded.value = true;
+    return;
+  }
   try {
     const out = await apiGet<ThreadListResponse>('/api/threads');
     threads.value = out?.threads || [];
