@@ -1367,7 +1367,7 @@ watch(tab, (t) => {
               <span class="prov-meta">{{ mcpContractMeta(p.spec.endpoints || 0, humanTime(p.spec.loaded_at)) }}</span>
             </template>
             <template v-else>
-              <span v-if="p.spec.endpoints" class="prov-meta">{{ p.spec.endpoints }} endpoints</span>
+              <span v-if="p.spec.endpoints" class="prov-meta">{{ p.spec.endpoints }} endpoint{{ p.spec.endpoints === 1 ? '' : 's' }}</span>
               <span class="prov-meta">loaded {{ humanTime(p.spec.loaded_at) }}</span>
             </template>
           </div>
