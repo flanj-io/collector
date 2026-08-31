@@ -17,10 +17,8 @@ import (
 )
 
 type driftProcessor struct {
-	cfg     *Config
-	doc     *openapi3.T
-	rawSpec []byte
-	logger  *zap.Logger
+	cfg    *Config
+	logger *zap.Logger
 
 	// The org's own contract (we-as-provider), validated against INBOUND calls.
 	selfDoc     *openapi3.T
@@ -36,8 +34,19 @@ type driftProcessor struct {
 	// into the pipeline cover the tiered store pod either way.
 	st store.Store
 
-	versionFindings []model.Finding
-	emitVersionOnce sync.Once
+	// specs holds the PARSED provider contracts, keyed by peer host, refreshed
+	// in the background from src. The per-call path reads this map and nothing
+	// else (speccache.go).
+	specs *specCache
+	// src is where contracts come from: the co-located store, or — on a front
+	// of the tiered topology, which has none — the store pod over HTTP.
+	src specSource
+	// kick asks the refresh loop to run early, on first sight of a host with no
+	// cached contract. Buffered to 1: a kick already pending is the same
+	// request, and the loop floors how often it may act on one.
+	kick chan struct{}
+	done chan struct{}
+	wg   sync.WaitGroup
 
 	// The loaded contracts as spec_info records — precomputed at construction
 	// (stable loaded_at) and used both for the direct PutSpecInfo at Start
@@ -59,13 +68,15 @@ type specInfoRecord struct {
 // specInfoRefresh bounds how often a front re-emits its spec_info records.
 const specInfoRefresh = 10 * time.Minute
 
-// start records the loaded contracts in the shared store so the local UI can
-// surface them (title/version/docs link + the raw spec documents) and seeds the
-// MCP detector from the persisted snapshots. Best effort: a collector without
-// the store extension still detects drift (a front collector in the tiered
-// topology — the spec_info records emitted into the pipeline carry the
-// contracts instead, and the MCP baseline re-establishes from the next
-// observed tools/list).
+// start resolves where provider contracts come from, fills the spec cache once
+// so detection is live on the first call rather than a tick later, and launches
+// the background refresh. It also records the self contract in the shared store
+// (title/version/docs link + the raw document) and seeds the MCP detector from
+// the persisted snapshots.
+//
+// Best effort throughout: a collector with no contract source still detects MCP
+// drift and still stamps call ids, which is what makes front->store retries
+// idempotent.
 func (p *driftProcessor) start(_ context.Context, host component.Host) error {
 	for _, ext := range host.GetExtensions() {
 		prov, ok := ext.(store.Provider)
@@ -75,6 +86,30 @@ func (p *driftProcessor) start(_ context.Context, host component.Host) error {
 		p.st = prov.Store()
 		break
 	}
+
+	// Where contracts come from. A co-located store wins: it is the same data
+	// the store pod would serve, without the hop. A front of the tiered
+	// topology has no store, so it asks the store pod instead.
+	switch {
+	case p.st != nil:
+		p.src = storeSpecSource{st: p.st}
+	case p.cfg.StorePodEndpoint != "":
+		p.src = newRemoteSpecSource(p.cfg.StorePodEndpoint, p.cfg.StorePodToken)
+	default:
+		// No store and no endpoint: a front that was never told where the
+		// store pod is. Uploaded contracts cannot reach it, and saying so once
+		// at start is the difference between a silent hole and a fixable one.
+		if p.logger != nil {
+			p.logger.Warn("no contract source: this collector has no store and no store_pod_endpoint, " +
+				"so uploaded contracts cannot reach it and REST drift detection will not run")
+		}
+	}
+	if p.src != nil {
+		p.refreshSpecs()
+		p.wg.Add(1)
+		go p.refreshLoop()
+	}
+
 	if p.st == nil {
 		return nil
 	}
@@ -108,6 +143,74 @@ func (p *driftProcessor) start(_ context.Context, host component.Host) error {
 		}
 	}
 	return nil
+}
+
+// shutdown stops the refresh loop and waits for it, so a restarting collector
+// never leaves a goroutine reading a store that is being closed underneath it.
+func (p *driftProcessor) shutdown(_ context.Context) error {
+	select {
+	case <-p.done: // already closed (Shutdown may be called more than once)
+	default:
+		close(p.done)
+	}
+	p.wg.Wait()
+	return nil
+}
+
+// refreshLoop reconciles the spec cache on a ticker, and early whenever a call
+// arrives for a host with no cached contract. specRefreshFloor spaces those
+// early runs so traffic to uncovered hosts — the common case on a big estate —
+// cannot turn into a refresh per batch.
+func (p *driftProcessor) refreshLoop() {
+	defer p.wg.Done()
+	ticker := time.NewTicker(specRefresh)
+	defer ticker.Stop()
+	var last time.Time
+	for {
+		select {
+		case <-p.done:
+			return
+		case <-ticker.C:
+			p.refreshSpecs()
+			last = time.Now()
+		case <-p.kick:
+			if time.Since(last) < specRefreshFloor {
+				continue
+			}
+			p.refreshSpecs()
+			last = time.Now()
+		}
+	}
+}
+
+// refreshSpecs pulls the current contracts into the cache and logs what moved.
+func (p *driftProcessor) refreshSpecs() {
+	if p.src == nil {
+		return
+	}
+	changed, errs := p.specs.refresh(p.src)
+	if p.logger == nil {
+		return
+	}
+	for _, err := range errs {
+		p.logger.Warn("contract refresh failed", zap.Error(err))
+	}
+	if len(changed) > 0 {
+		docs, rawBytes := p.specs.stats()
+		p.logger.Info("contracts refreshed",
+			zap.Strings("hosts", changed),
+			zap.Int("contracts", docs),
+			zap.Int("source_bytes", rawBytes))
+	}
+}
+
+// kickRefresh asks for an early refresh without ever blocking the pipeline. A
+// kick already queued is the same request, so a full buffer is success.
+func (p *driftProcessor) kickRefresh() {
+	select {
+	case p.kick <- struct{}{}:
+	default:
+	}
 }
 
 // specInfoFor extracts the displayable contract metadata from a loaded spec.
@@ -192,8 +295,17 @@ func (p *driftProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.Logs
 					}
 					continue
 				}
-				// No spec loaded → pass-through (capture + edge discovery only).
-				if p.doc == nil && p.selfDoc == nil {
+				// Nothing to validate against → pass-through (capture + edge
+				// discovery only). The cache fills in the background, so this
+				// is a per-batch check, not a fixed one.
+				//
+				// Ask for a refresh on the way past. This branch IS the fresh
+				// install — nothing uploaded yet — and it is the one case where
+				// waiting out a full tick would be felt: the operator uploads
+				// their first contract and watches nothing happen. The kick
+				// never blocks and the loop floors how often it may act.
+				if p.selfDoc == nil && p.specs.empty() {
+					p.kickRefresh()
 					continue
 				}
 				call := otlpattr.CallFromRecord(lr)
@@ -225,15 +337,18 @@ func (p *driftProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.Logs
 
 				// OUTBOUND: we are the consumer — validate the provider's
 				// responses against the contract the provider publishes.
-				if p.doc == nil {
+				//
+				// Contracts are bound to exactly one host at upload, so the
+				// host IS the lookup. A call to a host with no contract is not
+				// an error and not a finding: it was captured, not validated,
+				// and the UI says exactly that. Ask for an early refresh in
+				// case the contract was uploaded moments ago.
+				doc, ok := p.specs.lookup(call.PeerHost)
+				if !ok {
+					p.kickRefresh()
 					continue
 				}
-				// Spec-matched-by-host: when PeerHost is configured, only validate
-				// calls on that edge against this spec.
-				if p.cfg.PeerHost != "" && call.PeerHost != p.cfg.PeerHost {
-					continue
-				}
-				fs, err := drift.DetectLiveVsSpec(p.doc, call)
+				fs, err := drift.DetectLiveVsSpec(doc, call)
 				if err != nil {
 					// A route miss or reconstruction error is logged, not fatal —
 					// v0's deterministic finding is the response-schema mismatch.
@@ -246,10 +361,6 @@ func (p *driftProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.Logs
 			}
 		}
 	}
-
-	p.emitVersionOnce.Do(func() {
-		findings = append(findings, p.versionFindings...)
-	})
 
 	// MCP snapshots observed in THIS batch ride along un-rate-limited: each is
 	// already at most one per observed tools/list, and the store's PutSpecInfo

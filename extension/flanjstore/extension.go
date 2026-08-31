@@ -10,6 +10,8 @@ package flanjstore
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/http"
 	"net/url"
 	"sync"
 
@@ -55,6 +57,11 @@ type storeExtension struct {
 	// is still writing the handle.
 	mu sync.Mutex
 	st store.Store
+
+	// The intra-cluster contract endpoint (specserver.go), bound only when
+	// spec_endpoint is set — the tiered topology's store pod.
+	specSrv *http.Server
+	specLn  net.Listener
 }
 
 // Store exposes the shared store (store.Provider). Nil until Start has opened
@@ -109,6 +116,13 @@ func (e *storeExtension) Start(_ context.Context, _ component.Host) error {
 	e.mu.Lock()
 	e.st = st
 	e.mu.Unlock()
+	// The contract endpoint serves from the handle just opened, so it binds
+	// after it. A bind failure aborts Start: a store pod that silently fails to
+	// serve contracts leaves every front detecting nothing, with no symptom.
+	if err := e.startSpecServer(); err != nil {
+		_ = st.Close()
+		return fmt.Errorf("flanjstore extension: bind contract endpoint %s: %w", e.cfg.SpecEndpoint, err)
+	}
 	if e.logger != nil {
 		e.logger.Info("flanj store opened",
 			zap.String("backend", backend),
@@ -141,6 +155,7 @@ func redactDSN(dsn string) string {
 
 // Shutdown closes the connection.
 func (e *storeExtension) Shutdown(context.Context) error {
+	e.stopSpecServer()
 	e.mu.Lock()
 	st := e.st
 	e.mu.Unlock()

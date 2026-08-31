@@ -13,6 +13,9 @@
 #   * The store pod NEVER runs flanjdrift — it would re-detect every forwarded
 #     call and double the findings' occurrence_count. Drift runs exactly once per
 #     call, on the front.
+#   * Contracts are uploaded HERE (the UI lives on this pod) and read BY the
+#     fronts over spec_endpoint below. That read is the only reason an upload
+#     takes effect on a tiered deployment at all.
 #   * flanjredaction stays on (idempotent, add-only, skips non-call records): the
 #     floor on the last hop before persistence, even if something bypasses a front.
 #   * sqlite: db_path on a PVC, one pod per file. postgres: dsn, no PVC.
@@ -27,6 +30,16 @@ extensions:
     db_path: /data/flanj.db # required iff backend=sqlite — MUST be on a persistent volume (PVC)
     window_max_rows: 10000
     window_max_bytes: 268435456 # 256 MiB
+    # The CONTRACT endpoint — how fronts read the contracts uploaded in this
+    # pod's UI. Read-only and contracts-only: it serves provider contract
+    # metadata and documents, nothing else. Required on a tiered deployment
+    # (without it, uploads reach no front and REST drift never runs); leave it
+    # unset on every other shape, where drift reads the store in-process.
+    #
+    # This is a ClusterIP-facing port like :4318, NOT the UI — the UI stays on
+    # loopback.
+    spec_endpoint: 0.0.0.0:5336
+    spec_token: ${env:FLANJ_SPEC_TOKEN} # shared with the fronts' flanjdrift.store_pod_token; never logged
     # --- postgres variant (BYO-DB; the store tier may then scale) -------------
     # backend: postgres
     # dsn: ${env:FLANJ_PG_DSN} # required iff backend=postgres; logged redacted only

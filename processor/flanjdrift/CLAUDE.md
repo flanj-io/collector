@@ -32,11 +32,35 @@ list.
 **Technical adherence ONLY** — fields/types/shapes/enums. Never business/economic
 correctness (pricing, quantities, business rules) — that would be a false-positive storm.
 
-**Everything is OPTIONAL** — the collector auto-discovers edges from traffic and
-never requires a target/integration/spec. With no `spec_path` the processor is a
-pass-through (still stamps `flanj.call.id`); capture + edge discovery work
-regardless. If `peer_host` is set, the loaded spec is scoped to that one discovered edge;
-otherwise every outbound call is validated against it.
+**Provider contracts come from the STORE, not config** (2026-08-31; `spec_path`,
+`spec_v2_path` and `peer_host` were removed from CONTRACTS §8). They are uploaded
+in the UI, bound to exactly ONE provider host, and read at runtime by
+`speccache.go`: parsed documents keyed by peer host, refreshed on a 60s ticker
+and early on first sight of an uncovered host. **The per-call path is a map read
+and nothing else** — parsing is expensive and the store is a database; neither
+belongs on the hot path. An upload therefore validates within a tick, with no
+restart.
+
+Where that cache is filled FROM is the `specSource` interface, with two
+implementations:
+- `storeSpecSource` — the co-located store handle. Single pod, and every pod of
+  a shared-postgres deployment.
+- `remoteSpecSource` (`remotesource.go`) — the store pod's read-only contract
+  endpoint (`flanjstore.spec_endpoint`), for a FRONT of the tiered topology,
+  which runs drift but owns no store. Without it a front detects no REST drift
+  however many contracts are uploaded, and says so once at Start. Shaped like
+  the deferred CP per-domain fetch on purpose: that lands as a third
+  implementation, not a third channel.
+
+**Everything is still OPTIONAL** — the collector auto-discovers edges from
+traffic and never requires a target/integration/contract. With nothing uploaded
+the processor is a pass-through that still stamps `flanj.call.id`; capture and
+edge discovery work regardless, and those calls are captured, not validated.
+
+Binding is MANDATORY at upload, which is what makes the host the whole lookup. A
+contract bound to the wrong host validates nothing forever while its card claims
+otherwise — the old optional `peer_host` had exactly that failure mode, silently,
+for every install that left it unset.
 
 **A drift is per endpoint, not per call.** Each drifting call emits a finding
 record carrying a `signature` (integration|endpoint|kind|rule|field_path); the
@@ -45,28 +69,43 @@ store dedups on it — the first call creates the finding, later calls increment
 
 ## Files
 
-- `factory.go` — loads `spec_path` at construction (bad spec fails the build
-  fast); precomputes version-diff findings once if `spec_v2_path` is set.
-- `config.go` — frozen keys `integration_id`, `spec_path`, `spec_v2_path`, `peer_host`,
-  `self_spec_path`, `self_integration_id` (CONTRACTS §8). `spec_path` validates
-  OUTBOUND (client) calls; `self_spec_path` is the contract THIS org publishes
-  and validates INBOUND (server) responses — self findings are relabeled to
-  `self_integration_id` (default `self`, must differ from `integration_id`)
-  with their signature recomputed, so self and provider drift never merge.
-- `processor.go` — per-batch live-vs-spec detection + one-time version-diff
-  injection + rate-limited spec_info emission; appends finding + spec_info
-  records under a fresh trailing ResourceLogs/ScopeLogs (calls stay ahead).
+- `factory.go` — loads `self_spec_path` at construction (a bad self spec fails
+  the build fast). Provider contracts are NOT loaded here.
+- `config.go` — frozen keys `integration_id`, `self_spec_path`,
+  `self_integration_id`, `store_pod_endpoint`, `store_pod_token` (CONTRACTS §8).
+  `self_spec_path` is the contract THIS org publishes and validates INBOUND
+  (server) responses — self findings are relabeled to `self_integration_id`
+  (default `self`, must differ from `integration_id`) with their signature
+  recomputed, so self and provider drift never merge.
+- `speccache.go` — the `specSource` interface, the co-located store
+  implementation, and the parsed-document cache keyed by peer host. The refresh
+  is metadata-first: it compares `loaded_at` and downloads only what moved, so
+  steady state on a fifty-provider front is one small request a minute. Read
+  methods are nil-safe — no contract source degrades to pass-through, never to a
+  panic on the hot path.
+- `remotesource.go` — the tiered topology's front-side client.
+- `processor.go` — per-batch live-vs-spec detection + the refresh loop +
+  rate-limited spec_info emission; appends finding + spec_info records under a
+  fresh trailing ResourceLogs/ScopeLogs (calls stay ahead).
 
-The loaded contracts (provider + self) are precomputed once as `spec_info`
-records (`specInfos`, stable `loaded_at`) and reach the store two ways:
+**The version diff moved.** It used to be computed once at construction from
+`spec_v2_path`. With contracts uploaded, the only place a v1→v2 diff can come
+from is an upload REPLACING a bound contract, so it is computed on that path (in
+`extension/flanjui`) against the previous document the store keeps.
+
+The SELF contract is precomputed once as a `spec_info` record (`specInfos`,
+stable `loaded_at`) and reaches the store two ways:
 directly at Start (`PutSpecInfo` via `store.Provider`, when a store extension is
 co-located — single-pod topology), AND emitted INTO the pipeline as
 `flanj.record.type=spec_info` log records (metadata JSON attribute + raw
 document in the Body) in the same trailing scope as findings — on the first
 batch after Start, then at most every `specInfoRefresh` (10 min). That is how a
-store pod behind an `otlphttp` hop (tiered topology) populates its Contracts
-tab; in single-pod mode the double write is a harmless upsert. A front
-collector without a store extension is therefore never "spec-blind".
+store pod behind an `otlphttp` hop (tiered topology) learns a front's self
+contract; in single-pod mode the double write is a harmless upsert.
+
+A front no longer announces PROVIDER contracts upward — the direction reversed.
+Uploads land on the store pod, so it is already their source of truth, and the
+front reads them from it.
 
 ## Detection lives in `internal/drift`
 

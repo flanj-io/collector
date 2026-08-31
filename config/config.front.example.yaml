@@ -30,13 +30,22 @@ processors:
   # The floor is always on; the only knob is `enable_ip: true` (optional, off by default).
   flanjredaction: {}
 
-  # Drift detection runs HERE, once per call. Specs are optional; the processor
-  # must still be in the pipeline (call-id stamping — see invariants above).
+  # Drift detection runs HERE, once per call. The processor must be in the
+  # pipeline even with no contracts (call-id stamping — see invariants above).
+  #
+  # A front owns no store, so it cannot see the contracts an operator uploaded
+  # in the UI — those live on the STORE POD. `store_pod_endpoint` is how it
+  # reads them: it fetches contract metadata on a one-minute ticker and
+  # downloads only what changed, keeping the parsed documents in memory.
+  #
+  # Leave it unset and this front detects NO REST drift at all, however many
+  # contracts have been uploaded. It logs that at start rather than failing —
+  # a spec-less front is a legitimate configuration — but on a tiered
+  # deployment it is almost always a mistake.
   flanjdrift:
     integration_id: acme-payments
-    spec_path: /etc/flanj/spec-v1.yaml # OPTIONAL — empty disables live-vs-spec
-    spec_v2_path: /etc/flanj/spec-v2.yaml # optional — enables the version-diff finding
-    # peer_host: api.acme.test          # optional — scope the spec to one edge by host
+    store_pod_endpoint: ${env:FLANJ_STORE_SPEC_ENDPOINT:-http://flanj-store:5336}
+    store_pod_token: ${env:FLANJ_SPEC_TOKEN} # must match the store pod's flanjstore.spec_token
     # self_spec_path: /etc/flanj/self-spec.yaml
     # self_integration_id: self
 

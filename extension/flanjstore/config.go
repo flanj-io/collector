@@ -37,6 +37,20 @@ type Config struct {
 	// WindowMaxBytes caps the rolling window byte size (<=0 disables the cap).
 	WindowMaxBytes int64 `mapstructure:"window_max_bytes"`
 
+	// SpecEndpoint binds the intra-cluster CONTRACT endpoint — the tiered
+	// topology's spec channel. Set it on the STORE POD; front collectors then
+	// point `flanjdrift.store_pod_endpoint` at it and read the contracts an
+	// operator uploaded in the UI. Empty (the default) serves nothing, which is
+	// correct for every single-pod and shared-postgres deployment, where the
+	// drift processor reads the co-located store directly.
+	//
+	// Read-only and contracts-only. The UI stays loopback (non-negotiable #5);
+	// this is a sibling of the `:4318` intra-cluster ingest, not a second UI.
+	SpecEndpoint string `mapstructure:"spec_endpoint"`
+	// SpecToken is the shared bearer token fronts present to that endpoint. Use
+	// ${env:...} interpolation; it is never logged.
+	SpecToken string `mapstructure:"spec_token"`
+
 	// prevent unkeyed literal initialization
 	_ struct{}
 }
@@ -54,6 +68,9 @@ func (c *Config) Validate() error {
 		}
 	default:
 		return fmt.Errorf("flanjstore extension: unknown backend %q (want %q or %q)", c.Backend, BackendSQLite, BackendPostgres)
+	}
+	if c.SpecToken != "" && c.SpecEndpoint == "" {
+		return errors.New("flanjstore extension: spec_token needs spec_endpoint (a token guarding nothing is a misconfiguration, not a default)")
 	}
 	return nil
 }
