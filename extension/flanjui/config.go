@@ -11,9 +11,15 @@ type Config struct {
 	IntegrationID string `mapstructure:"integration_id"`
 	// ConsumerDisplayName is the "shared by <name>" identity on the peek screen.
 	ConsumerDisplayName string `mapstructure:"consumer_display_name"`
-	// ProviderDisplayName names the provider whose API is observed; sent on the
-	// flag so the peek/thread names BOTH sides (CONTRACTS §8). If empty it
-	// defaults to the humanized integration_id.
+	// ProviderDisplayName is the fallback provider name sent ON A FLAG, so the
+	// thread names the provider when the UI does not supply one.
+	//
+	// It NO LONGER names an edge. That tier needed a config→edge linkage, which
+	// came from the config spec's peer_host, and provider contracts are uploaded
+	// now (CONTRACTS §8, 2026-08-31) — an upload carries the host AND the
+	// document's title, so the `contract` tier names edges from what the
+	// operator actually did. Naming a provider on a thread needs no linkage at
+	// all, which is why this key survives that removal.
 	ProviderDisplayName string `mapstructure:"provider_display_name"`
 	// CPBaseURL is the control-plane base URL for the flag POST.
 	CPBaseURL string `mapstructure:"cp_base_url"`

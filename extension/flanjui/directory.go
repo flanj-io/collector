@@ -2,11 +2,19 @@ package flanjui
 
 // The edge-name directory + resolution (v1 phase 1 — edge naming).
 //
-// Resolution precedence for an OUTBOUND edge's display name, first hit wins
-// (brief-common "The model"): named-by-you (settings KV, source `user`) >
-// config (the two legacy YAML keys, migrated on boot as source `config`) >
-// directory (a periodically pulled full table merged OVER the baked seed) >
-// auto (no name; the UI renders the humanized host).
+// Resolution precedence for an OUTBOUND edge's display name, first hit wins:
+// named-by-you (settings KV, source `user`) > contract (the title of the
+// contract UPLOADED for this domain — the provider's own words) > directory (a
+// periodically pulled full table merged OVER the baked seed) > auto (no name;
+// the UI renders the humanized host).
+//
+// The `config` tier was removed with `spec_path` (CONTRACTS §8, 2026-08-31).
+// The legacy `provider_display_name` names a provider, but nothing said WHICH
+// edge it meant — that linkage came from the config spec's `peer_host`, and
+// there are no config specs any more. The upload carries both facts at once, so
+// the tier that replaces it derives its name from what the operator actually
+// did. `provider_display_name` itself stays: it is still the fallback provider
+// name sent on a flag, which needs no edge linkage at all.
 //
 // The directory is NEVER queried per cache miss — permanently rejected: the
 // local UI must work with the CP down, and the CP must never receive the org's
@@ -33,6 +41,7 @@ import (
 	"sync"
 
 	"github.com/flanj-io/collector/internal/edge"
+	"github.com/flanj-io/collector/internal/model"
 	"github.com/flanj-io/collector/internal/redact"
 	"github.com/flanj-io/collector/internal/store"
 )
@@ -118,13 +127,12 @@ func loadDirectory(st store.Store) map[string]directoryEntry {
 }
 
 // nameResolver is one request's resolution context, loaded ONCE per request
-// (never per edge): the stored names, the merged directory, and the single
-// domain the legacy config keys are linked to (if derivable).
+// (never per edge): the stored user names, the uploaded contracts' titles, and
+// the merged directory.
 type nameResolver struct {
-	names        map[string]edgeNameRecord
-	directory    map[string]directoryEntry
-	configDomain string
-	configName   string
+	names     map[string]edgeNameRecord
+	contracts map[string]string // registrable domain → the contract's info.title
+	directory map[string]directoryEntry
 }
 
 // newNameResolver loads the resolution context from the store.
@@ -133,18 +141,51 @@ func (e *uiExtension) newNameResolver(st store.Store) nameResolver {
 	if names == nil {
 		names = map[string]edgeNameRecord{}
 	}
-	r := nameResolver{names: names, directory: loadDirectory(st)}
-	if e.cfg.ProviderDisplayName != "" {
-		// The config-tier name passes the redaction floor at READ time exactly
-		// as the boot migration does before persist (migrateConfigNames), so the
-		// read-time and migrated outputs are byte-identical. A value the floor
-		// consumes entirely resolves nowhere — same as the migration's skip.
-		if name := strings.TrimSpace(redact.New().Redact(e.cfg.ProviderDisplayName).Text); name != "" {
-			r.configDomain = configEdgeDomain(st, e.cfg.IntegrationID)
-			r.configName = name
+	return nameResolver{
+		names:     names,
+		contracts: contractEdgeNames(st),
+		directory: loadDirectory(st),
+	}
+}
+
+// contractEdgeNames maps a registrable domain to the title of the contract
+// uploaded for a host under it.
+//
+// Naming is DOMAIN-level while contract binding is HOST-level, deliberately and
+// for different reasons: subdomains routinely run different APIs (so a contract
+// binds to exactly one host), while a name describes the organisation behind the
+// domain (so `api.acme.test` and `api-eu.acme.test` read as the same provider).
+// One upload therefore names the whole domain, which is the behaviour that makes
+// a fifty-provider estate legible after fifty uploads.
+//
+// The title passes the redaction floor before it can render, exactly as a typed
+// rename does — an uploaded document is operator-supplied text like any other.
+// A title the floor consumes entirely resolves nowhere, same as an empty one.
+func contractEdgeNames(st store.Store) map[string]string {
+	infos, err := st.ListSpecInfos()
+	if err != nil {
+		return nil
+	}
+	out := make(map[string]string, len(infos))
+	for _, si := range infos {
+		if si.Role == model.SpecRoleSelf || si.PeerHost == "" || si.Title == "" {
+			continue
+		}
+		domain := edge.RegistrableDomain(si.PeerHost)
+		if domain == "" {
+			continue
+		}
+		name := strings.TrimSpace(redact.New().Redact(si.Title).Text)
+		if name == "" {
+			continue
+		}
+		// First writer wins so the map is stable: two hosts under one domain
+		// with different contracts would otherwise flip the name by map order.
+		if _, taken := out[domain]; !taken {
+			out[domain] = name
 		}
 	}
-	return r
+	return out
 }
 
 // resolve returns (display name, source) for a registrable domain — the
@@ -157,11 +198,12 @@ func (r nameResolver) resolve(domain string) (string, string) {
 	if rec, ok := r.names[domain]; ok {
 		return rec.Name, rec.Source
 	}
-	// Read-time config fallback: the precedence output is identical whether or
-	// not the boot migration ran (it may not be derivable — see
-	// migrateConfigNames), because both use the same configEdgeDomain linkage.
-	if r.configName != "" && domain == r.configDomain {
-		return r.configName, nameSourceConfig
+	// The contract the operator uploaded for this domain names it in the
+	// provider's own words. Above `directory` because it is what THIS operator
+	// put there for THIS edge, and the curated table is a general fact about the
+	// domain; below `user` because a rename is the more specific act.
+	if name, ok := r.contracts[domain]; ok && name != "" {
+		return name, nameSourceContract
 	}
 	if entry, ok := r.directory[domain]; ok && entry.Name != "" {
 		return entry.Name, nameSourceDirectory
@@ -169,74 +211,7 @@ func (r nameResolver) resolve(domain string) (string, string) {
 	return "", nameSourceAuto
 }
 
-// configEdgeDomain derives the ONE registrable domain the legacy
-// `provider_display_name` config key names: the singular v0 model gives the
-// configured integration one spec, whose spec_infos row carries the peer_host
-// that scopes it. When no such row exists (no spec loaded, or a spec with no
-// peer_host scoping), the linkage is NOT derivable and this returns "" — the
-// config tier then resolves nowhere, both here and in the boot migration,
-// which keeps the two paths equivalent by construction.
-func configEdgeDomain(st store.Store, integrationID string) string {
-	if integrationID == "" {
-		return ""
-	}
-	infos, err := st.ListSpecInfos()
-	if err != nil {
-		return ""
-	}
-	for _, si := range infos {
-		if si.Integration == integrationID && si.Role != "self" && si.PeerHost != "" {
-			return edge.RegistrableDomain(si.PeerHost)
-		}
-	}
-	return ""
-}
 
-// migrateConfigNames is the C4 boot migration: the legacy
-// `provider_display_name` YAML value moves into the KV as a source `config`
-// record, keyed by the drift-target edge's registrable domain. Idempotent and
-// safe to re-run: a `user` record is NEVER overwritten; a re-run refreshes the
-// `config` record when the YAML value changed. When the config→edge linkage is
-// not derivable from existing store data, nothing is invented and the
-// migration is skipped — the config tier still resolves identically at read
-// time (resolve above).
-func (e *uiExtension) migrateConfigNames(st store.Store) {
-	if e.cfg.ProviderDisplayName == "" {
-		return
-	}
-	domain := configEdgeDomain(st, e.cfg.IntegrationID)
-	if domain == "" {
-		return
-	}
-	// The migrated value passes the same redaction floor a UI rename (and a
-	// Connect display name) passes before persist.
-	name := strings.TrimSpace(redact.New().Redact(e.cfg.ProviderDisplayName).Text)
-	if name == "" {
-		return
-	}
-	names, err := loadEdgeNames(st)
-	if err != nil {
-		return
-	}
-	if rec, ok := names[domain]; ok {
-		if rec.Source == nameSourceUser {
-			return // a UI rename always beats a stale YAML value
-		}
-		if rec.Name == name {
-			return // already migrated, unchanged
-		}
-	}
-	if err := putEdgeName(st, domain, name, nameSourceConfig); err != nil {
-		e.telemetry.Logger.Warn("edge naming: config migration write failed: " + err.Error())
-	}
-}
-
-// maybeMigrateNames runs the boot migration exactly once per process, the
-// first time the store resolves (extensions start in any order, so Start
-// cannot assume the store is up — resolveStore calls this on first success).
-func (e *uiExtension) maybeMigrateNames(st store.Store) {
-	e.migrateOnce.Do(func() { e.migrateConfigNames(st) })
-}
 
 // syncDirectoryOnce is one directory pull, riding the sync ticker after the
 // findings tick (same cadence, same skip conditions, all silent): a configured

@@ -121,6 +121,14 @@ collector is outbound-only; nothing serves off-host.
   gitignored).
 - `config.go` — frozen keys `ui_endpoint`, `integration_id`,
   `consumer_display_name`, `provider_display_name`, `cp_base_url`, `cp_deploy_token` (CONTRACTS §8).
+  `provider_display_name` is the FLAG's fallback provider name only — it stopped
+  naming edges when contracts moved into the UI (its edge linkage came from the
+  config spec's `peer_host`).
+- `contracts_upload.go` — `POST /api/contracts/{preview,upload,remove}`: the only
+  way a provider contract enters this collector. Parse-before-persist, mandatory
+  host binding, integration id DERIVED from the host, replace with one previous
+  document kept, and the version diff on replace. Nothing on this path reaches
+  the control plane — an uploaded contract never leaves.
 
 ## Invariants
 

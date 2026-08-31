@@ -491,7 +491,7 @@ is deliberately unaffected: one document per deployment, not one per vendor.
 | Key | Meaning |
 |---|---|
 | `integration_id` | the integration being observed, e.g. `acme-payments` |
-| `provider_display_name` *(optional)* | human name of the provider whose API is observed, e.g. `Acme Payments`; sent on the flag so the peek/thread names the provider. Defaults to a humanized `integration_id`. |
+| `provider_display_name` *(optional)* | fallback provider name sent ON A FLAG, so the thread names the provider. Defaults to a humanized `integration_id`. **No longer names an edge** (2026-08-31): that tier needed a config→edge linkage supplied by the config spec's `peer_host`, and contracts are uploaded now — the `contract` tier names edges from the uploaded document's `info.title`, keyed by the bound host's registrable domain. |
 | `consumer_display_name` *(optional)* | human name of this consumer org, e.g. `Acme Consumer Ltd`; sent on the flag. |
 | `self_spec_path` *(optional)* | the OpenAPI spec THIS org publishes as a provider; validates INBOUND (server-direction) responses against the org's own contract |
 | `self_integration_id` *(optional)* | labels self-spec findings (default `self`); must differ from `integration_id` |

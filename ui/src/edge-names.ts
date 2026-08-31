@@ -8,7 +8,7 @@
 // explicit user events (type, toggle, save, cancel) and the save round-trip
 // move the state.
 
-export type EdgeNameSource = 'user' | 'config' | 'directory' | 'auto';
+export type EdgeNameSource = 'user' | 'contract' | 'directory' | 'auto';
 
 /** The naming fields a GET /api/edges outbound row carries. */
 export interface NamedEdgeRow {
@@ -20,7 +20,6 @@ export interface NamedEdgeRow {
 
 // ─── Copy (exact strings from the v1p1 copy deck) ─────────────────────────
 export const BADGE_USER = 'named by you';
-export const BADGE_CONFIG = 'config';
 export const RENAME_LABEL = 'Rename';
 export const EDIT_NAME_LABEL = 'Edit name';
 export const SAVE_LABEL = 'Save';
@@ -41,15 +40,19 @@ export function badgeLabel(source?: string): string {
   switch (source) {
     case 'user':
       return BADGE_USER;
-    case 'config':
-      return BADGE_CONFIG;
     default:
-      // Everything else — 'directory' and 'auto' — carries NO badge (owner
-      // rulings 2026-08-31). A badge is for what the OPERATOR did: renamed a
-      // row, or carried a legacy YAML value they should migrate. A directory
-      // name is infrastructure they do not manage (and the host stays visible
-      // beside it, so nobody is misled); an 'auto' row is simply its own host,
-      // so labelling it announces nothing they can act on.
+      // Everything else carries NO badge (owner rulings 2026-08-31). A badge is
+      // for what the OPERATOR did: renamed a row. A directory name is
+      // infrastructure they do not manage (and the host stays visible beside
+      // it, so nobody is misled); an 'auto' row is simply its own host, so
+      // labelling it announces nothing they can act on.
+      //
+      // 'contract' — the title of the contract uploaded for this domain —
+      // earns none either, and for a better reason than the others: the row
+      // ALREADY carries `contract v1.0.0 · uploaded 12d ago` in the meta line
+      // directly below the host. That says where the name came from far more
+      // precisely than a one-word chip, and it is a control as well. The
+      // 'config' badge it replaces is gone with its tier.
       return '';
   }
 }
@@ -156,7 +159,7 @@ export function cancelEdit(s: EdgeNameEdit | null): EdgeNameEdit | null {
 //
 // ONE resolution path, and this is it: the index is built from the edges list
 // the Edges panel has ALREADY loaded (`GET /api/edges`, which resolved
-// user > config > directory > auto server-side). No second lookup, no control
+// user > contract > directory > auto server-side). No second lookup, no control
 // plane request, no per-row re-resolution from the settings KV — a cache miss
 // never reaches the network, permanently.
 

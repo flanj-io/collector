@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  BADGE_CONFIG,
   BADGE_USER,
   EDIT_NAME_LABEL,
   RENAME_LABEL,
@@ -31,10 +30,16 @@ const row = {
 };
 
 describe('copy', () => {
-  it('renders the four provenance badges exactly', () => {
+  it('renders the one provenance badge exactly; every other tier carries none', () => {
     expect(badgeLabel('user')).toBe(BADGE_USER);
     expect(BADGE_USER).toBe('named by you');
-    expect(badgeLabel('config')).toBe(BADGE_CONFIG);
+    // 'contract' — the title of the contract uploaded for this domain — carries
+    // no badge: the row already shows `contract v1.0.0 · uploaded 12d ago` in
+    // the meta line below the host, which says where the name came from more
+    // precisely than a chip AND is a control. It replaced the 'config' tier,
+    // whose badge went with it.
+    expect(badgeLabel('contract')).toBe('');
+    expect(badgeLabel('config')).toBe('');
     // A directory name carries NO badge (owner ruling 2026-08-31): the directory is
     // infrastructure, the host stays visible beside the name, and the remaining badges
     // mark only what the operator themselves did.
