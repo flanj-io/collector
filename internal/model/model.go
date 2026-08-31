@@ -223,6 +223,17 @@ const (
 	// the raw doc stored alongside is the snapshot JSON exactly as captured
 	// ({"tools":[…], "serverInfo"?, …}), decodable by contract.ParseToolsList.
 	SpecFormatMCP = "mcp"
+
+	// SpecSourceUpload marks a contract an operator uploaded in the UI. It is
+	// the only way a PROVIDER contract enters the collector (CONTRACTS §8 —
+	// `spec_path` was removed 2026-08-31), and it never leaves.
+	SpecSourceUpload = "upload"
+	// SpecSourceConfig marks a contract loaded from a mounted file — in v1 that
+	// is `self_spec_path` and nothing else.
+	SpecSourceConfig = "config"
+	// SpecSourceObserved marks a contract the traffic delivered: an MCP
+	// tools/list snapshot, which needs no configuring and no uploading.
+	SpecSourceObserved = "observed"
 )
 
 // SpecInfo describes an API contract (spec) loaded by the drift processor,
@@ -244,6 +255,22 @@ type SpecInfo struct {
 	DocsURL   string `json:"docs_url,omitempty"`
 	Endpoints int    `json:"endpoints,omitempty"`
 	LoadedAt  string `json:"loaded_at"`
+
+	// Source is how this contract got here: SpecSourceUpload (an operator
+	// uploaded it in the UI), SpecSourceConfig (a mounted self_spec_path), or
+	// SpecSourceObserved (an MCP tools/list, which delivers itself). The UI's
+	// provenance word tracks it — "uploaded" vs "loaded" — so which one is live
+	// is legible on sight. Empty means config, for rows written before uploads
+	// existed.
+	Source string `json:"source,omitempty"`
+
+	// PrevVersion / PrevLoadedAt describe the document this one REPLACED, kept
+	// at N=2 (one previous, no archive — nobody wants a spec museum in a
+	// localhost debugging tool). They are what lets the card read
+	// "updated 2 hours ago · v2.1.0 · replaced v1.0.0", and what makes the
+	// version diff on replace a switch rather than a migration.
+	PrevVersion  string `json:"prev_version,omitempty"`
+	PrevLoadedAt string `json:"prev_loaded_at,omitempty"`
 }
 
 // ComputeSignature returns the dedup key for a finding:

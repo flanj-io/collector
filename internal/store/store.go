@@ -62,6 +62,19 @@ type Store interface {
 	ListEdges(externalOnly bool) ([]model.Edge, error)
 	EdgeCallCountsSince(sinceISO string) (map[string]int, error)
 	PutSpecInfo(info model.SpecInfo, rawSpec []byte) error
+	// PutUploadedSpec is the UPLOAD path's write. It differs from PutSpecInfo
+	// in one way that matters: replacing a bound contract rotates the document
+	// it displaces into prev_doc rather than dropping it, and returns it, so
+	// the caller can diff v1 -> v2 and the card can read "replaced v1.0.0".
+	// Exactly one previous document is kept — no archive.
+	//
+	// Rotation and write are one transaction: a replace that half-applied would
+	// leave a host either validating nothing or validating against a document
+	// whose recorded metadata describes a different one.
+	PutUploadedSpec(info model.SpecInfo, rawSpec []byte) (prev UploadedSpecPrevious, err error)
+	// DeleteSpecInfo removes a contract. Remove ships with upload: a contract
+	// bound to the wrong host with no undo is worse than no contract.
+	DeleteSpecInfo(integration string) (existed bool, err error)
 	ListSpecInfos() ([]model.SpecInfo, error)
 	GetSpecDoc(integration string) (raw []byte, format string, ok bool, err error)
 	Stats() (rows int, bytes int64, err error)
@@ -76,6 +89,18 @@ type Store interface {
 	GetSetting(key string) (value string, ok bool, err error)
 	PutSetting(key, value string) error
 	Close() error
+}
+
+// UploadedSpecPrevious describes the contract an upload displaced, empty when
+// the upload was the first for that host.
+type UploadedSpecPrevious struct {
+	// Existed distinguishes a first upload from a replace. A replace with no
+	// version string is still a replace.
+	Existed bool
+	Raw     []byte
+	Version string
+	// LoadedAt is when the displaced document was itself uploaded.
+	LoadedAt string
 }
 
 // Provider is implemented by the store extension. The exporter, UI extension,
@@ -417,7 +442,8 @@ func (b *base) EdgeCallCountsSince(sinceISO string) (map[string]int, error) {
 func (b *base) ListSpecInfos() ([]model.SpecInfo, error) {
 	rows, err := b.db.Query(
 		`SELECT integration, role, COALESCE(peer_host,''), format, COALESCE(title,''),
-		        COALESCE(version,''), COALESCE(docs_url,''), endpoints, loaded_at
+		        COALESCE(version,''), COALESCE(docs_url,''), endpoints, loaded_at,
+		        COALESCE(source,'config'), COALESCE(prev_version,''), COALESCE(prev_loaded_at,'')
 		   FROM spec_infos ORDER BY role DESC, integration ASC`, // self first
 	)
 	if err != nil {
@@ -428,7 +454,8 @@ func (b *base) ListSpecInfos() ([]model.SpecInfo, error) {
 	for rows.Next() {
 		var si model.SpecInfo
 		if err := rows.Scan(&si.Integration, &si.Role, &si.PeerHost, &si.Format, &si.Title,
-			&si.Version, &si.DocsURL, &si.Endpoints, &si.LoadedAt); err != nil {
+			&si.Version, &si.DocsURL, &si.Endpoints, &si.LoadedAt,
+			&si.Source, &si.PrevVersion, &si.PrevLoadedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, si)
@@ -447,6 +474,61 @@ func (b *base) GetSpecDoc(integration string) (raw []byte, format string, ok boo
 		return nil, "", false, err
 	}
 	return []byte(doc), format, true, nil
+}
+
+// DeleteSpecInfo removes a contract and reports whether one was there.
+func (b *base) DeleteSpecInfo(integration string) (bool, error) {
+	res, err := b.db.Exec(b.rebind(`DELETE FROM spec_infos WHERE integration=?`), integration)
+	if err != nil {
+		return false, fmt.Errorf("delete spec info: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, nil // the driver cannot say; the row is gone either way
+	}
+	return n > 0, nil
+}
+
+// GetSpecPrevDoc returns the document this contract replaced, if one is kept.
+// Its one use is the version diff; it is stored regardless so turning the diff
+// UI on later is a switch rather than a migration.
+func (b *base) GetSpecPrevDoc(integration string) (raw []byte, ok bool, err error) {
+	var doc sql.NullString
+	err = b.db.QueryRow(b.rebind(`SELECT prev_doc FROM spec_infos WHERE integration=?`), integration).Scan(&doc)
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if !doc.Valid || doc.String == "" {
+		return nil, false, nil
+	}
+	return []byte(doc.String), true, nil
+}
+
+// readSpecForReplace loads what an upload is about to displace, inside the
+// caller's transaction.
+func readSpecForReplace(q interface {
+	QueryRow(string, ...any) *sql.Row
+}, rebind func(string) string, integration string) (UploadedSpecPrevious, error) {
+	var (
+		doc, version, loadedAt sql.NullString
+		prev                   UploadedSpecPrevious
+	)
+	err := q.QueryRow(rebind(`SELECT doc, COALESCE(version,''), loaded_at FROM spec_infos WHERE integration=?`),
+		integration).Scan(&doc, &version, &loadedAt)
+	if err == sql.ErrNoRows {
+		return prev, nil
+	}
+	if err != nil {
+		return prev, err
+	}
+	prev.Existed = true
+	prev.Raw = []byte(doc.String)
+	prev.Version = version.String
+	prev.LoadedAt = loadedAt.String
+	return prev, nil
 }
 
 // listDocs is a package function (Go methods may not have type parameters).

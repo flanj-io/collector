@@ -2,6 +2,8 @@ package drift
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
@@ -13,9 +15,41 @@ import (
 	"github.com/flanj-io/collector/internal/otlpattr"
 )
 
+// DetectVersionDiffData diffs two contract DOCUMENTS rather than two paths.
+//
+// This is the upload path's entry point. Contracts are uploaded in the UI and
+// live in the store (CONTRACTS §8 dropped `spec_v2_path`), so the only place a
+// v1 -> v2 diff can come from is an upload REPLACING a bound contract — and at
+// that moment both documents are bytes in hand, not files on disk.
+//
+// oasdiff loads through its own source abstraction, which reads paths, so the
+// documents are written to temporary files and the tested path-based
+// implementation runs unchanged. Deliberately not a reimplementation: the
+// severity overrides below are contract-driven and must not fork.
+func DetectVersionDiffData(v1, v2 []byte, integration string) ([]model.Finding, error) {
+	dir, err := os.MkdirTemp("", "flanj-versiondiff-")
+	if err != nil {
+		return nil, fmt.Errorf("version diff: temp dir: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+
+	// The extension decides how oasdiff parses the document, and an uploaded
+	// contract may be either JSON or YAML. A YAML parser reads JSON, so .yaml
+	// is the extension that works for both.
+	p1 := filepath.Join(dir, "v1.yaml")
+	p2 := filepath.Join(dir, "v2.yaml")
+	if err := os.WriteFile(p1, v1, 0o600); err != nil {
+		return nil, fmt.Errorf("version diff: write previous: %w", err)
+	}
+	if err := os.WriteFile(p2, v2, 0o600); err != nil {
+		return nil, fmt.Errorf("version diff: write current: %w", err)
+	}
+	return DetectVersionDiff(p1, p2, integration)
+}
+
 // DetectVersionDiff diffs spec v1 -> v2 and emits one breaking Finding per
 // backward-incompatible change (oasdiff Level==ERR -> severity="breaking").
-// Computed once at spec load; source_call_id is null.
+// source_call_id is null — the drift is in the documents, not in a call.
 func DetectVersionDiff(pathV1, pathV2, integration string) ([]model.Finding, error) {
 	loader := openapi3.NewLoader()
 	loader.IsExternalRefsAllowed = true

@@ -30,6 +30,8 @@ type stubCP struct {
 	contactStatus    string
 	contactEmail     string // the most recent (possibly pending) contact
 	confirmedEmail   string // the contact usable for threads ("" until the first confirmation)
+	// totalCalls counts EVERY request that reached this stub, on any route.
+	totalCalls       int
 	registerCalls    int
 	registerAuths    []string // Authorization header of every register call, in order
 	flagCalls        int
@@ -101,6 +103,14 @@ func (s *stubCP) track(id string) {
 		}
 	}
 	s.order = append(s.order, id)
+}
+
+// requestCount is how many requests have reached the control plane, on any
+// route. Its one job is proving a code path made none.
+func (s *stubCP) requestCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.totalCalls
 }
 
 func newStubCP(t *testing.T) *stubCP {
@@ -323,7 +333,15 @@ func newStubCP(t *testing.T) *stubCP {
 			jsonOut(w, 404, map[string]string{"error": "not_found"})
 		}
 	})
-	s.srv = httptest.NewServer(mux)
+	// Every request, whatever the route, so a test can assert a code path makes
+	// NO control-plane call at all — which is the whole ruling for uploaded
+	// contracts, and not something a per-route counter can prove.
+	s.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		s.totalCalls++
+		s.mu.Unlock()
+		mux.ServeHTTP(w, r)
+	}))
 	t.Cleanup(s.srv.Close)
 	return s
 }
