@@ -289,6 +289,19 @@ func (e *uiExtension) handleConnectGet(w http.ResponseWriter, r *http.Request) {
 	cs, cpErr := e.refreshConnect(r.Context(), st, cs, false)
 	out := cs.view()
 	out["cp_configured"] = e.cp != nil
+	// The UI's one link OUT to the control plane. Emitted only when this
+	// deployment is actually Connected, so the SPA can never offer a door to a
+	// place this collector has no identity at. The collector composes the path
+	// rather than handing over a base URL: which page is the dashboard is
+	// contract knowledge, not something the SPA should assemble.
+	if e.cp != nil && cs.CollectorKey != "" {
+		// Read the base URL off the CLIENT, not the config: the client is what
+		// requests actually go to, so a deployment that set it any other way
+		// still gets a working door, and the two can never disagree.
+		if base := strings.TrimRight(e.cp.BaseURL, "/"); base != "" {
+			out["dashboard_url"] = base + "/d"
+		}
+	}
 	if cpErr != "" {
 		out["error"] = cpErr
 	}

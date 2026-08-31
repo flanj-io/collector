@@ -179,6 +179,11 @@ const connectPill = computed(() => {
       return 'Not connected';
   }
 });
+/** The CP dashboard link, emitted by /api/connect ONLY while Connected. When
+ *  absent the pill stays a button into Settings — the door is never offered to
+ *  a control plane this collector has no identity at. */
+const dashboardUrl = computed(() => (connect.value as { dashboard_url?: string } | null)?.dashboard_url || '');
+
 const threadsByFinding = computed(() => {
   const m: Record<string, ThreadRow> = {};
   for (const t of threads.value) m[t.finding_id] = t;
@@ -1101,6 +1106,22 @@ watch(tab, (t) => {
              not this org; it lives on the Overview headline + its Contracts card). -->
         <span v-if="orgPillName" class="pill" title="Your organization — shown to the provider on every thread.">{{ orgPillName }}</span>
         <span v-if="!health.cp_configured" class="pill warn">control plane not configured</span>
+        <!-- Connected: the pill is the one door out to the control plane. The
+             LABEL stays the status ("Connected") — a status indicator that hides
+             its state on hover would trade a fact for a hint, and there is no
+             hover at all on touch — while the tooltip and the ↗ carry the
+             destination. Not connected / pending: unchanged, it still opens
+             Settings so the next step is the one you need. -->
+        <a
+          v-else-if="connectStatus === 'connected' && dashboardUrl"
+          class="pill pill-btn ok pill-link"
+          :href="dashboardUrl"
+          target="_blank"
+          rel="noopener noreferrer"
+          title="Go to your Flanj dashboard"
+        >
+          {{ connectPill }}<span class="pill-out" aria-hidden="true">↗</span>
+        </a>
         <button
           v-else
           type="button"
@@ -2074,6 +2095,9 @@ pre.body { background: var(--panel2); border: 1px solid var(--line); border-radi
 /* The deck's badge strings are lowercase ("named by you" · "config" ·
    "directory" · "auto") — uppercasing them made all four read as one shouted
    pill. Render the copy as written. */
+.pill-link { text-decoration: none; display: inline-flex; align-items: center; gap: 0.3rem; }
+.pill-link:hover { text-decoration: underline; }
+.pill-out { font-size: 0.85em; opacity: 0.75; }
 .name-badge { flex: none; font-size: 0.7rem; letter-spacing: 0; color: var(--muted); background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 0.05rem 0.45rem; }
 .edge-actions { display: flex; gap: 0.35rem; justify-content: flex-end; }
 .edge-rename { border-top: 1px dashed var(--line); background: var(--panel2); padding: 0.6rem 0.7rem; display: flex; flex-direction: column; gap: 0.45rem; }
