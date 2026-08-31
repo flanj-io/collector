@@ -89,6 +89,7 @@ import {
   typeDraft,
   type EdgeNameEdit
 } from './edge-names';
+import { callCoverage, notCheckedTitle, NOT_CHECKED_LABEL, type Coverage } from './coverage';
 import type { Correlation, Finding, FlagResult, Health, RedactedCall } from './types';
 
 interface Edge {
@@ -471,6 +472,29 @@ const driftedEndpoints = computed(() => {
   return { provider, self };
 });
 
+/** Contract COVERAGE for a row — see ui/src/coverage.ts. Kept distinct from
+ *  DRIFT: a call to a host with no loaded contract was captured and never
+ *  validated, so it is neither conforming nor drifted. */
+/** How many captured calls this card's contract has actually validated.
+ *  A contract can be loaded and have checked NOTHING — no traffic yet, or a
+ *  host-scoped spec on an edge that has been quiet. Claiming "conforming" in
+ *  that state asserts a clean bill of health nothing performed. An UNSCOPED
+ *  provider spec (config `spec_path` with no `peer_host`) validates every
+ *  outbound call, so it counts them all. */
+function cardValidatedCalls(p: ContractCard): number {
+  let n = 0;
+  for (const c of calls.value) {
+    if (coverageOf(c) !== 'checked') continue;
+    if (p.peerHost && c.peer_host !== p.peerHost) continue;
+    n++;
+  }
+  return n;
+}
+
+function coverageOf(c: RedactedCall): Coverage {
+  return callCoverage(c, contracts.value);
+}
+
 function isDrifted(c: RedactedCall): boolean {
   if (c.transport === 'mcp') return mcpDriftedTools.value.has(`${c.integration} ${toolNameOf(c)}`);
   if (c.direction === 'server') return driftedEndpoints.value.self.has(`${c.method} ${c.route}`);
@@ -551,7 +575,10 @@ const filteredCalls = computed(() => {
     // ('err' matches mcp_is_error, '2xx' matches ok — see statusFilterMatches).
     if (!statusFilterMatches(fStatus.value, c)) return false;
     if (fContract.value === 'drifted' && !isDrifted(c)) return false;
-    if (fContract.value === 'conforming' && isDrifted(c)) return false;
+    // `conforming` now means validated-and-clean: a row nothing checked is not
+    // conforming, and used to be counted as such.
+    if (fContract.value === 'conforming' && (isDrifted(c) || coverageOf(c) !== 'checked')) return false;
+    if (fContract.value === 'not-checked' && coverageOf(c) !== 'not-checked') return false;
     if (fDirection.value && c.direction !== fDirection.value) return false;
     if (fPeer.value && c.peer_host !== fPeer.value) return false;
     if (hideHealth.value && HEALTH_RE.test(c.route || c.url || '')) return false;
@@ -1315,7 +1342,16 @@ watch(tab, (t) => {
               <!-- Tier-split chips — same taxonomy as the tab pills, so the sums always agree. -->
               <span v-if="cardBreakingCount(p)" class="tag drift">{{ breakingChipLabel(cardBreakingCount(p)) }}</span>
               <span v-if="cardInfoCount(p)" class="tag warn" :title="cardInfoTitle(p)">{{ informationalChipLabel(cardInfoCount(p)) }}</span>
-              <span v-if="!cardBreakingCount(p) && !cardInfoCount(p) && p.spec" class="tag ok">conforming</span>
+              <span
+                v-if="!cardBreakingCount(p) && !cardInfoCount(p) && p.spec && cardValidatedCalls(p)"
+                class="tag ok"
+              >conforming</span>
+              <!-- Loaded, but nothing has run against it yet: "conforming" would
+                   be a clean bill of health nobody performed. -->
+              <span
+                v-else-if="!cardBreakingCount(p) && !cardInfoCount(p) && p.spec"
+                class="tag none"
+              >no calls validated yet</span>
               <span v-else-if="!cardBreakingCount(p) && !cardInfoCount(p)" class="tag none">no contract loaded</span>
             </span>
           </div>
@@ -1581,6 +1617,7 @@ watch(tab, (t) => {
               <option value="">contract: all</option>
               <option value="drifted">drifted</option>
               <option value="conforming">conforming</option>
+              <option value="not-checked">contract: not checked</option>
             </select>
             <label class="tr-chk"><input v-model="hideHealth" type="checkbox" /> hide health checks</label>
             <button v-if="filtersActive" class="tr-clear" @click="clearFilters">clear</button>
@@ -1669,6 +1706,15 @@ watch(tab, (t) => {
                   title="Internal same-team call — metadata only. Bodies are never captured or shared. Shown so the traffic log is complete."
                 >internal</span>
                 <span v-else-if="isDrifted(c)" class="tag drift">drifted</span>
+                <!-- Nothing validated this call: no contract is bound to its edge.
+                     It is neither conforming nor drifted, and saying "conforming"
+                     here told operators their traffic was checked when nothing had
+                     looked at it. Same honest-chip treatment as `internal`. -->
+                <span
+                  v-else-if="coverageOf(c) === 'not-checked'"
+                  class="tag none"
+                  :title="notCheckedTitle(c.peer_host)"
+                >{{ NOT_CHECKED_LABEL }}</span>
                 <span v-else class="tag ok">conforming</span>
               </span>
             </div>
