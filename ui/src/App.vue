@@ -492,7 +492,12 @@ function cardValidatedCalls(p: ContractCard): number {
 }
 
 function coverageOf(c: RedactedCall): Coverage {
-  return callCoverage(c, contracts.value);
+  // MCP coverage is per TOOL, not per server: only a tool publishing an
+  // outputSchema can have its result validated (drift/mcp.go). Hand the parsed
+  // snapshot rows in so the chip cannot claim a check the processor never runs.
+  const tools: Record<string, McpToolRow[]> = {};
+  for (const [integration, entry] of Object.entries(mcpTools.value)) tools[integration] = entry.rows;
+  return callCoverage(c, contracts.value, tools);
 }
 
 function isDrifted(c: RedactedCall): boolean {

@@ -43,16 +43,36 @@ describe('callCoverage — mirrors processor/flanjdrift', () => {
     expect(callCoverage(inb('api.consumer-a.test'), [])).toBe('not-checked');
   });
 
-  it('mcp: checked only once a SNAPSHOT exists for that host', () => {
-    expect(callCoverage(mcp('mcp.acme.test'), [mcpSpec('mcp.acme.test')])).toBe('checked');
+  const TOOLS = {
+    'acme-tools': [
+      { name: 'get_balance', hasOutputSchema: true },
+      { name: 'list_transactions', hasOutputSchema: false } // the mock omits it deliberately
+    ]
+  };
+  const mcpCall = (tool: string) => ({ ...mcp('mcp.acme.test'), integration: 'acme-tools', mcp_tool_name: tool });
+
+  it('mcp: needs a SNAPSHOT for that host', () => {
     // Traffic seen but no tools/list yet — nothing to validate against.
-    expect(callCoverage(mcp('mcp.acme.test'), [])).toBe('not-checked');
+    expect(callCoverage(mcpCall('get_balance'), [], TOOLS)).toBe('not-checked');
     // Another server's snapshot must not cover this one.
-    expect(callCoverage(mcp('mcp.other.test'), [mcpSpec('mcp.acme.test')])).toBe('not-checked');
+    expect(callCoverage({ ...mcpCall('get_balance'), peer_host: 'mcp.other.test' }, [mcpSpec('mcp.acme.test')], TOOLS)).toBe('not-checked');
+  });
+
+  it('mcp: coverage is per TOOL — only a tool publishing an outputSchema is validated', () => {
+    const specs = [mcpSpec('mcp.acme.test')];
+    // get_balance publishes an outputSchema, so its RESULT is checked.
+    expect(callCoverage(mcpCall('get_balance'), specs, TOOLS)).toBe('checked');
+    // list_transactions publishes none — the processor never validates it, so
+    // claiming "conforming" here would be the same lie in a new place.
+    expect(callCoverage(mcpCall('list_transactions'), specs, TOOLS)).toBe('not-checked');
+    // A tool absent from the snapshot, and rows not loaded at all, both resolve
+    // conservatively rather than assuming coverage.
+    expect(callCoverage(mcpCall('unknown_tool'), specs, TOOLS)).toBe('not-checked');
+    expect(callCoverage(mcpCall('get_balance'), specs, {})).toBe('not-checked');
   });
 
   it('mcp is not covered by an unscoped REST spec, and vice versa', () => {
-    expect(callCoverage(mcp('mcp.acme.test'), [providerSpec(undefined)])).toBe('not-checked');
+    expect(callCoverage(mcpCall('get_balance'), [providerSpec(undefined)], TOOLS)).toBe('not-checked');
     expect(callCoverage(out('api.acme.test'), [mcpSpec('api.acme.test')])).toBe('not-checked');
   });
 

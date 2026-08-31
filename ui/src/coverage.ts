@@ -15,8 +15,15 @@
 //   client (outbound) → validated iff a provider doc is loaded AND that spec is
 //                       either unscoped (`peer_host` empty → validates EVERY
 //                       outbound call) or its peer_host matches the call's
-//   mcp               → validated iff a snapshot exists for that host; the
-//                       observed tools/list IS the contract, self-delivering
+//   mcp               → validated iff a snapshot exists for that host AND the
+//                       CALLED TOOL declares an `outputSchema` in it. A tool
+//                       without one publishes nothing to check its result
+//                       against, so its calls are never validated even though
+//                       the server's tools/list is present (drift/mcp.go:220
+//                       gates on `op.OutputSchema != nil`). Per-TOOL, not
+//                       per-host — the mock's `list_transactions` omits it
+//                       deliberately, and treating the whole server as covered
+//                       would restate the very lie this module exists to kill
 //   internal          → never validated by design (metadata-only, no bodies)
 
 /** The minimum shape this module needs from a call row. */
@@ -25,6 +32,10 @@ export interface CoverageCall {
   direction?: string;
   edge_class?: string;
   transport?: string;
+  /** MCP only: the tool this call invoked, used for the per-tool schema check. */
+  mcp_tool_name?: string;
+  /** MCP only: which server's snapshot to look the tool up in. */
+  integration?: string;
 }
 
 /** The minimum shape this module needs from a loaded contract (spec_infos). */
@@ -35,6 +46,12 @@ export interface CoverageSpec {
 }
 
 export type Coverage = 'internal' | 'checked' | 'not-checked';
+
+/** One tool from a server's tools/list snapshot (ui/src/mcp.ts parseToolRows). */
+export interface McpToolCoverage {
+  name: string;
+  hasOutputSchema: boolean;
+}
 
 /** The Traffic chip for an unvalidated call, and its filter value. */
 export const NOT_CHECKED_LABEL = 'not checked';
@@ -54,16 +71,27 @@ export function notCheckedTitle(host?: string): string {
  * external call with no contract is a real gap in what the operator can see.
  * Rendering them the same would turn a deliberate policy into an apparent hole.
  */
-export function callCoverage(call: CoverageCall, specs: readonly CoverageSpec[]): Coverage {
+export function callCoverage(
+  call: CoverageCall,
+  specs: readonly CoverageSpec[],
+  mcpTools: Readonly<Record<string, readonly McpToolCoverage[]>> = {}
+): Coverage {
   if (call.edge_class === 'internal') return 'internal';
 
   if (call.transport === 'mcp') {
     // Snapshots only — NOT the wider "hosts we have seen MCP traffic from".
     // A server whose tools/list has not arrived yet has nothing to validate
     // against, and claiming otherwise would be the same lie in a new place.
-    return specs.some((s) => s.format === 'mcp' && s.peer_host && s.peer_host === call.peer_host)
-      ? 'checked'
-      : 'not-checked';
+    const snapshot = specs.some(
+      (s) => s.format === 'mcp' && s.peer_host && s.peer_host === call.peer_host
+    );
+    if (!snapshot) return 'not-checked';
+    // Per TOOL: only a tool that publishes an outputSchema can have its result
+    // validated. Rows not loaded yet resolve conservatively — never claim a
+    // check we cannot evidence.
+    const rows = (call.integration && mcpTools[call.integration]) || [];
+    const tool = rows.find((t) => t.name === call.mcp_tool_name);
+    return tool?.hasOutputSchema ? 'checked' : 'not-checked';
   }
 
   if (call.direction === 'server') {
