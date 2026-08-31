@@ -38,7 +38,7 @@ extensions:
     #
     # This is a ClusterIP-facing port like :4318, NOT the UI — the UI stays on
     # loopback.
-    spec_endpoint: 0.0.0.0:5336
+    spec_endpoint: 0.0.0.0:5337
     spec_token: ${env:FLANJ_SPEC_TOKEN} # shared with the fronts' flanjdrift.store_pod_token; never logged
     # --- postgres variant (BYO-DB; the store tier may then scale) -------------
     # backend: postgres

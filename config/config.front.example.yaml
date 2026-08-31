@@ -44,7 +44,7 @@ processors:
   # deployment it is almost always a mistake.
   flanjdrift:
     integration_id: acme-payments
-    store_pod_endpoint: ${env:FLANJ_STORE_SPEC_ENDPOINT:-http://flanj-store:5336}
+    store_pod_endpoint: ${env:FLANJ_STORE_SPEC_ENDPOINT:-http://flanj-store:5337}
     store_pod_token: ${env:FLANJ_SPEC_TOKEN} # must match the store pod's flanjstore.spec_token
     # self_spec_path: /etc/flanj/self-spec.yaml
     # self_integration_id: self
