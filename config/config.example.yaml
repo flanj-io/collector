@@ -46,10 +46,10 @@ extensions:
     ui_endpoint: 127.0.0.1:5335 # loopback only — the collector is outbound-only
     integration_id: acme-payments
     consumer_display_name: Acme Consumer Ltd
-    provider_display_name: Acme Payments # who the flag is about; defaults to humanized integration_id
+    provider_display_name: Acme Payments # DEPRECATED — name edges in the UI (Overview → Edges → Rename); this value migrates into the store on boot and a UI rename beats it
     cp_base_url: https://cp.flanj.test
     cp_deploy_token: ${env:CP_DEPLOY_TOKEN} # used once, for Connect (register); the per-deployment collector key it returns lives in the store
-    finding_sync: true # default true — periodic shape-only findings sync to the control plane (id/signature/kind/severity/endpoint/rule/counts/timestamps; expected/actual/detail never leave this collector); false disables the loop
+    finding_sync: true # default true — periodic shape-only findings sync to the control plane (id/signature/kind/severity/endpoint/rule/counts/timestamps; expected/actual/detail never leave this collector), plus the directory-name refresh that rides the same tick (a keyed fetch of the name table — this collector's edges are not sent); false disables both
 
 receivers:
   otlp:

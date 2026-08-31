@@ -844,3 +844,40 @@ func TestSettings_RoundTrip(t *testing.T) {
 		}
 	})
 }
+
+// TestSettings_EdgeNameKeys (v1 phase 1 — edge naming): the rename KV shape —
+// per-domain records `edge.name.<registrable_domain>` + the `edge.names` index
+// array — persists across a reopen (the restart simulation; on the postgres
+// backend the same reopen is a second pod sharing the deployment's database,
+// so this is the cross-pod persistence oracle too). A cleared name is a
+// tombstone (empty value), never a delete.
+func TestSettings_EdgeNameKeys(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, b *testBackend) {
+		s := b.open(t, 0, 0)
+		rec := `{"name":"Guava Billing","source":"user","updated_at":"2026-08-30T10:00:00Z"}`
+		if err := s.PutSetting("edge.name.zzguava.dev", rec); err != nil {
+			t.Fatalf("put record: %v", err)
+		}
+		if err := s.PutSetting("edge.names", `["zzguava.dev"]`); err != nil {
+			t.Fatalf("put index: %v", err)
+		}
+		// Restart / second pod.
+		_ = s.Close()
+		s2 := b.reopen(t, 0, 0)
+		if v, ok, _ := s2.GetSetting("edge.name.zzguava.dev"); !ok || v != rec {
+			t.Fatalf("record after reopen = %q ok=%v", v, ok)
+		}
+		if v, ok, _ := s2.GetSetting("edge.names"); !ok || v != `["zzguava.dev"]` {
+			t.Fatalf("index after reopen = %q ok=%v", v, ok)
+		}
+		// Tombstone (the KV has no delete): the empty record persists as empty.
+		if err := s2.PutSetting("edge.name.zzguava.dev", ""); err != nil {
+			t.Fatalf("tombstone: %v", err)
+		}
+		_ = s2.Close()
+		s3 := b.reopen(t, 0, 0)
+		if v, ok, _ := s3.GetSetting("edge.name.zzguava.dev"); !ok || v != "" {
+			t.Fatalf("tombstone after reopen = %q ok=%v, want empty value present", v, ok)
+		}
+	})
+}

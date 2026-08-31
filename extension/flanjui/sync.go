@@ -46,6 +46,10 @@ func (e *uiExtension) startFindingSync() {
 		defer t.Stop()
 		for {
 			e.syncFindingsOnce(ctx)
+			// The directory pull rides the same cadence, after findings
+			// (v1 phase 1 — directory.go): conditional full-table fetch,
+			// same skip conditions, silent.
+			e.syncDirectoryOnce(ctx)
 			select {
 			case <-ctx.Done():
 				return

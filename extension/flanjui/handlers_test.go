@@ -55,6 +55,33 @@ type stubCP struct {
 	// order, plus the call count — sync_test.go asserts on the BYTES.
 	findingsCalls  int
 	findingsBodies [][]byte
+	// Directory pull (GET /api/v1/directory): the served ENTRIES object + ETag,
+	// the If-None-Match header of every call, and the call count. Fixtures set
+	// the bare `{"<domain>": {"name","tier"}}` map; the stub ALWAYS wraps it in
+	// the §5.14 envelope `{"entries": …, "count": n}` itself, so a fixture can
+	// never drift back to serving a bare map.
+	directoryEntries string
+	directoryETag    string
+	directoryCalls int
+	directoryINMs  []string
+	// Directory submissions (POST /api/v1/directory/submissions): every raw
+	// body in order, plus an optional forced status (and error message) for
+	// the failure paths.
+	submissionBodies  [][]byte
+	submissionStatus  int
+	submissionMessage string
+}
+
+// directoryEnvelopeBody wraps a bare entries object in the §5.14 response
+// envelope `{"entries": …, "count": n}` — the ONLY shape the stub (and the
+// real CP) ever serves. Tests reuse it to compute expected raw bodies.
+func directoryEnvelopeBody(entries string) string {
+	if entries == "" {
+		entries = "{}"
+	}
+	var m map[string]json.RawMessage
+	_ = json.Unmarshal([]byte(entries), &m)
+	return fmt.Sprintf(`{"entries":%s,"count":%d}`, entries, len(m))
 }
 
 // summaryRow is the §5.5 summary object — the SAME row §5.5a lists.
@@ -191,6 +218,47 @@ func newStubCP(t *testing.T) *stubCP {
 		}
 		_ = json.Unmarshal(raw, &b)
 		jsonOut(w, 200, map[string]any{"received": len(b.Findings), "stored": len(b.Findings)})
+	})
+	// v1p1: the directory full-table pull — collector key required, ETag
+	// conditional (If-None-Match match → 304, no body).
+	mux.HandleFunc("GET /api/v1/directory", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if !keyed(w, r) {
+			return
+		}
+		s.directoryCalls++
+		s.directoryINMs = append(s.directoryINMs, r.Header.Get("If-None-Match"))
+		if s.directoryETag != "" && r.Header.Get("If-None-Match") == s.directoryETag {
+			w.WriteHeader(304)
+			return
+		}
+		if s.directoryETag != "" {
+			w.Header().Set("ETag", s.directoryETag)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(directoryEnvelopeBody(s.directoryEntries)))
+	})
+	// v1p1: opt-in directory submissions — collector key required; the stub
+	// records the raw body so tests assert nothing leaves without the opt-in.
+	mux.HandleFunc("POST /api/v1/directory/submissions", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if !keyed(w, r) {
+			return
+		}
+		raw, _ := io.ReadAll(r.Body)
+		s.submissionBodies = append(s.submissionBodies, append([]byte(nil), raw...))
+		if s.submissionStatus != 0 {
+			msg := s.submissionMessage
+			if msg == "" {
+				msg = "try later"
+			}
+			jsonOut(w, s.submissionStatus, map[string]string{"error": "unavailable", "message": msg})
+			return
+		}
+		jsonOut(w, 202, map[string]any{"status": "pending"})
 	})
 	// CONTRACTS-CP §5.5a: the collector-key-scoped thread list, an ENVELOPE.
 	mux.HandleFunc("GET /api/v1/threads", func(w http.ResponseWriter, r *http.Request) {

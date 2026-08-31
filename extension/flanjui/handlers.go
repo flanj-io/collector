@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"io/fs"
 	"net/http"
+	"strings"
 	"time"
+	"unicode/utf8"
 
+	"github.com/flanj-io/collector/internal/edge"
 	"github.com/flanj-io/collector/internal/model"
 	"github.com/flanj-io/collector/internal/promote"
+	"github.com/flanj-io/collector/internal/redact"
 	"github.com/flanj-io/collector/internal/store"
 )
 
@@ -19,6 +23,11 @@ func (e *uiExtension) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", e.handleHealth)
 	mux.HandleFunc("/api/edges", e.handleEdges)
+	// Edge rename (v1 phase 1) — LOCAL mutation (guarded WITHOUT the CP check:
+	// naming an edge works on a disconnected collector; only the opt-in
+	// directory suggestion needs a Connected one, and its failure never fails
+	// the save).
+	mux.HandleFunc("/api/edges/name", e.handleEdgeName)
 	mux.HandleFunc("/api/calls", e.handleCalls)
 	mux.HandleFunc("/api/findings", e.handleFindings)
 	// Local acknowledge (never a relay route — guarded WITHOUT the CP check).
@@ -71,9 +80,8 @@ func (e *uiExtension) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if cs, err := loadConnect(st); err == nil {
 		connect = cs.status()
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	out := map[string]any{
 		"status":            "ok",
-		"integration":       e.cfg.IntegrationID,
 		"window_rows":       rows,
 		"window_bytes":      bytes,
 		"calls":             calls,
@@ -86,18 +94,62 @@ func (e *uiExtension) handleHealth(w http.ResponseWriter, r *http.Request) {
 		// (ux-design-v2 §3.4) — the first is "this browser has no stored theme
 		// choice", which only the browser can answer.
 		"held_prior_data": heldPriorData(st),
-		// Display names from config: the UI prefills Connect's org field and
-		// names the provider on the Flag sheet with these.
+		// consumer_display_name names the INSTALLER, not a discovery — it may
+		// render pre-traffic (the pre-traffic honesty rule exempts it).
 		"consumer_display_name": e.cfg.ConsumerDisplayName,
-		"provider_display_name": e.cfg.ProviderDisplayName,
-	})
+	}
+	// Pre-traffic honesty (v1 phase 1): `integration` and
+	// `provider_display_name` describe a DISCOVERY, so they emit only once at
+	// least one external outbound edge (or a finding) exists — never from bare
+	// config at zero traffic.
+	if hasObservedProvider(st, findings) {
+		out["integration"] = e.cfg.IntegrationID
+		out["provider_display_name"] = e.cfg.ProviderDisplayName
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
-// edgeWithRPM decorates a discovered edge with its observed request rate:
-// calls captured over the trailing 60 seconds, i.e. calls/minute.
+// hasObservedProvider reports whether this collector has anything real to
+// attach a provider identity to: ≥1 external outbound edge, or ≥1 finding.
+func hasObservedProvider(st store.Store, findings int) bool {
+	if findings > 0 {
+		return true
+	}
+	edges, err := st.ListEdges(true)
+	if err != nil {
+		return false
+	}
+	for _, ed := range edges {
+		if ed.Direction == edge.DirectionClient {
+			return true
+		}
+	}
+	return false
+}
+
+// edgeWithRPM decorates a discovered edge with its observed request rate
+// (calls captured over the trailing 60 seconds, i.e. calls/minute) and — v1
+// phase 1 — its naming fields: the registrable domain (the naming key), the
+// resolved display name and its provenance (`user | config | directory |
+// auto`). display_name is empty when the source is auto (the UI humanizes the
+// host itself). Names resolve for OUTBOUND rows only; inbound rows carry the
+// domain but always source auto (inbound naming is deferred — ruling 6).
 type edgeWithRPM struct {
 	model.Edge
-	RPM float64 `json:"rpm"`
+	RPM               float64 `json:"rpm"`
+	RegistrableDomain string  `json:"registrable_domain"`
+	DisplayName       string  `json:"display_name"`
+	NameSource        string  `json:"name_source"`
+}
+
+// decorateEdge builds the API row for one discovered edge.
+func decorateEdge(ed model.Edge, rpm float64, names nameResolver) edgeWithRPM {
+	er := edgeWithRPM{Edge: ed, RPM: rpm, NameSource: nameSourceAuto}
+	er.RegistrableDomain = edge.RegistrableDomain(ed.PeerHost)
+	if ed.Direction == edge.DirectionClient {
+		er.DisplayName, er.NameSource = names.resolve(er.RegistrableDomain)
+	}
+	return er
 }
 
 // handleEdges returns the discovered EXTERNAL edges (inbound + outbound), each
@@ -119,11 +171,14 @@ func (e *uiExtension) handleEdges(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	// One resolution context per REQUEST — never a lookup per edge, and never
+	// a CP call from here (the directory tier reads only the KV + baked seed).
+	names := e.newNameResolver(st)
 	all := make([]edgeWithRPM, 0, len(edges))
 	outbound := make([]edgeWithRPM, 0)
 	inbound := make([]edgeWithRPM, 0)
 	for _, ed := range edges {
-		er := edgeWithRPM{Edge: ed, RPM: float64(counts[ed.PeerHost+"|"+ed.Direction])}
+		er := decorateEdge(ed, float64(counts[ed.PeerHost+"|"+ed.Direction]), names)
 		all = append(all, er)
 		if ed.Direction == "server" {
 			inbound = append(inbound, er)
@@ -136,6 +191,135 @@ func (e *uiExtension) handleEdges(w http.ResponseWriter, r *http.Request) {
 		"outbound": outbound,
 		"inbound":  inbound,
 	})
+}
+
+// edgeNameRequestBody is POST /api/edges/name: rename ({host, name}) or clear
+// ({host, name: ""}) an OUTBOUND edge, keyed by the host's registrable domain.
+// suggest=true additionally sends the mapping to the Flanj directory — the
+// per-mapping OPT-IN (default false; the UI checkbox is unchecked by default).
+type edgeNameRequestBody struct {
+	Host    string `json:"host"`
+	Name    string `json:"name"`
+	Suggest bool   `json:"suggest"`
+}
+
+// edgeNameMaxLen caps a display name (in runes) before persist.
+const edgeNameMaxLen = 80
+
+// handleEdgeName saves, or clears, the `user` name for the outbound edge whose
+// host maps to a registrable domain. The value passes the SAME redaction floor
+// Connect display names pass before persist. When suggest is set AND the
+// collector is Connected, the mapping is POSTed to the CP directory — and a
+// submission failure NEVER fails the save: the answer is still 200 with
+// suggested=false and the distinct copy string. Nothing is ever sent when
+// suggest is false.
+func (e *uiExtension) handleEdgeName(w http.ResponseWriter, r *http.Request) {
+	if !e.guardLocalMutating(w, r) {
+		return
+	}
+	var body edgeNameRequestBody
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid_json", msgInvalidJSON)
+		return
+	}
+	body.Host = strings.TrimSpace(body.Host)
+	if body.Host == "" {
+		writeErr(w, http.StatusBadRequest, "missing_fields", msgEdgeHostRequired)
+		return
+	}
+	st := e.storeOrError(w)
+	if st == nil {
+		return
+	}
+	domain := edge.RegistrableDomain(body.Host)
+	// Outbound rows only: the host must map to a discovered external OUTBOUND
+	// edge (inbound naming is deferred; internal edges never surface at all).
+	edges, err := st.ListEdges(true)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "store_error", msgStoreUnavailable)
+		return
+	}
+	var target *model.Edge
+	for i := range edges {
+		if edges[i].Direction == edge.DirectionClient && edge.RegistrableDomain(edges[i].PeerHost) == domain {
+			target = &edges[i]
+			break
+		}
+	}
+	if domain == "" || target == nil {
+		writeErr(w, http.StatusNotFound, "edge_not_found", msgEdgeNotFound)
+		return
+	}
+
+	name := strings.TrimSpace(body.Name)
+	if name == "" {
+		// Clear: tombstone + index removal; the row returns to the next tier.
+		if err := deleteEdgeName(st, domain); err != nil {
+			writeErr(w, http.StatusInternalServerError, "store_error", msgStoreUnavailable)
+			return
+		}
+		names := e.newNameResolver(st)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"saved":     true,
+			"suggested": false,
+			"edge":      decorateEdge(*target, 0, names),
+		})
+		return
+	}
+	// The same redaction floor Connect display names pass (connect.go), plus a
+	// length cap — the value persists and may (opt-in) leave the collector.
+	name = strings.TrimSpace(redact.New().Redact(name).Text)
+	if utf8.RuneCountInString(name) > edgeNameMaxLen {
+		writeErr(w, http.StatusBadRequest, "name_too_long", msgNameTooLong)
+		return
+	}
+	if name == "" {
+		// The redaction floor consumed the whole value — refuse rather than
+		// persist an empty `user` record (an explicit clear posts name: "").
+		writeErr(w, http.StatusBadRequest, "name_empty", msgNameEmpty)
+		return
+	}
+	if err := putEdgeName(st, domain, name, nameSourceUser); err != nil {
+		writeErr(w, http.StatusInternalServerError, "store_error", msgStoreUnavailable)
+		return
+	}
+
+	// The OPT-IN suggestion — only ever on suggest=true, only when Connected,
+	// and never fatal to the save that already landed.
+	suggested := false
+	suggestMsg := ""
+	if body.Suggest {
+		cs, csErr := loadConnect(st)
+		if csErr == nil && cs.CollectorKey != "" && e.cp != nil {
+			_, sErr := e.keyedClient(cs).SubmitDirectoryName(r.Context(), promote.DirectorySubmissionRequest{Domain: domain, Name: name})
+			switch {
+			case sErr == nil:
+				suggested = true
+			default:
+				// A CP 400 is the directory's name normalizer REFUSING the
+				// suggestion — a definitive answer, not a transport failure:
+				// relay the CP's one-sentence reason. Everything else keeps
+				// the it-stays-local copy.
+				if ce := promote.AsCPError(sErr); ce != nil && ce.Status == http.StatusBadRequest && ce.Message != "" {
+					suggestMsg = msgNameSuggestRefused(ce.Message)
+				} else {
+					suggestMsg = msgNameSavedSuggestFailed
+				}
+			}
+		} else {
+			suggestMsg = msgNameSavedSuggestFailed
+		}
+	}
+	names := e.newNameResolver(st)
+	out := map[string]any{
+		"saved":     true,
+		"suggested": suggested,
+		"edge":      decorateEdge(*target, 0, names),
+	}
+	if suggestMsg != "" {
+		out["message"] = suggestMsg
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // handleContracts returns the provider contracts (specs) the drift processor

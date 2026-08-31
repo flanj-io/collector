@@ -145,6 +145,8 @@ func relayMessages() []string {
 		msgCPNotConfigured, msgStoreUnavailable, msgPostOnly, msgUIHeaderRequired, msgJSONRequired, msgForeignOrigin,
 		msgInvalidJSON, msgConnectFields, msgInvalidEmail, msgFindingRequired, msgFindingNotFound, msgFindingNoCall,
 		msgCallEvicted, msgThreadNotFound, msgWrongOrigin, msgKeyMissing, msgNotAckable, contactUnconfirmedMessage("ops@example.test"),
+		msgEdgeHostRequired, msgEdgeNotFound, msgNameTooLong, msgNameEmpty, msgNameSavedSuggestFailed,
+		msgNameSuggestRefused("The name is too long."),
 	}
 }
 

@@ -41,4 +41,22 @@ const (
 	msgThreadNotFound      = "No thread with that id was created from this collector."
 	msgWrongOrigin         = "This thread was created by another collector key — it can only be changed from there."
 	msgKeyMissing          = "The control plane already knows this collector, but this store never received its key. Set a new cp_deploy_token and Connect again."
+	// Edge naming (v1 phase 1).
+	msgEdgeHostRequired = "host is required."
+	msgEdgeNotFound     = "No outbound edge with that host has been discovered."
+	msgNameTooLong      = "The name is too long."
+	msgNameEmpty        = "The name is empty."
+	// The distinct partial-success copy: the local save landed, only the
+	// OPT-IN directory suggestion did not go out (brief-common copy deck).
+	msgNameSavedSuggestFailed = "Name saved. The suggestion didn't reach the directory — it stays local."
 )
+
+// msgNameSuggestRefused is the OTHER partial-success copy: the local save
+// landed, and the directory REFUSED the suggestion (a CP 400 from the name
+// normalizer — not a transport failure), relaying the CP's one-sentence reason.
+// The wrapper deliberately does NOT say "refused": the CP's own sentence already
+// carries the refusal ("The name … doesn't accept."), and doubling it read as two
+// rejections stacked on one line.
+func msgNameSuggestRefused(cpMessage string) string {
+	return "Name saved. The directory didn't take the suggestion: " + cpMessage
+}
