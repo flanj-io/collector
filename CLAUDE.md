@@ -50,8 +50,11 @@ dedup by `signature`, so one drift = one finding (with an `occurrence_count`) = 
   `v0.159.0`, stable components (`component`, `extension`, `pdata`) `v1.65.0`; `config/confighttp` is beta (`v0.159.0`). `otlpreceiver` is **core**, not contrib.
 - `docker build -t flanj-collector .` (multi-stage: node builds UI → go builds binary embedding it).
 - `go test ./...` (unit + contract tests for the custom components; the component modules — e.g. `extension/flanjui` — are their own Go modules, run `go test ./...` inside them too). `cd ui && npm run dev` (UI dev server against a running collector); `npm test` (vitest, pure helpers);
-  `npm run typecheck` (vue-tsc — the ONLY check that reads the `.vue` templates; `npm run build` does not
-  type-check and vitest only loads the `.ts` files); `npm run build`.
+  `npm run typecheck` (vue-tsc — the only check that TYPE-checks the `.vue` templates; vitest only
+  loads the `.ts` files); **`npm run build` — required, not optional**: vue-tsc does NOT validate
+  template STRUCTURE, so an unbalanced tag passes typecheck clean and fails only here. Skip it
+  locally and a broken template surfaces at the Docker stage instead, which is the slowest place
+  to find it (measured 2026-08-31). Both must pass before you push a `ui/` change.
 
 ## Layout
 
