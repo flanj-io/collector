@@ -168,7 +168,15 @@ func contractEdgeNames(st store.Store) map[string]string {
 	}
 	out := make(map[string]string, len(infos))
 	for _, si := range infos {
-		if si.Role == model.SpecRoleSelf || si.PeerHost == "" || si.Title == "" {
+		// UPLOADED REST contracts only. An MCP snapshot is a provider row with a
+		// peer_host and a title too, but its title is the SERVER's name
+		// (`acme-tools-mcp`), not the organisation's — and `mcp.acme.test` shares
+		// a registrable domain with `api.acme.test`, so letting it through would
+		// let an observed server name win the whole domain by nothing more than
+		// which row sorted first. Naming is what the operator DID; a tools/list
+		// snapshot is something the traffic delivered.
+		if si.Format != model.SpecFormatOpenAPI || si.Role == model.SpecRoleSelf ||
+			si.PeerHost == "" || si.Title == "" {
 			continue
 		}
 		domain := edge.RegistrableDomain(si.PeerHost)

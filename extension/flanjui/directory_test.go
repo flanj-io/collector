@@ -269,3 +269,23 @@ func TestHealthZeroTrafficHonesty(t *testing.T) {
 		t.Errorf("a finding must unlock the provider fields: %v", out)
 	}
 }
+
+// TestMcpSnapshotNamesNoEdge: an MCP snapshot is a provider row with a peer_host
+// and a title, so it looks like a contract to a careless filter — but its title
+// is the SERVER's name, not the organisation's, and mcp.acme.test shares a
+// registrable domain with api.acme.test. Letting it through would let an
+// observed server name win the whole domain by sort order.
+func TestMcpSnapshotNamesNoEdge(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	_ = r.st.PutSpecInfo(model.SpecInfo{
+		Integration: "acme-tools", Role: model.SpecRoleProvider, Format: model.SpecFormatMCP,
+		PeerHost: "mcp.zzguava.dev", Title: "acme-tools-mcp", Source: model.SpecSourceObserved,
+	}, nil)
+	seedOutboundEdge(r, "api.zzguava.dev")
+
+	row := edgeRowFor(t, r, "api.zzguava.dev")
+	if row["name_source"] == "contract" {
+		t.Errorf("an MCP snapshot named a REST edge on the shared domain: %v", row)
+	}
+}
