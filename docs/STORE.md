@@ -80,6 +80,7 @@ shape and the Kubernetes objects each needs — in [DEPLOYMENT.md](DEPLOYMENT.md
 | | Single pod | N pods + shared postgres | Tiered: N fronts → 1 store |
 |---|---|---|---|
 | Pipeline | one collector: otlp → redaction → drift → store + UI | N identical collectors, each the full pipeline, `backend: postgres` | **fronts**: otlp → redaction → drift → `otlphttp`; **store pod**: otlp → redaction → store + UI |
+| Uploaded contracts | read from the co-located store, in-process | same — every pod holds a store handle onto the shared database | uploaded on the **store pod**; fronts read them back over `spec_endpoint` (set it, or drift never runs on a front) |
 | Config | `/etc/flanj/config.yaml` | same, `backend: postgres` | `/etc/flanj/front.yaml` + `/etc/flanj/store.yaml` (`config/config.*.example.yaml`) |
 | State | sqlite on a PVC (or postgres) | postgres only | store pod: sqlite on ONE PVC (or postgres); fronts: none |
 | Scale | 1 | N writers (postgres) | N stateless fronts (HPA on cpu/memory); store = 1 on sqlite, may scale on postgres |
@@ -108,10 +109,16 @@ no custom protocol exists between the tiers.
   partial batch, cross-request reordering, a call re-sent after eviction) the
   store's *late pin* pins the call when it lands and repairs the edge drift
   attribution. An insert's own eviction also never evicts the row it just wrote.
-- **Contract metadata crosses the hop too**: each front emits its loaded specs
-  as `spec_info` records (first batch after start, then every 10 minutes) so
-  the store pod's Contracts tab is populated; a freshly wiped store converges
-  within one interval.
+- **Contracts flow the OTHER way** (2026-08-31). Provider contracts are uploaded
+  in the UI, which lives on the store pod, so the store pod is their source of
+  truth and the fronts READ them — the reverse of every other record here.
+  A front polls the store pod's `spec_endpoint` on a one-minute ticker (and
+  early on first sight of a host it has no contract for), keeps the parsed
+  documents in memory, and re-downloads only what changed. Without
+  `store_pod_endpoint` set on a front, an uploaded contract reaches it never and
+  REST drift detection simply does not run there; the front says so once at
+  start. A front's SELF contract (`self_spec_path`, still config) still crosses
+  upward as a `spec_info` record, first batch after start then every 10 minutes.
 
 ### Tiered: invariants
 
@@ -128,6 +135,14 @@ no custom protocol exists between the tiers.
    `kubectl port-forward` to it.
 5. **Upgrade the store pod first**, then fronts (an older store drops a newer
    front's `spec_info` records harmlessly; an older front simply sends none).
+   This matters more now that contracts flow downward: a front upgraded first
+   would poll a `spec_endpoint` the old store pod does not serve, and detect
+   nothing until the store pod caught up.
+6. **The contract endpoint is not the UI.** `spec_endpoint` is a separate,
+   read-only, contracts-only listener on the cluster interface — a sibling of
+   `:4318`, requiring the shared `spec_token`. It exposes no calls, no findings
+   and no settings, and it mutates nothing. The UI stays loopback (invariant 4),
+   which is what lets this exist without weakening it.
 
 The e2e harness proves this shape end-to-end: `make gate-tiered` /
 `make stress-tiered` run the unchanged gate, the contracts check and the
