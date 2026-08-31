@@ -40,10 +40,10 @@ func createDefaultConfig() component.Config {
 		UIEndpoint: "127.0.0.1:5335",
 		// Shape-only findings sync is on unless finding_sync: false (CONTRACTS §8).
 		FindingSync: true,
-		// The directory display-name refresh is on unless display_name_sync:
+		// The directory display-name refresh is on unless directory_sync:
 		// false (CONTRACTS §8) — its own switch since the 2026-08-31 ruling, so
 		// an omitted key still means on and behaviour is unchanged.
-		DisplayNameSync: true,
+		DirectorySync: true,
 	}
 }
 

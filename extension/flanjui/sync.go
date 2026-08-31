@@ -17,7 +17,7 @@ package flanjui
 //
 // ONE ticker, TWO independently gated legs (owner ruling 2026-08-31): the
 // directory display-name refresh (directory.go) rides this same ticker but
-// answers to its own key, `display_name_sync`. They are two different egresses
+// answers to its own key, `directory_sync`. They are two different egresses
 // with two different privacy stories — findings go OUT, the directory only
 // comes IN — so neither switch may silently turn the other off. With BOTH
 // false the goroutine is never started at all: no ticker, no work, nothing.
@@ -45,7 +45,7 @@ func (e *uiExtension) startFindingSync() {
 	}
 	// Read the switches ONCE, here, and hand them to the goroutine: the loop
 	// must not read e.cfg concurrently with anyone else.
-	syncFindings, syncDirectory := e.cfg.FindingSync, e.cfg.DisplayNameSync
+	syncFindings, syncDirectory := e.cfg.FindingSync, e.cfg.DirectorySync
 	if !syncFindings && !syncDirectory {
 		return
 	}
@@ -63,7 +63,7 @@ func (e *uiExtension) startFindingSync() {
 			if syncFindings {
 				e.syncFindingsOnce(ctx)
 			}
-			// Leg 2 — the directory pull (display_name_sync): rides the same
+			// Leg 2 — the directory pull (directory_sync): rides the same
 			// cadence, after findings (v1 phase 1 — directory.go); conditional
 			// full-table fetch, same skip conditions, silent. Gated on its OWN
 			// key, so finding_sync: false never stops a name refresh.

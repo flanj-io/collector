@@ -16,10 +16,10 @@ package flanjui
 // in the KV with one blind put.
 //
 // The refresh SHARES that ticker with the findings sync but has its OWN switch,
-// `display_name_sync` (CONTRACTS §8, default true — owner ruling 2026-08-31):
+// `directory_sync` (CONTRACTS §8, default true — owner ruling 2026-08-31):
 // this leg is a pure fetch (nothing about this collector's edges leaves), so it
 // does not answer to `finding_sync`, which governs an egress. With
-// `display_name_sync: false` the pull never runs — but note it does not CLEAR
+// `directory_sync: false` the pull never runs — but note it does not CLEAR
 // a table pulled earlier: loadDirectory keeps merging the stored table over the
 // seed, so a previously-connected collector goes on serving those names (frozen,
 // and going stale) until the store is reset. Turning the switch off stops future
@@ -241,7 +241,7 @@ func (e *uiExtension) maybeMigrateNames(st store.Store) {
 // syncDirectoryOnce is one directory pull, riding the sync ticker after the
 // findings tick (same cadence, same skip conditions, all silent): a configured
 // CP and a collector key, or nothing happens. The caller (sync.go) gates this
-// leg on `display_name_sync` alone. Never on a cache miss, never per edge.
+// leg on `directory_sync` alone. Never on a cache miss, never per edge.
 // 304 → no-op; 200 → one blind put of the raw body + the new ETag.
 func (e *uiExtension) syncDirectoryOnce(ctx context.Context) {
 	if e.cp == nil {
