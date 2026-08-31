@@ -637,11 +637,12 @@ const contractCards = computed<{ self: ContractCard[]; providers: ContractCard[]
   const coveredHosts = new Set<string>();
   for (const s of contracts.value) {
     const card: ContractCard = {
-      // The edge's display name beats the humanized integration SLUG (a
-      // spec-scoping label, not an identity) — a named edge reads as its name
-      // here too. The spec's own title stays first: it is the provider's own
-      // words for the contract, not a raw host. `peerHost` below still renders
-      // the host next to whichever name wins, so the host is never replaced.
+      // The spec's own `info.title` wins: it is the provider's own words for the
+      // contract, read out of the document the operator loaded — declared, and
+      // inspectable in this very tab. Edge display names are deliberately NOT
+      // consulted here (owner ruling 2026-08-31: naming stays on the Edges
+      // panel; Traffic and Contracts keep domains). `peerHost` renders beside
+      // whichever name wins, so the host is never replaced.
       key: 'spec-' + s.integration,
       name: s.title || humanize(s.integration) || s.peer_host || (s.role === 'self' ? 'Your API' : 'Provider'),
       peerHost: s.peer_host || '',
