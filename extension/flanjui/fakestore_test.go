@@ -15,6 +15,11 @@ type fakeStore struct {
 	findings map[string]model.Finding
 	settings map[string]string
 	promoted []string
+	// edges + specInfos back the v1p1 naming surface: ListEdges serves the
+	// seeded rows (externalOnly filters on class) and ListSpecInfos serves the
+	// seeded spec rows (config→edge linkage for the boot migration).
+	edges     []model.Edge
+	specInfos []model.SpecInfo
 	// afterPut, when set, runs (unlocked) right after a PutSetting write —
 	// tests use it to simulate a concurrent writer clobbering the key.
 	afterPut func(key, value string)
@@ -78,10 +83,30 @@ func (f *fakeStore) ListFindings(limit int) ([]model.Finding, error) {
 	}
 	return out, nil
 }
-func (f *fakeStore) ListEdges(bool) ([]model.Edge, error)               { return nil, nil }
+func (f *fakeStore) ListEdges(externalOnly bool) ([]model.Edge, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]model.Edge, 0, len(f.edges))
+	for _, e := range f.edges {
+		if externalOnly && e.Class != "external" {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out, nil
+}
 func (f *fakeStore) EdgeCallCountsSince(string) (map[string]int, error) { return map[string]int{}, nil }
-func (f *fakeStore) PutSpecInfo(model.SpecInfo, []byte) error           { return nil }
-func (f *fakeStore) ListSpecInfos() ([]model.SpecInfo, error)           { return nil, nil }
+func (f *fakeStore) PutSpecInfo(si model.SpecInfo, _ []byte) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.specInfos = append(f.specInfos, si)
+	return nil
+}
+func (f *fakeStore) ListSpecInfos() ([]model.SpecInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]model.SpecInfo(nil), f.specInfos...), nil
+}
 func (f *fakeStore) GetSpecDoc(string) ([]byte, string, bool, error)    { return nil, "", false, nil }
 func (f *fakeStore) Stats() (int, int64, error)                         { return len(f.calls), 0, nil }
 func (f *fakeStore) Counts() (int, int, error)                          { return len(f.calls), len(f.findings), nil }

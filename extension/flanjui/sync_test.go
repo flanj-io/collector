@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/collector/confmap"
+
 	"github.com/flanj-io/collector/internal/model"
 	"github.com/flanj-io/collector/internal/promote"
 )
@@ -177,17 +179,19 @@ func TestFindingSyncRepeatPosts(t *testing.T) {
 	}
 }
 
-// TestFindingSyncConfigOff: finding_sync: false never starts the loop; a
-// missing CP client never starts it either.
+// TestFindingSyncConfigOff: with BOTH legs off the loop never starts (since
+// 2026-08-31 `finding_sync: false` alone only silences the findings POST — see
+// TestSyncSwitchesGateLegsIndependently); a missing CP client never starts it
+// either.
 func TestFindingSyncConfigOff(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
 	connectKeyOnly(t, r)
-	r.ext.cfg.FindingSync = false
+	r.ext.cfg.FindingSync, r.ext.cfg.DirectorySync = false, false
 
 	r.ext.startFindingSync()
 	if r.ext.syncCancel != nil || r.ext.syncDone != nil {
-		t.Fatal("finding_sync: false must not start the ticker")
+		t.Fatal("both switches off must not start the ticker")
 	}
 	time.Sleep(30 * time.Millisecond)
 	if r.cp.findingsCallCount() != 0 {
@@ -266,5 +270,105 @@ func TestFindingSyncDefaultOn(t *testing.T) {
 	cfg := createDefaultConfig().(*Config)
 	if !cfg.FindingSync {
 		t.Fatal("finding_sync must default to true")
+	}
+}
+
+// --- the two switches (owner ruling 2026-08-31) -----------------------------
+//
+// `finding_sync` and `directory_sync` gate the two legs of the ONE ticker
+// independently: an egress (findings POST) and a pure fetch (directory GET)
+// with two different privacy stories must not share a switch.
+
+// runSyncLoop starts the REAL ticker with the two switches as given, lets it
+// settle, stops it, and reports what actually reached the stub control plane —
+// the wire, not internal state. `started` says whether a ticker was created at
+// all.
+func runSyncLoop(t *testing.T, findingSync, displayNameSync bool) (findings, directory int, started bool) {
+	t.Helper()
+	r := newRig(t)
+	r.start(t) // seeds one finding, so the findings leg has something to post
+	connectKeyOnly(t, r)
+	r.cp.mu.Lock()
+	r.cp.directoryEntries, r.cp.directoryETag = `{"zzguava.dev":{"name":"Guava Billing","tier":"curated"}}`, `"v1"`
+	r.cp.mu.Unlock()
+	r.ext.cfg.FindingSync, r.ext.cfg.DirectorySync = findingSync, displayNameSync
+
+	r.ext.startFindingSync()
+	started = r.ext.syncDone != nil
+	if started {
+		// Wait for every ENABLED leg to reach the wire (bounded, no sleeps as
+		// synchronisation).
+		deadline := time.Now().Add(2 * time.Second)
+		for (findingSync && r.cp.findingsCallCount() == 0) || (displayNameSync && r.cp.directoryCallCount() == 0) {
+			if time.Now().After(deadline) {
+				t.Fatalf("enabled leg never reached the wire (finding_sync=%v directory_sync=%v; findings=%d directory=%d)",
+					findingSync, displayNameSync, r.cp.findingsCallCount(), r.cp.directoryCallCount())
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+	}
+	// Settle: give a DISABLED leg every chance to betray itself before we read
+	// the counters (the first pass runs both legs back to back).
+	time.Sleep(50 * time.Millisecond)
+	if started {
+		r.ext.stopFindingSync()
+	}
+	r.assertNeverLogged(t, r.cp.collectorKey)
+	return r.cp.findingsCallCount(), r.cp.directoryCallCount(), started
+}
+
+// TestSyncSwitchesGateLegsIndependently pins all four combinations at the wire:
+// each switch turns its own leg on/off and NEITHER touches the other.
+func TestSyncSwitchesGateLegsIndependently(t *testing.T) {
+	cases := []struct {
+		name                        string
+		findingSync, displayName    bool
+		wantFindings, wantDirectory bool
+		wantTicker                  bool
+	}{
+		{"both on — both legs fire", true, true, true, true, true},
+		{"finding_sync off — the directory pull still refreshes names, no findings POST", false, true, false, true, true},
+		{"directory_sync off — findings still post, no directory GET", true, false, true, false, true},
+		{"both off — no ticker, no wire traffic at all", false, false, false, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			findings, directory, started := runSyncLoop(t, tc.findingSync, tc.displayName)
+			if started != tc.wantTicker {
+				t.Errorf("ticker started = %v, want %v", started, tc.wantTicker)
+			}
+			if got := findings > 0; got != tc.wantFindings {
+				t.Errorf("POST /api/v1/findings reached the wire %d time(s); want any=%v", findings, tc.wantFindings)
+			}
+			if got := directory > 0; got != tc.wantDirectory {
+				t.Errorf("GET /api/v1/directory reached the wire %d time(s); want any=%v", directory, tc.wantDirectory)
+			}
+		})
+	}
+}
+
+// TestDirectorySyncDefaultOn pins the factory default: an omitted
+// directory_sync key means ON (CONTRACTS §8), so splitting the switch off
+// finding_sync changed nobody's behaviour.
+func TestDirectorySyncDefaultOn(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	if !cfg.DirectorySync {
+		t.Fatal("directory_sync must default to true")
+	}
+	// And it survives a config file that never mentions the key: unmarshalling
+	// a flanjui block WITHOUT directory_sync must leave the default alone.
+	cfg2 := createDefaultConfig().(*Config)
+	if err := confmap.NewFromStringMap(map[string]any{
+		"ui_endpoint":    "127.0.0.1:5335",
+		"integration_id": "acme-payments",
+		"finding_sync":   false,
+	}).Unmarshal(cfg2); err != nil {
+		t.Fatal(err)
+	}
+	if cfg2.FindingSync {
+		t.Error("finding_sync: false must be read from the config")
+	}
+	if !cfg2.DirectorySync {
+		t.Fatal("an absent directory_sync key must stay true — finding_sync: false must not disable name refreshes")
 	}
 }

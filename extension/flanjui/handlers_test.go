@@ -55,6 +55,33 @@ type stubCP struct {
 	// order, plus the call count — sync_test.go asserts on the BYTES.
 	findingsCalls  int
 	findingsBodies [][]byte
+	// Directory pull (GET /api/v1/directory): the served ENTRIES object + ETag,
+	// the If-None-Match header of every call, and the call count. Fixtures set
+	// the bare `{"<domain>": {"name","tier"}}` map; the stub ALWAYS wraps it in
+	// the §5.14 envelope `{"entries": …, "count": n}` itself, so a fixture can
+	// never drift back to serving a bare map.
+	directoryEntries string
+	directoryETag    string
+	directoryCalls int
+	directoryINMs  []string
+	// Directory submissions (POST /api/v1/directory/submissions): every raw
+	// body in order, plus an optional forced status (and error message) for
+	// the failure paths.
+	submissionBodies  [][]byte
+	submissionStatus  int
+	submissionMessage string
+}
+
+// directoryEnvelopeBody wraps a bare entries object in the §5.14 response
+// envelope `{"entries": …, "count": n}` — the ONLY shape the stub (and the
+// real CP) ever serves. Tests reuse it to compute expected raw bodies.
+func directoryEnvelopeBody(entries string) string {
+	if entries == "" {
+		entries = "{}"
+	}
+	var m map[string]json.RawMessage
+	_ = json.Unmarshal([]byte(entries), &m)
+	return fmt.Sprintf(`{"entries":%s,"count":%d}`, entries, len(m))
 }
 
 // summaryRow is the §5.5 summary object — the SAME row §5.5a lists.
@@ -191,6 +218,47 @@ func newStubCP(t *testing.T) *stubCP {
 		}
 		_ = json.Unmarshal(raw, &b)
 		jsonOut(w, 200, map[string]any{"received": len(b.Findings), "stored": len(b.Findings)})
+	})
+	// v1p1: the directory full-table pull — collector key required, ETag
+	// conditional (If-None-Match match → 304, no body).
+	mux.HandleFunc("GET /api/v1/directory", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if !keyed(w, r) {
+			return
+		}
+		s.directoryCalls++
+		s.directoryINMs = append(s.directoryINMs, r.Header.Get("If-None-Match"))
+		if s.directoryETag != "" && r.Header.Get("If-None-Match") == s.directoryETag {
+			w.WriteHeader(304)
+			return
+		}
+		if s.directoryETag != "" {
+			w.Header().Set("ETag", s.directoryETag)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(directoryEnvelopeBody(s.directoryEntries)))
+	})
+	// v1p1: opt-in directory submissions — collector key required; the stub
+	// records the raw body so tests assert nothing leaves without the opt-in.
+	mux.HandleFunc("POST /api/v1/directory/submissions", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if !keyed(w, r) {
+			return
+		}
+		raw, _ := io.ReadAll(r.Body)
+		s.submissionBodies = append(s.submissionBodies, append([]byte(nil), raw...))
+		if s.submissionStatus != 0 {
+			msg := s.submissionMessage
+			if msg == "" {
+				msg = "try later"
+			}
+			jsonOut(w, s.submissionStatus, map[string]string{"error": "unavailable", "message": msg})
+			return
+		}
+		jsonOut(w, 202, map[string]any{"status": "pending"})
 	})
 	// CONTRACTS-CP §5.5a: the collector-key-scoped thread list, an ENVELOPE.
 	mux.HandleFunc("GET /api/v1/threads", func(w http.ResponseWriter, r *http.Request) {
@@ -1767,5 +1835,44 @@ func TestHeldPriorDataProbe(t *testing.T) {
 	t.Cleanup(r2.ui.Close)
 	if _, out, raw = r2.do(t, http.MethodGet, "/api/health", nil); out["held_prior_data"] != true {
 		t.Errorf("a collector that already held calls must report prior data: %s", raw)
+	}
+}
+
+// TestDashboardURLOnlyWhenConnected pins the one link the local UI offers OUT to
+// the control plane. It must appear ONLY once this deployment actually holds a
+// collector key: offering a door to a CP this collector has no identity at sends
+// the operator to a signed-out page for no reason, and the SPA decides whether
+// to render the link purely on this field's presence.
+func TestDashboardURLOnlyWhenConnected(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+
+	// Disconnected: no key, so no door.
+	_, out, _ := r.do(t, http.MethodGet, "/api/connect", nil)
+	if _, ok := out["dashboard_url"]; ok {
+		t.Fatalf("a disconnected collector must not offer a dashboard link, got %v", out["dashboard_url"])
+	}
+
+	// Connect, which persists the collector key.
+	if resp, _, _ := r.do(t, http.MethodPost, "/api/connect", map[string]string{
+		"consumer_display_name": "Acme Consumer Ltd",
+		"contact_email":         "ops@acme.test",
+		"contact_display_name":  "Dana",
+	}); resp.StatusCode != 202 && resp.StatusCode != 200 {
+		t.Fatalf("connect: %d", resp.StatusCode)
+	}
+
+	_, out, _ = r.do(t, http.MethodGet, "/api/connect", nil)
+	got, _ := out["dashboard_url"].(string)
+	if got == "" {
+		t.Fatalf("a Connected collector must offer the dashboard link, got %v", out)
+	}
+	// The collector composes the path — the SPA must never have to know which
+	// page the dashboard is, nor assemble it from a base URL.
+	if !strings.HasSuffix(got, "/d") {
+		t.Errorf("dashboard_url should point at the CP dashboard page, got %q", got)
+	}
+	if strings.Contains(got, "//d") || strings.HasSuffix(got, "//d") {
+		t.Errorf("dashboard_url has a doubled slash — base URL trailing slash not trimmed: %q", got)
 	}
 }

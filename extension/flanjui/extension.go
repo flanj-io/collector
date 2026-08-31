@@ -31,6 +31,10 @@ type uiExtension struct {
 	// waited for — no goroutine leak) in Shutdown.
 	syncCancel context.CancelFunc
 	syncDone   chan struct{}
+
+	// migrateOnce gates the one-shot config→KV edge-name migration
+	// (directory.go), run the first time the store resolves.
+	migrateOnce sync.Once
 }
 
 // resolveStore finds the single-owner store extension lazily. Extensions can
@@ -50,6 +54,11 @@ func (e *uiExtension) resolveStore() store.Store {
 			e.st = p.Store()
 			break
 		}
+	}
+	if e.st != nil {
+		// First successful resolve: run the one-shot config→KV name migration
+		// (idempotent; re-runs safely on every boot — directory.go).
+		e.maybeMigrateNames(e.st)
 	}
 	return e.st
 }

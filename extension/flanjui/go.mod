@@ -7,6 +7,7 @@ require (
 	go.opentelemetry.io/collector/component v1.65.0
 	go.opentelemetry.io/collector/config/confighttp v0.159.0
 	go.opentelemetry.io/collector/config/confignet v1.65.0
+	go.opentelemetry.io/collector/confmap v1.65.0
 	go.opentelemetry.io/collector/extension v1.65.0
 	go.uber.org/zap v1.28.0
 )
@@ -53,7 +54,6 @@ require (
 	go.opentelemetry.io/collector/config/configopaque v1.65.0 // indirect
 	go.opentelemetry.io/collector/config/configoptional v1.65.0 // indirect
 	go.opentelemetry.io/collector/config/configtls v1.65.0 // indirect
-	go.opentelemetry.io/collector/confmap v1.65.0 // indirect
 	go.opentelemetry.io/collector/extension/extensionauth v1.65.0 // indirect
 	go.opentelemetry.io/collector/extension/extensionmiddleware v0.159.0 // indirect
 	go.opentelemetry.io/collector/featuregate v1.65.0 // indirect

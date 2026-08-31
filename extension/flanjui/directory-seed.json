@@ -1,0 +1,986 @@
+{
+  "adp.com": {
+    "name": "ADP",
+    "tier": "curated"
+  },
+  "adyen.com": {
+    "name": "Adyen",
+    "tier": "curated"
+  },
+  "affirm.com": {
+    "name": "Affirm",
+    "tier": "curated"
+  },
+  "afterpay.com": {
+    "name": "Afterpay",
+    "tier": "curated"
+  },
+  "agendaforge.app": {
+    "name": "AgendaForge",
+    "tier": "curated"
+  },
+  "airtable.com": {
+    "name": "Airtable",
+    "tier": "curated"
+  },
+  "airwallex.com": {
+    "name": "Airwallex",
+    "tier": "curated"
+  },
+  "akamai.com": {
+    "name": "Akamai",
+    "tier": "curated"
+  },
+  "algolia.com": {
+    "name": "Algolia",
+    "tier": "curated"
+  },
+  "algolia.net": {
+    "name": "Algolia",
+    "tier": "curated"
+  },
+  "alloy.co": {
+    "name": "Alloy",
+    "tier": "curated"
+  },
+  "alpaca.markets": {
+    "name": "Alpaca",
+    "tier": "curated"
+  },
+  "amazon.com": {
+    "name": "Amazon",
+    "tier": "curated"
+  },
+  "amazonaws.com": {
+    "name": "Amazon Web Services",
+    "tier": "curated"
+  },
+  "amplitude.com": {
+    "name": "Amplitude",
+    "tier": "curated"
+  },
+  "anrok.com": {
+    "name": "Anrok",
+    "tier": "curated"
+  },
+  "anthropic.com": {
+    "name": "Anthropic",
+    "tier": "curated"
+  },
+  "apify.com": {
+    "name": "Apify",
+    "tier": "curated"
+  },
+  "applivery.com": {
+    "name": "Applivery",
+    "tier": "curated"
+  },
+  "asana.com": {
+    "name": "Asana",
+    "tier": "curated"
+  },
+  "assemblyai.com": {
+    "name": "AssemblyAI",
+    "tier": "curated"
+  },
+  "atlassian.com": {
+    "name": "Atlassian",
+    "tier": "curated"
+  },
+  "atlassian.net": {
+    "name": "Atlassian Cloud",
+    "tier": "curated"
+  },
+  "auteng.ai": {
+    "name": "Auteng",
+    "tier": "curated"
+  },
+  "auth0.com": {
+    "name": "Auth0",
+    "tier": "curated"
+  },
+  "authorize.net": {
+    "name": "Authorize.net",
+    "tier": "curated"
+  },
+  "avalara.com": {
+    "name": "Avalara",
+    "tier": "curated"
+  },
+  "azure.com": {
+    "name": "Microsoft Azure",
+    "tier": "curated"
+  },
+  "basistheory.com": {
+    "name": "Basis Theory",
+    "tier": "curated"
+  },
+  "betslipdoctor.ai": {
+    "name": "BetslipDoctor",
+    "tier": "curated"
+  },
+  "bigcommerce.com": {
+    "name": "BigCommerce",
+    "tier": "curated"
+  },
+  "bill.com": {
+    "name": "BILL",
+    "tier": "curated"
+  },
+  "bitbucket.org": {
+    "name": "Bitbucket",
+    "tier": "curated"
+  },
+  "blockrazor.io": {
+    "name": "BlockRazor",
+    "tier": "curated"
+  },
+  "box.com": {
+    "name": "Box",
+    "tier": "curated"
+  },
+  "brainiall.com": {
+    "name": "Brainiall",
+    "tier": "curated"
+  },
+  "braintreegateway.com": {
+    "name": "Braintree",
+    "tier": "curated"
+  },
+  "braintreepayments.com": {
+    "name": "Braintree",
+    "tier": "curated"
+  },
+  "brex.com": {
+    "name": "Brex",
+    "tier": "curated"
+  },
+  "calendly.com": {
+    "name": "Calendly",
+    "tier": "curated"
+  },
+  "capitol.guide": {
+    "name": "CapitolGuide",
+    "tier": "curated"
+  },
+  "chargebee.com": {
+    "name": "Chargebee",
+    "tier": "curated"
+  },
+  "checkout.com": {
+    "name": "Checkout.com",
+    "tier": "curated"
+  },
+  "circle.com": {
+    "name": "Circle",
+    "tier": "curated"
+  },
+  "circleci.com": {
+    "name": "CircleCI",
+    "tier": "curated"
+  },
+  "clerk.com": {
+    "name": "Clerk",
+    "tier": "curated"
+  },
+  "clickup.com": {
+    "name": "ClickUp",
+    "tier": "curated"
+  },
+  "cloudflare.com": {
+    "name": "Cloudflare",
+    "tier": "curated"
+  },
+  "cloudinary.com": {
+    "name": "Cloudinary",
+    "tier": "curated"
+  },
+  "cohere.com": {
+    "name": "Cohere",
+    "tier": "curated"
+  },
+  "coinbase.com": {
+    "name": "Coinbase",
+    "tier": "curated"
+  },
+  "contentful.com": {
+    "name": "Contentful",
+    "tier": "curated"
+  },
+  "currencycloud.com": {
+    "name": "Currencycloud",
+    "tier": "curated"
+  },
+  "databricks.com": {
+    "name": "Databricks",
+    "tier": "curated"
+  },
+  "datadoghq.com": {
+    "name": "Datadog",
+    "tier": "curated"
+  },
+  "deel.com": {
+    "name": "Deel",
+    "tier": "curated"
+  },
+  "deepgram.com": {
+    "name": "Deepgram",
+    "tier": "curated"
+  },
+  "deepsearch.app": {
+    "name": "DeepSearch",
+    "tier": "curated"
+  },
+  "devexpress.com": {
+    "name": "DevExpress",
+    "tier": "curated"
+  },
+  "dhl.com": {
+    "name": "DHL",
+    "tier": "curated"
+  },
+  "digitalocean.com": {
+    "name": "DigitalOcean",
+    "tier": "curated"
+  },
+  "discord.com": {
+    "name": "Discord",
+    "tier": "curated"
+  },
+  "dlocal.com": {
+    "name": "dLocal",
+    "tier": "curated"
+  },
+  "dnsdoctor.dev": {
+    "name": "DNSDoctor",
+    "tier": "curated"
+  },
+  "docimprint.com": {
+    "name": "DocImprint",
+    "tier": "curated"
+  },
+  "docs-md.com": {
+    "name": "docs-md",
+    "tier": "curated"
+  },
+  "docusign.com": {
+    "name": "DocuSign",
+    "tier": "curated"
+  },
+  "docusign.net": {
+    "name": "DocuSign",
+    "tier": "curated"
+  },
+  "docwand.app": {
+    "name": "DocWand",
+    "tier": "curated"
+  },
+  "dropbox.com": {
+    "name": "Dropbox",
+    "tier": "curated"
+  },
+  "dropboxapi.com": {
+    "name": "Dropbox",
+    "tier": "curated"
+  },
+  "dwolla.com": {
+    "name": "Dwolla",
+    "tier": "curated"
+  },
+  "easypost.com": {
+    "name": "EasyPost",
+    "tier": "curated"
+  },
+  "ebay.com": {
+    "name": "eBay",
+    "tier": "curated"
+  },
+  "elastic.co": {
+    "name": "Elastic",
+    "tier": "curated"
+  },
+  "elevenlabs.io": {
+    "name": "ElevenLabs",
+    "tier": "curated"
+  },
+  "etsy.com": {
+    "name": "Etsy",
+    "tier": "curated"
+  },
+  "facebook.com": {
+    "name": "Meta (Facebook)",
+    "tier": "curated"
+  },
+  "fastly.com": {
+    "name": "Fastly",
+    "tier": "curated"
+  },
+  "fedex.com": {
+    "name": "FedEx",
+    "tier": "curated"
+  },
+  "fiatdock.com": {
+    "name": "FiatDock",
+    "tier": "curated"
+  },
+  "finix.com": {
+    "name": "Finix",
+    "tier": "curated"
+  },
+  "firebaseio.com": {
+    "name": "Firebase",
+    "tier": "curated"
+  },
+  "fiserv.com": {
+    "name": "Fiserv",
+    "tier": "curated"
+  },
+  "flutterwave.com": {
+    "name": "Flutterwave",
+    "tier": "curated"
+  },
+  "fly.io": {
+    "name": "Fly.io",
+    "tier": "curated"
+  },
+  "fodda.ai": {
+    "name": "Fodda",
+    "tier": "curated"
+  },
+  "force.com": {
+    "name": "Salesforce",
+    "tier": "curated"
+  },
+  "freshdesk.com": {
+    "name": "Freshdesk",
+    "tier": "curated"
+  },
+  "fusionauth.dev": {
+    "name": "FusionAuth",
+    "tier": "curated"
+  },
+  "galileo-ft.com": {
+    "name": "Galileo",
+    "tier": "curated"
+  },
+  "gingerguide.app": {
+    "name": "GingerGuide",
+    "tier": "curated"
+  },
+  "github.com": {
+    "name": "GitHub",
+    "tier": "curated"
+  },
+  "githubcopilot.com": {
+    "name": "GitHub Copilot",
+    "tier": "curated"
+  },
+  "githubusercontent.com": {
+    "name": "GitHub (content)",
+    "tier": "curated"
+  },
+  "gitlab.com": {
+    "name": "GitLab",
+    "tier": "curated"
+  },
+  "globalpay.com": {
+    "name": "Global Payments",
+    "tier": "curated"
+  },
+  "gocardless.com": {
+    "name": "GoCardless",
+    "tier": "curated"
+  },
+  "google.com": {
+    "name": "Google",
+    "tier": "curated"
+  },
+  "googleapis.com": {
+    "name": "Google APIs",
+    "tier": "curated"
+  },
+  "goshippo.com": {
+    "name": "Shippo",
+    "tier": "curated"
+  },
+  "grafana.net": {
+    "name": "Grafana Cloud",
+    "tier": "curated"
+  },
+  "groq.com": {
+    "name": "Groq",
+    "tier": "curated"
+  },
+  "gusto.com": {
+    "name": "Gusto",
+    "tier": "curated"
+  },
+  "heroku.com": {
+    "name": "Heroku",
+    "tier": "curated"
+  },
+  "honeycomb.io": {
+    "name": "Honeycomb",
+    "tier": "curated"
+  },
+  "htagai.com": {
+    "name": "HtagAI",
+    "tier": "curated"
+  },
+  "hubapi.com": {
+    "name": "HubSpot",
+    "tier": "curated"
+  },
+  "hubspot.com": {
+    "name": "HubSpot",
+    "tier": "curated"
+  },
+  "huggingface.co": {
+    "name": "Hugging Face",
+    "tier": "curated"
+  },
+  "imbawallet.com": {
+    "name": "ImbaWallet",
+    "tier": "curated"
+  },
+  "increase.com": {
+    "name": "Increase",
+    "tier": "curated"
+  },
+  "infobip.com": {
+    "name": "Infobip",
+    "tier": "curated"
+  },
+  "intercom.io": {
+    "name": "Intercom",
+    "tier": "curated"
+  },
+  "intuit.com": {
+    "name": "Intuit (QuickBooks)",
+    "tier": "curated"
+  },
+  "invokera.com": {
+    "name": "Invokera",
+    "tier": "curated"
+  },
+  "jumio.com": {
+    "name": "Jumio",
+    "tier": "curated"
+  },
+  "klarna.com": {
+    "name": "Klarna",
+    "tier": "curated"
+  },
+  "launchdarkly.com": {
+    "name": "LaunchDarkly",
+    "tier": "curated"
+  },
+  "linear.app": {
+    "name": "Linear",
+    "tier": "curated"
+  },
+  "linkedin.com": {
+    "name": "LinkedIn",
+    "tier": "curated"
+  },
+  "lithic.com": {
+    "name": "Lithic",
+    "tier": "curated"
+  },
+  "lob.com": {
+    "name": "Lob",
+    "tier": "curated"
+  },
+  "mailchimp.com": {
+    "name": "Mailchimp",
+    "tier": "curated"
+  },
+  "mailgun.net": {
+    "name": "Mailgun",
+    "tier": "curated"
+  },
+  "mandrillapp.com": {
+    "name": "Mandrill",
+    "tier": "curated"
+  },
+  "mapbox.com": {
+    "name": "Mapbox",
+    "tier": "curated"
+  },
+  "marqeta.com": {
+    "name": "Marqeta",
+    "tier": "curated"
+  },
+  "meliopayments.com": {
+    "name": "Melio",
+    "tier": "curated"
+  },
+  "mercadopago.com": {
+    "name": "Mercado Pago",
+    "tier": "curated"
+  },
+  "methodfi.com": {
+    "name": "Method",
+    "tier": "curated"
+  },
+  "microsoft.com": {
+    "name": "Microsoft",
+    "tier": "curated"
+  },
+  "microsoftonline.com": {
+    "name": "Microsoft Entra ID",
+    "tier": "curated"
+  },
+  "middesk.com": {
+    "name": "Middesk",
+    "tier": "curated"
+  },
+  "mintmcp.com": {
+    "name": "MintMCP",
+    "tier": "curated"
+  },
+  "mistral.ai": {
+    "name": "Mistral AI",
+    "tier": "curated"
+  },
+  "mixpanel.com": {
+    "name": "Mixpanel",
+    "tier": "curated"
+  },
+  "moderntreasury.com": {
+    "name": "Modern Treasury",
+    "tier": "curated"
+  },
+  "mollie.com": {
+    "name": "Mollie",
+    "tier": "curated"
+  },
+  "moltlinestudio.com": {
+    "name": "Moltline Studio",
+    "tier": "curated"
+  },
+  "monday.com": {
+    "name": "monday.com",
+    "tier": "curated"
+  },
+  "mongodb.com": {
+    "name": "MongoDB",
+    "tier": "curated"
+  },
+  "mongodb.net": {
+    "name": "MongoDB Atlas",
+    "tier": "curated"
+  },
+  "moov.io": {
+    "name": "Moov",
+    "tier": "curated"
+  },
+  "mx.com": {
+    "name": "MX",
+    "tier": "curated"
+  },
+  "neon.tech": {
+    "name": "Neon",
+    "tier": "curated"
+  },
+  "netlify.com": {
+    "name": "Netlify",
+    "tier": "curated"
+  },
+  "netsuite.com": {
+    "name": "NetSuite",
+    "tier": "curated"
+  },
+  "newrelic.com": {
+    "name": "New Relic",
+    "tier": "curated"
+  },
+  "nium.com": {
+    "name": "Nium",
+    "tier": "curated"
+  },
+  "nmi.com": {
+    "name": "NMI",
+    "tier": "curated"
+  },
+  "notion.com": {
+    "name": "Notion",
+    "tier": "curated"
+  },
+  "notion.so": {
+    "name": "Notion",
+    "tier": "curated"
+  },
+  "ntop.com": {
+    "name": "ntop",
+    "tier": "curated"
+  },
+  "okta.com": {
+    "name": "Okta",
+    "tier": "curated"
+  },
+  "onfido.com": {
+    "name": "Onfido",
+    "tier": "curated"
+  },
+  "openai.com": {
+    "name": "OpenAI",
+    "tier": "curated"
+  },
+  "openweathermap.org": {
+    "name": "OpenWeather",
+    "tier": "curated"
+  },
+  "opsgenie.com": {
+    "name": "Opsgenie",
+    "tier": "curated"
+  },
+  "paddle.com": {
+    "name": "Paddle",
+    "tier": "curated"
+  },
+  "pagerduty.com": {
+    "name": "PagerDuty",
+    "tier": "curated"
+  },
+  "payoneer.com": {
+    "name": "Payoneer",
+    "tier": "curated"
+  },
+  "paypal.com": {
+    "name": "PayPal",
+    "tier": "curated"
+  },
+  "paystack.co": {
+    "name": "Paystack",
+    "tier": "curated"
+  },
+  "payu.com": {
+    "name": "PayU",
+    "tier": "curated"
+  },
+  "perplexity.ai": {
+    "name": "Perplexity",
+    "tier": "curated"
+  },
+  "pinecone.io": {
+    "name": "Pinecone",
+    "tier": "curated"
+  },
+  "plaid.com": {
+    "name": "Plaid",
+    "tier": "curated"
+  },
+  "planetscale.com": {
+    "name": "PlanetScale",
+    "tier": "curated"
+  },
+  "politicalcomms.com": {
+    "name": "PoliticalComms",
+    "tier": "curated"
+  },
+  "posthog.com": {
+    "name": "PostHog",
+    "tier": "curated"
+  },
+  "postmarkapp.com": {
+    "name": "Postmark",
+    "tier": "curated"
+  },
+  "prismic.io": {
+    "name": "Prismic",
+    "tier": "curated"
+  },
+  "qdrant.io": {
+    "name": "Qdrant",
+    "tier": "curated"
+  },
+  "railway.app": {
+    "name": "Railway",
+    "tier": "curated"
+  },
+  "ramp.com": {
+    "name": "Ramp",
+    "tier": "curated"
+  },
+  "rapyd.net": {
+    "name": "Rapyd",
+    "tier": "curated"
+  },
+  "razorpay.com": {
+    "name": "Razorpay",
+    "tier": "curated"
+  },
+  "recurly.com": {
+    "name": "Recurly",
+    "tier": "curated"
+  },
+  "redpanda.com": {
+    "name": "Redpanda",
+    "tier": "curated"
+  },
+  "render.com": {
+    "name": "Render",
+    "tier": "curated"
+  },
+  "replicate.com": {
+    "name": "Replicate",
+    "tier": "curated"
+  },
+  "resend.com": {
+    "name": "Resend",
+    "tier": "curated"
+  },
+  "revolut.com": {
+    "name": "Revolut",
+    "tier": "curated"
+  },
+  "rippling.com": {
+    "name": "Rippling",
+    "tier": "curated"
+  },
+  "roxyapi.com": {
+    "name": "RoxyAPI",
+    "tier": "curated"
+  },
+  "rudderstack.com": {
+    "name": "RudderStack",
+    "tier": "curated"
+  },
+  "sage.com": {
+    "name": "Sage",
+    "tier": "curated"
+  },
+  "salesforce.com": {
+    "name": "Salesforce",
+    "tier": "curated"
+  },
+  "sanity.io": {
+    "name": "Sanity",
+    "tier": "curated"
+  },
+  "sardine.ai": {
+    "name": "Sardine",
+    "tier": "curated"
+  },
+  "searchcode.com": {
+    "name": "searchcode",
+    "tier": "curated"
+  },
+  "seatcanvas.app": {
+    "name": "SeatCanvas",
+    "tier": "curated"
+  },
+  "segment.io": {
+    "name": "Segment",
+    "tier": "curated"
+  },
+  "sendgrid.com": {
+    "name": "SendGrid",
+    "tier": "curated"
+  },
+  "sentry.dev": {
+    "name": "Sentry",
+    "tier": "curated"
+  },
+  "sentry.io": {
+    "name": "Sentry",
+    "tier": "curated"
+  },
+  "shipengine.com": {
+    "name": "ShipEngine",
+    "tier": "curated"
+  },
+  "shopify.com": {
+    "name": "Shopify",
+    "tier": "curated"
+  },
+  "slack.com": {
+    "name": "Slack",
+    "tier": "curated"
+  },
+  "smartystreets.com": {
+    "name": "Smarty",
+    "tier": "curated"
+  },
+  "snowflakecomputing.com": {
+    "name": "Snowflake",
+    "tier": "curated"
+  },
+  "socure.com": {
+    "name": "Socure",
+    "tier": "curated"
+  },
+  "soracom.com": {
+    "name": "Soracom",
+    "tier": "curated"
+  },
+  "spreedly.com": {
+    "name": "Spreedly",
+    "tier": "curated"
+  },
+  "squareup.com": {
+    "name": "Square",
+    "tier": "curated"
+  },
+  "statsig.com": {
+    "name": "Statsig",
+    "tier": "curated"
+  },
+  "stripe.com": {
+    "name": "Stripe",
+    "tier": "curated"
+  },
+  "stytch.com": {
+    "name": "Stytch",
+    "tier": "curated"
+  },
+  "supabase.co": {
+    "name": "Supabase",
+    "tier": "curated"
+  },
+  "supabase.com": {
+    "name": "Supabase",
+    "tier": "curated"
+  },
+  "taxjar.com": {
+    "name": "TaxJar",
+    "tier": "curated"
+  },
+  "telegram.org": {
+    "name": "Telegram",
+    "tier": "curated"
+  },
+  "teller.io": {
+    "name": "Teller",
+    "tier": "curated"
+  },
+  "tink.com": {
+    "name": "Tink",
+    "tier": "curated"
+  },
+  "together.ai": {
+    "name": "Together AI",
+    "tier": "curated"
+  },
+  "trello.com": {
+    "name": "Trello",
+    "tier": "curated"
+  },
+  "truelayer.com": {
+    "name": "TrueLayer",
+    "tier": "curated"
+  },
+  "trulioo.com": {
+    "name": "Trulioo",
+    "tier": "curated"
+  },
+  "trysonar.app": {
+    "name": "Sonar (trysonar.app)",
+    "tier": "curated"
+  },
+  "twilio.com": {
+    "name": "Twilio",
+    "tier": "curated"
+  },
+  "twitter.com": {
+    "name": "X (Twitter)",
+    "tier": "curated"
+  },
+  "unit.co": {
+    "name": "Unit",
+    "tier": "curated"
+  },
+  "unit21.ai": {
+    "name": "Unit21",
+    "tier": "curated"
+  },
+  "ups.com": {
+    "name": "UPS",
+    "tier": "curated"
+  },
+  "usps.com": {
+    "name": "USPS",
+    "tier": "curated"
+  },
+  "vercel.com": {
+    "name": "Vercel",
+    "tier": "curated"
+  },
+  "verygoodsecurity.com": {
+    "name": "Very Good Security",
+    "tier": "curated"
+  },
+  "visa.com": {
+    "name": "Visa",
+    "tier": "curated"
+  },
+  "vonage.com": {
+    "name": "Vonage",
+    "tier": "curated"
+  },
+  "vonage.dev": {
+    "name": "Vonage",
+    "tier": "curated"
+  },
+  "weaviate.io": {
+    "name": "Weaviate",
+    "tier": "curated"
+  },
+  "wise.com": {
+    "name": "Wise",
+    "tier": "curated"
+  },
+  "withpersona.com": {
+    "name": "Persona",
+    "tier": "curated"
+  },
+  "wordpress.com": {
+    "name": "WordPress.com",
+    "tier": "curated"
+  },
+  "workday.com": {
+    "name": "Workday",
+    "tier": "curated"
+  },
+  "workos.com": {
+    "name": "WorkOS",
+    "tier": "curated"
+  },
+  "worldpay.com": {
+    "name": "Worldpay",
+    "tier": "curated"
+  },
+  "x.com": {
+    "name": "X (Twitter)",
+    "tier": "curated"
+  },
+  "xero.com": {
+    "name": "Xero",
+    "tier": "curated"
+  },
+  "yappy.biz": {
+    "name": "Yappy",
+    "tier": "curated"
+  },
+  "yodlee.com": {
+    "name": "Yodlee",
+    "tier": "curated"
+  },
+  "zendesk.com": {
+    "name": "Zendesk",
+    "tier": "curated"
+  },
+  "zoom.us": {
+    "name": "Zoom",
+    "tier": "curated"
+  },
+  "zoominfo.com": {
+    "name": "ZoomInfo",
+    "tier": "curated"
+  },
+  "zuora.com": {
+    "name": "Zuora",
+    "tier": "curated"
+  }
+}

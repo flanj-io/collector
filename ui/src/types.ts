@@ -91,7 +91,10 @@ export interface Finding {
 
 export interface Health {
   status: string;
-  integration: string;
+  /** Absent until the collector has observed ≥1 external outbound edge (or a
+   *  finding) — pre-traffic honesty (v1p1): never emitted from bare config at
+   *  zero traffic, and the UI renders no fragment while it is absent. */
+  integration?: string;
   window_rows: number;
   calls: number;
   findings: number;

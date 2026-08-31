@@ -68,6 +68,28 @@ import {
   toolNameOf,
   type McpToolRow
 } from './mcp';
+import {
+  CANCEL_LABEL,
+  REMOVE_NAME_LABEL,
+  RETRY_LABEL,
+  SAVE_ERROR,
+  SAVE_LABEL,
+  SUGGEST_TOO_LONG,
+  badgeLabel,
+  beginEdit,
+  cancelEdit,
+  editorClosed,
+  placeholderFor,
+  renameLabel,
+  saveFailed,
+  saveStart,
+  suggestLabelFor,
+  suggestTooLong,
+  toggleSuggest,
+  typeDraft,
+  type EdgeNameEdit
+} from './edge-names';
+import { callCoverage, notCheckedTitle, NOT_CHECKED_LABEL, type Coverage } from './coverage';
 import type { Correlation, Finding, FlagResult, Health, RedactedCall } from './types';
 
 interface Edge {
@@ -80,6 +102,10 @@ interface Edge {
   call_count: number;
   drift_count: number;
   rpm?: number;
+  /** v1p1 edge naming (outbound rows resolve a name; inbound stay auto). */
+  registrable_domain?: string;
+  display_name?: string;
+  name_source?: string;
 }
 interface SpecInfo {
   integration: string;
@@ -153,6 +179,11 @@ const connectPill = computed(() => {
       return 'Not connected';
   }
 });
+/** The CP dashboard link, emitted by /api/connect ONLY while Connected. When
+ *  absent the pill stays a button into Settings — the door is never offered to
+ *  a control plane this collector has no identity at. */
+const dashboardUrl = computed(() => (connect.value as { dashboard_url?: string } | null)?.dashboard_url || '');
+
 const threadsByFinding = computed(() => {
   const m: Record<string, ThreadRow> = {};
   for (const t of threads.value) m[t.finding_id] = t;
@@ -408,8 +439,21 @@ const callsById = computed(() => {
   return m;
 });
 
-const outboundEdges = computed(() => edges.value.filter((e) => e.direction === 'client'));
-const inboundEdges = computed(() => edges.value.filter((e) => e.direction === 'server'));
+// Stable row order: the store returns ORDER BY last_seen DESC, which re-sorts the
+// rows on every 5s poll and moves buttons out from under the cursor. Sort
+// client-side by registrable domain (then host) so a row keeps its place.
+const byDomain = (a: Edge, b: Edge) =>
+  (a.registrable_domain || a.peer_host).localeCompare(b.registrable_domain || b.peer_host) ||
+  a.peer_host.localeCompare(b.peer_host);
+const outboundEdges = computed(() => edges.value.filter((e) => e.direction === 'client').slice().sort(byDomain));
+const inboundEdges  = computed(() => edges.value.filter((e) => e.direction === 'server').slice().sort(byDomain));
+
+// ─── One host → name index, shared by every surface that shows a host ─────
+// Owner ruling 2026-08-31: display names substitute for raw hosts everywhere a
+// host is shown — Traffic (the calls table + the counterparty facet) and the
+// Contracts provider cards, not only the Edges panel. They all read THIS
+// index, built from the edges list already loaded for the Edges panel: one
+// resolution path, no second lookup, and never a control-plane request on a
 
 // Integration ids that label SELF-contract findings (our own API, inbound).
 const selfIntegrations = computed(
@@ -432,6 +476,34 @@ const driftedEndpoints = computed(() => {
   }
   return { provider, self };
 });
+
+/** Contract COVERAGE for a row — see ui/src/coverage.ts. Kept distinct from
+ *  DRIFT: a call to a host with no loaded contract was captured and never
+ *  validated, so it is neither conforming nor drifted. */
+/** How many captured calls this card's contract has actually validated.
+ *  A contract can be loaded and have checked NOTHING — no traffic yet, or a
+ *  host-scoped spec on an edge that has been quiet. Claiming "conforming" in
+ *  that state asserts a clean bill of health nothing performed. An UNSCOPED
+ *  provider spec (config `spec_path` with no `peer_host`) validates every
+ *  outbound call, so it counts them all. */
+function cardValidatedCalls(p: ContractCard): number {
+  let n = 0;
+  for (const c of calls.value) {
+    if (coverageOf(c) !== 'checked') continue;
+    if (p.peerHost && c.peer_host !== p.peerHost) continue;
+    n++;
+  }
+  return n;
+}
+
+function coverageOf(c: RedactedCall): Coverage {
+  // MCP coverage is per TOOL, not per server: only a tool publishing an
+  // outputSchema can have its result validated (drift/mcp.go). Hand the parsed
+  // snapshot rows in so the chip cannot claim a check the processor never runs.
+  const tools: Record<string, McpToolRow[]> = {};
+  for (const [integration, entry] of Object.entries(mcpTools.value)) tools[integration] = entry.rows;
+  return callCoverage(c, contracts.value, tools);
+}
 
 function isDrifted(c: RedactedCall): boolean {
   if (c.transport === 'mcp') return mcpDriftedTools.value.has(`${c.integration} ${toolNameOf(c)}`);
@@ -513,7 +585,10 @@ const filteredCalls = computed(() => {
     // ('err' matches mcp_is_error, '2xx' matches ok — see statusFilterMatches).
     if (!statusFilterMatches(fStatus.value, c)) return false;
     if (fContract.value === 'drifted' && !isDrifted(c)) return false;
-    if (fContract.value === 'conforming' && isDrifted(c)) return false;
+    // `conforming` now means validated-and-clean: a row nothing checked is not
+    // conforming, and used to be counted as such.
+    if (fContract.value === 'conforming' && (isDrifted(c) || coverageOf(c) !== 'checked')) return false;
+    if (fContract.value === 'not-checked' && coverageOf(c) !== 'not-checked') return false;
     if (fDirection.value && c.direction !== fDirection.value) return false;
     if (fPeer.value && c.peer_host !== fPeer.value) return false;
     if (hideHealth.value && HEALTH_RE.test(c.route || c.url || '')) return false;
@@ -599,6 +674,12 @@ const contractCards = computed<{ self: ContractCard[]; providers: ContractCard[]
   const coveredHosts = new Set<string>();
   for (const s of contracts.value) {
     const card: ContractCard = {
+      // The spec's own `info.title` wins: it is the provider's own words for the
+      // contract, read out of the document the operator loaded — declared, and
+      // inspectable in this very tab. Edge display names are deliberately NOT
+      // consulted here (owner ruling 2026-08-31: naming stays on the Edges
+      // panel; Traffic and Contracts keep domains). `peerHost` renders beside
+      // whichever name wins, so the host is never replaced.
       key: 'spec-' + s.integration,
       name: s.title || humanize(s.integration) || s.peer_host || (s.role === 'self' ? 'Your API' : 'Provider'),
       peerHost: s.peer_host || '',
@@ -619,7 +700,15 @@ const contractCards = computed<{ self: ContractCard[]; providers: ContractCard[]
   if (contractsKnown.value) {
     for (const e of outboundEdges.value) {
       if (!coveredHosts.has(e.peer_host)) {
-        providers.push({ key: 'edge-' + e.peer_host, name: e.peer_host, peerHost: e.peer_host, spec: null, findings: [] });
+        // A discovered outbound edge with no contract: its name if it has one,
+        // otherwise the host itself — the auto tier, same as the Edges panel.
+        providers.push({
+          key: 'edge-' + e.peer_host,
+          name: e.peer_host,
+          peerHost: e.peer_host,
+          spec: null,
+          findings: []
+        });
       }
     }
   }
@@ -792,9 +881,14 @@ const sheetCall = computed(() =>
 
 // Headline counts LIVE drift only — spec-version diffs are informational and
 // intentionally excluded from the divergence status.
+//
+// Pre-traffic honesty (v1p1): `integration` is absent from /api/health until
+// the collector has observed an external outbound edge (or a finding). While
+// absent, the "on integration <slug>" fragment simply does not render — no
+// replacement copy, no fallback slug.
 const headline = computed(() => {
   const n = liveFindings.value.length;
-  const integration = health.value?.integration || 'provider';
+  const integration = health.value?.integration || '';
   if (n === 0) return { you: 'No drift detected', ok: true, integration };
   const endpoints = Array.from(new Set(liveFindings.value.map((f) => f.endpoint)));
   return {
@@ -803,6 +897,89 @@ const headline = computed(() => {
     integration
   };
 });
+
+// ─── Edge naming (v1p1): the inline rename editor ─────────────────────────
+// One editor at a time; all transitions live in edge-names.ts (vitest-covered).
+// The 5s refresh repaints the rows but NEVER the open editor — the draft lives
+// here, not on the row (the connect-form poll-clobber discipline).
+const nameEdit = ref<EdgeNameEdit | null>(null);
+// Post-save notices/errors keyed by registrable domain: the partial-success
+// line ("Name saved. The suggestion didn't reach…") and the Remove-name error.
+const nameNotice = ref<Record<string, string>>({});
+const removeNameError = ref<Record<string, string>>({});
+const removeNameBusy = ref<Record<string, boolean>>({});
+// The editor's input: focused on open so Escape works on the first press and a
+// mouse user does not have to click twice. The input is declared inside the
+// outbound-rows v-for, so Vue compiles the ref with `ref_for` and stores the
+// mounted elements as an ARRAY (at most one — the v-if allows a single open
+// editor); normalize on read rather than calling .focus() on the array.
+const renameInput = ref<HTMLInputElement | HTMLInputElement[] | null>(null);
+
+function focusRenameInput() {
+  const el = renameInput.value;
+  (Array.isArray(el) ? el[0] : el)?.focus();
+}
+
+function edgeDomain(e: Edge): string {
+  return e.registrable_domain || e.peer_host;
+}
+
+function startRename(e: Edge) {
+  nameEdit.value = beginEdit(e);
+  nextTick(focusRenameInput);
+  nameNotice.value = { ...nameNotice.value, [edgeDomain(e)]: '' };
+}
+
+function cancelRename() {
+  // Escape and the Cancel button both land here: inert while a save is in
+  // flight (cancelEdit is identity-while-busy — the button is disabled then,
+  // and the Escape key gets the same guard).
+  nameEdit.value = cancelEdit(nameEdit.value);
+}
+
+function onRenameInput(ev: globalThis.Event) {
+  if (!nameEdit.value) return;
+  nameEdit.value = typeDraft(nameEdit.value, (ev.target as HTMLInputElement).value);
+}
+
+function onSuggestToggle(ev: globalThis.Event) {
+  if (!nameEdit.value) return;
+  nameEdit.value = toggleSuggest(nameEdit.value, (ev.target as HTMLInputElement).checked);
+}
+
+async function saveRename() {
+  if (!nameEdit.value || nameEdit.value.busy) return;
+  // The directory cap pre-check: Save is blocked while the suggest box is
+  // ticked and the name exceeds 64 chars (SUGGEST_TOO_LONG shows inline).
+  if (suggestTooLong(nameEdit.value)) return;
+  const s = (nameEdit.value = saveStart(nameEdit.value));
+  try {
+    const out = await apiPost<{ saved: boolean; suggested: boolean; message?: string }>('/api/edges/name', {
+      host: s.host,
+      name: s.draft,
+      suggest: s.suggest
+    });
+    if (out.message) nameNotice.value = { ...nameNotice.value, [s.domain]: out.message };
+    nameEdit.value = editorClosed();
+    refresh();
+  } catch {
+    if (nameEdit.value) nameEdit.value = saveFailed(nameEdit.value);
+  }
+}
+
+async function removeName(e: Edge) {
+  const domain = edgeDomain(e);
+  removeNameBusy.value = { ...removeNameBusy.value, [domain]: true };
+  removeNameError.value = { ...removeNameError.value, [domain]: '' };
+  try {
+    await apiPost('/api/edges/name', { host: e.peer_host, name: '', suggest: false });
+    refresh();
+  } catch {
+    removeNameError.value = { ...removeNameError.value, [domain]: SAVE_ERROR };
+  } finally {
+    removeNameBusy.value = { ...removeNameBusy.value, [domain]: false };
+  }
+}
 
 async function refresh() {
   try {
@@ -929,6 +1106,22 @@ watch(tab, (t) => {
              not this org; it lives on the Overview headline + its Contracts card). -->
         <span v-if="orgPillName" class="pill" title="Your organization — shown to the provider on every thread.">{{ orgPillName }}</span>
         <span v-if="!health.cp_configured" class="pill warn">control plane not configured</span>
+        <!-- Connected: the pill is the one door out to the control plane. The
+             LABEL stays the status ("Connected") — a status indicator that hides
+             its state on hover would trade a fact for a hint, and there is no
+             hover at all on touch — while the tooltip and the ↗ carry the
+             destination. Not connected / pending: unchanged, it still opens
+             Settings so the next step is the one you need. -->
+        <a
+          v-else-if="connectStatus === 'connected' && dashboardUrl"
+          class="pill pill-btn ok pill-link"
+          :href="dashboardUrl"
+          target="_blank"
+          rel="noopener noreferrer"
+          title="Go to your Flanj dashboard"
+        >
+          {{ connectPill }}<span class="pill-out" aria-hidden="true">↗</span>
+        </a>
         <button
           v-else
           type="button"
@@ -986,7 +1179,9 @@ watch(tab, (t) => {
         <div class="hl-you">
           You: <strong>{{ headline.you }}</strong>
         </div>
-        <div class="hl-sub">on integration <code>{{ headline.integration }}</code></div>
+        <!-- Pre-traffic honesty: no integration observed yet → the fragment is
+             simply absent (no replacement copy). -->
+        <div v-if="headline.integration" class="hl-sub">on integration <code>{{ headline.integration }}</code></div>
       </section>
 
       <!-- MCP servers (v0.5): one headline per observed server (deck §2). -->
@@ -1018,7 +1213,7 @@ watch(tab, (t) => {
 
       <section>
         <h2>
-          Edges <small>discovered from traffic — external only, no targets configured</small>
+          Edges <small>discovered from traffic — external only</small>
         </h2>
         <p v-if="edges.length === 0" class="empty">
           No external edges discovered yet. Send some traffic through the SDK and your
@@ -1053,16 +1248,77 @@ watch(tab, (t) => {
             </h3>
             <p v-if="outboundEdges.length === 0" class="empty small">No outbound edges.</p>
             <div v-else class="edge-table">
-              <div class="edge-head">
-                <span>peer host</span><span>observed RPM</span>
+              <div class="edge-head named">
+                <span>provider</span><span>observed RPM</span><span></span>
               </div>
-              <div v-for="e in outboundEdges" :key="'o-' + e.peer_host" class="edge-row" :class="{ drift: e.drift_count > 0 }">
-                <span class="peer mono">
-                  {{ e.peer_host }}
-                  <span v-if="mcpHosts.has(e.peer_host)" class="mcp-badge" :title="MCP_BADGE_TOOLTIP">{{ mcpBadgeLabel(e.class) }}</span>
-                </span>
-                <span class="num">{{ fmtRPM(e.rpm) }}<span class="unit">/min</span></span>
-              </div>
+              <!-- A NAME renders OVER the host, never instead of it — the registrable domain
+                   stays visible (it is the identity; the name is decoration). An UNNAMED row
+                   has no name to render over anything, so it shows the host once, plain, with
+                   the `auto` badge — never a title-cased pseudo-name, never an empty state. -->
+              <template v-for="e in outboundEdges" :key="'o-' + e.peer_host">
+                <div class="edge-row named" :class="{ drift: e.drift_count > 0 }">
+                  <span class="edge-name-cell">
+                    <span class="edge-name-line">
+                      <!-- Unnamed rows render the HOST ITSELF, once, in the name slot — never a
+                           title-cased pseudo-name. humanize() is the integration-SLUG helper
+                           (splits on -/_, never dots), so humanize('api.stripe.com') is
+                           'Api.stripe.com': a mangled duplicate of the host line right below it.
+                           The domain is the identity; when there is no name there is nothing to
+                           render over it. -->
+                      <span class="edge-name" :class="{ unnamed: !e.display_name }" :title="e.display_name || e.peer_host">{{ e.display_name || e.peer_host }}</span>
+                      <span v-if="badgeLabel(e.name_source)" class="name-badge" :class="'src-' + (e.name_source || 'auto')">{{ badgeLabel(e.name_source) }}</span>
+                      <span v-if="mcpHosts.has(e.peer_host)" class="mcp-badge" :title="MCP_BADGE_TOOLTIP">{{ mcpBadgeLabel(e.class) }}</span>
+                    </span>
+                    <span v-if="e.display_name" class="peer mono edge-host" :title="e.peer_host">{{ e.peer_host }}</span>
+                  </span>
+                  <span class="num">{{ fmtRPM(e.rpm) }}<span class="unit">/min</span></span>
+                  <span class="edge-actions">
+                    <button type="button" class="btn ghost small" @click="startRename(e)">{{ renameLabel(e.name_source) }}</button>
+                    <button
+                      v-if="e.name_source === 'user'"
+                      type="button"
+                      class="btn ghost small"
+                      :disabled="removeNameBusy[edgeDomain(e)]"
+                      @click="removeName(e)"
+                    >{{ REMOVE_NAME_LABEL }}</button>
+                  </span>
+                </div>
+                <div v-if="nameEdit && nameEdit.host === e.peer_host" class="edge-rename">
+                  <input
+                    ref="renameInput"
+                    class="edge-rename-input"
+                    type="text"
+                    :placeholder="placeholderFor(nameEdit.domain)"
+                    :value="nameEdit.draft"
+                    :disabled="nameEdit.busy"
+                    @input="onRenameInput"
+                    @keydown.enter.prevent="saveRename"
+                    @keydown.esc.prevent="cancelRename"
+                  />
+                  <!-- The opt-in: per mapping, default UNCHECKED, names the egress plainly. -->
+                  <label class="edge-suggest">
+                    <input type="checkbox" :checked="nameEdit.suggest" :disabled="nameEdit.busy" @change="onSuggestToggle" />
+                    <span>{{ suggestLabelFor(nameEdit.domain) }}</span>
+                  </label>
+                  <!-- The directory-cap pre-check: shown only while the box is
+                       ticked AND the name exceeds 64 chars; Save is blocked,
+                       unticking (or shortening) saves fine. -->
+                  <p v-if="suggestTooLong(nameEdit)" class="edge-name-note">{{ SUGGEST_TOO_LONG }}</p>
+                  <div class="edge-rename-actions">
+                    <button type="button" class="btn primary small" :disabled="nameEdit.busy || suggestTooLong(nameEdit)" @click="saveRename">{{ SAVE_LABEL }}</button>
+                    <button type="button" class="btn ghost small" :disabled="nameEdit.busy" @click="cancelRename">{{ CANCEL_LABEL }}</button>
+                    <span v-if="nameEdit.error" class="error small-err">
+                      {{ nameEdit.error }}
+                      <button type="button" class="btn ghost small" @click="saveRename">{{ RETRY_LABEL }}</button>
+                    </span>
+                  </div>
+                </div>
+                <p v-if="nameNotice[edgeDomain(e)]" class="edge-name-note">{{ nameNotice[edgeDomain(e)] }}</p>
+                <p v-if="removeNameError[edgeDomain(e)]" class="edge-name-note error small-err">
+                  {{ removeNameError[edgeDomain(e)] }}
+                  <button type="button" class="btn ghost small" @click="removeName(e)">{{ RETRY_LABEL }}</button>
+                </p>
+              </template>
             </div>
           </div>
         </div>
@@ -1112,7 +1368,16 @@ watch(tab, (t) => {
               <!-- Tier-split chips — same taxonomy as the tab pills, so the sums always agree. -->
               <span v-if="cardBreakingCount(p)" class="tag drift">{{ breakingChipLabel(cardBreakingCount(p)) }}</span>
               <span v-if="cardInfoCount(p)" class="tag warn" :title="cardInfoTitle(p)">{{ informationalChipLabel(cardInfoCount(p)) }}</span>
-              <span v-if="!cardBreakingCount(p) && !cardInfoCount(p) && p.spec" class="tag ok">conforming</span>
+              <span
+                v-if="!cardBreakingCount(p) && !cardInfoCount(p) && p.spec && cardValidatedCalls(p)"
+                class="tag ok"
+              >conforming</span>
+              <!-- Loaded, but nothing has run against it yet: "conforming" would
+                   be a clean bill of health nobody performed. -->
+              <span
+                v-else-if="!cardBreakingCount(p) && !cardInfoCount(p) && p.spec"
+                class="tag none"
+              >no calls validated yet</span>
               <span v-else-if="!cardBreakingCount(p) && !cardInfoCount(p)" class="tag none">no contract loaded</span>
             </span>
           </div>
@@ -1128,7 +1393,7 @@ watch(tab, (t) => {
               <span class="prov-meta">{{ mcpContractMeta(p.spec.endpoints || 0, humanTime(p.spec.loaded_at)) }}</span>
             </template>
             <template v-else>
-              <span v-if="p.spec.endpoints" class="prov-meta">{{ p.spec.endpoints }} endpoints</span>
+              <span v-if="p.spec.endpoints" class="prov-meta">{{ p.spec.endpoints }} endpoint{{ p.spec.endpoints === 1 ? '' : 's' }}</span>
               <span class="prov-meta">loaded {{ humanTime(p.spec.loaded_at) }}</span>
             </template>
           </div>
@@ -1378,6 +1643,7 @@ watch(tab, (t) => {
               <option value="">contract: all</option>
               <option value="drifted">drifted</option>
               <option value="conforming">conforming</option>
+              <option value="not-checked">contract: not checked</option>
             </select>
             <label class="tr-chk"><input v-model="hideHealth" type="checkbox" /> hide health checks</label>
             <button v-if="filtersActive" class="tr-clear" @click="clearFilters">clear</button>
@@ -1466,6 +1732,15 @@ watch(tab, (t) => {
                   title="Internal same-team call — metadata only. Bodies are never captured or shared. Shown so the traffic log is complete."
                 >internal</span>
                 <span v-else-if="isDrifted(c)" class="tag drift">drifted</span>
+                <!-- Nothing validated this call: no contract is bound to its edge.
+                     It is neither conforming nor drifted, and saying "conforming"
+                     here told operators their traffic was checked when nothing had
+                     looked at it. Same honest-chip treatment as `internal`. -->
+                <span
+                  v-else-if="coverageOf(c) === 'not-checked'"
+                  class="tag none"
+                  :title="notCheckedTitle(c.peer_host)"
+                >{{ NOT_CHECKED_LABEL }}</span>
                 <span v-else class="tag ok">conforming</span>
               </span>
             </div>
@@ -1746,6 +2021,9 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .dir-chip.out { color: var(--accent); border: 1px solid var(--accent); }
 .dir-chip.in { color: var(--ok-text); border: 1px solid var(--ok-text); }
 .peer-host { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-size: 0.82rem; }
+/* Named row: the host demotes to the same under-line treatment the Edges panel
+   gives it — still there, still selectable, just no longer the headline. An
+   UNNAMED row keeps the rule above untouched, i.e. renders exactly as before. */
 
 /* Contract cards (self + provider) */
 .provider { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 1rem 1.1rem; margin-bottom: 0.9rem; }
@@ -1794,11 +2072,40 @@ pre.body { background: var(--panel2); border: 1px solid var(--line); border-radi
 .edge-table { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .edge-head, .edge-row { display: grid; grid-template-columns: 2.4fr 1fr; gap: 0.5rem; align-items: center; padding: 0.4rem 0.7rem; }
 .edge-head { color: var(--muted); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; background: var(--panel2); border-bottom: 1px solid var(--line); }
+/* "OBSERVED RPM" wrapped to two lines at narrow widths and became the tallest
+   thing in the header row — the column labels never wrap. */
+.edge-head span { white-space: nowrap; }
 .edge-row { border-top: 1px solid var(--line); font-size: 0.85rem; }
 .edge-row:first-child { border-top: 0; }
 .edge-row.drift { box-shadow: inset 3px 0 0 var(--danger); }
 .edge-row .peer { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .edge-row .role { color: var(--muted); }
+/* v1p1 edge naming: outbound rows carry name-over-host + actions. */
+/* The name cell gets a real floor: a fractional track collapsed it to ~59px at
+   every width, truncating a saved name to "Acme …" (a single clipped letter at
+   900px). minmax(9rem, 1fr) + max-content RPM keeps the name readable. */
+.edge-head.named, .edge-row.named { grid-template-columns: minmax(9rem, 1fr) max-content auto; }
+.edge-name-cell { display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; }
+.edge-name-line { display: flex; align-items: center; gap: 0.4rem; min-width: 0; }
+.edge-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* An unnamed row IS its host: same mono treatment the named row's host line gets, so the two
+   row shapes read as one column and nothing looks like a mangled name. */
+.edge-name.unnamed { color: var(--ink); font-weight: 400; font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 0.82rem; }
+.edge-host { color: var(--muted); font-size: 0.75rem; }
+/* The deck's badge strings are lowercase ("named by you" · "config" ·
+   "directory" · "auto") — uppercasing them made all four read as one shouted
+   pill. Render the copy as written. */
+.pill-link { text-decoration: none; display: inline-flex; align-items: center; gap: 0.3rem; }
+.pill-link:hover { text-decoration: underline; }
+.pill-out { font-size: 0.85em; opacity: 0.75; }
+.name-badge { flex: none; font-size: 0.7rem; letter-spacing: 0; color: var(--muted); background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 0.05rem 0.45rem; }
+.edge-actions { display: flex; gap: 0.35rem; justify-content: flex-end; }
+.edge-rename { border-top: 1px dashed var(--line); background: var(--panel2); padding: 0.6rem 0.7rem; display: flex; flex-direction: column; gap: 0.45rem; }
+.edge-rename-input { width: 100%; max-width: 26rem; padding: 0.35rem 0.5rem; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); font-size: 0.85rem; }
+.edge-suggest { display: flex; align-items: flex-start; gap: 0.4rem; font-size: 0.78rem; color: var(--muted); }
+.edge-suggest input { margin-top: 0.15rem; }
+.edge-rename-actions { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+.edge-name-note { margin: 0; padding: 0.35rem 0.7rem; font-size: 0.78rem; color: var(--muted); border-top: 1px dashed var(--line); }
 .edge-row .num { text-align: right; font-variant-numeric: tabular-nums; }
 .edge-row .unit { color: var(--muted); font-size: 0.72rem; margin-left: 0.12rem; }
 .empty.small { font-size: 0.85rem; }
@@ -1836,10 +2143,15 @@ pre.body { background: var(--panel2); border: 1px solid var(--line); border-radi
 .seg button:hover { color: var(--ink); }
 .seg button.active { background: var(--accent); color: var(--on-accent); }
 
+/* The two edge tables need the full width well before the phone breakpoint —
+   side by side they squeeze the name cell to a few characters. */
+@media (max-width: 1024px) {
+  .edge-groups { grid-template-columns: 1fr; }
+}
+
 @media (max-width: 720px) {
   .tr-head { display: none; }
   .tr-row { grid-template-columns: 1fr 1fr; grid-auto-rows: min-content; }
   .reqres { grid-template-columns: 1fr; }
-  .edge-groups { grid-template-columns: 1fr; }
 }
 </style>

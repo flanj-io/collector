@@ -46,10 +46,11 @@ extensions:
     ui_endpoint: 127.0.0.1:5335 # loopback only — the collector is outbound-only
     integration_id: acme-payments
     consumer_display_name: Acme Consumer Ltd
-    provider_display_name: Acme Payments # who the flag is about; defaults to humanized integration_id
+    provider_display_name: Acme Payments # DEPRECATED — name edges in the UI (Overview → Edges → Rename); this value migrates into the store on boot and a UI rename beats it
     cp_base_url: https://cp.flanj.test
     cp_deploy_token: ${env:CP_DEPLOY_TOKEN} # used once, for Connect (register); the per-deployment collector key it returns lives in the store
-    finding_sync: true # default true — periodic shape-only findings sync to the control plane (id/signature/kind/severity/endpoint/rule/counts/timestamps; expected/actual/detail never leave this collector); false disables the loop
+    finding_sync: true # default true — periodic shape-only findings sync to the control plane (id/signature/kind/severity/endpoint/rule/counts/timestamps; expected/actual/detail never leave this collector); false disables that sync only — the display-name refresh below has its own switch
+    directory_sync: true # default true — periodic display-name refresh on the same tick: a keyed, ETag-conditional fetch of the directory name table, so discovered edges show human names. Your edges are not sent — nothing about what this collector talks to leaves in this request, and a name is never looked up per miss. false disables the refresh only; the names baked into the image still resolve offline, as does any table already pulled (turning it off stops future fetches, it does not clear one fetched earlier)
 
 receivers:
   otlp:
