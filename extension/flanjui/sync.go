@@ -8,12 +8,19 @@ package flanjui
 // NEVER leave the collector on this path: the payload builder is an explicit
 // allow-list (internal/promote.BuildFindingShapes) with a wire-bytes test.
 //
-// The loop is on by default and disabled entirely with `finding_sync: false`
+// The findings POST is on by default and disabled with `finding_sync: false`
 // (CONTRACTS §8). A tick skips silently unless the control plane is
 // configured, a collector key exists in the store, and there is at least one
 // finding. One attempt per tick — a failure is retried by the next tick, never
 // inline. Log lines carry only status + counts: never the bearer, never any
 // finding content.
+//
+// ONE ticker, TWO independently gated legs (owner ruling 2026-08-31): the
+// directory display-name refresh (directory.go) rides this same ticker but
+// answers to its own key, `display_name_sync`. They are two different egresses
+// with two different privacy stories — findings go OUT, the directory only
+// comes IN — so neither switch may silently turn the other off. With BOTH
+// false the goroutine is never started at all: no ticker, no work, nothing.
 
 import (
 	"context"
@@ -30,9 +37,16 @@ import (
 const findingSyncInterval = 15 * time.Second
 
 // startFindingSync launches the sync ticker goroutine (called from Start).
-// No-op when the loop is disabled or no control plane is configured.
+// No-op when no control plane is configured, or when BOTH legs are switched
+// off — with nothing left for a tick to do, no ticker is created.
 func (e *uiExtension) startFindingSync() {
-	if !e.cfg.FindingSync || e.cp == nil {
+	if e.cp == nil {
+		return
+	}
+	// Read the switches ONCE, here, and hand them to the goroutine: the loop
+	// must not read e.cfg concurrently with anyone else.
+	syncFindings, syncDirectory := e.cfg.FindingSync, e.cfg.DisplayNameSync
+	if !syncFindings && !syncDirectory {
 		return
 	}
 	// Not Start's ctx (that one ends with the Start call): the loop lives until
@@ -45,11 +59,17 @@ func (e *uiExtension) startFindingSync() {
 		t := time.NewTicker(findingSyncInterval)
 		defer t.Stop()
 		for {
-			e.syncFindingsOnce(ctx)
-			// The directory pull rides the same cadence, after findings
-			// (v1 phase 1 — directory.go): conditional full-table fetch,
-			// same skip conditions, silent.
-			e.syncDirectoryOnce(ctx)
+			// Leg 1 — the findings egress (finding_sync).
+			if syncFindings {
+				e.syncFindingsOnce(ctx)
+			}
+			// Leg 2 — the directory pull (display_name_sync): rides the same
+			// cadence, after findings (v1 phase 1 — directory.go); conditional
+			// full-table fetch, same skip conditions, silent. Gated on its OWN
+			// key, so finding_sync: false never stops a name refresh.
+			if syncDirectory {
+				e.syncDirectoryOnce(ctx)
+			}
 			select {
 			case <-ctx.Done():
 				return

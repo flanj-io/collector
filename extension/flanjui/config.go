@@ -26,8 +26,20 @@ type Config struct {
 	// id, signature, kind, severity, integration, endpoint, rule, counts,
 	// timestamps; the observed values (expected / actual / detail) never leave
 	// this collector. The sync runs only once a collector key exists (after
-	// Connect).
+	// Connect). It governs the findings POST ONLY — the directory-name refresh
+	// that rides the same ticker has its own switch, DisplayNameSync.
 	FindingSync bool `mapstructure:"finding_sync"`
+	// DisplayNameSync enables the periodic directory display-name refresh
+	// (GET /api/v1/directory — CONTRACTS §8, CONTRACTS-CP §5.14). ON by default
+	// (the factory default is true, so an omitted key means on);
+	// `display_name_sync: false` disables the refresh only. It rides the same
+	// ticker as FindingSync but is gated independently: two different egresses
+	// with two different privacy stories do not share one switch (owner ruling
+	// 2026-08-31). The refresh is a pure FETCH — a conditional (ETag) full-table
+	// GET; this collector's edges, peer hosts and domains are NEVER sent, and
+	// there is no per-miss lookup. With it off, the baked directory seed still
+	// resolves names offline.
+	DisplayNameSync bool `mapstructure:"display_name_sync"`
 
 	// prevent unkeyed literal initialization
 	_ struct{}
