@@ -99,6 +99,30 @@ export function needsCollectorAddress(state: ConnectState | null | undefined): b
   return !!state && state.status === 'connected' && !state.local_ui_url;
 }
 
+/** `GET /api/threads` refuses with `412 not_connected` for exactly one state:
+ *  the collector holds no collector key, so the relay has no keyed control-plane
+ *  client (`extension/flanjui/threads.go` → `keyedClient`). That empty key is
+ *  also the one thing `/api/connect` reports as `disconnected`
+ *  (`extension/flanjui/connect.go` → `status()`), so the UI can know the answer
+ *  without asking — and must, because a request that can only 4xx is logged by
+ *  the BROWSER as a failed resource. On a 15s poll that is a permanent red
+ *  console for a designed state the tab already renders correctly.
+ *
+ *  `null` / `undefined` is NOT "cannot": it means `/api/connect` has not
+ *  answered yet. Treating unknown as disconnected would flash the not-connected
+ *  notice at a collector that is in fact connected. */
+export function cannotListThreads(state: ConnectState | null | undefined): boolean {
+  return !!state && state.status === 'disconnected';
+}
+
+/** The line the relay's own `412 not_connected` carries on `GET /api/threads`
+ *  (`extension/flanjui/messages.go` → `msgThreadsNotConnected`). Mirrored here
+ *  because the UI no longer makes that request while disconnected: the Threads
+ *  tab must show the same sentence — with the same inline Connect — that the
+ *  refused response used to supply. Keep the two byte-identical. */
+export const THREADS_NOT_CONNECTED_NOTICE =
+  "Not connected — this collector can't list threads. Connect in Settings to see them.";
+
 export interface ConnectState {
   status: ConnectStatus;
   consumer_display_name?: string;

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  THREADS_NOT_CONNECTED_NOTICE,
   canCreateThread,
+  cannotListThreads,
   chipLabel,
   correlationCount,
   defaultFlagMessage,
@@ -260,5 +262,33 @@ describe('misc', () => {
     expect(canCreateThread({ status: 'connected', contact_email: 'a@b.c', confirmed_contact_email: 'a@b.c' })).toBe(true);
     // change of contact: new@ pending, ops@ still confirmed → Create thread stays available
     expect(canCreateThread({ status: 'pending', contact_email: 'new@b.c', confirmed_contact_email: 'ops@b.c' })).toBe(true);
+  });
+});
+
+// Console hygiene (qa-gate 2026-08-30): the Threads poll used to fire while
+// disconnected and collect a 412 on every tick. The relay's refusal is correct
+// and the tab's notice is correct — but the BROWSER logs each refused request
+// as a failed resource, which no JS can suppress. The only cure is not asking,
+// so the poll gates on the connect state the UI already holds.
+describe('cannotListThreads (gate on the 412 the relay would answer)', () => {
+  it('true only for a state that is KNOWN disconnected', () => {
+    expect(cannotListThreads({ status: 'disconnected' })).toBe(true);
+    // pending still has a collector key, so the relay CAN list — asking is right
+    expect(cannotListThreads({ status: 'pending', contact_email: 'a@b.c' })).toBe(false);
+    expect(cannotListThreads({ status: 'connected', confirmed_contact_email: 'a@b.c' })).toBe(false);
+  });
+  it('unknown is not disconnected — an unanswered /api/connect must not flash the notice', () => {
+    // App.vue waits for the connect answer on this; treating null as
+    // disconnected would show "Not connected" to a connected collector for one
+    // frame on every page load.
+    expect(cannotListThreads(null)).toBe(false);
+    expect(cannotListThreads(undefined)).toBe(false);
+  });
+  it('carries the relay 412 line verbatim, so the tab renders what the response used to supply', () => {
+    // Byte-identical to msgThreadsNotConnected in extension/flanjui/messages.go.
+    expect(THREADS_NOT_CONNECTED_NOTICE).toBe("Not connected — this collector can't list threads. Connect in Settings to see them.");
+    // Non-empty is what ThreadsTab keys the inline Connect button off (v-if="notice"),
+    // so the not-connected notice keeps its affordance without the request.
+    expect(THREADS_NOT_CONNECTED_NOTICE.length).toBeGreaterThan(0);
   });
 });
