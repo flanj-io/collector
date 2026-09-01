@@ -822,7 +822,13 @@ const cardGroups = computed(() => [
     sub: 'the API you publish — your inbound responses validated against it',
     cards: contractCards.value.self,
     emptyText: contractsKnown.value
-      ? 'No self contract loaded. Point flanjdrift.self_spec_path at the OpenAPI document you publish to catch your own drift before your consumers do.'
+      ? // NOT "before your consumers do" — we cannot, and saying so was a lie of
+        // exactly the kind this surface exists to stop. The self contract validates
+        // INBOUND calls (processor.go: direction == "server"), i.e. responses ALREADY
+        // SENT; the SDK captures after the fact, so the consumer received the drifting
+        // response first, every time. What this actually buys is the SOURCE of the
+        // news: your own traffic instead of someone else's bug report.
+        'No self contract loaded. Point flanjdrift.self_spec_path at the OpenAPI document you publish and your own responses get checked against it — so your drift reaches you from your traffic, not from a consumer.'
       : ''
   },
   {
