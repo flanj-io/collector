@@ -15,9 +15,24 @@ import (
 )
 
 // Edge classes (CONTRACTS §2 flanj.edge.class).
+//
+// A THIRD value exists on the wire and in the store — `local-process`, the
+// SDK's word for a server spawned as a child process (MCP over stdio). It is
+// listed here so the vocabulary is complete, NOT because this package
+// classifies it: the SDK stamps it and the collector carries it through.
+//
+// It never appears on GET /api/edges, which filters to ClassExternal
+// (store.go ListEdges). That is deliberate — a child process is not a network
+// edge and does not belong on the integration graph — but the consequence is
+// worth stating, because it went unstated and cost a real confusion: a stdio
+// MCP server appears on the Contracts tab, on Overview and in Traffic, and
+// nowhere on Edges. The Contracts tab and the Edges roll call therefore count
+// MCP servers from DIFFERENT sources, and must not both count from edges.
 const (
 	ClassExternal = "external"
 	ClassInternal = "internal"
+	// ClassLocalProcess is stamped by the SDK and never derived here.
+	ClassLocalProcess = "local-process"
 )
 
 // Directions (CONTRACTS §2 flanj.direction).

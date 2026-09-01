@@ -244,6 +244,13 @@ const (
 	// SpecSourceObserved marks a contract the traffic delivered: an MCP
 	// tools/list snapshot, which needs no configuring and no uploading.
 	SpecSourceObserved = "observed"
+
+	// Edge classes, shared by RedactedCall and SpecInfo. `local-process` is the
+	// SDK's own word for a server spawned as a child process (MCP over stdio);
+	// it never appears on GET /api/edges, which is external-only.
+	EdgeClassExternal     = "external"
+	EdgeClassInternal     = "internal"
+	EdgeClassLocalProcess = "local-process"
 )
 
 // SpecInfo describes an API contract (spec) loaded by the drift processor,
@@ -257,6 +264,18 @@ type SpecInfo struct {
 	// PeerHost is the discovered edge this spec is matched to (empty when the
 	// spec applies to all captured calls).
 	PeerHost string `json:"peer_host,omitempty"`
+	// EdgeClass mirrors RedactedCall.EdgeClass exactly — external | internal |
+	// local-process — and exists so the UI can tell two contracts apart when
+	// their titles collide.
+	//
+	// It has to be here rather than derived from the edges list: a
+	// `local-process` MCP server (stdio) has NO edge row at all, because
+	// GET /api/edges is external-only. So the one fact that distinguishes a
+	// stdio server from its HTTP twin is unreachable from every other source.
+	// Reusing `edge_class` rather than inventing `transport` is deliberate:
+	// `transport` already means "mcp" on a call, and a second meaning for a
+	// shipped word is how the next collision gets built.
+	EdgeClass string `json:"edge_class,omitempty"`
 	// Format is the contract document type, e.g. "openapi" (future: "asyncapi").
 	Format  string `json:"format"`
 	Title   string `json:"title,omitempty"`

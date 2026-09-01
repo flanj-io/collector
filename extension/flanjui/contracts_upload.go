@@ -271,7 +271,11 @@ func specInfoFromDoc(sum drift.SpecSummary, integration, host string) model.Spec
 		Role:        model.SpecRoleProvider,
 		PeerHost:    host,
 		Format:      model.SpecFormatOpenAPI,
-		Source:      model.SpecSourceUpload,
+		// An uploaded contract binds to a network host by construction — the
+		// host is required and normalised. Stated rather than left empty so the
+		// card's origin line has a source that never guesses.
+		EdgeClass: model.EdgeClassExternal,
+		Source:    model.SpecSourceUpload,
 		LoadedAt:    time.Now().UTC().Format(time.RFC3339),
 		Title:       sum.Title,
 		Version:     sum.Version,

@@ -25,6 +25,9 @@ export interface ContractSpec {
   version?: string;
   endpoints?: number;
   loaded_at?: string;
+  /** 'external' | 'internal' | 'local-process' — mirrors the call field. The
+   *  only fact that separates two servers publishing the same name. */
+  edge_class?: string;
   /** How the contract got here: 'upload' | 'config' | 'observed'. */
   source?: string;
   /** The version this one replaced, when it replaced one. */
@@ -172,12 +175,21 @@ export function rollCall(
   const hosts = new Set(outbound.map((e) => e.peer_host));
   const covered = contractsByHost(specs);
   let checked = 0;
-  let mcp = 0;
   for (const host of hosts) {
-    if (mcpHosts.has(host)) mcp++;
-    else if (covered.has(host)) checked++;
+    if (!mcpHosts.has(host) && covered.has(host)) checked++;
   }
-  const rest = hosts.size - mcp;
+  const rest = [...hosts].filter((h) => !mcpHosts.has(h)).length;
+
+  // MCP servers are counted from the CONTRACTS, not from the edges.
+  //
+  // Counting them among outbound edge hosts structurally could not see a stdio
+  // server: it is `local-process`, and GET /api/edges is external-only. So
+  // Overview said "1 MCP server self-reports theirs" while the Contracts tab
+  // showed two cards — the same disagreement between two surfaces that this
+  // whole roll call exists to prevent. The `N of M providers` clause keeps its
+  // edge-based count, which is right: a REST provider with no traffic is
+  // genuinely not on the roll call yet.
+  const mcp = specs.filter((s) => s.format === 'mcp' && s.role !== 'self').length;
 
   if (checked === 0 && mcp === 0) return ROLL_CALL_ZERO;
 
@@ -301,4 +313,38 @@ export function bindingTiming(host: string, hasTraffic: boolean): string {
 /** True when anything on the checklist wants a second look. */
 export function hasBindingWarning(checks: readonly BindingCheck[]): boolean {
   return checks.some((c) => c.level === 'warn');
+}
+
+/* ── Identity ──────────────────────────────────────────────────────────── */
+
+/**
+ * WHERE this contract's counterparty is: the host for a network transport, the
+ * literal word `stdio` for a local process.
+ *
+ * Exists because two MCP servers can publish the same `serverInfo.name` — the
+ * live stack has exactly that — and the name is the only thing the card
+ * rendered at heading weight. The integration slug was supposed to be the
+ * tiebreak, but `acme-tools` vs `acme-tools-stdio` differ by a trailing suffix
+ * on a muted 0.78rem mono string, which is where a reader compares rather than
+ * distinguishes.
+ */
+export function contractOrigin(spec: ContractSpec): string {
+  // The SELF contract describes THIS org's own API. It has no counterparty, so
+  // an origin would be inventing one — it keeps a bare title.
+  if (spec.role === 'self') return '';
+  if (spec.edge_class === 'local-process') return 'stdio';
+  return spec.peer_host || spec.integration || '';
+}
+
+/**
+ * The card heading: `<name> · <origin>`, ALWAYS — not only on collision.
+ *
+ * Collision-conditional would change a card's shape when an unrelated second
+ * server appears, and at fifty cards nobody can see whether a title is unique,
+ * so a bare name could never be trusted to mean "the only one".
+ */
+export function contractHeading(spec: ContractSpec): string {
+  const name = spec.title || spec.integration;
+  const origin = contractOrigin(spec);
+  return origin ? `${name} · ${origin}` : name;
 }

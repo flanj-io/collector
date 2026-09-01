@@ -103,6 +103,7 @@ CREATE TABLE IF NOT EXISTS spec_infos (
   integration  TEXT PRIMARY KEY,
   role         TEXT NOT NULL DEFAULT 'provider',
   peer_host    TEXT,
+  edge_class   TEXT,
   format       TEXT NOT NULL,
   title        TEXT,
   version      TEXT,
@@ -159,6 +160,7 @@ var callsAddedColumns = []string{
 }
 
 var specInfoAddedColumns = []string{
+	`edge_class TEXT`,
 	`source TEXT NOT NULL DEFAULT 'config'`,
 	`prev_doc TEXT`,
 	`prev_version TEXT`,
@@ -418,13 +420,13 @@ func (s *sqliteStore) PutSpecInfo(info model.SpecInfo, rawSpec []byte) error {
 		role = model.SpecRoleProvider
 	}
 	_, err := s.db.Exec(
-		`INSERT INTO spec_infos (integration, role, peer_host, format, title, version, docs_url, endpoints, loaded_at, doc)
-		   VALUES (?,?,?,?,?,?,?,?,?,?)
+		`INSERT INTO spec_infos (integration, role, peer_host, edge_class, format, title, version, docs_url, endpoints, loaded_at, doc)
+		   VALUES (?,?,?,?,?,?,?,?,?,?,?)
 		 ON CONFLICT(integration) DO UPDATE SET
-		   role=excluded.role, peer_host=excluded.peer_host, format=excluded.format, title=excluded.title,
+		   role=excluded.role, peer_host=excluded.peer_host, edge_class=excluded.edge_class, format=excluded.format, title=excluded.title,
 		   version=excluded.version, docs_url=excluded.docs_url, endpoints=excluded.endpoints,
 		   loaded_at=excluded.loaded_at, doc=excluded.doc`,
-		info.Integration, role, nullStr(info.PeerHost), info.Format, nullStr(info.Title),
+		info.Integration, role, nullStr(info.PeerHost), nullStr(info.EdgeClass), info.Format, nullStr(info.Title),
 		nullStr(info.Version), nullStr(info.DocsURL), info.Endpoints, info.LoadedAt, string(rawSpec),
 	)
 	if err != nil {
@@ -474,16 +476,16 @@ func execUploadedSpec(tx interface {
 		source = model.SpecSourceUpload
 	}
 	_, err := tx.Exec(rebind(
-		`INSERT INTO spec_infos (integration, role, peer_host, format, title, version, docs_url,
+		`INSERT INTO spec_infos (integration, role, peer_host, edge_class, format, title, version, docs_url,
 		                         endpoints, loaded_at, doc, source, prev_doc, prev_version, prev_loaded_at)
-		   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		 ON CONFLICT(integration) DO UPDATE SET
-		   role=excluded.role, peer_host=excluded.peer_host, format=excluded.format, title=excluded.title,
+		   role=excluded.role, peer_host=excluded.peer_host, edge_class=excluded.edge_class, format=excluded.format, title=excluded.title,
 		   version=excluded.version, docs_url=excluded.docs_url, endpoints=excluded.endpoints,
 		   loaded_at=excluded.loaded_at, doc=excluded.doc, source=excluded.source,
 		   prev_doc=excluded.prev_doc, prev_version=excluded.prev_version,
 		   prev_loaded_at=excluded.prev_loaded_at`),
-		info.Integration, role, nullStr(info.PeerHost), info.Format, nullStr(info.Title),
+		info.Integration, role, nullStr(info.PeerHost), nullStr(info.EdgeClass), info.Format, nullStr(info.Title),
 		nullStr(info.Version), nullStr(info.DocsURL), info.Endpoints, info.LoadedAt, string(rawSpec),
 		source, nullStr(string(prev.Raw)), nullStr(prev.Version), nullStr(prev.LoadedAt),
 	)

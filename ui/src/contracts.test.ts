@@ -7,6 +7,8 @@ import {
   hostLooksRoutable,
   bindingChecks,
   bindingTiming,
+  contractHeading,
+  contractOrigin,
   hasBindingWarning,
   endpointCount,
   provenanceWord,
@@ -134,9 +136,15 @@ describe('uncoveredProviders', () => {
 describe('rollCall', () => {
   const mcp = new Set(['mcp.acme.test']);
 
+  const mcpContract: ContractSpec = {
+    integration: 'acme-tools', format: 'mcp', peer_host: 'mcp.acme.test', title: 'acme-tools-mcp'
+  };
+
   it('counts positive and names the MCP servers separately', () => {
     const edges = [edge('api.acme.test'), edge('api.globex.test'), edge('api.initech.test'), edge('mcp.acme.test')];
-    expect(rollCall(edges, [uploaded('api.acme.test')], mcp)).toBe(
+    // The MCP clause counts CONTRACTS now, so the server needs a contract row —
+    // which is the point: a stdio server has a contract and no edge.
+    expect(rollCall(edges, [uploaded('api.acme.test'), mcpContract], mcp)).toBe(
       '1 of 3 providers checked against a contract · 1 MCP server self-reports theirs'
     );
   });
@@ -147,7 +155,7 @@ describe('rollCall', () => {
   });
 
   it('an MCP-only estate is not a zero state — those servers ARE covered', () => {
-    expect(rollCall([edge('mcp.acme.test')], [], mcp)).toBe('1 MCP server self-reports theirs');
+    expect(rollCall([edge('mcp.acme.test')], [mcpContract], mcp)).toBe('1 MCP server self-reports theirs');
   });
 
   it('agrees with itself in the singular', () => {
@@ -297,5 +305,71 @@ describe('bindingTiming', () => {
   it('states what happens next, as information rather than a verdict', () => {
     expect(bindingTiming('api.acme.test', true)).toContain('validation starts on the next one');
     expect(bindingTiming('api.acme.test', false)).toContain('starts validating when traffic arrives');
+  });
+});
+
+describe('contract identity', () => {
+  // The live stack runs two MCP servers publishing the SAME serverInfo.name.
+  // The owner asked "why do I see 2 acme-tools-mcp in Contracts?" — they are
+  // two real servers whose only distinguishing fact was never rendered at a
+  // weight anyone reads.
+  const http: ContractSpec = {
+    integration: 'acme-tools', title: 'acme-tools-mcp', format: 'mcp',
+    peer_host: 'mcp.acme.test', edge_class: 'external'
+  };
+  const stdio: ContractSpec = {
+    integration: 'acme-tools-stdio', title: 'acme-tools-mcp', format: 'mcp',
+    peer_host: 'acme-tools-mcp', edge_class: 'local-process'
+  };
+
+  it('two servers with the SAME name get different headings', () => {
+    expect(contractHeading(http)).toBe('acme-tools-mcp · mcp.acme.test');
+    expect(contractHeading(stdio)).toBe('acme-tools-mcp · stdio');
+    expect(contractHeading(http)).not.toBe(contractHeading(stdio));
+  });
+
+  it('a local process reads as stdio, never as its pseudo-host', () => {
+    // `acme-tools-mcp` is the stdio server's peer_host — rendering it would
+    // print the name twice and say nothing about the transport.
+    expect(contractOrigin(stdio)).toBe('stdio');
+  });
+
+  it('an uploaded REST contract reads as its bound host', () => {
+    expect(contractHeading({
+      integration: 'api-acme-test', title: 'Acme Payments API', format: 'openapi',
+      peer_host: 'api.acme.test', edge_class: 'external'
+    })).toBe('Acme Payments API · api.acme.test');
+  });
+
+  it('the self contract keeps a bare title — it has no counterparty', () => {
+    expect(contractHeading({ integration: 'self', role: 'self', title: 'Our Public API' })).toBe('Our Public API');
+  });
+});
+
+describe('rollCall counts MCP from contracts, not edges', () => {
+  // REGRESSION: Overview said "1 MCP server self-reports theirs" while the
+  // Contracts tab showed TWO MCP cards. A stdio server is `local-process` and
+  // GET /api/edges is external-only, so counting MCP among outbound edge hosts
+  // could never see it. Two surfaces disagreeing is the exact failure the roll
+  // call exists to prevent.
+  const httpMcp: ContractSpec = { integration: 'acme-tools', format: 'mcp', peer_host: 'mcp.acme.test', title: 'acme-tools-mcp' };
+  const stdioMcp: ContractSpec = { integration: 'acme-tools-stdio', format: 'mcp', peer_host: 'acme-tools-mcp', edge_class: 'local-process', title: 'acme-tools-mcp' };
+  const rest = uploaded('api.acme.test');
+  const edges = [
+    { peer_host: 'api.acme.test', direction: 'client' },
+    { peer_host: 'api.globex.test', direction: 'client' },
+    { peer_host: 'mcp.acme.test', direction: 'client' }
+  ];
+
+  it('counts the stdio server, which has no edge at all', () => {
+    expect(rollCall(edges, [rest, httpMcp, stdioMcp], new Set(['mcp.acme.test']))).toBe(
+      '1 of 2 providers checked against a contract · 2 MCP servers self-report theirs'
+    );
+  });
+
+  it('the provider clause still counts EDGES — a provider with no traffic is not on the roll call', () => {
+    // api.initech.test has a contract but no edge; it must not inflate the total.
+    const extra = uploaded('api.initech.test');
+    expect(rollCall(edges, [rest, extra, httpMcp], new Set(['mcp.acme.test']))).toContain('1 of 2 providers');
   });
 });

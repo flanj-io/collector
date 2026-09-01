@@ -25,6 +25,7 @@ import {
   NO_CONTRACT_SECTION,
   REPLACE_CONTRACT,
   contractMeta,
+  contractOrigin,
   contractsByHost,
   edgeContractLine,
   isEvidenceFor,
@@ -133,6 +134,10 @@ interface SpecInfo {
   docs_url?: string;
   endpoints?: number;
   loaded_at: string;
+  /** "external" | "internal" | "local-process" — mirrors the call field. The
+   *  only fact separating two servers that publish the same name; a
+   *  local-process (stdio) server has no edge row to look it up from. */
+  edge_class?: string;
   /** How this contract got here: "upload" (the UI), "config" (a mounted
    *  self_spec_path) or "observed" (an MCP tools/list). The card's provenance
    *  word tracks it, and only an uploaded contract offers Replace / Remove.
@@ -689,7 +694,7 @@ interface ContractCard {
   findings: Finding[];
 }
 
-const contractCards = computed<{ self: ContractCard[]; providers: ContractCard[] }>(() => {
+const contractCards = computed<{ self: ContractCard[]; mcpServers: ContractCard[]; providers: ContractCard[] }>(() => {
   const byIntegration = new Map<string, Finding[]>();
   for (const f of [...liveFindings.value, ...mcpContractFindings.value]) {
     const list = byIntegration.get(f.integration) || [];
@@ -697,6 +702,12 @@ const contractCards = computed<{ self: ContractCard[]; providers: ContractCard[]
     byIntegration.set(f.integration, list);
   }
   const self: ContractCard[] = [];
+  // MCP servers are their own KIND, not providers with an odd format: nobody
+  // uploaded them, Replace/Remove do not apply, and the providers section's own
+  // sub-line ("the contracts your providers publish — your outbound calls
+  // validated against them") is already false for them. A section whose
+  // sub-line is untrue for some of its cards is the wrong section.
+  const mcpServers: ContractCard[] = [];
   const providers: ContractCard[] = [];
   for (const s of contracts.value) {
     const card: ContractCard = {
@@ -713,16 +724,14 @@ const contractCards = computed<{ self: ContractCard[]; providers: ContractCard[]
       findings: byIntegration.get(s.integration) || []
     };
     byIntegration.delete(s.integration);
-    if (s.role === 'self') {
-      self.push(card);
-    } else {
-      providers.push(card);
-    }
+    if (s.role === 'self') self.push(card);
+    else if (s.format === 'mcp') mcpServers.push(card);
+    else providers.push(card);
   }
   for (const [integration, fs] of byIntegration) {
     providers.push({ key: 'find-' + integration, name: humanize(integration) || integration, peerHost: '', spec: null, findings: fs });
   }
-  return { self, providers };
+  return { self, mcpServers, providers };
 });
 
 // Providers with traffic and no contract — one compact row each, collapsed by
@@ -828,6 +837,13 @@ const cardGroups = computed(() => [
       : ''
   },
   {
+    key: 'mcp',
+    title: `MCP servers${contractCards.value.mcpServers.length ? ` (${contractCards.value.mcpServers.length})` : ''}`,
+    sub: 'each server publishes its own contract on tools/list — nothing to upload, nothing to remove',
+    cards: contractCards.value.mcpServers,
+    emptyText: ''
+  },
+  {
     key: 'providers',
     title: 'Provider contracts',
     sub: 'the contracts your providers publish — your outbound calls validated against them',
@@ -889,7 +905,10 @@ const mcpOverview = computed(() =>
   mcpContracts.value.map((s) => ({
     key: s.integration,
     headline: mcpHeadline(
-      { name: s.title || s.integration, version: s.version },
+      // Same origin rule as the Contracts card, from the same function — so the
+      // two surfaces cannot drift apart and render two identical health lines
+      // for two different servers again.
+      { name: s.title || s.integration, version: s.version, origin: contractOrigin(s) },
       mcpFindings.value.filter((f) => f.integration === s.integration),
       humanTime
     )
@@ -1490,9 +1509,18 @@ watch(tab, (t) => {
           :class="{ self: g.key === 'self' }"
         >
           <div class="prov-head">
+            <!-- `<name> · <origin>`, ALWAYS — not only on collision. Two MCP
+                 servers can publish the SAME serverInfo.name (the live stack
+                 does), and the origin is the only thing that separates them.
+                 Collision-conditional would change a card's shape when an
+                 unrelated second server appears, and at fifty cards nobody can
+                 see whether a title is unique — so a bare name could never be
+                 trusted to mean "the only one".
+                 The separate mono host chip is GONE: the host is in the heading
+                 now, and rendering it twice in two type sizes said nothing. -->
             <span class="prov-name">{{ p.name }}</span>
-            <span v-if="p.peerHost" class="prov-host mono">{{ p.peerHost }}</span>
-            <span v-if="p.spec" class="fmt-badge">{{ p.spec.format }}</span>
+            <span v-if="p.spec && contractOrigin(p.spec)" class="prov-origin mono">· {{ contractOrigin(p.spec) }}</span>
+            <span v-if="p.spec" class="fmt-badge">{{ p.spec.format === 'mcp' ? mcpBadgeLabel(p.spec.edge_class) : p.spec.format }}</span>
             <span v-if="p.spec?.version" class="prov-ver">v{{ p.spec.version }}</span>
             <!-- The integration slug lives here (it scopes THIS contract), not in the header.
                  On EVERY card that has one: the two MCP servers share a name (`acme-tools-mcp`), so
@@ -2235,6 +2263,10 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .doc-link { color: var(--accent); font-size: 0.85rem; text-decoration: none; border: 1px solid var(--line); border-radius: 8px; padding: 0.28rem 0.7rem; background: var(--panel2); }
 .doc-link:hover { border-color: var(--accent); }
 .prov-meta { color: var(--muted); font-size: 0.8rem; }
+/* The origin sits IN the heading at the same size as the name, muted — the fact
+   that separates two servers sharing a name has to be where the eye already is,
+   not in a 0.78rem slug at the end of the row. */
+.prov-origin { color: var(--muted); font-weight: 400; }
 .prov-nospec { color: var(--muted); font-size: 0.88rem; margin: 0.6rem 0 0; }
 .prov-integration { color: var(--muted); font-size: 0.78rem; }
 .finding.nested { background: var(--panel2); margin: 0.75rem 0 0; }

@@ -477,7 +477,7 @@ func (b *base) EdgeCallCountsSince(sinceISO string) (map[string]int, error) {
 // ListSpecInfos returns the loaded provider contracts (metadata only, no doc).
 func (b *base) ListSpecInfos() ([]model.SpecInfo, error) {
 	rows, err := b.db.Query(
-		`SELECT integration, role, COALESCE(peer_host,''), format, COALESCE(title,''),
+		`SELECT integration, role, COALESCE(peer_host,''), COALESCE(edge_class,''), format, COALESCE(title,''),
 		        COALESCE(version,''), COALESCE(docs_url,''), endpoints, loaded_at,
 		        COALESCE(source,'config'), COALESCE(prev_version,''), COALESCE(prev_loaded_at,'')
 		   FROM spec_infos ORDER BY role DESC, integration ASC`, // self first
@@ -489,7 +489,7 @@ func (b *base) ListSpecInfos() ([]model.SpecInfo, error) {
 	out := make([]model.SpecInfo, 0)
 	for rows.Next() {
 		var si model.SpecInfo
-		if err := rows.Scan(&si.Integration, &si.Role, &si.PeerHost, &si.Format, &si.Title,
+		if err := rows.Scan(&si.Integration, &si.Role, &si.PeerHost, &si.EdgeClass, &si.Format, &si.Title,
 			&si.Version, &si.DocsURL, &si.Endpoints, &si.LoadedAt,
 			&si.Source, &si.PrevVersion, &si.PrevLoadedAt); err != nil {
 			return nil, err
