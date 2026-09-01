@@ -130,9 +130,15 @@ func loadDirectory(st store.Store) map[string]directoryEntry {
 // (never per edge): the stored user names, the uploaded contracts' titles, and
 // the merged directory.
 type nameResolver struct {
-	names     map[string]edgeNameRecord
+	names map[string]edgeNameRecord
+	// contracts is the DOMAIN-wide name: one OpenAPI upload names every host
+	// under the domain that has no contract of its own.
 	contracts map[string]string // registrable domain → the contract's info.title
-	directory map[string]directoryEntry
+	// contractsByHost is what a host's OWN contract calls it, and it outranks
+	// the domain-wide name. Carries MCP snapshots too — a tools/list may not
+	// name a whole domain, but it is the provider's own word for ITS host.
+	contractsByHost map[string]string // peer host → that contract's title
+	directory       map[string]directoryEntry
 }
 
 // newNameResolver loads the resolution context from the store.
@@ -141,10 +147,12 @@ func (e *uiExtension) newNameResolver(st store.Store) nameResolver {
 	if names == nil {
 		names = map[string]edgeNameRecord{}
 	}
+	byDomain, byHost := contractEdgeNames(st)
 	return nameResolver{
-		names:     names,
-		contracts: contractEdgeNames(st),
-		directory: loadDirectory(st),
+		names:           names,
+		contracts:       byDomain,
+		contractsByHost: byHost,
+		directory:       loadDirectory(st),
 	}
 }
 
@@ -161,12 +169,30 @@ func (e *uiExtension) newNameResolver(st store.Store) nameResolver {
 // The title passes the redaction floor before it can render, exactly as a typed
 // rename does — an uploaded document is operator-supplied text like any other.
 // A title the floor consumes entirely resolves nowhere, same as an empty one.
-func contractEdgeNames(st store.Store) map[string]string {
+func contractEdgeNames(st store.Store) (byDomain, byHost map[string]string) {
 	infos, err := st.ListSpecInfos()
 	if err != nil {
-		return nil
+		return nil, nil
 	}
-	out := make(map[string]string, len(infos))
+	byDomain = make(map[string]string, len(infos))
+	byHost = make(map[string]string, len(infos))
+	// Pass one: what each host's OWN contract calls it. An MCP snapshot counts
+	// here (see the domain exclusion below — it is barred from naming the
+	// DOMAIN, never its own host), and an uploaded OpenAPI document outranks
+	// one on the same host because the operator put it there deliberately.
+	for _, si := range infos {
+		if si.Role == model.SpecRoleSelf || si.PeerHost == "" || si.Title == "" {
+			continue
+		}
+		name := strings.TrimSpace(redact.New().Redact(si.Title).Text)
+		if name == "" {
+			continue
+		}
+		if _, taken := byHost[si.PeerHost]; taken && si.Format != model.SpecFormatOpenAPI {
+			continue
+		}
+		byHost[si.PeerHost] = name
+	}
 	for _, si := range infos {
 		// UPLOADED REST contracts only. An MCP snapshot is a provider row with a
 		// peer_host and a title too, but its title is the SERVER's name
@@ -189,17 +215,17 @@ func contractEdgeNames(st store.Store) map[string]string {
 		}
 		// First writer wins so the map is stable: two hosts under one domain
 		// with different contracts would otherwise flip the name by map order.
-		if _, taken := out[domain]; !taken {
-			out[domain] = name
+		if _, taken := byDomain[domain]; !taken {
+			byDomain[domain] = name
 		}
 	}
-	return out
+	return byDomain, byHost
 }
 
 // resolve returns (display name, source) for a registrable domain — the
 // precedence chain. An empty name with source "auto" means unnamed: the UI
 // humanizes the host itself.
-func (r nameResolver) resolve(domain string) (string, string) {
+func (r nameResolver) resolve(host, domain string) (string, string) {
 	if domain == "" {
 		return "", nameSourceAuto
 	}
@@ -210,6 +236,14 @@ func (r nameResolver) resolve(domain string) (string, string) {
 	// provider's own words. Above `directory` because it is what THIS operator
 	// put there for THIS edge, and the curated table is a general fact about the
 	// domain; below `user` because a rename is the more specific act.
+	//
+	// A host that has a contract of its OWN is named by that one first. The
+	// domain-wide rule spares an operator fifty renames; it was never meant to
+	// overrule the provider's own words about a specific host — which is exactly
+	// what it did to an MCP server sharing a domain with an uploaded REST spec.
+	if name, ok := r.contractsByHost[host]; ok && name != "" {
+		return name, nameSourceContract
+	}
 	if name, ok := r.contracts[domain]; ok && name != "" {
 		return name, nameSourceContract
 	}

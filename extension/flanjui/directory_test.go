@@ -289,3 +289,70 @@ func TestMcpSnapshotNamesNoEdge(t *testing.T) {
 		t.Errorf("an MCP snapshot named a REST edge on the shared domain: %v", row)
 	}
 }
+
+// TestHostWithOwnContractKeepsItsOwnName: the domain-wide rule above must not
+// reach a host that has a contract of its OWN.
+//
+// BUG (tiered-lane QA walk, 2026-09-01): an MCP server at `mcp.zzguava.dev`
+// carrying its own `tools/list` contract rendered as "Guava Billing API" on
+// Overview — the title of the OpenAPI document uploaded for the sibling host
+// `api.zzguava.dev` — while the Contracts tab called the same server
+// `zzguava-tools-mcp`. Two providers in one graph became indistinguishable by
+// name, and one of them was named after an API it does not serve.
+//
+// Domain-wide naming exists to spare an operator fifty renames; it was never
+// meant to overrule the provider's own words about a specific host.
+func TestHostWithOwnContractKeepsItsOwnName(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	_ = r.st.PutSpecInfo(model.SpecInfo{
+		Integration: "api-zzguava-dev", Role: model.SpecRoleProvider,
+		Format: model.SpecFormatOpenAPI, PeerHost: "api.zzguava.dev",
+		Title: "Guava Billing API", Source: model.SpecSourceUpload,
+	}, nil)
+	_ = r.st.PutSpecInfo(model.SpecInfo{
+		Integration: "zzguava-tools", Role: model.SpecRoleProvider,
+		Format: model.SpecFormatMCP, PeerHost: "mcp.zzguava.dev",
+		Title: "zzguava-tools-mcp", Source: model.SpecSourceObserved,
+	}, nil)
+	seedOutboundEdge(r, "api.zzguava.dev")
+	seedOutboundEdge(r, "mcp.zzguava.dev")
+
+	mcp := edgeRowFor(t, r, "mcp.zzguava.dev")
+	if mcp["display_name"] != "zzguava-tools-mcp" || mcp["name_source"] != "contract" {
+		t.Errorf("MCP host = %v, want its OWN contract's name, not the sibling's", mcp)
+	}
+	// The host the document was actually uploaded for is unaffected.
+	api := edgeRowFor(t, r, "api.zzguava.dev")
+	if api["display_name"] != "Guava Billing API" {
+		t.Errorf("uploaded host = %v, want the uploaded title", api)
+	}
+	// And a THIRD host with no contract of its own still inherits the domain
+	// name — the fifty-provider legibility rule is intact.
+	seedOutboundEdge(r, "api-eu.zzguava.dev")
+	sibling := edgeRowFor(t, r, "api-eu.zzguava.dev")
+	if sibling["display_name"] != "Guava Billing API" {
+		t.Errorf("contract-less sibling = %v, want the domain-wide name", sibling)
+	}
+}
+
+// TestUserRenameStillBeatsAHostsOwnContract: precedence order is unchanged —
+// user > contract, whichever contract resolved.
+func TestUserRenameStillBeatsAHostsOwnContract(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	_ = r.st.PutSpecInfo(model.SpecInfo{
+		Integration: "zzguava-tools", Role: model.SpecRoleProvider,
+		Format: model.SpecFormatMCP, PeerHost: "mcp.zzguava.dev",
+		Title: "zzguava-tools-mcp", Source: model.SpecSourceObserved,
+	}, nil)
+	seedOutboundEdge(r, "mcp.zzguava.dev")
+	if err := putEdgeName(r.st, "zzguava.dev", "Guava (ours)", nameSourceUser); err != nil {
+		t.Fatal(err)
+	}
+
+	row := edgeRowFor(t, r, "mcp.zzguava.dev")
+	if row["display_name"] != "Guava (ours)" || row["name_source"] != "user" {
+		t.Errorf("row = %v, want the operator's own name to win", row)
+	}
+}

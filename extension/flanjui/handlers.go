@@ -150,7 +150,7 @@ func decorateEdge(ed model.Edge, rpm float64, names nameResolver) edgeWithRPM {
 	er := edgeWithRPM{Edge: ed, RPM: rpm, NameSource: nameSourceAuto}
 	er.RegistrableDomain = edge.RegistrableDomain(ed.PeerHost)
 	if ed.Direction == edge.DirectionClient {
-		er.DisplayName, er.NameSource = names.resolve(er.RegistrableDomain)
+		er.DisplayName, er.NameSource = names.resolve(ed.PeerHost, er.RegistrableDomain)
 	}
 	return er
 }
