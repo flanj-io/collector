@@ -28,9 +28,10 @@ import {
   UPLOAD_PROMPT,
   UPLOAD_STAYS_LOCAL,
   UPLOAD_TAKES_EFFECT,
+  bindingChecks,
   endpointCount,
-  noTrafficYet,
-  serversLine
+  hasBindingWarning,
+  noTrafficYet
 } from './contracts';
 
 const props = defineProps<{
@@ -142,9 +143,27 @@ async function confirm() {
   }
 }
 
-const serversNote = computed(() =>
-  preview.value ? serversLine(preview.value.servers, preview.value.peer_host) : ''
+/**
+ * Everything knowable about whether this binding is the one that was meant,
+ * shown together. A typo'd host trips all three at once and that pattern is
+ * unmistakable; one whispered line was not.
+ *
+ * Recomputed from the LIVE host field, not the preview's echo, so editing the
+ * host updates the verdict immediately instead of after a re-parse.
+ */
+const checks = computed(() =>
+  preview.value ? bindingChecks(boundHost.value, preview.value.servers, preview.value.has_traffic) : []
 );
+const warned = computed(() => hasBindingWarning(checks.value));
+
+/** Re-parse when the host changes at the confirm step: the server-side preview
+ *  carries the binding, so a stale one would confirm the wrong thing. */
+let hostDebounce: ReturnType<typeof setTimeout> | undefined;
+function onHostEdited() {
+  if (!preview.value) return;
+  clearTimeout(hostDebounce);
+  hostDebounce = setTimeout(() => void runPreview(), 400);
+}
 </script>
 
 <template>
@@ -181,20 +200,44 @@ const serversNote = computed(() =>
         <div><dt>Contract</dt><dd>{{ preview.title || filename || 'OpenAPI document' }}</dd></div>
         <div v-if="preview.version"><dt>Version</dt><dd>v{{ preview.version }}</dd></div>
         <div><dt>Endpoints</dt><dd>{{ endpointCount(preview.endpoints) }}</dd></div>
-        <div><dt>Binds to</dt><dd class="mono">{{ preview.peer_host }}</dd></div>
         <div v-if="preview.replaces"><dt>Replaces</dt><dd>v{{ preview.replaces }}</dd></div>
       </dl>
 
-      <!-- `servers:` CORROBORATES, never decides: proxy, gateway and staging
-           hosts are legitimate and common, so a mismatch warns and the button
-           still says go. -->
-      <p v-if="serversNote" class="confirm-servers" :class="{ mismatch: !preview.servers_match }">{{ serversNote }}</p>
-      <p v-if="!preview.has_traffic" class="confirm-note">{{ noTrafficYet(preview.peer_host) }}</p>
+      <!-- The host stays a FIELD here, not a fact. It was static text, so the
+           only way to correct a typo was "Choose a different file" — which is
+           the wrong thing to want when the file is fine and the host is wrong. -->
+      <label class="uploader-host confirm-host">
+        <span>Binds to</span>
+        <input
+          v-model="typedHost"
+          type="text"
+          placeholder="api.acme.test"
+          spellcheck="false"
+          autocapitalize="off"
+          autocorrect="off"
+          :disabled="!!props.host"
+          @input="onHostEdited"
+        />
+        <small v-if="props.host" class="host-locked">From the provider row you came from.</small>
+        <small v-else class="host-hint">One document, one host. Re-upload the same file for a sibling like <code>api-eu.acme.test</code>.</small>
+      </label>
+
+      <!-- Everything knowable about the binding, together. A typo'd host trips
+           every line at once, which is the pattern worth seeing; each one is a
+           reason to look again, never a refusal — gateway hosts legitimately
+           mismatch `servers:`, and a fresh install legitimately has no traffic. -->
+      <ul v-if="checks.length" class="binding-checks" :class="{ warned }">
+        <li v-for="c in checks" :key="c.text" :class="c.level">
+          <span class="chk" aria-hidden="true">{{ c.level === 'ok' ? '✓' : '!' }}</span>
+          <span>{{ c.text }}</span>
+        </li>
+      </ul>
+
       <p class="uploader-privacy">{{ UPLOAD_STAYS_LOCAL }}</p>
 
       <div class="uploader-actions">
-        <button type="button" class="btn" :disabled="busy" @click="confirm">
-          {{ preview.servers_match || !preview.servers.length ? 'Add contract' : BIND_ANYWAY }}
+        <button type="button" class="btn" :class="{ warn: warned }" :disabled="busy || !boundHost" @click="confirm">
+          {{ warned ? BIND_ANYWAY : 'Add contract' }}
         </button>
         <button type="button" class="btn ghost" :disabled="busy" @click="preview = null">Choose a different file</button>
         <button type="button" class="btn ghost" :disabled="busy" @click="emit('cancel')">Cancel</button>

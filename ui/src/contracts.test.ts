@@ -4,6 +4,9 @@ import {
   contractsByHost,
   edgeContractLine,
   isEvidenceFor,
+  hostLooksRoutable,
+  bindingChecks,
+  hasBindingWarning,
   endpointCount,
   provenanceWord,
   rollCall,
@@ -225,5 +228,61 @@ describe('the two no-contract strings', () => {
         expect(s.toLowerCase()).not.toContain(banned);
       }
     }
+  });
+});
+
+describe('hostLooksRoutable', () => {
+  it('accepts what traffic actually carries', () => {
+    for (const h of ['api.acme.test', 'api-eu.acme.test', 'localhost', '10.0.0.7', 'acme.test']) {
+      expect(hostLooksRoutable(h), h).toBe(true);
+    }
+  });
+
+  it('flags a bare word — the `sad` case', () => {
+    // Found by Idan in the live uploader: a bare word was accepted, and a
+    // contract bound to it validates NOTHING forever while the card shows a
+    // loaded contract. That is the silent failure mandatory binding exists to
+    // prevent, so it has to be visible at the moment of binding.
+    for (const h of ['sad', 'acme', 'todo', '']) {
+      expect(hostLooksRoutable(h), h).toBe(false);
+    }
+  });
+
+  it('never refuses `localhost` or an internal single-label host by shape alone', () => {
+    // A refusal here would break real deployments — this drives a warning only.
+    expect(hostLooksRoutable('localhost')).toBe(true);
+  });
+});
+
+describe('bindingChecks', () => {
+  it('a typo trips every signal at once — which is the pattern worth seeing', () => {
+    const checks = bindingChecks('sad', ['api.acme.test'], false);
+    expect(checks.every((c) => c.level === 'warn')).toBe(true);
+    expect(hasBindingWarning(checks)).toBe(true);
+    expect(checks[0].text).toContain('typo');
+  });
+
+  it('the good case reassures instead of staying silent', () => {
+    const checks = bindingChecks('api.acme.test', ['api.acme.test'], true);
+    expect(checks.every((c) => c.level === 'ok')).toBe(true);
+    expect(hasBindingWarning(checks)).toBe(false);
+  });
+
+  it('a gateway host warns on servers but stays bindable — warn, never block', () => {
+    const checks = bindingChecks('api-gateway.internal.test', ['api.acme.test'], true);
+    expect(hasBindingWarning(checks)).toBe(true);
+    // The host itself is fine and traffic exists; only the servers line objects.
+    expect(checks.filter((c) => c.level === 'warn')).toHaveLength(1);
+  });
+
+  it('says nothing about servers when the document declares none', () => {
+    const checks = bindingChecks('api.acme.test', [], true);
+    expect(checks.some((c) => c.text.includes('servers:'))).toBe(false);
+  });
+
+  it('pre-traffic upload warns but is legitimate — a fresh install has no edges', () => {
+    const checks = bindingChecks('api.acme.test', ['api.acme.test'], false);
+    expect(hasBindingWarning(checks)).toBe(true);
+    expect(checks.find((c) => c.level === 'warn')!.text).toContain('starts validating when traffic arrives');
   });
 });

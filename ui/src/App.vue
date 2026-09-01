@@ -2368,9 +2368,20 @@ pre.body { background: var(--panel2); border: 1px solid var(--line); border-radi
 .confirm-facts > div { display: flex; gap: 0.5rem; font-size: 0.85rem; }
 .confirm-facts dt { color: var(--muted); min-width: 6rem; }
 .confirm-facts dd { margin: 0; }
-.confirm-servers { margin: 0 0 0.35rem; font-size: 0.8rem; color: var(--muted); }
-.confirm-servers.mismatch { color: var(--ink); }
-.confirm-note { margin: 0 0 0.35rem; font-size: 0.8rem; color: var(--muted); }
+/* The binding checklist. A `servers:` mismatch used to render in body ink —
+   "warn, never block" means warn VISIBLY, and that was a whisper. Warnings get
+   the warning colour and a marker; the button still says go. */
+.binding-checks { list-style: none; margin: 0 0 0.5rem; padding: 0.5rem 0.6rem; display: grid; gap: 0.3rem; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); }
+.binding-checks.warned { border-color: var(--warn-line, #d1ac1f); background: var(--warn-bg, rgba(209, 172, 31, 0.08)); }
+.binding-checks li { display: flex; gap: 0.45rem; align-items: flex-start; font-size: 0.8rem; line-height: 1.45; color: var(--muted); }
+.binding-checks li.warn { color: var(--ink); }
+.binding-checks .chk { flex: none; width: 1em; text-align: center; font-weight: 700; color: var(--muted); }
+.binding-checks li.warn .chk { color: var(--warn-ink, #8a6f0a); }
+.confirm-host { margin: 0.1rem 0 0.6rem; }
+.confirm-host input:disabled { opacity: 0.7; cursor: not-allowed; }
+.host-hint, .host-locked { font-size: 0.72rem; color: var(--muted); }
+.host-hint code { font-size: 0.95em; }
+.btn.warn { border-color: var(--warn-line, #d1ac1f); }
 .pretraffic h2 { margin-bottom: 0.5rem; }
 /* The deck's badge strings are lowercase ("named by you" · "config" ·
    "directory" · "auto") — uppercasing them made all four read as one shouted

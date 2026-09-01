@@ -221,3 +221,80 @@ export function isEvidenceFor(
   if (!card.peerHost) return false;
   return call.direction !== 'server' && call.peer_host === card.peerHost;
 }
+
+/* ── Binding confidence ────────────────────────────────────────────────── */
+
+/**
+ * Does this look like a host traffic could actually carry?
+ *
+ * NOT a validity check, and deliberately not a refusal: `localhost` and
+ * single-label internal service names are real peer hosts and must stay
+ * bindable. But a bare word like `sad` is almost always a typo, and binding a
+ * contract to it validates nothing FOREVER while the card shows a loaded
+ * contract — the exact silent failure mandatory binding exists to prevent.
+ *
+ * So this drives a warning, never a block.
+ */
+export function hostLooksRoutable(host: string): boolean {
+  const h = host.trim().toLowerCase();
+  if (!h) return false;
+  // Dotted name (api.acme.test), IPv4, or a known bare host.
+  if (h.includes('.')) return true;
+  return h === 'localhost';
+}
+
+/** One thing worth checking before an upload binds. */
+export interface BindingCheck {
+  /** 'ok' reassures; 'warn' is a reason to look again — never a refusal. */
+  level: 'ok' | 'warn';
+  text: string;
+}
+
+/**
+ * The confirm step's checklist: everything knowable about whether this binding
+ * is the one the operator meant.
+ *
+ * Every warn is survivable — proxy, gateway and staging hosts legitimately
+ * mismatch `servers:`, and pre-traffic upload is a normal thing to do on a
+ * fresh install. The point is that the operator SEES the signals together
+ * instead of one whispered line, because a typo'd host trips all three at once
+ * and that pattern is unmistakable.
+ */
+export function bindingChecks(
+  host: string,
+  servers: readonly string[],
+  hasTraffic: boolean
+): BindingCheck[] {
+  const checks: BindingCheck[] = [];
+
+  if (!hostLooksRoutable(host)) {
+    checks.push({
+      level: 'warn',
+      text: `“${host}” doesn’t look like a host your traffic would carry — check for a typo.`
+    });
+  }
+
+  if (servers.length) {
+    checks.push(
+      servers.some((s) => s.toLowerCase() === host.trim().toLowerCase())
+        ? { level: 'ok', text: `This spec’s servers: list ${servers.join(', ')} — matches this edge.` }
+        : {
+            level: 'warn',
+            text: `This spec’s servers: list ${servers.join(', ')}. You’re binding it to ${host}.`
+          }
+    );
+  }
+
+  checks.push(
+    hasTraffic
+      ? { level: 'ok', text: `Calls to ${host} are already being captured — validation starts on the next one.` }
+      : { level: 'warn', text: noTrafficYet(host) }
+  );
+
+  return checks;
+}
+
+/** True when anything on the checklist wants a second look. */
+export function hasBindingWarning(checks: readonly BindingCheck[]): boolean {
+  return checks.some((c) => c.level === 'warn');
+}
