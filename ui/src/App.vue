@@ -845,7 +845,9 @@ const cardGroups = computed(() => [
   },
   {
     key: 'providers',
-    title: 'Provider contracts',
+    // Counted like the MCP section: at 50 the number IS the information, and a
+    // count on one section but not its neighbour reads as an oversight.
+    title: `Provider contracts${contractCards.value.providers.length ? ` (${contractCards.value.providers.length})` : ''}`,
     sub: 'the contracts your providers publish — your outbound calls validated against them',
     cards: contractCards.value.providers,
     emptyText:
