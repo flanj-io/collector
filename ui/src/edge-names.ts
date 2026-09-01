@@ -8,7 +8,7 @@
 // explicit user events (type, toggle, save, cancel) and the save round-trip
 // move the state.
 
-export type EdgeNameSource = 'user' | 'config' | 'directory' | 'auto';
+export type EdgeNameSource = 'user' | 'contract' | 'directory' | 'auto';
 
 /** The naming fields a GET /api/edges outbound row carries. */
 export interface NamedEdgeRow {
@@ -19,8 +19,13 @@ export interface NamedEdgeRow {
 }
 
 // ─── Copy (exact strings from the v1p1 copy deck) ─────────────────────────
-export const BADGE_USER = 'named by you';
-export const BADGE_CONFIG = 'config';
+//
+// NO PROVENANCE BADGE, on any tier (owner ruling 2026-09-01). `named by you`
+// was the last one standing and it earned its removal the same way the other
+// three did: it is redundant beside the name it sits on — you are the one who
+// typed it — and a chip in the name slot competes with the name for the eye.
+// The `Edit name` / `Remove name` controls on the row already say the name is
+// yours, and say it where you can act on it.
 export const RENAME_LABEL = 'Rename';
 export const EDIT_NAME_LABEL = 'Edit name';
 export const SAVE_LABEL = 'Save';
@@ -35,24 +40,6 @@ export const SUGGEST_FAILED_NOTE = "Name saved. The suggestion didn't reach the 
 export const SUGGEST_NAME_CAP = 64;
 export const SUGGEST_TOO_LONG =
   'Suggestions are capped at 64 characters — shorten the name to suggest it, or save it locally.';
-
-/** The provenance badge for a row's name source (absent/unknown reads auto). */
-export function badgeLabel(source?: string): string {
-  switch (source) {
-    case 'user':
-      return BADGE_USER;
-    case 'config':
-      return BADGE_CONFIG;
-    default:
-      // Everything else — 'directory' and 'auto' — carries NO badge (owner
-      // rulings 2026-08-31). A badge is for what the OPERATOR did: renamed a
-      // row, or carried a legacy YAML value they should migrate. A directory
-      // name is infrastructure they do not manage (and the host stays visible
-      // beside it, so nobody is misled); an 'auto' row is simply its own host,
-      // so labelling it announces nothing they can act on.
-      return '';
-  }
-}
 
 /** The per-row affordance: `Edit name` on rows named by you, else `Rename`. */
 export function renameLabel(source?: string): string {
@@ -156,7 +143,7 @@ export function cancelEdit(s: EdgeNameEdit | null): EdgeNameEdit | null {
 //
 // ONE resolution path, and this is it: the index is built from the edges list
 // the Edges panel has ALREADY loaded (`GET /api/edges`, which resolved
-// user > config > directory > auto server-side). No second lookup, no control
+// user > contract > directory > auto server-side). No second lookup, no control
 // plane request, no per-row re-resolution from the settings KV — a cache miss
 // never reaches the network, permanently.
 

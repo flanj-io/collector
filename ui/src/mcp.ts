@@ -161,13 +161,26 @@ export function mcpBadgeLabel(edgeClass?: string): string {
 // ─── Deck §2 — Health (Overview) ─────────────────────────────────────────────
 
 export interface McpServerRef {
-  /** serverInfo.name */
+  /** serverInfo.name — NOT unique: two servers can publish the same one. */
   name: string;
   version?: string;
+  /** Where this server is: its host, or `stdio` for a local process. Two
+   *  servers sharing a name rendered two IDENTICAL health lines without it. */
+  origin?: string;
 }
 
+/**
+ * `Server: <name> v<version> · <origin>. You: `
+ *
+ * The origin goes after the version and before the `. You: ` pivot, so all four
+ * headline branches inherit it from here and none needs editing — and so this
+ * surface can never drift from the Contracts card, which builds its heading the
+ * same way.
+ */
 function serverLead(s: McpServerRef): string {
-  return `Server: ${s.name}${s.version ? ' v' + s.version : ''}. You: `;
+  const version = s.version ? ' v' + s.version : '';
+  const origin = s.origin ? ' · ' + s.origin : '';
+  return `Server: ${s.name}${version}${origin}. You: `;
 }
 
 /**

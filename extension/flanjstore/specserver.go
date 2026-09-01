@@ -1,0 +1,210 @@
+package flanjstore
+
+import (
+	"crypto/subtle"
+	"encoding/json"
+	"errors"
+	"net"
+	"net/http"
+	"time"
+
+	"go.uber.org/zap"
+
+	"github.com/flanj-io/collector/internal/model"
+	"github.com/flanj-io/collector/internal/store"
+)
+
+// The tiered topology's contract channel.
+//
+// A FRONT collector runs flanjdrift but owns no store, while the store pod owns
+// both the store and the UI an operator uploads contracts through. Without a
+// read path the upload lands where the front never sees it and REST drift
+// detection silently never runs — on exactly the deployments large enough to be
+// tiered. This serves that read.
+//
+// Deliberately NOT on the UI extension. The UI is loopback-only and stays that
+// way (non-negotiable #5); this is a separate, read-only, contracts-only
+// listener on the cluster interface, a sibling of the `:4318` intra-cluster
+// ingest fronts already speak to. It exposes no calls, no findings, no
+// settings, and mutates nothing.
+const (
+	specReadTimeout  = 10 * time.Second
+	specWriteTimeout = 30 * time.Second
+	// specMaxDoc caps a single document, matching the ceiling the upload path
+	// enforces so both ends of the channel agree.
+	specMaxDoc = 8 << 20 // 8 MiB
+)
+
+// startSpecServer binds the contract endpoint when one is configured. A front
+// with no store pod to ask is the normal single-pod case, so an unset
+// spec_endpoint is silence, not an error.
+func (e *storeExtension) startSpecServer() error {
+	if e.cfg.SpecEndpoint == "" {
+		return nil
+	}
+	ln, err := net.Listen("tcp", e.cfg.SpecEndpoint)
+	if err != nil {
+		return err
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /internal/contracts", e.handleSpecList)
+	mux.HandleFunc("GET /internal/contracts/doc", e.handleSpecDoc)
+
+	e.specSrv = &http.Server{
+		Handler:           e.authSpec(mux),
+		ReadHeaderTimeout: specReadTimeout,
+		WriteTimeout:      specWriteTimeout,
+	}
+	e.specLn = ln
+	go func() {
+		if err := e.specSrv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) && e.logger != nil {
+			e.logger.Error("contract endpoint stopped", zap.Error(err))
+		}
+	}()
+	if e.logger != nil {
+		e.logger.Info("contract endpoint listening (intra-cluster, read-only)",
+			zap.String("endpoint", e.cfg.SpecEndpoint),
+			zap.Bool("token_required", e.cfg.SpecToken != ""))
+	}
+	return nil
+}
+
+// authSpec enforces the shared token. Compared in constant time, and the token
+// itself is never logged or echoed.
+func (e *storeExtension) authSpec(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Unconditional. An empty configured token used to skip the check
+		// entirely, which turned an unset FLANJ_SPEC_TOKEN into an open
+		// listener on the cluster interface. Config validation now refuses that
+		// combination outright; this is the second lock on the same door, and
+		// it fails CLOSED — an empty token matches no request, including one
+		// sending a bare `Bearer `.
+		const prefix = "Bearer "
+		got := r.Header.Get("Authorization")
+		if e.cfg.SpecToken == "" || len(got) <= len(prefix) || got[:len(prefix)] != prefix ||
+			subtle.ConstantTimeCompare([]byte(got[len(prefix):]), []byte(e.cfg.SpecToken)) != 1 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// handleSpecList returns contract METADATA — never the documents. That is what
+// keeps a front's steady-state refresh one small request a minute: it compares
+// this list against what it has cached and downloads only what moved.
+func (e *storeExtension) handleSpecList(w http.ResponseWriter, _ *http.Request) {
+	st := e.Store()
+	if st == nil {
+		http.Error(w, "store not ready", http.StatusServiceUnavailable)
+		return
+	}
+	infos, err := st.ListSpecInfos()
+	if err != nil {
+		e.specError(w, "list contracts", err)
+		return
+	}
+	out := make([]model.SpecInfo, 0, len(infos))
+	for _, si := range infos {
+		if servableContract(si) {
+			out = append(out, si)
+		}
+	}
+	writeSpecJSON(w, map[string]any{"contracts": out})
+}
+
+// servableContract is the ONE rule for what may cross this hop, applied by the
+// list route and the doc route alike. A filter on the index and none on the
+// item is not a filter: the doc route used to pass the caller's `integration`
+// straight to a bare `SELECT ... WHERE integration=?` over the same table, so
+// `?integration=self` returned the organisation's own OpenAPI document — the
+// exact thing the list route was written to withhold.
+//
+// A front validates its dependencies' REST traffic. The self contract is the
+// store pod's own; an unbound contract names no edge; and an MCP snapshot is
+// self-delivering from the traffic the front already sees (and is not OpenAPI,
+// so the front's cache would reject it anyway). None has business here.
+//
+// The format check is load-bearing, not belt-and-braces: an MCP snapshot is
+// persisted as role=provider WITH a peer_host, so the role+host pair alone
+// never excluded one, whatever the old comment claimed.
+func servableContract(si model.SpecInfo) bool {
+	return si.Role == model.SpecRoleProvider &&
+		si.PeerHost != "" &&
+		si.Format == model.SpecFormatOpenAPI
+}
+
+// handleSpecDoc returns one raw contract document.
+func (e *storeExtension) handleSpecDoc(w http.ResponseWriter, r *http.Request) {
+	st := e.Store()
+	if st == nil {
+		http.Error(w, "store not ready", http.StatusServiceUnavailable)
+		return
+	}
+	integration := r.URL.Query().Get("integration")
+	if integration == "" {
+		http.Error(w, "integration is required", http.StatusBadRequest)
+		return
+	}
+	// Resolve the metadata FIRST and apply the same admission rule as the list.
+	// A withheld contract answers exactly like an absent one — a 403 here would
+	// confirm that `self` exists to anyone holding the token.
+	infos, err := st.ListSpecInfos()
+	if err != nil {
+		e.specError(w, "list contracts", err)
+		return
+	}
+	servable := false
+	for _, si := range infos {
+		if si.Integration == integration && servableContract(si) {
+			servable = true
+			break
+		}
+	}
+	if !servable {
+		http.Error(w, "no such contract", http.StatusNotFound)
+		return
+	}
+	raw, _, ok, err := st.GetSpecDoc(integration)
+	if err != nil {
+		e.specError(w, "read contract", err)
+		return
+	}
+	if !ok {
+		http.Error(w, "no such contract", http.StatusNotFound)
+		return
+	}
+	if len(raw) > specMaxDoc {
+		raw = raw[:specMaxDoc]
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	_, _ = w.Write(raw)
+}
+
+// specError logs the cause and tells the caller only that it failed — a peer
+// gets a status, not the store's internals.
+func (e *storeExtension) specError(w http.ResponseWriter, what string, err error) {
+	if e.logger != nil {
+		e.logger.Warn("contract endpoint: "+what+" failed", zap.Error(err))
+	}
+	http.Error(w, what+" failed", http.StatusInternalServerError)
+}
+
+func writeSpecJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+// stopSpecServer closes the listener at Shutdown.
+func (e *storeExtension) stopSpecServer() {
+	if e.specSrv != nil {
+		_ = e.specSrv.Close()
+	}
+}
+
+// compile-time assertion: the endpoint only ever needs the read surface.
+var _ interface {
+	ListSpecInfos() ([]model.SpecInfo, error)
+	GetSpecDoc(string) ([]byte, string, bool, error)
+} = (store.Store)(nil)

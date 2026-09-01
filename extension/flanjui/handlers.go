@@ -35,6 +35,9 @@ func (e *uiExtension) routes() http.Handler {
 	mux.HandleFunc("/api/findings/{id}/unack", e.handleFindingUnack)
 	mux.HandleFunc("/api/contracts", e.handleContracts)
 	mux.HandleFunc("/api/contracts/spec", e.handleContractSpec)
+	mux.HandleFunc("/api/contracts/preview", e.handleContractPreview)
+	mux.HandleFunc("/api/contracts/upload", e.handleContractUpload)
+	mux.HandleFunc("/api/contracts/remove", e.handleContractRemove)
 	mux.HandleFunc("/api/connect", e.handleConnect)
 	mux.HandleFunc("/api/flag", e.handleFlag)
 	mux.HandleFunc("/api/threads", e.handleThreads)
@@ -147,7 +150,7 @@ func decorateEdge(ed model.Edge, rpm float64, names nameResolver) edgeWithRPM {
 	er := edgeWithRPM{Edge: ed, RPM: rpm, NameSource: nameSourceAuto}
 	er.RegistrableDomain = edge.RegistrableDomain(ed.PeerHost)
 	if ed.Direction == edge.DirectionClient {
-		er.DisplayName, er.NameSource = names.resolve(er.RegistrableDomain)
+		er.DisplayName, er.NameSource = names.resolve(ed.PeerHost, er.RegistrableDomain)
 	}
 	return er
 }

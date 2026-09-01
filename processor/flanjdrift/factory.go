@@ -4,6 +4,9 @@
 // changes (version-diff, oasdiff). Each violation is emitted as a Finding log
 // record (flanj.record.type=finding) flowing to the store exporter.
 //
+// Provider contracts are UPLOADED in the UI and read from the store at runtime
+// (speccache.go), never from config. The org's OWN contract stays config.
+//
 // Technical adherence ONLY — fields/types/shapes/enums. Never business/economic
 // correctness (pricing, quantities, business rules), which would produce a false-positive storm.
 package flanjdrift
@@ -47,35 +50,23 @@ func createLogsProcessor(
 
 	// The MCP detector is ALWAYS on (no config): MCP contracts are
 	// self-delivering — an observed tools/list snapshot is the local spec.
-	dp := &driftProcessor{cfg: c, logger: set.Logger, mcp: drift.NewMCPDetector()}
-
-	// The spec is OPTIONAL: with no spec_path the processor is a pass-through that
-	// still stamps call ids so capture + edge discovery work. When a spec IS
-	// configured, load it once at construction so a bad spec fails the build fast.
-	if c.SpecPath != "" {
-		doc, err := drift.LoadSpecFile(c.SpecPath)
-		if err != nil {
-			return nil, fmt.Errorf("flanjdrift: load spec %q: %w", c.SpecPath, err)
-		}
-		dp.doc = doc
-		// Keep the raw document too: at Start it is recorded in the shared store
-		// so the local UI can link to the exact contract being validated.
-		if raw, err := os.ReadFile(c.SpecPath); err == nil {
-			dp.rawSpec = raw
-		}
-
-		// Compute the version-diff findings once, at load, if a v2 spec is provided.
-		if c.SpecV2Path != "" {
-			vf, err := drift.DetectVersionDiff(c.SpecPath, c.SpecV2Path, c.IntegrationID)
-			if err != nil {
-				return nil, fmt.Errorf("flanjdrift: version diff: %w", err)
-			}
-			dp.versionFindings = vf
-		}
+	dp := &driftProcessor{
+		cfg:    c,
+		logger: set.Logger,
+		mcp:    drift.NewMCPDetector(),
+		specs:  newSpecCache(),
+		kick:   make(chan struct{}, 1),
+		done:   make(chan struct{}),
 	}
 
+	// PROVIDER contracts are not loaded here — they arrive from the store at
+	// Start and on every refresh tick. With none uploaded the processor is a
+	// pass-through that still stamps call ids, so capture and edge discovery
+	// work exactly as before.
+
 	// The org's OWN contract (we-as-provider): validates INBOUND responses so a
-	// provider sees its own drift, not just its dependencies'. Also optional.
+	// provider sees its own drift, not just its dependencies'. Optional, and
+	// still config — one document per deployment, loaded once, fails fast.
 	if c.SelfSpecPath != "" {
 		doc, err := drift.LoadSpecFile(c.SelfSpecPath)
 		if err != nil {
@@ -90,12 +81,10 @@ func createLogsProcessor(
 	// Precompute the contract metadata records once (stable loaded_at): used
 	// for the direct store write at Start AND emitted into the pipeline for a
 	// store pod behind an otlphttp hop.
-	if dp.doc != nil {
-		dp.specInfos = append(dp.specInfos, specInfoRecord{
-			info: specInfoFor(dp.doc, model.SpecRoleProvider, c.IntegrationID, c.PeerHost),
-			raw:  dp.rawSpec,
-		})
-	}
+	//
+	// Only the SELF contract now. A front no longer announces provider
+	// contracts upward — it READS them from the store pod, which is where the
+	// upload landed and which is therefore already their source of truth.
 	if dp.selfDoc != nil {
 		dp.specInfos = append(dp.specInfos, specInfoRecord{
 			info: specInfoFor(dp.selfDoc, model.SpecRoleSelf, c.selfIntegration(), ""),
@@ -108,5 +97,6 @@ func createLogsProcessor(
 		dp.processLogs,
 		processorhelper.WithCapabilities(consumer.Capabilities{MutatesData: true}),
 		processorhelper.WithStart(dp.start),
+		processorhelper.WithShutdown(dp.shutdown),
 	)
 }

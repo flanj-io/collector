@@ -93,6 +93,10 @@ func (d *MCPDetector) LoadSnapshot(snap otlpattr.ContractSnapshot) ([]model.Find
 
 	info := model.SpecInfo{
 		Integration: snap.Integration,
+		// Carried so the UI can tell a stdio server from its HTTP twin: both
+		// publish the same serverInfo.name, and a local-process server has no
+		// edge row to look it up from.
+		EdgeClass: snap.EdgeClass,
 		Role:        model.SpecRoleProvider,
 		PeerHost:    snap.PeerHost,
 		Format:      model.SpecFormatMCP,

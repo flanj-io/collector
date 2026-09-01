@@ -117,22 +117,25 @@ func TestEdgeNameClearReturnsNextTier(t *testing.T) {
 	}
 }
 
-// TestEdgeNamePrecedence: named-by-you > config > directory > auto, on one
-// listing. The config tier resolves through the spec_infos linkage (the
-// singular v0 model: the configured integration's spec names its peer_host).
+// TestEdgeNamePrecedence: named-by-you > contract > directory > auto, on one
+// listing. The `contract` tier is the title of the contract UPLOADED for the
+// domain — it replaced `config`, which died with `spec_path` (a YAML provider
+// name could not say WHICH edge it meant; an upload says both at once).
 func TestEdgeNamePrecedence(t *testing.T) {
 	r := newRig(t)
-	r.ext.cfg.ProviderDisplayName = "Acme Payments"
 	r.start(t)
-	// The config linkage points at api.stripe.com — which is ALSO in the seed,
-	// so config-beats-directory is observable on the same row.
-	_ = r.st.PutSpecInfo(model.SpecInfo{Integration: "acme-payments", Role: "provider", PeerHost: "api.stripe.com"}, nil)
+	// The contract is bound to api.stripe.com — which is ALSO in the seed, so
+	// contract-beats-directory is observable on the same row.
+	_ = r.st.PutSpecInfo(model.SpecInfo{
+		Integration: "api-stripe-com", Role: model.SpecRoleProvider, Format: model.SpecFormatOpenAPI,
+		PeerHost: "api.stripe.com", Title: "Acme Payments API", Source: model.SpecSourceUpload,
+	}, nil)
 	seedOutboundEdge(r, "api.stripe.com")
 	seedOutboundEdge(r, "api.adyen.com")   // seed only → directory tier
 	seedOutboundEdge(r, "api.zzguava.dev") // nowhere → auto tier
 
-	if row := edgeRowFor(t, r, "api.stripe.com"); row["display_name"] != "Acme Payments" || row["name_source"] != "config" {
-		t.Errorf("config tier = %v, want the YAML name over the seed", row)
+	if row := edgeRowFor(t, r, "api.stripe.com"); row["display_name"] != "Acme Payments API" || row["name_source"] != "contract" {
+		t.Errorf("contract tier = %v, want the contract's title over the seed", row)
 	}
 	if row := edgeRowFor(t, r, "api.adyen.com"); row["display_name"] != "Adyen" || row["name_source"] != "directory" {
 		t.Errorf("directory tier = %v", row)
@@ -140,12 +143,12 @@ func TestEdgeNamePrecedence(t *testing.T) {
 	if row := edgeRowFor(t, r, "api.zzguava.dev"); row["display_name"] != "" || row["name_source"] != "auto" {
 		t.Errorf("auto tier = %v", row)
 	}
-	// A UI rename beats the config tier.
+	// A UI rename beats the contract tier.
 	if resp, _, raw := r.do(t, http.MethodPost, "/api/edges/name", map[string]any{"host": "api.stripe.com", "name": "Our PSP"}); resp.StatusCode != 200 {
 		t.Fatalf("rename: %d %s", resp.StatusCode, raw)
 	}
 	if row := edgeRowFor(t, r, "api.stripe.com"); row["display_name"] != "Our PSP" || row["name_source"] != "user" {
-		t.Errorf("user tier = %v, want the rename over config", row)
+		t.Errorf("user tier = %v, want the rename over the contract's title", row)
 	}
 	// Inbound rows never resolve a name (outbound only — ruling 6).
 	r.st.mu.Lock()

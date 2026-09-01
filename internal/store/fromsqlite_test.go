@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/flanj-io/collector/internal/model"
 )
 
 // buildLegacyStore writes a realistic sqlite store: unpinned traffic, one
@@ -175,5 +177,115 @@ func TestMigrateFromSQLite_MissingFileIsSteadyState(t *testing.T) {
 	}
 	if sum.Ran {
 		t.Errorf("migration claims to have run on a missing file")
+	}
+}
+
+// TestMigrateFromSQLite_CarriesUploadedContracts: switching backend
+// sqlite→postgres must not destroy the operator's uploaded provider contracts.
+//
+// BUG (cross-repo review, 2026-09-01): MigrateFromSQLite skipped spec_infos,
+// justified by "the drift processor re-records loaded contracts at every
+// Start". That was true while provider contracts came from
+// `flanjdrift.spec_path` — this slice DELETED that key, so an uploaded
+// contract now exists ONLY as a spec_infos row. The migration then renamed the
+// sqlite file to `<path>.migrated`, so it destroyed the only copy and
+// tombstoned the source in one step. Every provider would have silently gone
+// back to "captured, not validated" on a backend switch.
+func TestMigrateFromSQLite_CarriesUploadedContracts(t *testing.T) {
+	pods := pgPods(t, 1, 0, 0)
+	pg := pods[0]
+
+	path := filepath.Join(t.TempDir(), "flanj.db")
+	s, err := OpenSQLite(path, 0, 0)
+	if err != nil {
+		t.Fatalf("open legacy sqlite: %v", err)
+	}
+	doc := []byte("openapi: 3.0.0\ninfo:\n  title: Acme Payments API\n  version: 1.0.0\n")
+	if _, err := s.PutUploadedSpec(model.SpecInfo{
+		Integration: "api-acme-test",
+		Role:        model.SpecRoleProvider,
+		Format:      model.SpecFormatOpenAPI,
+		PeerHost:    "api.acme.test",
+		Title:       "Acme Payments API",
+		Version:     "1.0.0",
+		Source:      model.SpecSourceUpload,
+	}, doc); err != nil {
+		t.Fatalf("upload legacy contract: %v", err)
+	}
+	s.Close()
+
+	if _, err := MigrateFromSQLite(pg, path); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	infos, err := pg.ListSpecInfos()
+	if err != nil {
+		t.Fatalf("ListSpecInfos after migration: %v", err)
+	}
+	var found *model.SpecInfo
+	for i := range infos {
+		if infos[i].PeerHost == "api.acme.test" {
+			found = &infos[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("uploaded contract did not survive the backend switch — it existed ONLY here, "+
+			"and the sqlite file has been renamed to .migrated (infos=%+v)", infos)
+	}
+	if found.Title != "Acme Payments API" || found.Source != model.SpecSourceUpload {
+		t.Errorf("migrated contract = %+v, want the uploaded title and source preserved", *found)
+	}
+
+	// The DOCUMENT itself must cross, not just the metadata row — a front reads
+	// the doc over the spec endpoint, and metadata alone validates nothing.
+	raw, _, ok, err := pg.GetSpecDoc("api-acme-test")
+	if err != nil || !ok {
+		t.Fatalf("GetSpecDoc after migration: ok=%v err=%v", ok, err)
+	}
+	if string(raw) != string(doc) {
+		t.Errorf("migrated contract document differs from the uploaded one")
+	}
+}
+
+// TestMigrateFromSQLite_CarriesDriftedFlag: the per-call drift mark is part of
+// the evidence, so it must cross the backend switch with the call.
+//
+// BUG (cross-repo review, 2026-09-01): copyPinnedCalls omitted `drifted` from
+// both its SELECT and its INSERT, so every migrated call took the column's
+// DEFAULT 0. Since every call it copies is `pinned=1` — i.e. by pin-on-finding
+// every one of them produced a finding — a backend switch relabelled the whole
+// retained evidence window as `conforming`.
+func TestMigrateFromSQLite_CarriesDriftedFlag(t *testing.T) {
+	pods := pgPods(t, 1, 0, 0)
+	pg := pods[0]
+
+	path := filepath.Join(t.TempDir(), "flanj.db")
+	s, err := OpenSQLite(path, 0, 0)
+	if err != nil {
+		t.Fatalf("open legacy sqlite: %v", err)
+	}
+	call := makeEdgeCall(300, "api.acme.test", "client", "external")
+	if err := s.InsertCall(call); err != nil {
+		t.Fatalf("insert call: %v", err)
+	}
+	if err := s.InsertFinding(driftFinding("0191e8c4-dddd-7000-8000-000000000001", call.ID)); err != nil {
+		t.Fatalf("insert finding: %v", err)
+	}
+	if got, ok, _ := s.GetCall(call.ID); !ok || !got.Drifted {
+		t.Fatalf("precondition: legacy call drifted=%v ok=%v, want true", got.Drifted, ok)
+	}
+	s.Close()
+
+	if _, err := MigrateFromSQLite(pg, path); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	got, ok, err := pg.GetCall(call.ID)
+	if err != nil || !ok {
+		t.Fatalf("GetCall after migration: ok=%v err=%v", ok, err)
+	}
+	if !got.Drifted {
+		t.Errorf("migrated call: drifted=false, want true — a backend switch must not "+
+			"relabel retained drift evidence as conforming")
 	}
 }

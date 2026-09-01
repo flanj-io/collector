@@ -33,8 +33,11 @@ inbound off-host.
 
 **No target list is configured.** Integration edges are auto-discovered from observed traffic, keyed by
 (`peer.host`, `direction`), classified external vs internal (external-only surfaced on `/api/edges`). Drift
-detection is an OPTIONAL enhancer (`peer_host` scopes a loaded spec to one edge; unset, every outbound call is
-validated against it). **MCP edges (v0.5) need no spec at all**: the SDK's observed `tools/list` arrives as a
+detection is an OPTIONAL enhancer, and **provider contracts are UPLOADED in the UI, never configured**
+(2026-08-31 — `spec_path`/`spec_v2_path`/`peer_host` removed from CONTRACTS §8). Each upload binds to exactly
+ONE provider host, stays on this collector, and is read from the store at runtime by the drift processor's spec
+cache — so it validates within a minute, no restart. A call to a host with no contract is captured, not
+validated, and the UI says exactly that. **MCP edges (v0.5) need no spec at all**: the SDK's observed `tools/list` arrives as a
 `contract_snapshot` record — the self-delivering local spec — versioned by content hash in the drift processor
 (previous snapshot kept for diffing; persisted as a `spec_infos` row, format `"mcp"`, so the Contracts tab lists
 the server and restarts re-seed). MCP findings: `output_mismatch` + `definition_change` (flaggable at every class — DESCRIPTION included
@@ -100,6 +103,11 @@ contracts/                         # vendored contract: CONTRACTS.md + fixtures,
    `flanjdrift` (it would double `occurrence_count`); fronts always run it (call-id stamping). The
    store is order-independent for call/finding pairs (late pin) — nothing upstream may rely on or
    compensate for record order.
+7. **Contracts flow store → front, calls flow front → store.** A front owns no store, so it reads
+   uploaded contracts from the store pod's read-only `spec_endpoint` (`flanjstore`), authenticated by a
+   shared token. That listener serves contracts and nothing else — no calls, no findings, no settings —
+   and it is NOT the UI: the UI stays loopback (#5). Leave `store_pod_endpoint` unset on a tiered front
+   and it detects no REST drift at all, whatever has been uploaded.
 
 ## Contract
 

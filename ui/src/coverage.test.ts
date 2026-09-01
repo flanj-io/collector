@@ -26,10 +26,17 @@ describe('callCoverage — mirrors processor/flanjdrift', () => {
     expect(callCoverage(out('api.globex.test'), specs)).toBe('not-checked');
   });
 
-  it('outbound: an UNSCOPED spec validates every outbound call (config spec_path with no peer_host)', () => {
+  it('outbound: an UNBOUND contract covers nothing — binding is mandatory at upload', () => {
+    // The config `spec_path` with no `peer_host` used to validate EVERY
+    // outbound call against one document, and this asserted exactly that.
+    // Contracts are uploaded now and bind to one host (CONTRACTS §8 dropped
+    // both keys), so an unbound row — only reachable from a store written
+    // before uploads existed — validates nothing. Reading it as coverage would
+    // mark every outbound call "checked" while the processor checks none of
+    // them, which is this module's original lie wearing a new hat.
     const specs = [providerSpec(undefined)];
-    expect(callCoverage(out('api.acme.test'), specs)).toBe('checked');
-    expect(callCoverage(out('anything.else'), specs)).toBe('checked');
+    expect(callCoverage(out('api.acme.test'), specs)).toBe('not-checked');
+    expect(callCoverage(out('anything.else'), specs)).toBe('not-checked');
   });
 
   it('a self contract does NOT check outbound calls, and a provider contract does not check inbound', () => {

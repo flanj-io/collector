@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { ApiError, apiGet, apiPost, openThreadInNewTab } from './api';
 import ConnectPanel from './ConnectPanel.vue';
+import ContractUploader from './ContractUploader.vue';
 import FlagSheet from './FlagSheet.vue';
 import ThreadsTab from './ThreadsTab.vue';
 import {
@@ -17,6 +18,23 @@ import {
   type ThreadListResponse,
   type ThreadRow
 } from './threads';
+import {
+  ADD_CONTRACT,
+  MCP_SELF_REPORTS,
+  NO_CONTRACT_ROW,
+  NO_CONTRACT_SECTION,
+  REPLACE_CONTRACT,
+  contractMeta,
+  contractOrigin,
+  findingBelongsToContract,
+  contractsByHost,
+  edgeContractLine,
+  isEvidenceFor,
+  rollCall,
+  uncoveredHeading,
+  uncoveredProviders,
+  providerContractsEmptyText
+} from './contracts';
 import {
   THEME_FLIP_NOTICE_KEY,
   applyTheme,
@@ -75,7 +93,6 @@ import {
   SAVE_ERROR,
   SAVE_LABEL,
   SUGGEST_TOO_LONG,
-  badgeLabel,
   beginEdit,
   cancelEdit,
   editorClosed,
@@ -119,6 +136,17 @@ interface SpecInfo {
   docs_url?: string;
   endpoints?: number;
   loaded_at: string;
+  /** "external" | "internal" | "local-process" — mirrors the call field. The
+   *  only fact separating two servers that publish the same name; a
+   *  local-process (stdio) server has no edge row to look it up from. */
+  edge_class?: string;
+  /** How this contract got here: "upload" (the UI), "config" (a mounted
+   *  self_spec_path) or "observed" (an MCP tools/list). The card's provenance
+   *  word tracks it, and only an uploaded contract offers Replace / Remove.
+   *  Absent on rows written before provenance was recorded. */
+  source?: string;
+  /** The version this contract replaced, when it replaced one. */
+  prev_version?: string;
 }
 
 type Tab = 'overview' | 'traffic' | 'contract' | 'threads' | 'settings';
@@ -161,6 +189,9 @@ const highlightThreadId = ref<string | null>(null);
 // links here): the Contracts tab opens with that finding's row highlighted and
 // scrolled into view — the mirror of the Threads tab's `#threads/<id>`.
 const highlightFindingId = ref<string | null>(null);
+/** The uncovered-provider row the Edges panel routed to, so the operator lands
+ *  on the row they clicked rather than the top of a collapsed section. */
+const highlightUncoveredHost = ref<string | null>(null);
 const connectBannerDismissed = ref(localStorage.getItem('flanj.connect.banner.dismissed') === '1');
 // Post-Connect nudge (v0.1b): Connected but no collector address yet — email
 // links can't deep-link back here. One dismissible line on the Connect panel
@@ -455,27 +486,11 @@ const inboundEdges  = computed(() => edges.value.filter((e) => e.direction === '
 // index, built from the edges list already loaded for the Edges panel: one
 // resolution path, no second lookup, and never a control-plane request on a
 
-// Integration ids that label SELF-contract findings (our own API, inbound).
-const selfIntegrations = computed(
-  () => new Set(contracts.value.filter((s) => s.role === 'self').map((s) => s.integration))
-);
-
-// The drifted endpoints derived from live-vs-spec findings. A drift is
-// per-endpoint, so every call on a drifted endpoint is itself drifted — not
-// only the representative source call. Provider findings key by
-// "<integration> <METHOD ROUTE>" and match outbound calls; self findings key by
-// endpoint alone and match inbound calls (inbound calls carry the org's
-// integration id, not the self contract's label).
-const driftedEndpoints = computed(() => {
-  const provider = new Set<string>();
-  const self = new Set<string>();
-  for (const f of findings.value) {
-    if (f.kind !== 'live-vs-spec') continue;
-    if (selfIntegrations.value.has(f.integration)) self.add(f.endpoint);
-    else provider.add(`${f.integration} ${f.endpoint}`);
-  }
-  return { provider, self };
-});
+// A drift is per CALL. The signature is per-endpoint — that is how findings
+// DEDUP — but "one finding per endpoint" never meant "every call on that
+// endpoint drifted", and reading it that way relabelled conforming calls, and
+// calls captured before the drift existed. The store now records it on the
+// call (model.RedactedCall.Drifted); see isDrifted.
 
 /** Contract COVERAGE for a row — see ui/src/coverage.ts. Kept distinct from
  *  DRIFT: a call to a host with no loaded contract was captured and never
@@ -487,10 +502,11 @@ const driftedEndpoints = computed(() => {
  *  provider spec (config `spec_path` with no `peer_host`) validates every
  *  outbound call, so it counts them all. */
 function cardValidatedCalls(p: ContractCard): number {
+  const card = { peerHost: p.peerHost, isSelf: p.spec?.role === 'self' };
   let n = 0;
   for (const c of calls.value) {
     if (coverageOf(c) !== 'checked') continue;
-    if (p.peerHost && c.peer_host !== p.peerHost) continue;
+    if (!isEvidenceFor(c, card)) continue;
     n++;
   }
   return n;
@@ -505,10 +521,23 @@ function coverageOf(c: RedactedCall): Coverage {
   return callCoverage(c, contracts.value, tools);
 }
 
+/**
+ * Did THIS call drift?
+ *
+ * Read off the call's own `drifted` flag, which the store sets when the call
+ * produced a live-vs-spec finding — on every occurrence, not just the first.
+ *
+ * It used to ask "has this ENDPOINT ever drifted?" (a set built from findings),
+ * so ONE drifting charge marked every call on `POST /v1/charges` as drifted:
+ * the conforming ones, and the ones captured before the drift existed. Same
+ * false-assurance class as CONFORMING-with-no-evidence, pointing the other way.
+ *
+ * MCP keeps its per-tool lookup: an MCP finding is per tool and the snapshot
+ * detector does not stamp calls, so that path is unchanged.
+ */
 function isDrifted(c: RedactedCall): boolean {
   if (c.transport === 'mcp') return mcpDriftedTools.value.has(`${c.integration} ${toolNameOf(c)}`);
-  if (c.direction === 'server') return driftedEndpoints.value.self.has(`${c.method} ${c.route}`);
-  return driftedEndpoints.value.provider.has(`${c.integration} ${c.method} ${c.route}`);
+  return c.drifted === true;
 }
 
 const hasExpanded = computed(() => Object.values(expanded.value).some(Boolean));
@@ -650,10 +679,15 @@ function specHref(s: SpecInfo): string {
 }
 
 // Contract cards. Self = the contract WE publish (validates our inbound
-// responses). Providers = loaded provider contracts first, then providers only
-// known from findings (older collector without /api/contracts), then discovered
-// outbound edges with no contract loaded — those are only asserted when the
-// collector actually answered /api/contracts.
+// responses). Providers = contracts that EXIST, then providers only known from
+// findings (an older collector without /api/contracts).
+//
+// A card is NOT fabricated for every uncovered edge any more. That loop
+// produced ~40 near-identical empty cards on a 50-provider estate, each with a
+// chip saying nothing was loaded and a paragraph of config scolding — a wall
+// that buried the handful of real contracts inside it. Uncovered providers get
+// ONE ROW EACH in a collapsed section instead (uncoveredHosts below), with the
+// uploader opening in place. A card materialises when a contract does.
 interface ContractCard {
   key: string;
   name: string;
@@ -662,16 +696,28 @@ interface ContractCard {
   findings: Finding[];
 }
 
-const contractCards = computed<{ self: ContractCard[]; providers: ContractCard[] }>(() => {
-  const byIntegration = new Map<string, Finding[]>();
-  for (const f of [...liveFindings.value, ...mcpContractFindings.value]) {
-    const list = byIntegration.get(f.integration) || [];
-    list.push(f);
-    byIntegration.set(f.integration, list);
-  }
+const contractCards = computed<{ self: ContractCard[]; mcpServers: ContractCard[]; providers: ContractCard[] }>(() => {
+  // Findings are attributed to a contract by HOST first, integration second —
+  // see findingBelongsToContract. An uploaded contract's integration is derived
+  // from its host while a finding's comes from the call, so an
+  // integration-only join split one provider into two cards.
+  const unclaimed = [...liveFindings.value, ...mcpContractFindings.value];
+  const hostOfCall = (id: string) => callsById.value[id]?.peer_host;
+  const claim = (spec: SpecInfo): Finding[] => {
+    const mine: Finding[] = [];
+    for (let i = unclaimed.length - 1; i >= 0; i--) {
+      if (findingBelongsToContract(unclaimed[i], spec, hostOfCall)) mine.unshift(...unclaimed.splice(i, 1));
+    }
+    return mine;
+  };
   const self: ContractCard[] = [];
+  // MCP servers are their own KIND, not providers with an odd format: nobody
+  // uploaded them, Replace/Remove do not apply, and the providers section's own
+  // sub-line ("the contracts your providers publish — your outbound calls
+  // validated against them") is already false for them. A section whose
+  // sub-line is untrue for some of its cards is the wrong section.
+  const mcpServers: ContractCard[] = [];
   const providers: ContractCard[] = [];
-  const coveredHosts = new Set<string>();
   for (const s of contracts.value) {
     const card: ContractCard = {
       // The spec's own `info.title` wins: it is the provider's own words for the
@@ -684,36 +730,110 @@ const contractCards = computed<{ self: ContractCard[]; providers: ContractCard[]
       name: s.title || humanize(s.integration) || s.peer_host || (s.role === 'self' ? 'Your API' : 'Provider'),
       peerHost: s.peer_host || '',
       spec: s,
-      findings: byIntegration.get(s.integration) || []
+      findings: claim(s)
     };
-    byIntegration.delete(s.integration);
-    if (s.role === 'self') {
-      self.push(card);
-    } else {
-      providers.push(card);
-      if (s.peer_host) coveredHosts.add(s.peer_host);
-    }
+    if (s.role === 'self') self.push(card);
+    else if (s.format === 'mcp') mcpServers.push(card);
+    else providers.push(card);
   }
-  for (const [integration, fs] of byIntegration) {
+  // Anything still unclaimed belongs to no contract we hold — an older
+  // collector's findings, or a provider whose contract was removed. It keeps
+  // its own card, because dropping a finding on the floor is worse than an
+  // imperfect heading.
+  const leftover = new Map<string, Finding[]>();
+  for (const f of unclaimed) {
+    const list = leftover.get(f.integration) || [];
+    list.push(f);
+    leftover.set(f.integration, list);
+  }
+  for (const [integration, fs] of leftover) {
     providers.push({ key: 'find-' + integration, name: humanize(integration) || integration, peerHost: '', spec: null, findings: fs });
   }
-  if (contractsKnown.value) {
-    for (const e of outboundEdges.value) {
-      if (!coveredHosts.has(e.peer_host)) {
-        // A discovered outbound edge with no contract: its name if it has one,
-        // otherwise the host itself — the auto tier, same as the Edges panel.
-        providers.push({
-          key: 'edge-' + e.peer_host,
-          name: e.peer_host,
-          peerHost: e.peer_host,
-          spec: null,
-          findings: []
-        });
-      }
-    }
-  }
-  return { self, providers };
+  return { self, mcpServers, providers };
 });
+
+// Providers with traffic and no contract — one compact row each, collapsed by
+// default. Only asserted once /api/contracts has actually answered: an older
+// collector cannot say whether a contract is loaded, and guessing "none" there
+// would invent work that may already be done.
+const uncoveredHosts = computed(() =>
+  contractsKnown.value ? uncoveredProviders(outboundEdges.value, contracts.value, mcpHosts.value) : []
+);
+const uncoveredOpen = ref(false);
+
+// The Edges roll call: one line under the outbound group's heading, counted
+// positive, below a fully rendered graph. Nothing is gated on it.
+const outboundRollCall = computed(() =>
+  contractsKnown.value ? rollCall(outboundEdges.value, contracts.value, mcpHosts.value) : ''
+);
+
+// Provider contracts indexed by the host each is bound to — the Edges row's
+// meta line, and what the uploader consults to know it is replacing.
+const contractByHost = computed(() => contractsByHost(contracts.value));
+
+// ─── The uploader ────────────────────────────────────────────────────────
+// State lives in ContractUploader.vue; App owns only WHICH row has it open and
+// the one-line after-state it reports back. Only one can be open at a time —
+// there is one mutation, so there is one confirm flow.
+const uploadFor = ref('');
+const uploadNotice = ref('');
+const uploadError = ref('');
+
+function openUploader(host: string) {
+  uploadFor.value = host || '*';
+  uploadNotice.value = '';
+  uploadError.value = '';
+}
+
+function closeUploader() {
+  uploadFor.value = '';
+}
+
+/**
+ * The Edges panel's route into this tab. It is a ROUTE, not a second uploader:
+ * one mutation, one confirm flow, one binding model, and one surface that can
+ * render the after-state.
+ *
+ * A host with a contract lands on its card; a host without one expands the
+ * collapsed section and highlights its row. Either way the uploader that opens
+ * already knows the host, which is the whole ergonomic prize for routing here.
+ */
+function goToContracts(host: string) {
+  tab.value = 'contract';
+  if (contractByHost.value.has(host)) {
+    highlightUncoveredHost.value = null;
+    nextTick(() => document.getElementById('contract-' + host)?.scrollIntoView({ block: 'center' }));
+    return;
+  }
+  uncoveredOpen.value = true;
+  highlightUncoveredHost.value = host;
+  openUploader(host);
+  nextTick(() => document.getElementById('uncovered-' + host)?.scrollIntoView({ block: 'center' }));
+}
+
+async function onUploaded(notice: string) {
+  closeUploader();
+  uploadNotice.value = notice;
+  await refreshContracts();
+}
+
+/** Only an UPLOADED contract offers Replace and Remove. A config-loaded one
+ *  would be back at the next start, and a button that undoes itself is worse
+ *  than no button. */
+function isUploaded(spec: SpecInfo | null): boolean {
+  return !!spec && spec.format !== 'mcp' && spec.role !== 'self' && (spec.source ?? 'upload') === 'upload';
+}
+
+async function removeContract(integration: string, host: string) {
+  if (!window.confirm(`Remove the contract for ${host || integration}? Its calls will be captured but not validated.`)) return;
+  try {
+    await apiPost('/api/contracts/remove', { integration });
+    uploadNotice.value = '';
+    await refreshContracts();
+  } catch (e) {
+    uploadError.value = e instanceof ApiError ? e.message : 'Couldn’t remove the contract.';
+  }
+}
 
 // The Contracts tab's two sections, rendered by one shared card template. The
 // self section only renders once /api/contracts has actually answered (older
@@ -725,16 +845,30 @@ const cardGroups = computed(() => [
     sub: 'the API you publish — your inbound responses validated against it',
     cards: contractCards.value.self,
     emptyText: contractsKnown.value
-      ? 'No self contract loaded. Point flanjdrift.self_spec_path at the OpenAPI document you publish to catch your own drift before your consumers do.'
+      ? // NOT "before your consumers do" — we cannot, and saying so was a lie of
+        // exactly the kind this surface exists to stop. The self contract validates
+        // INBOUND calls (processor.go: direction == "server"), i.e. responses ALREADY
+        // SENT; the SDK captures after the fact, so the consumer received the drifting
+        // response first, every time. What this actually buys is the SOURCE of the
+        // news: your own traffic instead of someone else's bug report.
+        'No self contract loaded. Point flanjdrift.self_spec_path at the OpenAPI document you publish and your own responses get checked against it — so your drift reaches you from your traffic, not from a consumer.'
       : ''
   },
   {
+    key: 'mcp',
+    title: `MCP servers${contractCards.value.mcpServers.length ? ` (${contractCards.value.mcpServers.length})` : ''}`,
+    sub: 'each server publishes its own contract on tools/list — nothing to upload, nothing to remove',
+    cards: contractCards.value.mcpServers,
+    emptyText: ''
+  },
+  {
     key: 'providers',
-    title: 'Provider contracts',
+    // Counted like the MCP section: at 50 the number IS the information, and a
+    // count on one section but not its neighbour reads as an oversight.
+    title: `Provider contracts${contractCards.value.providers.length ? ` (${contractCards.value.providers.length})` : ''}`,
     sub: 'the contracts your providers publish — your outbound calls validated against them',
     cards: contractCards.value.providers,
-    emptyText:
-      'No provider contracts yet. Point flanjdrift.spec_path at a provider’s OpenAPI document, or send traffic through the SDK to discover providers.'
+    emptyText: providerContractsEmptyText(uncoveredHosts.value.length)
   }
 ]);
 
@@ -790,7 +924,10 @@ const mcpOverview = computed(() =>
   mcpContracts.value.map((s) => ({
     key: s.integration,
     headline: mcpHeadline(
-      { name: s.title || s.integration, version: s.version },
+      // Same origin rule as the Contracts card, from the same function — so the
+      // two surfaces cannot drift apart and render two identical health lines
+      // for two different servers again.
+      { name: s.title || s.integration, version: s.version, origin: contractOrigin(s) },
       mcpFindings.value.filter((f) => f.integration === s.integration),
       humanTime
     )
@@ -997,7 +1134,13 @@ async function refresh() {
   } catch (e) {
     loadError.value = String(e);
   }
-  // Newer endpoint — a collector predating /api/contracts must not fail the page.
+  await refreshContracts();
+}
+
+// Newer endpoint — a collector predating /api/contracts must not fail the page.
+// Called on every poll AND straight after an upload or a removal, so the card
+// the operator just produced is on screen before the next tick.
+async function refreshContracts() {
   try {
     const resp = await fetch('/api/contracts');
     if (resp.ok) {
@@ -1246,6 +1389,10 @@ watch(tab, (t) => {
               <span class="dir-badge out">Outbound</span> you → provider
               <small>this org is the consumer</small>
             </h3>
+            <!-- The roll call. Counted POSITIVE, one line for the whole panel,
+                 and it sits BELOW a fully rendered graph: the zero-config
+                 install-to-graph moment is untouched and nothing is gated. -->
+            <p v-if="outboundRollCall && outboundEdges.length" class="edge-rollcall">{{ outboundRollCall }}</p>
             <p v-if="outboundEdges.length === 0" class="empty small">No outbound edges.</p>
             <div v-else class="edge-table">
               <div class="edge-head named">
@@ -1266,10 +1413,26 @@ watch(tab, (t) => {
                            The domain is the identity; when there is no name there is nothing to
                            render over it. -->
                       <span class="edge-name" :class="{ unnamed: !e.display_name }" :title="e.display_name || e.peer_host">{{ e.display_name || e.peer_host }}</span>
-                      <span v-if="badgeLabel(e.name_source)" class="name-badge" :class="'src-' + (e.name_source || 'auto')">{{ badgeLabel(e.name_source) }}</span>
                       <span v-if="mcpHosts.has(e.peer_host)" class="mcp-badge" :title="MCP_BADGE_TOOLTIP">{{ mcpBadgeLabel(e.class) }}</span>
                     </span>
                     <span v-if="e.display_name" class="peer mono edge-host" :title="e.peer_host">{{ e.peer_host }}</span>
+                    <!-- Coverage, in the SAME muted text channel that renders
+                         the host — not the badge lane, not the actions cell.
+                         Zero new chips: on ~40 rows a chip is a wall, and a
+                         chip would be a label where a control does more work.
+                         MCP rows get nothing new — their transport badge and
+                         its tooltip already say "covered, self-delivering,
+                         nothing for you to do". -->
+                    <span v-if="!mcpHosts.has(e.peer_host) && contractsKnown" class="edge-contract">
+                      <template v-if="contractByHost.get(e.peer_host)">
+                        <button type="button" class="edge-contract-link" @click="goToContracts(e.peer_host)">
+                          {{ edgeContractLine(contractByHost.get(e.peer_host)!) }}
+                        </button>
+                      </template>
+                      <button v-else type="button" class="edge-contract-link add" @click="goToContracts(e.peer_host)">
+                        {{ ADD_CONTRACT }}
+                      </button>
+                    </span>
                   </span>
                   <span class="num">{{ fmtRPM(e.rpm) }}<span class="unit">/min</span></span>
                   <span class="edge-actions">
@@ -1347,6 +1510,9 @@ watch(tab, (t) => {
           <button type="button" class="btn ghost small" aria-label="Dismiss" @click="dismissConnectBanner">Dismiss</button>
         </span>
       </div>
+      <p v-if="uploadNotice" class="upload-notice">{{ uploadNotice }}</p>
+      <p v-if="uploadError" class="upload-notice error">{{ uploadError }}</p>
+
       <section v-for="g in cardGroups" v-show="g.cards.length || g.emptyText" :key="g.key">
         <h2>
           {{ g.title }}
@@ -1354,11 +1520,26 @@ watch(tab, (t) => {
         </h2>
         <p v-if="g.cards.length === 0" class="empty">{{ g.emptyText }}</p>
 
-        <article v-for="p in g.cards" :key="p.key" class="provider" :class="{ self: g.key === 'self' }">
+        <article
+          v-for="p in g.cards"
+          :id="p.peerHost ? 'contract-' + p.peerHost : undefined"
+          :key="p.key"
+          class="provider"
+          :class="{ self: g.key === 'self' }"
+        >
           <div class="prov-head">
+            <!-- `<name> · <origin>`, ALWAYS — not only on collision. Two MCP
+                 servers can publish the SAME serverInfo.name (the live stack
+                 does), and the origin is the only thing that separates them.
+                 Collision-conditional would change a card's shape when an
+                 unrelated second server appears, and at fifty cards nobody can
+                 see whether a title is unique — so a bare name could never be
+                 trusted to mean "the only one".
+                 The separate mono host chip is GONE: the host is in the heading
+                 now, and rendering it twice in two type sizes said nothing. -->
             <span class="prov-name">{{ p.name }}</span>
-            <span v-if="p.peerHost" class="prov-host mono">{{ p.peerHost }}</span>
-            <span v-if="p.spec" class="fmt-badge">{{ p.spec.format }}</span>
+            <span v-if="p.spec && contractOrigin(p.spec)" class="prov-origin mono">· {{ contractOrigin(p.spec) }}</span>
+            <span v-if="p.spec" class="fmt-badge">{{ p.spec.format === 'mcp' ? mcpBadgeLabel(p.spec.edge_class) : p.spec.format }}</span>
             <span v-if="p.spec?.version" class="prov-ver">v{{ p.spec.version }}</span>
             <!-- The integration slug lives here (it scopes THIS contract), not in the header.
                  On EVERY card that has one: the two MCP servers share a name (`acme-tools-mcp`), so
@@ -1382,6 +1563,13 @@ watch(tab, (t) => {
             </span>
           </div>
 
+          <ContractUploader
+            v-if="uploadFor === p.peerHost && p.peerHost"
+            :host="p.peerHost"
+            @uploaded="onUploaded"
+            @cancel="closeUploader"
+          />
+
           <div v-if="p.spec" class="prov-links">
             <a class="doc-link" :href="specHref(p.spec)" target="_blank" rel="noopener">
               {{ p.spec.format === 'mcp' ? 'View tools/list snapshot' : 'View OpenAPI spec' }}
@@ -1393,15 +1581,19 @@ watch(tab, (t) => {
               <span class="prov-meta">{{ mcpContractMeta(p.spec.endpoints || 0, humanTime(p.spec.loaded_at)) }}</span>
             </template>
             <template v-else>
-              <span v-if="p.spec.endpoints" class="prov-meta">{{ p.spec.endpoints }} endpoint{{ p.spec.endpoints === 1 ? '' : 's' }}</span>
-              <span class="prov-meta">loaded {{ humanTime(p.spec.loaded_at) }}</span>
+              <!-- Provenance + recency, relative, with the absolute time on
+                   hover. `Replace` sits immediately beside the date on purpose:
+                   the affordance next to it is what stops a date from reading
+                   as a nag. -->
+              <span class="prov-meta" :title="humanTime(p.spec.loaded_at)">{{ contractMeta(p.spec) }}</span>
+              <template v-if="isUploaded(p.spec)">
+                <button type="button" class="btn ghost small" @click="openUploader(p.peerHost)">{{ REPLACE_CONTRACT }}</button>
+                <button type="button" class="btn ghost small" @click="removeContract(p.spec.integration, p.peerHost)">Remove</button>
+              </template>
             </template>
           </div>
           <p v-else-if="mcpHosts.has(p.peerHost)" class="prov-nospec">{{ MCP_NO_SPEC_NEEDED }}</p>
-          <p v-else class="prov-nospec">
-            No spec loaded for this provider — point <code>flanjdrift.spec_path</code> at its
-            OpenAPI document to validate live traffic against it.
-          </p>
+          <p v-else class="prov-nospec">{{ NO_CONTRACT_ROW }}</p>
 
           <!-- MCP per-tool rows (deck §3): the server's tools ARE the contract surface. -->
           <div v-if="p.spec?.format === 'mcp' && mcpToolRows(p.spec.integration).length" class="tool-rows">
@@ -1543,6 +1735,58 @@ watch(tab, (t) => {
             </div>
           </article>
         </article>
+      </section>
+
+      <!-- Providers with traffic and no contract. ONE ROW EACH, collapsed by
+           default — a card apiece was ~40 near-identical empty cards on a
+           50-provider estate, which buried the real contracts above it. A card
+           materialises when a contract does; until then the row IS the fix. -->
+      <section v-if="uncoveredHosts.length" class="uncovered">
+        <h2>
+          <button type="button" class="uncovered-toggle" :aria-expanded="uncoveredOpen" @click="uncoveredOpen = !uncoveredOpen">
+            <span class="chev" :class="{ open: uncoveredOpen }">▸</span>
+            {{ uncoveredHeading(uncoveredHosts.length) }}
+          </button>
+        </h2>
+        <!-- Said ONCE for the section, not once per row. Rendered at 28 real
+             rows the identical sentence repeated 28 times was its own wall —
+             the thing this section exists to replace — and it is a property of
+             the group anyway, not of any particular provider. -->
+        <p v-show="uncoveredOpen" class="uncovered-lede">{{ NO_CONTRACT_SECTION }}</p>
+        <div v-show="uncoveredOpen" class="uncovered-rows">
+          <div
+            v-for="host in uncoveredHosts"
+            :id="'uncovered-' + host"
+            :key="host"
+            class="uncovered-row"
+            :class="{ highlight: host === highlightUncoveredHost }"
+          >
+            <div class="uncovered-line">
+              <span class="mono uncovered-host">{{ host }}</span>
+              <button
+                v-if="uploadFor !== host"
+                type="button"
+                class="btn ghost small"
+                @click="openUploader(host)"
+              >{{ ADD_CONTRACT }}</button>
+            </div>
+            <ContractUploader
+              v-if="uploadFor === host"
+              :host="host"
+              @uploaded="onUploaded"
+              @cancel="closeUploader"
+            />
+          </div>
+        </div>
+      </section>
+
+      <!-- Pre-traffic upload: on a fresh install there are no edges at all, so
+           there is nothing to click Add contract ON. Naming the host by hand is
+           the only route in, and it must exist from the first paint. -->
+      <section class="pretraffic">
+        <h2>Add a contract <small>for a provider you haven’t sent traffic to yet</small></h2>
+        <button v-if="uploadFor !== '*'" type="button" class="btn" @click="openUploader('')">{{ ADD_CONTRACT }}</button>
+        <ContractUploader v-else host="" @uploaded="onUploaded" @cancel="closeUploader" />
       </section>
     </div>
 
@@ -2038,6 +2282,10 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .doc-link { color: var(--accent); font-size: 0.85rem; text-decoration: none; border: 1px solid var(--line); border-radius: 8px; padding: 0.28rem 0.7rem; background: var(--panel2); }
 .doc-link:hover { border-color: var(--accent); }
 .prov-meta { color: var(--muted); font-size: 0.8rem; }
+/* The origin sits IN the heading at the same size as the name, muted — the fact
+   that separates two servers sharing a name has to be where the eye already is,
+   not in a 0.78rem slug at the end of the row. */
+.prov-origin { color: var(--muted); font-weight: 400; }
 .prov-nospec { color: var(--muted); font-size: 0.88rem; margin: 0.6rem 0 0; }
 .prov-integration { color: var(--muted); font-size: 0.78rem; }
 .finding.nested { background: var(--panel2); margin: 0.75rem 0 0; }
@@ -2092,13 +2340,104 @@ pre.body { background: var(--panel2); border: 1px solid var(--line); border-radi
    row shapes read as one column and nothing looks like a mangled name. */
 .edge-name.unnamed { color: var(--ink); font-weight: 400; font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 0.82rem; }
 .edge-host { color: var(--muted); font-size: 0.75rem; }
+/* Contract coverage on an outbound row: the SAME muted text channel as
+   .edge-host, one line below it. Not the badge lane and not the actions cell —
+   the cell is `auto` inside minmax(9rem,1fr) max-content auto, a user-named row
+   already carries two buttons, and a third is untested at 900px. A text link
+   dodges the width fight entirely and does strictly more than a chip would. */
+.edge-contract { font-size: 0.75rem; line-height: 1.35; }
+.edge-contract-link {
+  background: none; border: 0; padding: 0; margin: 0;
+  font: inherit; color: var(--muted); cursor: pointer;
+  text-align: left; text-decoration: none;
+}
+.edge-contract-link:hover, .edge-contract-link:focus-visible { color: var(--ink); text-decoration: underline; }
+/* `Add contract` stays in the SAME muted channel as everything else on this
+   line — no accent, no fill, no border. Rendered at 30 real rows it was
+   accent-coloured, and 27 blue links marching down the column was the `auto`
+   wall verbatim: louder than the chip this design exists to avoid, and it
+   inverted the signal, since the three covered rows read quieter than the
+   uncovered ones. Muted, it is present when you look at a row and invisible
+   when you scan the column, which is the whole point of putting it here rather
+   than in the badge lane. The dotted underline is what marks it as a control
+   without spending colour on it. */
+.edge-contract-link.add { border-bottom: 1px dotted var(--line); }
+.edge-contract-link.add:hover, .edge-contract-link.add:focus-visible { border-bottom-color: currentColor; text-decoration: none; }
+/* The roll call: one line under the group heading, above the rows. */
+.edge-rollcall { margin: -0.15rem 0 0.55rem; font-size: 0.8rem; color: var(--muted); }
+
+/* Providers with no contract — rows, not cards. Collapsed by default. */
+.uncovered h2 { margin-bottom: 0.4rem; }
+.uncovered-toggle {
+  background: none; border: 0; padding: 0; font: inherit; color: inherit;
+  cursor: pointer; display: inline-flex; align-items: center; gap: 0.4rem;
+}
+.uncovered-toggle .chev { display: inline-block; transition: transform 120ms ease-out; color: var(--muted); font-size: 0.8em; }
+.uncovered-toggle .chev.open { transform: rotate(90deg); }
+.uncovered-rows { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.uncovered-row { padding: 0.55rem 0.7rem; border-bottom: 1px solid var(--line); }
+.uncovered-row:last-child { border-bottom: 0; }
+.uncovered-row.highlight { background: var(--panel2); }
+.uncovered-line { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; }
+.uncovered-host { font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.uncovered-lede { margin: 0 0 0.5rem; font-size: 0.82rem; color: var(--muted); }
+
+/* The after-state: what happens NEXT, said once, above the cards. */
+.upload-notice {
+  margin: 0 0 0.8rem; padding: 0.5rem 0.7rem; font-size: 0.85rem;
+  border-left: 3px solid var(--accent); background: var(--panel2); color: var(--ink);
+}
+.upload-notice.error { border-left-color: var(--danger, #b03a43); }
+
+/* The uploader. Rendered inline on whichever row opened it — there is one
+   mutation, so only one can be open at a time. */
+.uploader { border: 1px dashed var(--line); border-radius: 8px; padding: 0.7rem; margin-top: 0.5rem; background: var(--panel2); }
+.uploader-host { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.8rem; color: var(--muted); margin-bottom: 0.6rem; }
+.uploader-host input {
+  padding: 0.35rem 0.5rem; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel); color: var(--ink); font-size: 0.85rem; max-width: 22rem;
+}
+.dropzone {
+  border: 1px dashed var(--line); border-radius: 6px; padding: 1.1rem 0.8rem;
+  text-align: center; background: var(--panel);
+}
+.dropzone.dragging { border-color: var(--accent); background: var(--panel2); }
+.dz-prompt { margin: 0 0 0.15rem; font-size: 0.88rem; }
+.dz-formats { margin: 0 0 0.6rem; font-size: 0.78rem; color: var(--muted); }
+/* The privacy line sits AT the picker, where the document is chosen — the one
+   moment the operator is deciding whether to hand over a vendor's document. */
+.uploader-privacy { margin: 0.55rem 0 0; font-size: 0.78rem; color: var(--ink); }
+.uploader-note { margin: 0.2rem 0 0; font-size: 0.78rem; color: var(--muted); }
+.uploader-error { margin: 0.5rem 0 0; font-size: 0.82rem; color: var(--danger, #b03a43); }
+.uploader-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.7rem; }
+.confirm-facts { display: grid; gap: 0.25rem; margin: 0 0 0.5rem; }
+.confirm-facts > div { display: flex; gap: 0.5rem; font-size: 0.85rem; }
+.confirm-facts dt { color: var(--muted); min-width: 6rem; }
+.confirm-facts dd { margin: 0; }
+/* The binding checklist. A `servers:` mismatch used to render in body ink —
+   "warn, never block" means warn VISIBLY, and that was a whisper. Warnings get
+   the warning colour and a marker; the button still says go. */
+.binding-checks { list-style: none; margin: 0 0 0.5rem; padding: 0.5rem 0.6rem; display: grid; gap: 0.3rem; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); }
+.binding-checks.warned { border-color: var(--warn-line, #d1ac1f); background: var(--warn-bg, rgba(209, 172, 31, 0.08)); }
+.binding-checks li { display: flex; gap: 0.45rem; align-items: flex-start; font-size: 0.8rem; line-height: 1.45; color: var(--muted); }
+.binding-checks li.warn { color: var(--ink); }
+.binding-checks .chk { flex: none; width: 1em; text-align: center; font-weight: 700; color: var(--muted); }
+.binding-checks li.warn .chk { color: var(--warn-ink, #8a6f0a); }
+.confirm-host { margin: 0.1rem 0 0.6rem; }
+.confirm-host input:disabled { opacity: 0.7; cursor: not-allowed; }
+.host-hint, .host-locked { font-size: 0.72rem; color: var(--muted); }
+.host-awaiting { font-size: 0.75rem; color: var(--ink); }
+.uploader-host.awaiting input { border-color: var(--accent); }
+.confirm-timing { margin: 0 0 0.4rem; font-size: 0.78rem; color: var(--muted); }
+.host-hint code { font-size: 0.95em; }
+.btn.warn { border-color: var(--warn-line, #d1ac1f); }
+.pretraffic h2 { margin-bottom: 0.5rem; }
 /* The deck's badge strings are lowercase ("named by you" · "config" ·
    "directory" · "auto") — uppercasing them made all four read as one shouted
    pill. Render the copy as written. */
 .pill-link { text-decoration: none; display: inline-flex; align-items: center; gap: 0.3rem; }
 .pill-link:hover { text-decoration: underline; }
 .pill-out { font-size: 0.85em; opacity: 0.75; }
-.name-badge { flex: none; font-size: 0.7rem; letter-spacing: 0; color: var(--muted); background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 0.05rem 0.45rem; }
 .edge-actions { display: flex; gap: 0.35rem; justify-content: flex-end; }
 .edge-rename { border-top: 1px dashed var(--line); background: var(--panel2); padding: 0.6rem 0.7rem; display: flex; flex-direction: column; gap: 0.45rem; }
 .edge-rename-input { width: 100%; max-width: 26rem; padding: 0.35rem 0.5rem; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); font-size: 0.85rem; }

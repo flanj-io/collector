@@ -20,10 +20,10 @@ import (
 // and the index mutation carries the same bounded re-read-verify retry as the
 // ack index (see indexWriteAttempts for the residual-race honesty).
 //
-// Sources (shared vocabulary, brief-common): `user` (named in the UI) and
-// `config` (migrated from the legacy YAML keys on boot). The other two tiers —
-// `directory` and `auto` — are resolved at read time (directory.go) and never
-// stored here.
+// Only `user` names are STORED here — a name the operator typed. The other
+// three tiers are resolved at read time (directory.go) and never persisted:
+// `contract` (the title of the contract uploaded for this domain), `directory`
+// and `auto`.
 
 const (
 	// settingEdgeNamePrefix + <registrable_domain> → edgeNameRecord JSON.
@@ -31,8 +31,17 @@ const (
 	// settingEdgeNamesIndex → JSON array of named registrable domains.
 	settingEdgeNamesIndex = "edge.names"
 
-	nameSourceUser      = "user"
-	nameSourceConfig    = "config"
+	nameSourceUser = "user"
+	// nameSourceContract is the provider's OWN words for their API, read out of
+	// the contract uploaded for this domain (`info.title`).
+	//
+	// It replaces the `config` tier, which died with `spec_path`: the legacy
+	// `provider_display_name` names a provider but nothing said WHICH edge it
+	// meant — that linkage came from the config spec's `peer_host`, and there
+	// are no config specs any more. The upload carries both facts at once (the
+	// host it binds to, and the document's title), so the name is derived from
+	// what the operator actually did rather than guessed from a YAML value.
+	nameSourceContract  = "contract"
 	nameSourceDirectory = "directory"
 	nameSourceAuto      = "auto"
 )
@@ -42,7 +51,7 @@ const (
 // per-mapping opt-in, as a directory suggestion.
 type edgeNameRecord struct {
 	Name      string `json:"name"`
-	Source    string `json:"source"` // "user" | "config"
+	Source    string `json:"source"` // "user" — the only stored tier
 	UpdatedAt string `json:"updated_at"`
 }
 

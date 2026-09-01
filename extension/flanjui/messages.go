@@ -33,6 +33,19 @@ const (
 	msgConnectFields       = "Your organization and a contact email are required."
 	msgInvalidEmail        = "Enter a valid email."
 	msgFindingRequired     = "finding_id is required."
+
+	// Contract upload. Uploaded contracts stay on this collector — no string
+	// here may suggest otherwise, and no code path on that route reaches the
+	// control plane.
+	msgContractHostRequired        = "Which provider is this contract for? Enter its host, e.g. api.acme.test."
+	msgContractHostInvalid         = "That doesn't look like a host. Enter just the domain, e.g. api.acme.test."
+	msgContractHostTooLong         = "That host is too long to be a domain name."
+	msgContractHostPunycode        = "Enter the host as it appears in the traffic (ASCII, punycode for international domains)."
+	msgContractDocumentRequired    = "Choose an OpenAPI document to upload."
+	msgContractTooLarge            = "That document is larger than 8 MB. Contracts this size are usually a bundle — upload the API's own document."
+	msgContractStoreFailed         = "Couldn't save the contract to the local store."
+	msgContractIntegrationRequired = "integration is required."
+	msgContractNotRemovable        = "This contract comes from the collector's config file, not an upload — remove it there."
 	msgNotFlaggable        = "This finding is a local notice — stale-client calls stay on this collector and can't be flagged to the provider."
 	msgNotAckable          = "Only non-breaking informational findings can be acknowledged — breaking findings need a fix or a thread."
 	msgFindingNotFound     = "That finding is no longer in the local store."

@@ -62,6 +62,19 @@ type Store interface {
 	ListEdges(externalOnly bool) ([]model.Edge, error)
 	EdgeCallCountsSince(sinceISO string) (map[string]int, error)
 	PutSpecInfo(info model.SpecInfo, rawSpec []byte) error
+	// PutUploadedSpec is the UPLOAD path's write. It differs from PutSpecInfo
+	// in one way that matters: replacing a bound contract rotates the document
+	// it displaces into prev_doc rather than dropping it, and returns it, so
+	// the caller can diff v1 -> v2 and the card can read "replaced v1.0.0".
+	// Exactly one previous document is kept — no archive.
+	//
+	// Rotation and write are one transaction: a replace that half-applied would
+	// leave a host either validating nothing or validating against a document
+	// whose recorded metadata describes a different one.
+	PutUploadedSpec(info model.SpecInfo, rawSpec []byte) (prev UploadedSpecPrevious, err error)
+	// DeleteSpecInfo removes a contract. Remove ships with upload: a contract
+	// bound to the wrong host with no undo is worse than no contract.
+	DeleteSpecInfo(integration string) (existed bool, err error)
 	ListSpecInfos() ([]model.SpecInfo, error)
 	GetSpecDoc(integration string) (raw []byte, format string, ok bool, err error)
 	Stats() (rows int, bytes int64, err error)
@@ -76,6 +89,18 @@ type Store interface {
 	GetSetting(key string) (value string, ok bool, err error)
 	PutSetting(key, value string) error
 	Close() error
+}
+
+// UploadedSpecPrevious describes the contract an upload displaced, empty when
+// the upload was the first for that host.
+type UploadedSpecPrevious struct {
+	// Existed distinguishes a first upload from a replace. A replace with no
+	// version string is still a replace.
+	Existed bool
+	Raw     []byte
+	Version string
+	// LoadedAt is when the displaced document was itself uploaded.
+	LoadedAt string
 }
 
 // Provider is implemented by the store extension. The exporter, UI extension,
@@ -143,6 +168,22 @@ type execer interface {
 // holding the per-call advisory lock on postgres (see pgLockNSCallPin). The
 // store is thereby order-independent for call/finding pairs.
 func latePin(ex execer, rebind func(string) string, c model.RedactedCall) (pinned bool, err error) {
+	// Repair the per-call drift mark FIRST, and independently of whether this
+	// call still needs pinning. InsertFinding's `UPDATE calls SET drifted=1`
+	// matched no row when the finding arrived first, and nothing else ever
+	// recomputes the column — so without this the call is kept as evidence,
+	// counted as a drift on its edge, and still rendered `conforming`. Mirror
+	// InsertFinding exactly: live-vs-spec is the only kind that means THIS call
+	// departed from its contract. Idempotent (`drifted=0` guard), so a replayed
+	// call cannot double anything.
+	if _, err := ex.Exec(rebind(
+		`UPDATE calls SET drifted=1
+		  WHERE id=? AND drifted=0
+		    AND EXISTS (SELECT 1 FROM findings WHERE source_call_id=? AND kind=?)`),
+		c.ID, c.ID, model.KindLiveVsSpec,
+	); err != nil {
+		return false, fmt.Errorf("late pin: repair drifted: %w", err)
+	}
 	res, err := ex.Exec(rebind(
 		`UPDATE calls SET pinned=1
 		  WHERE id=? AND pinned=0
@@ -208,8 +249,14 @@ func (b *base) Close() error { return b.db.Close() }
 
 // GetCall returns the stored RedactedCall for id.
 func (b *base) GetCall(id string) (model.RedactedCall, bool, error) {
-	var doc string
-	err := b.db.QueryRow(b.rebind(`SELECT doc FROM calls WHERE id=?`), id).Scan(&doc)
+	var (
+		doc     string
+		drifted bool
+	)
+	// `drifted` is store-owned (set when the call produced a finding, including
+	// repeat occurrences), so it lives in its column and reads patch it back in
+	// — the same shape as findings' occurrence_count/last_seen.
+	err := b.db.QueryRow(b.rebind(`SELECT doc, drifted FROM calls WHERE id=?`), id).Scan(&doc, &drifted)
 	if err == sql.ErrNoRows {
 		return model.RedactedCall{}, false, nil
 	}
@@ -220,6 +267,7 @@ func (b *base) GetCall(id string) (model.RedactedCall, bool, error) {
 	if err := json.Unmarshal([]byte(doc), &c); err != nil {
 		return model.RedactedCall{}, false, err
 	}
+	c.Drifted = drifted
 	return c, true, nil
 }
 
@@ -236,8 +284,37 @@ func (b *base) GetFinding(id string) (model.Finding, bool, error) {
 }
 
 // ListCalls returns up to limit most-recent calls, newest first.
+//
+// `drifted` is store-owned and patched back in from its column: DRIFT IS A
+// PROPERTY OF THIS CALL, not of its endpoint. Reading it any coarser marked
+// every call on a drifted endpoint as drifted — conforming ones, and ones
+// captured before the drift existed.
 func (b *base) ListCalls(limit int) ([]model.RedactedCall, error) {
-	return listDocs[model.RedactedCall](b, `SELECT doc FROM calls ORDER BY seq DESC LIMIT ?`, limit)
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := b.db.Query(b.rebind(`SELECT doc, drifted FROM calls ORDER BY seq DESC LIMIT ?`), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]model.RedactedCall, 0, limit)
+	for rows.Next() {
+		var (
+			doc     string
+			drifted bool
+		)
+		if err := rows.Scan(&doc, &drifted); err != nil {
+			return nil, err
+		}
+		var c model.RedactedCall
+		if err := json.Unmarshal([]byte(doc), &c); err != nil {
+			return nil, err
+		}
+		c.Drifted = drifted
+		out = append(out, c)
+	}
+	return out, rows.Err()
 }
 
 // ListFindings returns up to limit most-recent findings, newest first.
@@ -416,8 +493,9 @@ func (b *base) EdgeCallCountsSince(sinceISO string) (map[string]int, error) {
 // ListSpecInfos returns the loaded provider contracts (metadata only, no doc).
 func (b *base) ListSpecInfos() ([]model.SpecInfo, error) {
 	rows, err := b.db.Query(
-		`SELECT integration, role, COALESCE(peer_host,''), format, COALESCE(title,''),
-		        COALESCE(version,''), COALESCE(docs_url,''), endpoints, loaded_at
+		`SELECT integration, role, COALESCE(peer_host,''), COALESCE(edge_class,''), format, COALESCE(title,''),
+		        COALESCE(version,''), COALESCE(docs_url,''), endpoints, loaded_at,
+		        COALESCE(source,'config'), COALESCE(prev_version,''), COALESCE(prev_loaded_at,'')
 		   FROM spec_infos ORDER BY role DESC, integration ASC`, // self first
 	)
 	if err != nil {
@@ -427,8 +505,9 @@ func (b *base) ListSpecInfos() ([]model.SpecInfo, error) {
 	out := make([]model.SpecInfo, 0)
 	for rows.Next() {
 		var si model.SpecInfo
-		if err := rows.Scan(&si.Integration, &si.Role, &si.PeerHost, &si.Format, &si.Title,
-			&si.Version, &si.DocsURL, &si.Endpoints, &si.LoadedAt); err != nil {
+		if err := rows.Scan(&si.Integration, &si.Role, &si.PeerHost, &si.EdgeClass, &si.Format, &si.Title,
+			&si.Version, &si.DocsURL, &si.Endpoints, &si.LoadedAt,
+			&si.Source, &si.PrevVersion, &si.PrevLoadedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, si)
@@ -447,6 +526,61 @@ func (b *base) GetSpecDoc(integration string) (raw []byte, format string, ok boo
 		return nil, "", false, err
 	}
 	return []byte(doc), format, true, nil
+}
+
+// DeleteSpecInfo removes a contract and reports whether one was there.
+func (b *base) DeleteSpecInfo(integration string) (bool, error) {
+	res, err := b.db.Exec(b.rebind(`DELETE FROM spec_infos WHERE integration=?`), integration)
+	if err != nil {
+		return false, fmt.Errorf("delete spec info: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, nil // the driver cannot say; the row is gone either way
+	}
+	return n > 0, nil
+}
+
+// GetSpecPrevDoc returns the document this contract replaced, if one is kept.
+// Its one use is the version diff; it is stored regardless so turning the diff
+// UI on later is a switch rather than a migration.
+func (b *base) GetSpecPrevDoc(integration string) (raw []byte, ok bool, err error) {
+	var doc sql.NullString
+	err = b.db.QueryRow(b.rebind(`SELECT prev_doc FROM spec_infos WHERE integration=?`), integration).Scan(&doc)
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if !doc.Valid || doc.String == "" {
+		return nil, false, nil
+	}
+	return []byte(doc.String), true, nil
+}
+
+// readSpecForReplace loads what an upload is about to displace, inside the
+// caller's transaction.
+func readSpecForReplace(q interface {
+	QueryRow(string, ...any) *sql.Row
+}, rebind func(string) string, integration string) (UploadedSpecPrevious, error) {
+	var (
+		doc, version, loadedAt sql.NullString
+		prev                   UploadedSpecPrevious
+	)
+	err := q.QueryRow(rebind(`SELECT doc, COALESCE(version,''), loaded_at FROM spec_infos WHERE integration=?`),
+		integration).Scan(&doc, &version, &loadedAt)
+	if err == sql.ErrNoRows {
+		return prev, nil
+	}
+	if err != nil {
+		return prev, err
+	}
+	prev.Existed = true
+	prev.Raw = []byte(doc.String)
+	prev.Version = version.String
+	prev.LoadedAt = loadedAt.String
+	return prev, nil
 }
 
 // listDocs is a package function (Go methods may not have type parameters).

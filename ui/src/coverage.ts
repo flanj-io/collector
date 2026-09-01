@@ -10,11 +10,16 @@
 // had looked at it.
 //
 // The rules below MIRROR processor/flanjdrift/processor.go — if that changes,
-// this must change with it, or the UI resumes lying. As of v1p1-2026-08-31:
+// this must change with it, or the UI resumes lying. As of 2026-08-31:
 //   server (inbound)  → validated iff a `self` contract is loaded (no host scoping)
-//   client (outbound) → validated iff a provider doc is loaded AND that spec is
-//                       either unscoped (`peer_host` empty → validates EVERY
-//                       outbound call) or its peer_host matches the call's
+//   client (outbound) → validated iff an UPLOADED provider contract is bound to
+//                       this call's peer_host. Binding is mandatory at upload,
+//                       so the host is the whole lookup — there is no longer an
+//                       unscoped spec that validates every outbound call (the
+//                       config `spec_path`/`peer_host` pair was removed from
+//                       CONTRACTS §8 when contracts moved into the UI). A row
+//                       with no peer_host therefore validates NOTHING, and must
+//                       never be read as covering the call in front of it
 //   mcp               → validated iff a snapshot exists for that host AND the
 //                       CALLED TOOL declares an `outputSchema` in it. A tool
 //                       without one publishes nothing to check its result
@@ -98,14 +103,15 @@ export function callCoverage(
     return specs.some((s) => s.role === 'self') ? 'checked' : 'not-checked';
   }
 
-  // Outbound. An unscoped provider spec validates EVERY outbound call, which is
-  // the config-file `spec_path` without `peer_host` — still supported, so the
-  // UI must not report those calls as unchecked.
+  // Outbound. Uploaded contracts bind to exactly one host, so coverage is a
+  // host match and nothing else. An unbound row (only reachable from a store
+  // written before uploads existed) validates nothing and is not coverage.
   return specs.some(
     (s) =>
       s.role !== 'self' &&
       s.format !== 'mcp' &&
-      (!s.peer_host || s.peer_host === call.peer_host)
+      !!s.peer_host &&
+      s.peer_host === call.peer_host
   )
     ? 'checked'
     : 'not-checked';

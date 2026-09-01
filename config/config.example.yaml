@@ -12,9 +12,10 @@
 # NO TARGET LIST IS CONFIGURED. Integration edges are auto-discovered from
 # observed traffic, keyed by (peer.host, direction), and classified external vs
 # internal — only external edges are surfaced on the UI Edges overview / GET
-# /api/edges. Drift detection is an OPTIONAL enhancer: a locally-loaded spec validates every
-# outbound call, or only one edge when `peer_host` scopes it. With no spec the collector still
-# captures, redacts, and discovers edges.
+# /api/edges. Drift detection is an OPTIONAL enhancer: contracts are UPLOADED in
+# the UI, each bound to one provider host, and validate that host's outbound
+# calls. With no contract uploaded the collector still captures, redacts, and
+# discovers edges — those calls are captured, not validated, and the UI says so.
 #
 # Every key here is frozen in contracts/CONTRACTS.md §8.
 #
@@ -62,16 +63,20 @@ processors:
   # The floor is always on; the only knob is `enable_ip: true` (optional IPv4/IPv6 rule, off by default).
   flanjredaction: {}
 
-  # OPTIONAL drift enhancer. Omit the whole block (or leave spec_path empty) to run
-  # capture + edge discovery with no detection. When a spec IS loaded it validates every
-  # outbound call, or only the edge named by peer_host.
+  # The drift detector. PROVIDER CONTRACTS ARE NOT CONFIGURED HERE — upload them
+  # in the UI (Contracts → Add contract), where each binds to exactly one
+  # provider host and is stored locally. The processor reads them from the store
+  # at runtime, so an upload starts validating within a minute, with no restart.
+  #
+  # An uploaded contract never leaves this collector.
+  #
+  # Keep the processor in the pipeline even with nothing uploaded: it stamps
+  # flanj.call.id, which capture and edge discovery depend on.
   flanjdrift:
-    integration_id: acme-payments # OPTIONAL — labels findings from this spec
-    spec_path: /etc/flanj/spec-v1.yaml # OPTIONAL — empty disables live-vs-spec (validates OUTBOUND calls)
-    spec_v2_path: /etc/flanj/spec-v2.yaml # optional — enables the version-diff finding
-    peer_host: api.acme.test # optional — scope this spec to one discovered edge by host
+    integration_id: acme-payments # OPTIONAL — read by the UI extension
     # The contract YOU publish as a provider: validates your INBOUND responses so
-    # providers see their own drift, not just their dependencies'.
+    # providers see their own drift, not just their dependencies'. Still config —
+    # it is one document per deployment, not one per vendor.
     # self_spec_path: /etc/flanj/self-spec.yaml # OPTIONAL — empty disables self validation
     #                                               # (mount your own spec; the image bakes none)
     # self_integration_id: self # optional — labels self findings (default "self"; must differ from integration_id)

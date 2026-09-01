@@ -516,3 +516,22 @@ describe('flag sheet, DESCRIPTION variant (§2.7.4)', () => {
     );
   });
 });
+
+describe('the Overview headline distinguishes servers that share a name', () => {
+  // REGRESSION: the live stack runs two MCP servers publishing the SAME
+  // serverInfo.name, so Overview rendered two byte-identical health lines and
+  // the owner reasonably read it as a duplicate.
+  it('two servers with one name produce two different lines', () => {
+    const http = mcpHeadline({ name: 'acme-tools-mcp', version: '1.2.0', origin: 'mcp.acme.test' }, [], () => '');
+    const stdio = mcpHeadline({ name: 'acme-tools-mcp', version: '1.2.0', origin: 'stdio' }, [], () => '');
+    expect(http.text).toBe('Server: acme-tools-mcp v1.2.0 · mcp.acme.test. You: no drift detected.');
+    expect(stdio.text).toBe('Server: acme-tools-mcp v1.2.0 · stdio. You: no drift detected.');
+    expect(http.text).not.toBe(stdio.text);
+  });
+
+  it('a server with no origin reads exactly as before', () => {
+    expect(mcpHeadline({ name: 'acme-tools-mcp', version: '1.2.0' }, [], () => '').text).toBe(
+      'Server: acme-tools-mcp v1.2.0. You: no drift detected.'
+    );
+  });
+});

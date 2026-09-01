@@ -34,6 +34,15 @@ const (
 // findings unique index, so there is no cycle.
 const pgLockNSCallPin int32 = 0x76696e66 // "vinf"
 
+// pgLockNSSpecUpload is the namespace of the per-contract advisory xact lock
+// taken by PutUploadedSpec: pg_advisory_xact_lock(pgLockNSSpecUpload,
+// hashtext(integration)). Two operators replacing the same contract at once
+// would otherwise interleave the read of the current document and the write
+// that displaces it, and one of them would lose the previous document the
+// version diff needs. A DIFFERENT namespace from call pinning, so a busy
+// ingest never queues behind an upload or vice versa.
+const pgLockNSSpecUpload int32 = 0x73706563 // "spec"
+
 // postgresStore is the shared external backend: N collector pods write to one
 // database concurrently. There is no process-level mutex — every write path is
 // a single atomic statement or a short transaction, and eviction/DDL/migration
@@ -90,6 +99,7 @@ CREATE TABLE IF NOT EXISTS calls (
   trace_id     TEXT,
   byte_size    BIGINT NOT NULL,
   pinned       INTEGER NOT NULL DEFAULT 0,
+  drifted      INTEGER NOT NULL DEFAULT 0,
   promoted_at  TEXT,
   doc          TEXT NOT NULL
 );
@@ -124,13 +134,18 @@ CREATE TABLE IF NOT EXISTS spec_infos (
   integration  TEXT PRIMARY KEY,
   role         TEXT NOT NULL DEFAULT 'provider',
   peer_host    TEXT,
+  edge_class   TEXT,
   format       TEXT NOT NULL,
   title        TEXT,
   version      TEXT,
   docs_url     TEXT,
   endpoints    INTEGER NOT NULL DEFAULT 0,
   loaded_at    TEXT NOT NULL,
-  doc          TEXT NOT NULL
+  doc          TEXT NOT NULL,
+  source       TEXT NOT NULL DEFAULT 'config',
+  prev_doc     TEXT,
+  prev_version TEXT,
+  prev_loaded_at TEXT
 );
 CREATE TABLE IF NOT EXISTS settings (
   key          TEXT PRIMARY KEY,
@@ -140,6 +155,18 @@ CREATE TABLE IF NOT EXISTS settings (
 CREATE INDEX IF NOT EXISTS idx_calls_pinned_seq ON calls(pinned, seq);
 CREATE INDEX IF NOT EXISTS idx_findings_source ON findings(source_call_id);
 CREATE INDEX IF NOT EXISTS idx_calls_captured_edge ON calls(captured_at, peer_host, direction);
+
+-- Widening: CREATE TABLE IF NOT EXISTS leaves an existing table alone, so
+-- columns added after spec_infos first shipped (contract provenance, and the
+-- one previous document kept on replace) need an explicit ALTER. Additive and
+-- idempotent, so this runs blind on every start. The sqlite backend does the
+-- same via specInfoAddedColumns, which has no IF NOT EXISTS to lean on.
+ALTER TABLE spec_infos ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'config';
+ALTER TABLE spec_infos ADD COLUMN IF NOT EXISTS prev_doc TEXT;
+ALTER TABLE spec_infos ADD COLUMN IF NOT EXISTS prev_version TEXT;
+ALTER TABLE spec_infos ADD COLUMN IF NOT EXISTS prev_loaded_at TEXT;
+ALTER TABLE spec_infos ADD COLUMN IF NOT EXISTS edge_class TEXT;
+ALTER TABLE calls ADD COLUMN IF NOT EXISTS drifted INTEGER NOT NULL DEFAULT 0;
 `
 	tx, err := p.db.Begin()
 	if err != nil {
@@ -282,6 +309,20 @@ func (p *postgresStore) InsertFinding(f model.Finding) error {
 	)
 	if err != nil {
 		return fmt.Errorf("insert finding: %w", err)
+	}
+	// mark-on-finding: THIS call drifted, whether or not its signature is new.
+	// Distinct from the pin, which marks the ONE representative call kept
+	// reproducible — drift is a property of every call that produced a finding,
+	// and losing the repeats is what forced the UI to guess per endpoint and
+	// relabel conforming neighbours. Inside the transaction so it lands with
+	// the finding or not at all.
+	if sourceCallID != nil && f.Kind == model.KindLiveVsSpec {
+		if _, err := tx.Exec(p.rebind(`SELECT pg_advisory_xact_lock(?, hashtext(?))`), pgLockNSCallPin, *sourceCallID); err != nil {
+			return fmt.Errorf("insert finding: lock: %w", err)
+		}
+		if _, err := tx.Exec(p.rebind(`UPDATE calls SET drifted=1 WHERE id=?`), *sourceCallID); err != nil {
+			return fmt.Errorf("mark call drifted: %w", err)
+		}
 	}
 	if n, _ := res.RowsAffected(); n > 0 {
 		// First occurrence — pin + drift attribution commit atomically with the
@@ -438,19 +479,47 @@ func (p *postgresStore) PutSpecInfo(info model.SpecInfo, rawSpec []byte) error {
 		role = model.SpecRoleProvider
 	}
 	_, err := p.db.Exec(p.rebind(
-		`INSERT INTO spec_infos (integration, role, peer_host, format, title, version, docs_url, endpoints, loaded_at, doc)
-		   VALUES (?,?,?,?,?,?,?,?,?,?)
+		`INSERT INTO spec_infos (integration, role, peer_host, edge_class, format, title, version, docs_url, endpoints, loaded_at, doc)
+		   VALUES (?,?,?,?,?,?,?,?,?,?,?)
 		 ON CONFLICT (integration) DO UPDATE SET
-		   role=excluded.role, peer_host=excluded.peer_host, format=excluded.format, title=excluded.title,
+		   role=excluded.role, peer_host=excluded.peer_host, edge_class=excluded.edge_class, format=excluded.format, title=excluded.title,
 		   version=excluded.version, docs_url=excluded.docs_url, endpoints=excluded.endpoints,
 		   loaded_at=excluded.loaded_at, doc=excluded.doc`),
-		info.Integration, role, nullStr(info.PeerHost), info.Format, nullStr(info.Title),
+		info.Integration, role, nullStr(info.PeerHost), nullStr(info.EdgeClass), info.Format, nullStr(info.Title),
 		nullStr(info.Version), nullStr(info.DocsURL), info.Endpoints, info.LoadedAt, string(rawSpec),
 	)
 	if err != nil {
 		return fmt.Errorf("put spec info: %w", err)
 	}
 	return nil
+}
+
+// PutUploadedSpec writes an uploaded contract, rotating the document it
+// replaces into prev_doc. One transaction, and — because N pods may share this
+// database — a row lock, so two operators replacing the same contract at once
+// cannot interleave the read and the write into a lost previous document.
+func (p *postgresStore) PutUploadedSpec(info model.SpecInfo, rawSpec []byte) (UploadedSpecPrevious, error) {
+	var prev UploadedSpecPrevious
+	tx, err := p.db.Begin()
+	if err != nil {
+		return prev, fmt.Errorf("put uploaded spec: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(p.rebind(`SELECT pg_advisory_xact_lock(?, hashtext(?))`), pgLockNSSpecUpload, info.Integration); err != nil {
+		return prev, fmt.Errorf("put uploaded spec: lock: %w", err)
+	}
+	prev, err = readSpecForReplace(tx, p.rebind, info.Integration)
+	if err != nil {
+		return UploadedSpecPrevious{}, fmt.Errorf("put uploaded spec: read previous: %w", err)
+	}
+	if err := execUploadedSpec(tx, p.rebind, info, rawSpec, prev); err != nil {
+		return UploadedSpecPrevious{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return UploadedSpecPrevious{}, fmt.Errorf("put uploaded spec: commit: %w", err)
+	}
+	return prev, nil
 }
 
 // compile-time assertion: the postgres backend satisfies the store surface.

@@ -20,6 +20,7 @@ type fakeStore struct {
 	// seeded spec rows (config→edge linkage for the boot migration).
 	edges     []model.Edge
 	specInfos []model.SpecInfo
+	specDocs  map[string][]byte
 	// afterPut, when set, runs (unlocked) right after a PutSetting write —
 	// tests use it to simulate a concurrent writer clobbering the key.
 	afterPut func(key, value string)
@@ -32,6 +33,7 @@ func newFakeStore() *fakeStore {
 		calls:    map[string]model.RedactedCall{},
 		findings: map[string]model.Finding{},
 		settings: map[string]string{},
+		specDocs: map[string][]byte{},
 	}
 }
 
@@ -107,7 +109,60 @@ func (f *fakeStore) ListSpecInfos() ([]model.SpecInfo, error) {
 	defer f.mu.Unlock()
 	return append([]model.SpecInfo(nil), f.specInfos...), nil
 }
-func (f *fakeStore) GetSpecDoc(string) ([]byte, string, bool, error)    { return nil, "", false, nil }
+func (f *fakeStore) GetSpecDoc(integration string) ([]byte, string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	doc, ok := f.specDocs[integration]
+	if !ok {
+		return nil, "", false, nil
+	}
+	return doc, model.SpecFormatOpenAPI, true, nil
+}
+
+// PutUploadedSpec mirrors the real backends' N=2 rotation: the document an
+// upload displaces is returned and kept as the single previous.
+func (f *fakeStore) PutUploadedSpec(si model.SpecInfo, raw []byte) (store.UploadedSpecPrevious, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.specDocs == nil {
+		f.specDocs = map[string][]byte{}
+	}
+	var prev store.UploadedSpecPrevious
+	for i, cur := range f.specInfos {
+		if cur.Integration != si.Integration {
+			continue
+		}
+		prev = store.UploadedSpecPrevious{
+			Existed:  true,
+			Raw:      f.specDocs[si.Integration],
+			Version:  cur.Version,
+			LoadedAt: cur.LoadedAt,
+		}
+		si.PrevVersion = cur.Version
+		si.PrevLoadedAt = cur.LoadedAt
+		f.specInfos[i] = si
+		f.specDocs[si.Integration] = raw
+		return prev, nil
+	}
+	f.specInfos = append(f.specInfos, si)
+	f.specDocs[si.Integration] = raw
+	return prev, nil
+}
+
+func (f *fakeStore) DeleteSpecInfo(integration string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, cur := range f.specInfos {
+		if cur.Integration != integration {
+			continue
+		}
+		f.specInfos = append(f.specInfos[:i], f.specInfos[i+1:]...)
+		delete(f.specDocs, integration)
+		return true, nil
+	}
+	return false, nil
+}
+
 func (f *fakeStore) Stats() (int, int64, error)                         { return len(f.calls), 0, nil }
 func (f *fakeStore) Counts() (int, int, error)                          { return len(f.calls), len(f.findings), nil }
 func (f *fakeStore) GetSetting(key string) (string, bool, error) {

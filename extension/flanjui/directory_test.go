@@ -114,109 +114,105 @@ func TestDirectoryPullMergesOverSeed(t *testing.T) {
 	}
 }
 
-// TestConfigNameBootMigration: provider_display_name migrates into the KV as a
-// source `config` record keyed by the drift-target edge's registrable domain
-// (spec_infos linkage); a `user` record is NEVER overwritten; a re-run with a
-// changed YAML value refreshes the `config` record.
-func TestConfigNameBootMigration(t *testing.T) {
+// TestContractNameTier: the contract UPLOADED for a domain names its edges, in
+// the provider's own words (`info.title`). This is the tier that replaced
+// `config` when `spec_path` was removed — the legacy YAML name could not say
+// WHICH edge it meant, and an upload says both at once.
+func TestContractNameTier(t *testing.T) {
 	r := newRig(t)
-	r.ext.cfg.ProviderDisplayName = "Acme Payments"
 	r.start(t)
-	_ = r.st.PutSpecInfo(model.SpecInfo{Integration: "acme-payments", Role: "provider", PeerHost: "api.zzguava.dev"}, nil)
-
-	r.ext.maybeMigrateNames(r.st)
-	names, err := loadEdgeNames(r.st)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rec, ok := names["zzguava.dev"]
-	if !ok || rec.Name != "Acme Payments" || rec.Source != nameSourceConfig {
-		t.Fatalf("migrated record = %+v ok=%v, want source config", rec, ok)
-	}
-
-	// A changed YAML value refreshes the config record on re-run (idempotent
-	// otherwise — migrateConfigNames is the once-per-boot body).
-	r.ext.cfg.ProviderDisplayName = "Acme Pay GmbH"
-	r.ext.migrateConfigNames(r.st)
-	names, _ = loadEdgeNames(r.st)
-	if rec := names["zzguava.dev"]; rec.Name != "Acme Pay GmbH" || rec.Source != nameSourceConfig {
-		t.Fatalf("refreshed record = %+v, want the new YAML value", rec)
-	}
-
-	// A user record is never touched by the migration.
-	if err := putEdgeName(r.st, "zzguava.dev", "Our PSP", nameSourceUser); err != nil {
-		t.Fatal(err)
-	}
-	r.ext.cfg.ProviderDisplayName = "Yet Another Name"
-	r.ext.migrateConfigNames(r.st)
-	names, _ = loadEdgeNames(r.st)
-	if rec := names["zzguava.dev"]; rec.Name != "Our PSP" || rec.Source != nameSourceUser {
-		t.Fatalf("user record overwritten by migration: %+v", rec)
-	}
-}
-
-// TestConfigNameMigrationSkipsUnderivableLinkage: with no spec_infos row for
-// the configured integration the linkage is NOT derivable — nothing is
-// invented, nothing is written, and (read-time equivalence) the config tier
-// resolves nowhere in the listing either.
-func TestConfigNameMigrationSkipsUnderivableLinkage(t *testing.T) {
-	r := newRig(t)
-	r.ext.cfg.ProviderDisplayName = "Acme Payments"
-	r.start(t)
+	_ = r.st.PutSpecInfo(model.SpecInfo{
+		Integration: "api-zzguava-dev", Role: model.SpecRoleProvider,
+		Format: model.SpecFormatOpenAPI, PeerHost: "api.zzguava.dev",
+		Title: "Guava Billing API", Source: model.SpecSourceUpload,
+	}, nil)
 	seedOutboundEdge(r, "api.zzguava.dev")
 
-	before := r.st.settingsSnapshot()
-	r.ext.maybeMigrateNames(r.st)
-	after := r.st.settingsSnapshot()
-	if len(before) != len(after) {
-		t.Fatalf("underivable linkage wrote settings: %v -> %v", before, after)
-	}
-	if row := edgeRowFor(t, r, "api.zzguava.dev"); row["name_source"] != "auto" {
-		t.Errorf("read-time config tier resolved without a linkage: %v", row)
+	row := edgeRowFor(t, r, "api.zzguava.dev")
+	if row["display_name"] != "Guava Billing API" || row["name_source"] != "contract" {
+		t.Fatalf("row = %v, want the contract's title at source `contract`", row)
 	}
 }
 
-// TestConfigNameReadTimeEquivalence: the listing is IDENTICAL whether the
-// migration ran or not — the read-time fallback uses the same linkage.
-func TestConfigNameReadTimeEquivalence(t *testing.T) {
+// TestContractNameIsDomainWide: contract BINDING is host-level (subdomains
+// routinely run different APIs) but NAMING is domain-level (a name describes
+// the organisation). One upload therefore names every edge under the domain,
+// which is what makes a fifty-provider estate legible after fifty uploads.
+func TestContractNameIsDomainWide(t *testing.T) {
 	r := newRig(t)
-	r.ext.cfg.ProviderDisplayName = "Acme Payments"
 	r.start(t)
-	_ = r.st.PutSpecInfo(model.SpecInfo{Integration: "acme-payments", Role: "provider", PeerHost: "api.zzguava.dev"}, nil)
+	_ = r.st.PutSpecInfo(model.SpecInfo{
+		Integration: "api-zzguava-dev", Role: model.SpecRoleProvider,
+		Format: model.SpecFormatOpenAPI, PeerHost: "api.zzguava.dev",
+		Title: "Guava Billing API", Source: model.SpecSourceUpload,
+	}, nil)
+	seedOutboundEdge(r, "api.zzguava.dev")
+	seedOutboundEdge(r, "api-eu.zzguava.dev")
+
+	sibling := edgeRowFor(t, r, "api-eu.zzguava.dev")
+	if sibling["display_name"] != "Guava Billing API" || sibling["name_source"] != "contract" {
+		t.Errorf("sibling host under the same domain = %v, want the same name", sibling)
+	}
+}
+
+// TestUserNameBeatsContractName: a rename is the more specific act, so it wins.
+func TestUserNameBeatsContractName(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	_ = r.st.PutSpecInfo(model.SpecInfo{
+		Integration: "api-zzguava-dev", Role: model.SpecRoleProvider,
+		Format: model.SpecFormatOpenAPI, PeerHost: "api.zzguava.dev",
+		Title: "Guava Billing API", Source: model.SpecSourceUpload,
+	}, nil)
+	seedOutboundEdge(r, "api.zzguava.dev")
+	if err := putEdgeName(r.st, "zzguava.dev", "Guava (ours)", nameSourceUser); err != nil {
+		t.Fatal(err)
+	}
+
+	row := edgeRowFor(t, r, "api.zzguava.dev")
+	if row["display_name"] != "Guava (ours)" || row["name_source"] != "user" {
+		t.Errorf("row = %v, want the operator's own name to win", row)
+	}
+}
+
+// TestSelfContractNamesNothing: the contract WE publish describes our own API,
+// not a provider's. Letting it name an outbound edge would put the org's own
+// name on somebody else's row.
+func TestSelfContractNamesNothing(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	_ = r.st.PutSpecInfo(model.SpecInfo{
+		Integration: "self", Role: model.SpecRoleSelf, Format: model.SpecFormatOpenAPI,
+		PeerHost: "api.zzguava.dev", Title: "Our Public API", Source: model.SpecSourceConfig,
+	}, nil)
 	seedOutboundEdge(r, "api.zzguava.dev")
 
-	pre := edgeRowFor(t, r, "api.zzguava.dev")
-	if pre["display_name"] != "Acme Payments" || pre["name_source"] != "config" {
-		t.Fatalf("pre-migration row = %v", pre)
-	}
-	r.ext.maybeMigrateNames(r.st)
-	post := edgeRowFor(t, r, "api.zzguava.dev")
-	if post["display_name"] != pre["display_name"] || post["name_source"] != pre["name_source"] {
-		t.Fatalf("migration changed the resolved output: %v -> %v", pre, post)
-	}
-
-	// A REDACTABLE YAML value: the read-time path applies the same redaction
-	// floor the migration applies before persist, so the resolved name is
-	// byte-identical before and after the migration — and the raw value never
-	// renders.
-	const pan = "4242424242424242"
-	r2 := newRig(t)
-	r2.ext.cfg.ProviderDisplayName = "Acme " + pan + " Payments"
-	r2.start(t)
-	_ = r2.st.PutSpecInfo(model.SpecInfo{Integration: "acme-payments", Role: "provider", PeerHost: "api.zzguava.dev"}, nil)
-	seedOutboundEdge(r2, "api.zzguava.dev")
-
-	pre2 := edgeRowFor(t, r2, "api.zzguava.dev")
-	preName, _ := pre2["display_name"].(string)
-	if pre2["name_source"] != "config" || strings.Contains(preName, pan) || !strings.Contains(preName, "⟦REDACTED:") {
-		t.Fatalf("pre-migration read-time config name not redacted: %v", pre2)
-	}
-	r2.ext.maybeMigrateNames(r2.st)
-	post2 := edgeRowFor(t, r2, "api.zzguava.dev")
-	if post2["display_name"] != pre2["display_name"] || post2["name_source"] != pre2["name_source"] {
-		t.Fatalf("redacted config name differs across the migration: %v -> %v", pre2, post2)
+	row := edgeRowFor(t, r, "api.zzguava.dev")
+	if row["name_source"] == "contract" {
+		t.Errorf("a SELF contract named an outbound edge: %v", row)
 	}
 }
+
+// TestContractNamePassesTheRedactionFloor: an uploaded document is
+// operator-supplied text like a typed rename, so its title goes through the same
+// floor before it can render. A title the floor consumes entirely names nothing.
+func TestContractNamePassesTheRedactionFloor(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	_ = r.st.PutSpecInfo(model.SpecInfo{
+		Integration: "api-zzguava-dev", Role: model.SpecRoleProvider,
+		Format: model.SpecFormatOpenAPI, PeerHost: "api.zzguava.dev",
+		Title: "4111111111111111", Source: model.SpecSourceUpload,
+	}, nil)
+	seedOutboundEdge(r, "api.zzguava.dev")
+
+	row := edgeRowFor(t, r, "api.zzguava.dev")
+	name, _ := row["display_name"].(string)
+	if strings.Contains(name, "4111111111111111") {
+		t.Errorf("a card number in info.title rendered as an edge name: %v", row)
+	}
+}
+
 
 // TestHealthZeroTrafficHonesty: a fresh zero-traffic collector fabricates
 // nothing — /api/health omits `integration` and `provider_display_name`
@@ -271,5 +267,92 @@ func TestHealthZeroTrafficHonesty(t *testing.T) {
 	_, out, _ = r3.do(t, http.MethodGet, "/api/health", nil)
 	if out["integration"] != "acme-payments" || out["provider_display_name"] != "Acme Payments" {
 		t.Errorf("a finding must unlock the provider fields: %v", out)
+	}
+}
+
+// TestMcpSnapshotNamesNoEdge: an MCP snapshot is a provider row with a peer_host
+// and a title, so it looks like a contract to a careless filter — but its title
+// is the SERVER's name, not the organisation's, and mcp.acme.test shares a
+// registrable domain with api.acme.test. Letting it through would let an
+// observed server name win the whole domain by sort order.
+func TestMcpSnapshotNamesNoEdge(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	_ = r.st.PutSpecInfo(model.SpecInfo{
+		Integration: "acme-tools", Role: model.SpecRoleProvider, Format: model.SpecFormatMCP,
+		PeerHost: "mcp.zzguava.dev", Title: "acme-tools-mcp", Source: model.SpecSourceObserved,
+	}, nil)
+	seedOutboundEdge(r, "api.zzguava.dev")
+
+	row := edgeRowFor(t, r, "api.zzguava.dev")
+	if row["name_source"] == "contract" {
+		t.Errorf("an MCP snapshot named a REST edge on the shared domain: %v", row)
+	}
+}
+
+// TestHostWithOwnContractKeepsItsOwnName: the domain-wide rule above must not
+// reach a host that has a contract of its OWN.
+//
+// BUG (tiered-lane QA walk, 2026-09-01): an MCP server at `mcp.zzguava.dev`
+// carrying its own `tools/list` contract rendered as "Guava Billing API" on
+// Overview — the title of the OpenAPI document uploaded for the sibling host
+// `api.zzguava.dev` — while the Contracts tab called the same server
+// `zzguava-tools-mcp`. Two providers in one graph became indistinguishable by
+// name, and one of them was named after an API it does not serve.
+//
+// Domain-wide naming exists to spare an operator fifty renames; it was never
+// meant to overrule the provider's own words about a specific host.
+func TestHostWithOwnContractKeepsItsOwnName(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	_ = r.st.PutSpecInfo(model.SpecInfo{
+		Integration: "api-zzguava-dev", Role: model.SpecRoleProvider,
+		Format: model.SpecFormatOpenAPI, PeerHost: "api.zzguava.dev",
+		Title: "Guava Billing API", Source: model.SpecSourceUpload,
+	}, nil)
+	_ = r.st.PutSpecInfo(model.SpecInfo{
+		Integration: "zzguava-tools", Role: model.SpecRoleProvider,
+		Format: model.SpecFormatMCP, PeerHost: "mcp.zzguava.dev",
+		Title: "zzguava-tools-mcp", Source: model.SpecSourceObserved,
+	}, nil)
+	seedOutboundEdge(r, "api.zzguava.dev")
+	seedOutboundEdge(r, "mcp.zzguava.dev")
+
+	mcp := edgeRowFor(t, r, "mcp.zzguava.dev")
+	if mcp["display_name"] != "zzguava-tools-mcp" || mcp["name_source"] != "contract" {
+		t.Errorf("MCP host = %v, want its OWN contract's name, not the sibling's", mcp)
+	}
+	// The host the document was actually uploaded for is unaffected.
+	api := edgeRowFor(t, r, "api.zzguava.dev")
+	if api["display_name"] != "Guava Billing API" {
+		t.Errorf("uploaded host = %v, want the uploaded title", api)
+	}
+	// And a THIRD host with no contract of its own still inherits the domain
+	// name — the fifty-provider legibility rule is intact.
+	seedOutboundEdge(r, "api-eu.zzguava.dev")
+	sibling := edgeRowFor(t, r, "api-eu.zzguava.dev")
+	if sibling["display_name"] != "Guava Billing API" {
+		t.Errorf("contract-less sibling = %v, want the domain-wide name", sibling)
+	}
+}
+
+// TestUserRenameStillBeatsAHostsOwnContract: precedence order is unchanged —
+// user > contract, whichever contract resolved.
+func TestUserRenameStillBeatsAHostsOwnContract(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	_ = r.st.PutSpecInfo(model.SpecInfo{
+		Integration: "zzguava-tools", Role: model.SpecRoleProvider,
+		Format: model.SpecFormatMCP, PeerHost: "mcp.zzguava.dev",
+		Title: "zzguava-tools-mcp", Source: model.SpecSourceObserved,
+	}, nil)
+	seedOutboundEdge(r, "mcp.zzguava.dev")
+	if err := putEdgeName(r.st, "zzguava.dev", "Guava (ours)", nameSourceUser); err != nil {
+		t.Fatal(err)
+	}
+
+	row := edgeRowFor(t, r, "mcp.zzguava.dev")
+	if row["display_name"] != "Guava (ours)" || row["name_source"] != "user" {
+		t.Errorf("row = %v, want the operator's own name to win", row)
 	}
 }

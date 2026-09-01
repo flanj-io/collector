@@ -1,6 +1,7 @@
 package store
 
 import (
+	"strings"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -67,6 +68,7 @@ CREATE TABLE IF NOT EXISTS calls (
   trace_id     TEXT,
   byte_size    INTEGER NOT NULL,
   pinned       INTEGER NOT NULL DEFAULT 0,
+  drifted      INTEGER NOT NULL DEFAULT 0,
   promoted_at  TEXT,
   doc          TEXT NOT NULL
 );
@@ -101,13 +103,18 @@ CREATE TABLE IF NOT EXISTS spec_infos (
   integration  TEXT PRIMARY KEY,
   role         TEXT NOT NULL DEFAULT 'provider',
   peer_host    TEXT,
+  edge_class   TEXT,
   format       TEXT NOT NULL,
   title        TEXT,
   version      TEXT,
   docs_url     TEXT,
   endpoints    INTEGER NOT NULL DEFAULT 0,
   loaded_at    TEXT NOT NULL,
-  doc          TEXT NOT NULL
+  doc          TEXT NOT NULL,
+  source       TEXT NOT NULL DEFAULT 'config',
+  prev_doc     TEXT,
+  prev_version TEXT,
+  prev_loaded_at TEXT
 );
 CREATE TABLE IF NOT EXISTS settings (
   key          TEXT PRIMARY KEY,
@@ -123,7 +130,41 @@ CREATE INDEX IF NOT EXISTS idx_calls_captured_edge ON calls(captured_at, peer_ho
 	if err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
+	// CREATE TABLE IF NOT EXISTS never widens a table that already exists, so
+	// columns added after a database was first created need an explicit ALTER.
+	// SQLite has no ADD COLUMN IF NOT EXISTS: run it and treat "duplicate
+	// column" as success, which makes this idempotent and safe on every start.
+	for _, col := range specInfoAddedColumns {
+		if _, err := s.db.Exec(`ALTER TABLE spec_infos ADD COLUMN ` + col); err != nil &&
+			!strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("migrate spec_infos: add %s: %w", col, err)
+		}
+	}
+	// calls.drifted — same additive widening (see callsAddedColumns).
+	for _, col := range callsAddedColumns {
+		if _, err := s.db.Exec(`ALTER TABLE calls ADD COLUMN ` + col); err != nil &&
+			!strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("migrate calls: add %s: %w", col, err)
+		}
+	}
 	return nil
+}
+
+// specInfoAddedColumns are the spec_infos columns introduced after the table
+// shipped — contract provenance, and the one previous document kept on replace.
+// Additive only: widening is the whole reason this list can be applied blind.
+// callsAddedColumns are the calls columns introduced after the table shipped.
+// `drifted` records that THIS call produced a finding — see model.RedactedCall.
+var callsAddedColumns = []string{
+	`drifted INTEGER NOT NULL DEFAULT 0`,
+}
+
+var specInfoAddedColumns = []string{
+	`edge_class TEXT`,
+	`source TEXT NOT NULL DEFAULT 'config'`,
+	`prev_doc TEXT`,
+	`prev_version TEXT`,
+	`prev_loaded_at TEXT`,
 }
 
 // InsertCall stores a RedactedCall (idempotent on id), discovers/updates the edge
@@ -238,6 +279,16 @@ func (s *sqliteStore) InsertFinding(f model.Finding) error {
 	)
 	if err != nil {
 		return fmt.Errorf("insert finding: %w", err)
+	}
+	// mark-on-finding: THIS call drifted, whether or not its signature is new.
+	// Distinct from the pin, which marks the ONE representative call kept
+	// reproducible — drift is a property of every call that produced a finding,
+	// and losing the repeats is what forced the UI to guess per endpoint and
+	// relabel conforming neighbours.
+	if sourceCallID != nil && f.Kind == model.KindLiveVsSpec {
+		if _, err := s.db.Exec(`UPDATE calls SET drifted=1 WHERE id=?`, *sourceCallID); err != nil {
+			return fmt.Errorf("mark call drifted: %w", err)
+		}
 	}
 	if n, _ := res.RowsAffected(); n > 0 {
 		if sourceCallID != nil {
@@ -369,17 +420,77 @@ func (s *sqliteStore) PutSpecInfo(info model.SpecInfo, rawSpec []byte) error {
 		role = model.SpecRoleProvider
 	}
 	_, err := s.db.Exec(
-		`INSERT INTO spec_infos (integration, role, peer_host, format, title, version, docs_url, endpoints, loaded_at, doc)
-		   VALUES (?,?,?,?,?,?,?,?,?,?)
+		`INSERT INTO spec_infos (integration, role, peer_host, edge_class, format, title, version, docs_url, endpoints, loaded_at, doc)
+		   VALUES (?,?,?,?,?,?,?,?,?,?,?)
 		 ON CONFLICT(integration) DO UPDATE SET
-		   role=excluded.role, peer_host=excluded.peer_host, format=excluded.format, title=excluded.title,
+		   role=excluded.role, peer_host=excluded.peer_host, edge_class=excluded.edge_class, format=excluded.format, title=excluded.title,
 		   version=excluded.version, docs_url=excluded.docs_url, endpoints=excluded.endpoints,
 		   loaded_at=excluded.loaded_at, doc=excluded.doc`,
-		info.Integration, role, nullStr(info.PeerHost), info.Format, nullStr(info.Title),
+		info.Integration, role, nullStr(info.PeerHost), nullStr(info.EdgeClass), info.Format, nullStr(info.Title),
 		nullStr(info.Version), nullStr(info.DocsURL), info.Endpoints, info.LoadedAt, string(rawSpec),
 	)
 	if err != nil {
 		return fmt.Errorf("put spec info: %w", err)
+	}
+	return nil
+}
+
+// PutUploadedSpec writes an uploaded contract, rotating the document it
+// replaces into prev_doc. Under the store mutex and in one transaction: a
+// half-applied replace would leave the host validating against a document its
+// recorded metadata no longer describes.
+func (s *sqliteStore) PutUploadedSpec(info model.SpecInfo, rawSpec []byte) (UploadedSpecPrevious, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var prev UploadedSpecPrevious
+	tx, err := s.db.Begin()
+	if err != nil {
+		return prev, fmt.Errorf("put uploaded spec: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	prev, err = readSpecForReplace(tx, func(q string) string { return q }, info.Integration)
+	if err != nil {
+		return UploadedSpecPrevious{}, fmt.Errorf("put uploaded spec: read previous: %w", err)
+	}
+	if err := execUploadedSpec(tx, func(q string) string { return q }, info, rawSpec, prev); err != nil {
+		return UploadedSpecPrevious{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return UploadedSpecPrevious{}, fmt.Errorf("put uploaded spec: commit: %w", err)
+	}
+	return prev, nil
+}
+// execUploadedSpec writes the row for both backends: the new document current,
+// the one it displaced kept as the single previous.
+func execUploadedSpec(tx interface {
+	Exec(string, ...any) (sql.Result, error)
+}, rebind func(string) string, info model.SpecInfo, rawSpec []byte, prev UploadedSpecPrevious) error {
+	role := info.Role
+	if role == "" {
+		role = model.SpecRoleProvider
+	}
+	source := info.Source
+	if source == "" {
+		source = model.SpecSourceUpload
+	}
+	_, err := tx.Exec(rebind(
+		`INSERT INTO spec_infos (integration, role, peer_host, edge_class, format, title, version, docs_url,
+		                         endpoints, loaded_at, doc, source, prev_doc, prev_version, prev_loaded_at)
+		   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		 ON CONFLICT(integration) DO UPDATE SET
+		   role=excluded.role, peer_host=excluded.peer_host, edge_class=excluded.edge_class, format=excluded.format, title=excluded.title,
+		   version=excluded.version, docs_url=excluded.docs_url, endpoints=excluded.endpoints,
+		   loaded_at=excluded.loaded_at, doc=excluded.doc, source=excluded.source,
+		   prev_doc=excluded.prev_doc, prev_version=excluded.prev_version,
+		   prev_loaded_at=excluded.prev_loaded_at`),
+		info.Integration, role, nullStr(info.PeerHost), nullStr(info.EdgeClass), info.Format, nullStr(info.Title),
+		nullStr(info.Version), nullStr(info.DocsURL), info.Endpoints, info.LoadedAt, string(rawSpec),
+		source, nullStr(string(prev.Raw)), nullStr(prev.Version), nullStr(prev.LoadedAt),
+	)
+	if err != nil {
+		return fmt.Errorf("put uploaded spec: %w", err)
 	}
 	return nil
 }
