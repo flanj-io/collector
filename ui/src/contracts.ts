@@ -348,3 +348,40 @@ export function contractHeading(spec: ContractSpec): string {
   const origin = contractOrigin(spec);
   return origin ? `${name} · ${origin}` : name;
 }
+
+/* ── Joining findings to the contract that produced them ───────────────── */
+
+/** The minimum a finding needs to be attributed to a contract. */
+export interface AttributableFinding {
+  integration: string;
+  source_call_id?: string | null;
+}
+
+/**
+ * Does this finding belong to this contract?
+ *
+ * HOST FIRST, integration second — and the order is the whole point.
+ *
+ * An uploaded contract's integration id is DERIVED from the host it binds to
+ * (`api.acme.test` → `api-acme-test`), because the operator is never asked for
+ * one. A finding's integration comes from the CALL, stamped by the SDK
+ * (`acme-payments`). Those two are unrelated strings for the same provider, so
+ * an integration-only join split one provider into two cards: the contract card
+ * claiming CONFORMING, and beside it a second card carrying the BREAKING
+ * finding under "No contract for this provider" — denying the contract while
+ * rendering a verdict only that contract could produce.
+ *
+ * The host is what they genuinely share. A finding reaches it through its
+ * source call. Integration stays as the fallback for CALL-LESS findings
+ * (version-diff on replace, MCP definition_change), which have no call to
+ * resolve a host from and DO carry the contract's own integration.
+ */
+export function findingBelongsToContract(
+  finding: AttributableFinding,
+  spec: ContractSpec,
+  hostOfCall: (callId: string) => string | undefined
+): boolean {
+  const callHost = finding.source_call_id ? hostOfCall(finding.source_call_id) : undefined;
+  if (callHost && spec.peer_host) return callHost === spec.peer_host;
+  return finding.integration === spec.integration;
+}

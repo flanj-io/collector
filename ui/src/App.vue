@@ -26,6 +26,7 @@ import {
   REPLACE_CONTRACT,
   contractMeta,
   contractOrigin,
+  findingBelongsToContract,
   contractsByHost,
   edgeContractLine,
   isEvidenceFor,
@@ -695,12 +696,19 @@ interface ContractCard {
 }
 
 const contractCards = computed<{ self: ContractCard[]; mcpServers: ContractCard[]; providers: ContractCard[] }>(() => {
-  const byIntegration = new Map<string, Finding[]>();
-  for (const f of [...liveFindings.value, ...mcpContractFindings.value]) {
-    const list = byIntegration.get(f.integration) || [];
-    list.push(f);
-    byIntegration.set(f.integration, list);
-  }
+  // Findings are attributed to a contract by HOST first, integration second —
+  // see findingBelongsToContract. An uploaded contract's integration is derived
+  // from its host while a finding's comes from the call, so an
+  // integration-only join split one provider into two cards.
+  const unclaimed = [...liveFindings.value, ...mcpContractFindings.value];
+  const hostOfCall = (id: string) => callsById.value[id]?.peer_host;
+  const claim = (spec: SpecInfo): Finding[] => {
+    const mine: Finding[] = [];
+    for (let i = unclaimed.length - 1; i >= 0; i--) {
+      if (findingBelongsToContract(unclaimed[i], spec, hostOfCall)) mine.unshift(...unclaimed.splice(i, 1));
+    }
+    return mine;
+  };
   const self: ContractCard[] = [];
   // MCP servers are their own KIND, not providers with an odd format: nobody
   // uploaded them, Replace/Remove do not apply, and the providers section's own
@@ -721,14 +729,23 @@ const contractCards = computed<{ self: ContractCard[]; mcpServers: ContractCard[
       name: s.title || humanize(s.integration) || s.peer_host || (s.role === 'self' ? 'Your API' : 'Provider'),
       peerHost: s.peer_host || '',
       spec: s,
-      findings: byIntegration.get(s.integration) || []
+      findings: claim(s)
     };
-    byIntegration.delete(s.integration);
     if (s.role === 'self') self.push(card);
     else if (s.format === 'mcp') mcpServers.push(card);
     else providers.push(card);
   }
-  for (const [integration, fs] of byIntegration) {
+  // Anything still unclaimed belongs to no contract we hold — an older
+  // collector's findings, or a provider whose contract was removed. It keeps
+  // its own card, because dropping a finding on the floor is worse than an
+  // imperfect heading.
+  const leftover = new Map<string, Finding[]>();
+  for (const f of unclaimed) {
+    const list = leftover.get(f.integration) || [];
+    list.push(f);
+    leftover.set(f.integration, list);
+  }
+  for (const [integration, fs] of leftover) {
     providers.push({ key: 'find-' + integration, name: humanize(integration) || integration, peerHost: '', spec: null, findings: fs });
   }
   return { self, mcpServers, providers };

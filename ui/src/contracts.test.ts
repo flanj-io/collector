@@ -9,6 +9,7 @@ import {
   bindingTiming,
   contractHeading,
   contractOrigin,
+  findingBelongsToContract,
   hasBindingWarning,
   endpointCount,
   provenanceWord,
@@ -371,5 +372,54 @@ describe('rollCall counts MCP from contracts, not edges', () => {
     // api.initech.test has a contract but no edge; it must not inflate the total.
     const extra = uploaded('api.initech.test');
     expect(rollCall(edges, [rest, extra, httpMcp], new Set(['mcp.acme.test']))).toContain('1 of 2 providers');
+  });
+});
+
+describe('findingBelongsToContract', () => {
+  // REGRESSION, found by the blind QA walk on the sqlite lane: one provider
+  // rendered as TWO cards — the uploaded contract showing CONFORMING, and
+  // beside it a second card carrying the BREAKING finding under "No contract
+  // for this provider". The card denied the contract while rendering a verdict
+  // only that contract could produce.
+  //
+  // Cause: an uploaded contract's integration is DERIVED from its host
+  // (api-acme-test) because the operator is never asked for one, while a
+  // finding's integration comes from the CALL (acme-payments). Unrelated
+  // strings for the same provider.
+  const contract: ContractSpec = {
+    integration: 'api-acme-test', role: 'provider', format: 'openapi', peer_host: 'api.acme.test'
+  };
+  const hostOf = (id: string) => (id === 'call_1' ? 'api.acme.test' : undefined);
+
+  it('joins on the HOST the two genuinely share, not the ids they do not', () => {
+    expect(findingBelongsToContract(
+      { integration: 'acme-payments', source_call_id: 'call_1' }, contract, hostOf
+    )).toBe(true);
+  });
+
+  it('a finding from another host never lands on this card', () => {
+    const other = (id: string) => (id === 'call_x' ? 'api.globex.test' : undefined);
+    expect(findingBelongsToContract(
+      { integration: 'acme-payments', source_call_id: 'call_x' }, contract, other
+    )).toBe(false);
+  });
+
+  it('a CALL-LESS finding falls back to integration — it has no host to resolve', () => {
+    // version-diff on replace, and MCP definition_change, carry the contract's
+    // OWN integration and no source call.
+    expect(findingBelongsToContract(
+      { integration: 'api-acme-test', source_call_id: null }, contract, hostOf
+    )).toBe(true);
+    expect(findingBelongsToContract(
+      { integration: 'somebody-else', source_call_id: null }, contract, hostOf
+    )).toBe(false);
+  });
+
+  it('an evicted source call falls back to integration rather than vanishing', () => {
+    // The rolling window evicts unpinned calls; a finding must not silently
+    // detach from its card because its evidence aged out.
+    expect(findingBelongsToContract(
+      { integration: 'api-acme-test', source_call_id: 'gone' }, contract, hostOf
+    )).toBe(true);
   });
 });
