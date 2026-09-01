@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS calls (
   trace_id     TEXT,
   byte_size    INTEGER NOT NULL,
   pinned       INTEGER NOT NULL DEFAULT 0,
+  drifted      INTEGER NOT NULL DEFAULT 0,
   promoted_at  TEXT,
   doc          TEXT NOT NULL
 );
@@ -138,12 +139,25 @@ CREATE INDEX IF NOT EXISTS idx_calls_captured_edge ON calls(captured_at, peer_ho
 			return fmt.Errorf("migrate spec_infos: add %s: %w", col, err)
 		}
 	}
+	// calls.drifted — same additive widening (see callsAddedColumns).
+	for _, col := range callsAddedColumns {
+		if _, err := s.db.Exec(`ALTER TABLE calls ADD COLUMN ` + col); err != nil &&
+			!strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("migrate calls: add %s: %w", col, err)
+		}
+	}
 	return nil
 }
 
 // specInfoAddedColumns are the spec_infos columns introduced after the table
 // shipped — contract provenance, and the one previous document kept on replace.
 // Additive only: widening is the whole reason this list can be applied blind.
+// callsAddedColumns are the calls columns introduced after the table shipped.
+// `drifted` records that THIS call produced a finding — see model.RedactedCall.
+var callsAddedColumns = []string{
+	`drifted INTEGER NOT NULL DEFAULT 0`,
+}
+
 var specInfoAddedColumns = []string{
 	`source TEXT NOT NULL DEFAULT 'config'`,
 	`prev_doc TEXT`,
@@ -263,6 +277,16 @@ func (s *sqliteStore) InsertFinding(f model.Finding) error {
 	)
 	if err != nil {
 		return fmt.Errorf("insert finding: %w", err)
+	}
+	// mark-on-finding: THIS call drifted, whether or not its signature is new.
+	// Distinct from the pin, which marks the ONE representative call kept
+	// reproducible — drift is a property of every call that produced a finding,
+	// and losing the repeats is what forced the UI to guess per endpoint and
+	// relabel conforming neighbours.
+	if sourceCallID != nil && f.Kind == model.KindLiveVsSpec {
+		if _, err := s.db.Exec(`UPDATE calls SET drifted=1 WHERE id=?`, *sourceCallID); err != nil {
+			return fmt.Errorf("mark call drifted: %w", err)
+		}
 	}
 	if n, _ := res.RowsAffected(); n > 0 {
 		if sourceCallID != nil {

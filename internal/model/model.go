@@ -96,6 +96,16 @@ type RedactedCall struct {
 	MCPProtocolVersion string `json:"mcp_protocol_version,omitempty"`
 	// MCPSessionID is the Mcp-Session-Id when the transport exposes one.
 	MCPSessionID string `json:"mcp_session_id,omitempty"`
+	// Drifted is TRUE when THIS call produced a live-vs-spec finding. Set by the
+	// store on every finding insert, including repeat occurrences of a signature
+	// that was already recorded.
+	//
+	// It exists because the UI otherwise had to ask "has this ENDPOINT ever
+	// drifted?", which marked every call on the endpoint — including ones that
+	// conformed, and ones captured BEFORE the drift — as drifted. Drift is a
+	// property of a CALL; anything coarser is a false accusation against the
+	// provider and against the operator's own reading of their traffic.
+	Drifted bool `json:"drifted,omitempty"`
 }
 
 // Finding kinds and severities (contracts §4).

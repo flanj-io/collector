@@ -39,6 +39,10 @@ export interface RedactedCall {
   mcp_server_version?: string;
   mcp_protocol_version?: string;
   mcp_session_id?: string;
+  /** Store-owned: THIS call produced a live-vs-spec finding, set on every
+   *  occurrence. Never infer drift from the endpoint — one drifting call would
+   *  relabel every conforming call on it. */
+  drifted?: boolean;
 }
 
 export type FindingKind =

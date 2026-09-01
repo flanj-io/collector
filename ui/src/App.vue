@@ -479,27 +479,11 @@ const inboundEdges  = computed(() => edges.value.filter((e) => e.direction === '
 // index, built from the edges list already loaded for the Edges panel: one
 // resolution path, no second lookup, and never a control-plane request on a
 
-// Integration ids that label SELF-contract findings (our own API, inbound).
-const selfIntegrations = computed(
-  () => new Set(contracts.value.filter((s) => s.role === 'self').map((s) => s.integration))
-);
-
-// The drifted endpoints derived from live-vs-spec findings. A drift is
-// per-endpoint, so every call on a drifted endpoint is itself drifted — not
-// only the representative source call. Provider findings key by
-// "<integration> <METHOD ROUTE>" and match outbound calls; self findings key by
-// endpoint alone and match inbound calls (inbound calls carry the org's
-// integration id, not the self contract's label).
-const driftedEndpoints = computed(() => {
-  const provider = new Set<string>();
-  const self = new Set<string>();
-  for (const f of findings.value) {
-    if (f.kind !== 'live-vs-spec') continue;
-    if (selfIntegrations.value.has(f.integration)) self.add(f.endpoint);
-    else provider.add(`${f.integration} ${f.endpoint}`);
-  }
-  return { provider, self };
-});
+// A drift is per CALL. The signature is per-endpoint — that is how findings
+// DEDUP — but "one finding per endpoint" never meant "every call on that
+// endpoint drifted", and reading it that way relabelled conforming calls, and
+// calls captured before the drift existed. The store now records it on the
+// call (model.RedactedCall.Drifted); see isDrifted.
 
 /** Contract COVERAGE for a row — see ui/src/coverage.ts. Kept distinct from
  *  DRIFT: a call to a host with no loaded contract was captured and never
@@ -530,10 +514,23 @@ function coverageOf(c: RedactedCall): Coverage {
   return callCoverage(c, contracts.value, tools);
 }
 
+/**
+ * Did THIS call drift?
+ *
+ * Read off the call's own `drifted` flag, which the store sets when the call
+ * produced a live-vs-spec finding — on every occurrence, not just the first.
+ *
+ * It used to ask "has this ENDPOINT ever drifted?" (a set built from findings),
+ * so ONE drifting charge marked every call on `POST /v1/charges` as drifted:
+ * the conforming ones, and the ones captured before the drift existed. Same
+ * false-assurance class as CONFORMING-with-no-evidence, pointing the other way.
+ *
+ * MCP keeps its per-tool lookup: an MCP finding is per tool and the snapshot
+ * detector does not stamp calls, so that path is unchanged.
+ */
 function isDrifted(c: RedactedCall): boolean {
   if (c.transport === 'mcp') return mcpDriftedTools.value.has(`${c.integration} ${toolNameOf(c)}`);
-  if (c.direction === 'server') return driftedEndpoints.value.self.has(`${c.method} ${c.route}`);
-  return driftedEndpoints.value.provider.has(`${c.integration} ${c.method} ${c.route}`);
+  return c.drifted === true;
 }
 
 const hasExpanded = computed(() => Object.values(expanded.value).some(Boolean));

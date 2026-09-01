@@ -99,6 +99,7 @@ CREATE TABLE IF NOT EXISTS calls (
   trace_id     TEXT,
   byte_size    BIGINT NOT NULL,
   pinned       INTEGER NOT NULL DEFAULT 0,
+  drifted      INTEGER NOT NULL DEFAULT 0,
   promoted_at  TEXT,
   doc          TEXT NOT NULL
 );
@@ -163,6 +164,7 @@ ALTER TABLE spec_infos ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'co
 ALTER TABLE spec_infos ADD COLUMN IF NOT EXISTS prev_doc TEXT;
 ALTER TABLE spec_infos ADD COLUMN IF NOT EXISTS prev_version TEXT;
 ALTER TABLE spec_infos ADD COLUMN IF NOT EXISTS prev_loaded_at TEXT;
+ALTER TABLE calls ADD COLUMN IF NOT EXISTS drifted INTEGER NOT NULL DEFAULT 0;
 `
 	tx, err := p.db.Begin()
 	if err != nil {
@@ -305,6 +307,20 @@ func (p *postgresStore) InsertFinding(f model.Finding) error {
 	)
 	if err != nil {
 		return fmt.Errorf("insert finding: %w", err)
+	}
+	// mark-on-finding: THIS call drifted, whether or not its signature is new.
+	// Distinct from the pin, which marks the ONE representative call kept
+	// reproducible — drift is a property of every call that produced a finding,
+	// and losing the repeats is what forced the UI to guess per endpoint and
+	// relabel conforming neighbours. Inside the transaction so it lands with
+	// the finding or not at all.
+	if sourceCallID != nil && f.Kind == model.KindLiveVsSpec {
+		if _, err := tx.Exec(p.rebind(`SELECT pg_advisory_xact_lock(?, hashtext(?))`), pgLockNSCallPin, *sourceCallID); err != nil {
+			return fmt.Errorf("insert finding: lock: %w", err)
+		}
+		if _, err := tx.Exec(p.rebind(`UPDATE calls SET drifted=1 WHERE id=?`), *sourceCallID); err != nil {
+			return fmt.Errorf("mark call drifted: %w", err)
+		}
 	}
 	if n, _ := res.RowsAffected(); n > 0 {
 		// First occurrence — pin + drift attribution commit atomically with the

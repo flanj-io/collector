@@ -233,8 +233,14 @@ func (b *base) Close() error { return b.db.Close() }
 
 // GetCall returns the stored RedactedCall for id.
 func (b *base) GetCall(id string) (model.RedactedCall, bool, error) {
-	var doc string
-	err := b.db.QueryRow(b.rebind(`SELECT doc FROM calls WHERE id=?`), id).Scan(&doc)
+	var (
+		doc     string
+		drifted bool
+	)
+	// `drifted` is store-owned (set when the call produced a finding, including
+	// repeat occurrences), so it lives in its column and reads patch it back in
+	// — the same shape as findings' occurrence_count/last_seen.
+	err := b.db.QueryRow(b.rebind(`SELECT doc, drifted FROM calls WHERE id=?`), id).Scan(&doc, &drifted)
 	if err == sql.ErrNoRows {
 		return model.RedactedCall{}, false, nil
 	}
@@ -245,6 +251,7 @@ func (b *base) GetCall(id string) (model.RedactedCall, bool, error) {
 	if err := json.Unmarshal([]byte(doc), &c); err != nil {
 		return model.RedactedCall{}, false, err
 	}
+	c.Drifted = drifted
 	return c, true, nil
 }
 
@@ -261,8 +268,37 @@ func (b *base) GetFinding(id string) (model.Finding, bool, error) {
 }
 
 // ListCalls returns up to limit most-recent calls, newest first.
+//
+// `drifted` is store-owned and patched back in from its column: DRIFT IS A
+// PROPERTY OF THIS CALL, not of its endpoint. Reading it any coarser marked
+// every call on a drifted endpoint as drifted — conforming ones, and ones
+// captured before the drift existed.
 func (b *base) ListCalls(limit int) ([]model.RedactedCall, error) {
-	return listDocs[model.RedactedCall](b, `SELECT doc FROM calls ORDER BY seq DESC LIMIT ?`, limit)
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := b.db.Query(b.rebind(`SELECT doc, drifted FROM calls ORDER BY seq DESC LIMIT ?`), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]model.RedactedCall, 0, limit)
+	for rows.Next() {
+		var (
+			doc     string
+			drifted bool
+		)
+		if err := rows.Scan(&doc, &drifted); err != nil {
+			return nil, err
+		}
+		var c model.RedactedCall
+		if err := json.Unmarshal([]byte(doc), &c); err != nil {
+			return nil, err
+		}
+		c.Drifted = drifted
+		out = append(out, c)
+	}
+	return out, rows.Err()
 }
 
 // ListFindings returns up to limit most-recent findings, newest first.
