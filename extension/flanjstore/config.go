@@ -72,5 +72,14 @@ func (c *Config) Validate() error {
 	if c.SpecToken != "" && c.SpecEndpoint == "" {
 		return errors.New("flanjstore extension: spec_token needs spec_endpoint (a token guarding nothing is a misconfiguration, not a default)")
 	}
+	// The other direction is the dangerous one. This listener is the single
+	// deliberate exception to outbound-only/loopback, and the shipped store
+	// config reads its token from ${env:FLANJ_SPEC_TOKEN} — which expands to
+	// the empty string when unset. Binding anyway would put every uploaded
+	// contract behind no auth at all on the cluster interface, as the DEFAULT
+	// failure of the documented config. Refuse to start instead.
+	if c.SpecEndpoint != "" && c.SpecToken == "" {
+		return errors.New("flanjstore extension: spec_endpoint requires spec_token (this listener is not loopback — set FLANJ_SPEC_TOKEN, or remove spec_endpoint)")
+	}
 	return nil
 }

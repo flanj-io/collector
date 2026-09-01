@@ -39,6 +39,10 @@ extensions:
     # This is a ClusterIP-facing port like :4318, NOT the UI — the UI stays on
     # loopback.
     spec_endpoint: 0.0.0.0:5337
+    # REQUIRED whenever spec_endpoint is set — the collector refuses to start
+    # without it rather than bind this port unauthenticated. An unset env var
+    # expands to the empty string, so "forgot to set it" must not silently mean
+    # "no auth" on a port the whole namespace can reach.
     spec_token: ${env:FLANJ_SPEC_TOKEN} # shared with the fronts' flanjdrift.store_pod_token; never logged
     # --- postgres variant (BYO-DB; the store tier may then scale) -------------
     # backend: postgres

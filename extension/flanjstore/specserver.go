@@ -74,14 +74,18 @@ func (e *storeExtension) startSpecServer() error {
 // itself is never logged or echoed.
 func (e *storeExtension) authSpec(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if e.cfg.SpecToken != "" {
-			const prefix = "Bearer "
-			got := r.Header.Get("Authorization")
-			if len(got) <= len(prefix) || got[:len(prefix)] != prefix ||
-				subtle.ConstantTimeCompare([]byte(got[len(prefix):]), []byte(e.cfg.SpecToken)) != 1 {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
-				return
-			}
+		// Unconditional. An empty configured token used to skip the check
+		// entirely, which turned an unset FLANJ_SPEC_TOKEN into an open
+		// listener on the cluster interface. Config validation now refuses that
+		// combination outright; this is the second lock on the same door, and
+		// it fails CLOSED — an empty token matches no request, including one
+		// sending a bare `Bearer `.
+		const prefix = "Bearer "
+		got := r.Header.Get("Authorization")
+		if e.cfg.SpecToken == "" || len(got) <= len(prefix) || got[:len(prefix)] != prefix ||
+			subtle.ConstantTimeCompare([]byte(got[len(prefix):]), []byte(e.cfg.SpecToken)) != 1 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -101,17 +105,34 @@ func (e *storeExtension) handleSpecList(w http.ResponseWriter, _ *http.Request) 
 		e.specError(w, "list contracts", err)
 		return
 	}
-	// PROVIDER contracts only. A front validates its dependencies' traffic; the
-	// self contract is the store pod's own config and MCP snapshots are
-	// self-delivering from the traffic the front already sees. Neither has any
-	// business crossing this hop.
 	out := make([]model.SpecInfo, 0, len(infos))
 	for _, si := range infos {
-		if si.Role == model.SpecRoleProvider && si.PeerHost != "" {
+		if servableContract(si) {
 			out = append(out, si)
 		}
 	}
 	writeSpecJSON(w, map[string]any{"contracts": out})
+}
+
+// servableContract is the ONE rule for what may cross this hop, applied by the
+// list route and the doc route alike. A filter on the index and none on the
+// item is not a filter: the doc route used to pass the caller's `integration`
+// straight to a bare `SELECT ... WHERE integration=?` over the same table, so
+// `?integration=self` returned the organisation's own OpenAPI document — the
+// exact thing the list route was written to withhold.
+//
+// A front validates its dependencies' REST traffic. The self contract is the
+// store pod's own; an unbound contract names no edge; and an MCP snapshot is
+// self-delivering from the traffic the front already sees (and is not OpenAPI,
+// so the front's cache would reject it anyway). None has business here.
+//
+// The format check is load-bearing, not belt-and-braces: an MCP snapshot is
+// persisted as role=provider WITH a peer_host, so the role+host pair alone
+// never excluded one, whatever the old comment claimed.
+func servableContract(si model.SpecInfo) bool {
+	return si.Role == model.SpecRoleProvider &&
+		si.PeerHost != "" &&
+		si.Format == model.SpecFormatOpenAPI
 }
 
 // handleSpecDoc returns one raw contract document.
@@ -124,6 +145,25 @@ func (e *storeExtension) handleSpecDoc(w http.ResponseWriter, r *http.Request) {
 	integration := r.URL.Query().Get("integration")
 	if integration == "" {
 		http.Error(w, "integration is required", http.StatusBadRequest)
+		return
+	}
+	// Resolve the metadata FIRST and apply the same admission rule as the list.
+	// A withheld contract answers exactly like an absent one — a 403 here would
+	// confirm that `self` exists to anyone holding the token.
+	infos, err := st.ListSpecInfos()
+	if err != nil {
+		e.specError(w, "list contracts", err)
+		return
+	}
+	servable := false
+	for _, si := range infos {
+		if si.Integration == integration && servableContract(si) {
+			servable = true
+			break
+		}
+	}
+	if !servable {
+		http.Error(w, "no such contract", http.StatusNotFound)
 		return
 	}
 	raw, _, ok, err := st.GetSpecDoc(integration)

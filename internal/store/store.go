@@ -168,6 +168,22 @@ type execer interface {
 // holding the per-call advisory lock on postgres (see pgLockNSCallPin). The
 // store is thereby order-independent for call/finding pairs.
 func latePin(ex execer, rebind func(string) string, c model.RedactedCall) (pinned bool, err error) {
+	// Repair the per-call drift mark FIRST, and independently of whether this
+	// call still needs pinning. InsertFinding's `UPDATE calls SET drifted=1`
+	// matched no row when the finding arrived first, and nothing else ever
+	// recomputes the column — so without this the call is kept as evidence,
+	// counted as a drift on its edge, and still rendered `conforming`. Mirror
+	// InsertFinding exactly: live-vs-spec is the only kind that means THIS call
+	// departed from its contract. Idempotent (`drifted=0` guard), so a replayed
+	// call cannot double anything.
+	if _, err := ex.Exec(rebind(
+		`UPDATE calls SET drifted=1
+		  WHERE id=? AND drifted=0
+		    AND EXISTS (SELECT 1 FROM findings WHERE source_call_id=? AND kind=?)`),
+		c.ID, c.ID, model.KindLiveVsSpec,
+	); err != nil {
+		return false, fmt.Errorf("late pin: repair drifted: %w", err)
+	}
 	res, err := ex.Exec(rebind(
 		`UPDATE calls SET pinned=1
 		  WHERE id=? AND pinned=0

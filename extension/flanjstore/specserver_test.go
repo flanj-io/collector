@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 	"time"
@@ -13,6 +14,11 @@ import (
 
 	"github.com/flanj-io/collector/internal/model"
 )
+
+// testSpecToken: the endpoint refuses to bind without one, so every test that
+// drives it presents this. The unauthenticated cases are asserted explicitly in
+// TestSpecEndpointRequiresItsToken and TestSpecAuthFailsClosedOnAnEmptyToken.
+const testSpecToken = "tok_test_01"
 
 // startStorePod boots a store extension with the contract endpoint bound to an
 // ephemeral port, and returns its base URL.
@@ -71,10 +77,10 @@ func seedContract(t *testing.T, e *storeExtension, integration, host, role, form
 // metadata for the uploaded provider contracts plus their documents. This is
 // the whole tiered channel.
 func TestSpecEndpointServesProviderContracts(t *testing.T) {
-	e, base := startStorePod(t, "")
+	e, base := startStorePod(t, testSpecToken)
 	seedContract(t, e, "acme", "api.acme.test", model.SpecRoleProvider, model.SpecFormatOpenAPI, []byte("openapi: 3.0.3\n"))
 
-	code, body := get(t, base+"/internal/contracts", "")
+	code, body := get(t, base+"/internal/contracts", testSpecToken)
 	if code != http.StatusOK {
 		t.Fatalf("list status = %d, want 200", code)
 	}
@@ -91,7 +97,7 @@ func TestSpecEndpointServesProviderContracts(t *testing.T) {
 		t.Error("loaded_at missing — it is the change token the front refreshes on")
 	}
 
-	code, doc := get(t, base+"/internal/contracts/doc?integration=acme", "")
+	code, doc := get(t, base+"/internal/contracts/doc?integration=acme", testSpecToken)
 	if code != http.StatusOK {
 		t.Fatalf("doc status = %d, want 200", code)
 	}
@@ -106,13 +112,13 @@ func TestSpecEndpointServesProviderContracts(t *testing.T) {
 // from traffic the front already sees, and an unbound row cannot be keyed by
 // host — none of them may cross the hop.
 func TestSpecEndpointExposesOnlyProviderContracts(t *testing.T) {
-	e, base := startStorePod(t, "")
+	e, base := startStorePod(t, testSpecToken)
 	doc := []byte("openapi: 3.0.3\n")
 	seedContract(t, e, "acme", "api.acme.test", model.SpecRoleProvider, model.SpecFormatOpenAPI, doc)
 	seedContract(t, e, "self", "api.self.test", model.SpecRoleSelf, model.SpecFormatOpenAPI, doc)
 	seedContract(t, e, "unbound", "", model.SpecRoleProvider, model.SpecFormatOpenAPI, doc)
 
-	_, body := get(t, base+"/internal/contracts", "")
+	_, body := get(t, base+"/internal/contracts", testSpecToken)
 	var listed struct {
 		Contracts []model.SpecInfo `json:"contracts"`
 	}
@@ -156,7 +162,7 @@ func TestSpecEndpointRequiresItsToken(t *testing.T) {
 // TestSpecEndpointIsReadOnly: nothing on this listener mutates. A write verb
 // finds no route rather than a handler.
 func TestSpecEndpointIsReadOnly(t *testing.T) {
-	_, base := startStorePod(t, "")
+	_, base := startStorePod(t, testSpecToken)
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch} {
 		req, _ := http.NewRequest(method, base+"/internal/contracts", nil)
 		resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
@@ -174,12 +180,12 @@ func TestSpecEndpointIsReadOnly(t *testing.T) {
 // and the settings KV (which carries the collector key). None of it has a route
 // here — the surface is two contract reads, full stop.
 func TestSpecEndpointSurfacesNothingElse(t *testing.T) {
-	_, base := startStorePod(t, "")
+	_, base := startStorePod(t, testSpecToken)
 	for _, path := range []string{
 		"/api/calls", "/api/findings", "/api/edges", "/api/health",
 		"/internal/calls", "/internal/findings", "/internal/settings", "/",
 	} {
-		if code, _ := get(t, base+path, ""); code == http.StatusOK {
+		if code, _ := get(t, base+path, testSpecToken); code == http.StatusOK {
 			t.Errorf("%s returned 200 — the contract endpoint exposes more than contracts", path)
 		}
 	}
@@ -189,11 +195,11 @@ func TestSpecEndpointSurfacesNothingElse(t *testing.T) {
 // and its fetch is a 404, which the front reads as "gone" and drops, rather
 // than an error it would retry forever.
 func TestSpecEndpointUnknownContract(t *testing.T) {
-	_, base := startStorePod(t, "")
-	if code, _ := get(t, base+"/internal/contracts/doc?integration=nope", ""); code != http.StatusNotFound {
+	_, base := startStorePod(t, testSpecToken)
+	if code, _ := get(t, base+"/internal/contracts/doc?integration=nope", testSpecToken); code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", code)
 	}
-	if code, _ := get(t, base+"/internal/contracts/doc", ""); code != http.StatusBadRequest {
+	if code, _ := get(t, base+"/internal/contracts/doc", testSpecToken); code != http.StatusBadRequest {
 		t.Errorf("missing integration status = %d, want 400", code)
 	}
 }
@@ -227,5 +233,91 @@ func TestSpecTokenNeedsAnEndpoint(t *testing.T) {
 	cfg.SpecToken = "s3cret"
 	if err := cfg.Validate(); err == nil {
 		t.Error("spec_token with no spec_endpoint validated clean")
+	}
+}
+
+// TestSpecEndpointRefusesToBindWithoutAToken: the endpoint is the ONE
+// deliberate exception to "outbound-only, loopback UI" (Non-negotiable 5), so
+// it must fail CLOSED.
+//
+// BUG (cross-repo review, 2026-09-01): authSpec ran the bearer check only when
+// SpecToken != "", and Validate enforced the reverse direction only. The
+// shipped config/config.store.example.yaml pairs `spec_endpoint: 0.0.0.0:5337`
+// with `spec_token: ${env:FLANJ_SPEC_TOKEN}` — and an undefined env var expands
+// to the empty string — so deploying the store-pod config as shipped, without
+// exporting that variable, bound a listener on the cluster interface that
+// answered every contract request unauthenticated. The default failure mode of
+// the documented config was an open door.
+func TestSpecEndpointRefusesToBindWithoutAToken(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	cfg.DBPath = "/data/flanj.db"
+	cfg.SpecEndpoint = "0.0.0.0:5337"
+	cfg.SpecToken = ""
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("spec_endpoint with an empty spec_token validated clean — an unset " +
+			"FLANJ_SPEC_TOKEN would bind an unauthenticated listener on the cluster interface")
+	}
+}
+
+// TestSpecAuthFailsClosedOnAnEmptyToken: belt to the config braces above. Even
+// if an empty token reached the runtime, the guard must refuse rather than wave
+// callers through.
+func TestSpecAuthFailsClosedOnAnEmptyToken(t *testing.T) {
+	e := &storeExtension{cfg: &Config{SpecToken: ""}}
+	var reached bool
+	h := e.authSpec(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true }))
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/internal/contracts", nil))
+	if reached {
+		t.Error("an empty configured token let an unauthenticated request through")
+	}
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+
+	// And a caller cannot satisfy it by sending an empty bearer either.
+	reached = false
+	rec = httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/internal/contracts", nil)
+	req.Header.Set("Authorization", "Bearer ")
+	h.ServeHTTP(rec, req)
+	if reached {
+		t.Error("`Bearer ` matched an empty configured token")
+	}
+}
+
+// TestSpecDocServesOnlyWhatTheListAdmits: the doc route must apply the SAME
+// filter as the list route.
+//
+// BUG (cross-repo review, 2026-09-01): handleSpecList filtered to
+// `Role == provider && PeerHost != ""` with the explicit rationale that the
+// self contract and MCP snapshots have "no business crossing this hop", while
+// handleSpecDoc passed the caller-supplied integration straight to GetSpecDoc —
+// a bare lookup over the same table. So a token-holding front could fetch the
+// ORGANISATION'S OWN OpenAPI document with
+// `GET /internal/contracts/doc?integration=self`, which the list route was
+// written specifically to withhold. A filter on the index and none on the
+// item is not a filter.
+func TestSpecDocServesOnlyWhatTheListAdmits(t *testing.T) {
+	const token = "s3cret"
+	e, base := startStorePod(t, token)
+	doc := []byte("openapi: 3.0.3\ninfo:\n  title: our own API\n")
+	seedContract(t, e, "acme", "api.acme.test", model.SpecRoleProvider, model.SpecFormatOpenAPI, doc)
+	seedContract(t, e, "self", "api.self.test", model.SpecRoleSelf, model.SpecFormatOpenAPI, doc)
+	seedContract(t, e, "unbound", "", model.SpecRoleProvider, model.SpecFormatOpenAPI, doc)
+	seedContract(t, e, "acme-tools", "mcp.acme.test", model.SpecRoleProvider, model.SpecFormatMCP, doc)
+
+	// The one the list admits is fetchable.
+	if code, _ := get(t, base+"/internal/contracts/doc?integration=acme", token); code != http.StatusOK {
+		t.Errorf("provider contract doc: status %d, want 200", code)
+	}
+	// Everything the list withholds must be unfetchable by id.
+	for _, integration := range []string{"self", "unbound", "acme-tools"} {
+		code, body := get(t, base+"/internal/contracts/doc?integration="+integration, token)
+		if code == http.StatusOK {
+			t.Errorf("GET doc?integration=%s returned 200 — the list route deliberately "+
+				"withholds this contract, so the doc route must too (body %d bytes)", integration, len(body))
+		}
 	}
 }

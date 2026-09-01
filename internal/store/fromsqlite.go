@@ -15,6 +15,7 @@ type MigrationSummary struct {
 	Findings    int
 	Edges       int
 	Settings    int
+	Contracts   int
 }
 
 // MigrateFromSQLite copies the durable-value rows of a legacy embedded sqlite
@@ -28,8 +29,15 @@ type MigrationSummary struct {
 // (dedup state: stable ids, occurrence counts — the flag idempotency key
 // derives from the finding id), edges (discovery history), and settings (the
 // per-deployment KV — e.g. the Connect key — which must not be lost on a backend
-// switch). spec_infos are skipped — the drift processor re-records loaded
-// contracts at every Start.
+// switch), and spec_infos (the UPLOADED provider contracts).
+//
+// spec_infos used to be skipped, justified by "the drift processor re-records
+// loaded contracts at every Start". That held only while provider contracts
+// came from `flanjdrift.spec_path`. Since that key was removed an uploaded
+// contract exists ONLY as a spec_infos row, and this function renames the
+// source file to `<path>.migrated` — so skipping the table destroyed the only
+// copy and tombstoned its source in one step, silently returning every provider
+// to "captured, not validated".
 //
 // Every insert is ON CONFLICT DO NOTHING and the rename happens only after
 // commit, so the whole operation is retry-safe: any failure aborts the
@@ -81,6 +89,9 @@ func MigrateFromSQLite(dst Store, sqlitePath string) (MigrationSummary, error) {
 	if sum.Settings, err = copySettings(src, tx); err != nil {
 		return sum, err
 	}
+	if sum.Contracts, err = copySpecInfos(src, tx); err != nil {
+		return sum, err
+	}
 	if err := tx.Commit(); err != nil {
 		return sum, fmt.Errorf("migrate-from-sqlite: commit: %w", err)
 	}
@@ -103,7 +114,7 @@ func MigrateFromSQLite(dst Store, sqlitePath string) (MigrationSummary, error) {
 func copyPinnedCalls(src *sql.DB, tx *sql.Tx) (int, error) {
 	rows, err := src.Query(
 		`SELECT id, captured_at, integration, peer_host, direction, edge_class, method, route,
-		        status_code, request_id, idem_key, trace_id, byte_size, pinned, promoted_at, doc
+		        status_code, request_id, idem_key, trace_id, byte_size, pinned, drifted, promoted_at, doc
 		   FROM calls WHERE pinned=1 ORDER BY seq ASC`)
 	if err != nil {
 		return 0, fmt.Errorf("migrate-from-sqlite: read pinned calls: %w", err)
@@ -115,20 +126,20 @@ func copyPinnedCalls(src *sql.DB, tx *sql.Tx) (int, error) {
 			id, capturedAt, integration, method, route, doc string
 			peerHost, direction, edgeClass                  sql.NullString
 			requestID, idemKey, traceID, promotedAt         sql.NullString
-			statusCode, pinned                              int
+			statusCode, pinned, drifted                     int
 			byteSize                                        int64
 		)
 		if err := rows.Scan(&id, &capturedAt, &integration, &peerHost, &direction, &edgeClass, &method, &route,
-			&statusCode, &requestID, &idemKey, &traceID, &byteSize, &pinned, &promotedAt, &doc); err != nil {
+			&statusCode, &requestID, &idemKey, &traceID, &byteSize, &pinned, &drifted, &promotedAt, &doc); err != nil {
 			return n, fmt.Errorf("migrate-from-sqlite: scan call: %w", err)
 		}
 		res, err := tx.Exec(
 			`INSERT INTO calls
-			  (id, captured_at, integration, peer_host, direction, edge_class, method, route, status_code, request_id, idem_key, trace_id, byte_size, pinned, promoted_at, doc)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+			  (id, captured_at, integration, peer_host, direction, edge_class, method, route, status_code, request_id, idem_key, trace_id, byte_size, pinned, drifted, promoted_at, doc)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
 			 ON CONFLICT (id) DO NOTHING`,
 			id, capturedAt, integration, peerHost, direction, edgeClass, method, route,
-			statusCode, requestID, idemKey, traceID, byteSize, pinned, promotedAt, doc,
+			statusCode, requestID, idemKey, traceID, byteSize, pinned, drifted, promotedAt, doc,
 		)
 		if err != nil {
 			return n, fmt.Errorf("migrate-from-sqlite: insert call %s: %w", id, err)
@@ -247,4 +258,50 @@ func copySettings(src *sql.DB, tx *sql.Tx) (int, error) {
 // isNoSuchTable reports sqlite's "no such table" error (older legacy files).
 func isNoSuchTable(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "no such table")
+}
+
+// copySpecInfos carries the uploaded provider contracts — metadata AND the
+// documents themselves. A front reads the document over the store pod's spec
+// endpoint, so a metadata-only copy would list contracts that validate nothing.
+// prev_doc/prev_version/prev_loaded_at come too: they are the evidence behind
+// the version-diff findings that copyFindings just carried over.
+func copySpecInfos(src *sql.DB, tx *sql.Tx) (int, error) {
+	rows, err := src.Query(
+		`SELECT integration, role, peer_host, edge_class, format, title, version, docs_url,
+		        endpoints, loaded_at, doc, source, prev_doc, prev_version, prev_loaded_at
+		   FROM spec_infos`)
+	if err != nil {
+		return 0, fmt.Errorf("migrate-from-sqlite: read contracts: %w", err)
+	}
+	defer rows.Close()
+	n := 0
+	for rows.Next() {
+		var (
+			integration, format, loadedAt, doc, source   string
+			role                                         string
+			peerHost, edgeClass, title, version, docsURL sql.NullString
+			prevDoc, prevVersion, prevLoadedAt           sql.NullString
+			endpoints                                    int
+		)
+		if err := rows.Scan(&integration, &role, &peerHost, &edgeClass, &format, &title, &version,
+			&docsURL, &endpoints, &loadedAt, &doc, &source, &prevDoc, &prevVersion, &prevLoadedAt); err != nil {
+			return n, fmt.Errorf("migrate-from-sqlite: scan contract: %w", err)
+		}
+		res, err := tx.Exec(
+			`INSERT INTO spec_infos
+			  (integration, role, peer_host, edge_class, format, title, version, docs_url,
+			   endpoints, loaded_at, doc, source, prev_doc, prev_version, prev_loaded_at)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+			 ON CONFLICT (integration) DO NOTHING`,
+			integration, role, peerHost, edgeClass, format, title, version, docsURL,
+			endpoints, loadedAt, doc, source, prevDoc, prevVersion, prevLoadedAt,
+		)
+		if err != nil {
+			return n, fmt.Errorf("migrate-from-sqlite: insert contract %s: %w", integration, err)
+		}
+		if c, _ := res.RowsAffected(); c > 0 {
+			n++
+		}
+	}
+	return n, rows.Err()
 }
