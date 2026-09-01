@@ -32,7 +32,8 @@ import {
   isEvidenceFor,
   rollCall,
   uncoveredHeading,
-  uncoveredProviders
+  uncoveredProviders,
+  providerContractsEmptyText
 } from './contracts';
 import {
   THEME_FLIP_NOTICE_KEY,
@@ -867,8 +868,7 @@ const cardGroups = computed(() => [
     title: `Provider contracts${contractCards.value.providers.length ? ` (${contractCards.value.providers.length})` : ''}`,
     sub: 'the contracts your providers publish — your outbound calls validated against them',
     cards: contractCards.value.providers,
-    emptyText:
-      'No provider contracts yet. Upload a provider’s OpenAPI document to start validating your calls to it — or send traffic through the SDK to discover providers first.'
+    emptyText: providerContractsEmptyText(uncoveredHosts.value.length)
   }
 ]);
 

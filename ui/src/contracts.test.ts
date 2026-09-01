@@ -10,6 +10,7 @@ import {
   contractHeading,
   contractOrigin,
   findingBelongsToContract,
+  providerContractsEmptyText,
   hasBindingWarning,
   endpointCount,
   provenanceWord,
@@ -421,5 +422,28 @@ describe('findingBelongsToContract', () => {
     expect(findingBelongsToContract(
       { integration: 'api-acme-test', source_call_id: 'gone' }, contract, hostOf
     )).toBe(true);
+  });
+});
+
+describe('providerContractsEmptyText', () => {
+  // BUG (postgres-lane QA walk, 2026-09-01): the empty state told the operator
+  // to "send traffic through the SDK to discover providers first" while the
+  // section immediately below it read "Providers with no contract (2)" — the
+  // page instructing a step one line above the proof it was already done.
+  it('does not ask for discovery once providers are discovered', () => {
+    const text = providerContractsEmptyText(2);
+    expect(text).not.toMatch(/discover providers first/);
+    expect(text).toContain('2 providers below');
+  });
+
+  it('asks for discovery only when nothing has been discovered', () => {
+    expect(providerContractsEmptyText(0)).toMatch(/discover providers first/);
+  });
+
+  it('agrees in number with a single discovered provider', () => {
+    const text = providerContractsEmptyText(1);
+    expect(text).toContain('1 provider below');
+    expect(text).not.toContain('providers below');
+    expect(text).toContain('validating your calls to it.');
   });
 });

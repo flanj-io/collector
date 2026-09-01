@@ -385,3 +385,25 @@ export function findingBelongsToContract(
   if (callHost && spec.peer_host) return callHost === spec.peer_host;
   return finding.integration === spec.integration;
 }
+
+/**
+ * The "Provider contracts" empty state, which has TWO branches because the
+ * instruction differs.
+ *
+ * BUG (postgres-lane QA walk, 2026-09-01): the single string ended "— or send
+ * traffic through the SDK to discover providers first", and stayed on screen
+ * after discovery had happened, directly above a section headed "Providers with
+ * no contract (2)". The page was instructing a step the operator had already
+ * completed, one line above the proof they had completed it.
+ *
+ * Once providers ARE discovered the only remaining action is the upload, so the
+ * copy names it and points at the list below instead of asking for traffic.
+ */
+export function providerContractsEmptyText(uncoveredCount: number): string {
+  if (uncoveredCount > 0) {
+    return `No provider contracts yet. Upload a document for any of the ${uncoveredCount} ${
+      uncoveredCount === 1 ? 'provider' : 'providers'
+    } below to start validating your calls to ${uncoveredCount === 1 ? 'it' : 'them'}.`;
+  }
+  return 'No provider contracts yet. Upload a provider’s OpenAPI document to start validating your calls to it — or send traffic through the SDK to discover providers first.';
+}
