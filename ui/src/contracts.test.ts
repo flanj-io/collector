@@ -6,6 +6,7 @@ import {
   isEvidenceFor,
   hostLooksRoutable,
   bindingChecks,
+  bindingTiming,
   hasBindingWarning,
   endpointCount,
   provenanceWord,
@@ -256,33 +257,45 @@ describe('hostLooksRoutable', () => {
 
 describe('bindingChecks', () => {
   it('a typo trips every signal at once — which is the pattern worth seeing', () => {
-    const checks = bindingChecks('sad', ['api.acme.test'], false);
+    const checks = bindingChecks('sad', ['api.acme.test']);
     expect(checks.every((c) => c.level === 'warn')).toBe(true);
     expect(hasBindingWarning(checks)).toBe(true);
     expect(checks[0].text).toContain('typo');
   });
 
   it('the good case reassures instead of staying silent', () => {
-    const checks = bindingChecks('api.acme.test', ['api.acme.test'], true);
+    const checks = bindingChecks('api.acme.test', ['api.acme.test']);
     expect(checks.every((c) => c.level === 'ok')).toBe(true);
     expect(hasBindingWarning(checks)).toBe(false);
   });
 
   it('a gateway host warns on servers but stays bindable — warn, never block', () => {
-    const checks = bindingChecks('api-gateway.internal.test', ['api.acme.test'], true);
+    const checks = bindingChecks('api-gateway.internal.test', ['api.acme.test']);
     expect(hasBindingWarning(checks)).toBe(true);
-    // The host itself is fine and traffic exists; only the servers line objects.
     expect(checks.filter((c) => c.level === 'warn')).toHaveLength(1);
   });
 
   it('says nothing about servers when the document declares none', () => {
-    const checks = bindingChecks('api.acme.test', [], true);
+    const checks = bindingChecks('api.acme.test', []);
     expect(checks.some((c) => c.text.includes('servers:'))).toBe(false);
   });
 
-  it('pre-traffic upload warns but is legitimate — a fresh install has no edges', () => {
-    const checks = bindingChecks('api.acme.test', ['api.acme.test'], false);
-    expect(hasBindingWarning(checks)).toBe(true);
-    expect(checks.find((c) => c.level === 'warn')!.text).toContain('starts validating when traffic arrives');
+  it('NEVER scores traffic state — neither answer is a problem to weigh', () => {
+    // Pre-traffic upload is the whole state of a fresh install, and traffic
+    // already flowing is the normal case. Scoring either made the list cry
+    // wolf, which is how a real warning gets ignored.
+    for (const host of ['api.acme.test', 'nowhere.test']) {
+      for (const c of bindingChecks(host, ['api.acme.test'])) {
+        expect(c.text).not.toContain('validation starts');
+        expect(c.text).not.toContain('starts validating');
+      }
+    }
+  });
+});
+
+describe('bindingTiming', () => {
+  it('states what happens next, as information rather than a verdict', () => {
+    expect(bindingTiming('api.acme.test', true)).toContain('validation starts on the next one');
+    expect(bindingTiming('api.acme.test', false)).toContain('starts validating when traffic arrives');
   });
 });

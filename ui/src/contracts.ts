@@ -255,16 +255,13 @@ export interface BindingCheck {
  * is the one the operator meant.
  *
  * Every warn is survivable — proxy, gateway and staging hosts legitimately
- * mismatch `servers:`, and pre-traffic upload is a normal thing to do on a
- * fresh install. The point is that the operator SEES the signals together
- * instead of one whispered line, because a typo'd host trips all three at once
- * and that pattern is unmistakable.
+ * mismatch `servers:`. The point is that the operator SEES the signals together
+ * instead of one whispered line, because a typo'd host trips both at once and
+ * that pattern is unmistakable.
+ *
+ * Traffic state is deliberately NOT here — see bindingTiming.
  */
-export function bindingChecks(
-  host: string,
-  servers: readonly string[],
-  hasTraffic: boolean
-): BindingCheck[] {
+export function bindingChecks(host: string, servers: readonly string[]): BindingCheck[] {
   const checks: BindingCheck[] = [];
 
   if (!hostLooksRoutable(host)) {
@@ -285,13 +282,20 @@ export function bindingChecks(
     );
   }
 
-  checks.push(
-    hasTraffic
-      ? { level: 'ok', text: `Calls to ${host} are already being captured — validation starts on the next one.` }
-      : { level: 'warn', text: noTrafficYet(host) }
-  );
-
+  // Traffic state is INFORMATIONAL, never a check. Neither answer is a problem:
+  // calls already flowing is the normal case and needs no remark at all, and a
+  // host with no traffic yet is a legitimate pre-traffic upload — the whole
+  // state of a fresh install. Scoring either as something to weigh made the
+  // list cry wolf, which is how a real warning gets ignored.
   return checks;
+}
+
+/** The one-line note under the checks: what happens next, stated plainly. Not a
+ *  check, because there is nothing here to get wrong. */
+export function bindingTiming(host: string, hasTraffic: boolean): string {
+  return hasTraffic
+    ? `Calls to ${host} are already being captured — validation starts on the next one.`
+    : noTrafficYet(host);
 }
 
 /** True when anything on the checklist wants a second look. */

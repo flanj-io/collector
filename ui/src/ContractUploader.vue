@@ -19,7 +19,7 @@
  * parses whatever is in the store and a bad row would cost that host detection
  * with no symptom left for the operator to see.
  */
-import { computed, ref } from 'vue';
+import { computed, nextTick, ref } from 'vue';
 import { ApiError, apiPost } from './api';
 import {
   BIND_ANYWAY,
@@ -29,6 +29,7 @@ import {
   UPLOAD_STAYS_LOCAL,
   UPLOAD_TAKES_EFFECT,
   bindingChecks,
+  bindingTiming,
   endpointCount,
   hasBindingWarning,
   noTrafficYet
@@ -65,6 +66,12 @@ const preview = ref<ContractPreview | null>(null);
 const error = ref('');
 const busy = ref(false);
 const dragging = ref(false);
+/** Set when a file was chosen before the host was named. The file is KEPT and
+ *  the host field asks for what it needs — the previous behaviour read the file
+ *  and then did nothing at all, which is indistinguishable from a broken
+ *  control. */
+const awaitingHost = ref(false);
+const hostField = ref<HTMLInputElement | null>(null);
 
 /** Arriving from a provider row the host is already known, so the confirm step
  *  shows one line and there is no field to fill. Zero-question binding for the
@@ -83,7 +90,22 @@ async function readFile(file: File | null | undefined) {
     error.value = 'Couldn’t read that file.';
     return;
   }
+  if (!boundHost.value) {
+    // Keep the file. Ask for the missing half, and put the cursor where the
+    // answer goes — never accept input and then show nothing.
+    awaitingHost.value = true;
+    await nextTick();
+    hostField.value?.focus();
+    return;
+  }
   await runPreview();
+}
+
+/** The host was named after the file was chosen — resume where we stopped. */
+async function onHostEntered() {
+  if (!boundHost.value) return;
+  awaitingHost.value = false;
+  if (doc.value && !preview.value) await runPreview();
 }
 
 function onFilePicked(ev: Event) {
@@ -152,7 +174,12 @@ async function confirm() {
  * host updates the verdict immediately instead of after a re-parse.
  */
 const checks = computed(() =>
-  preview.value ? bindingChecks(boundHost.value, preview.value.servers, preview.value.has_traffic) : []
+  preview.value ? bindingChecks(boundHost.value, preview.value.servers) : []
+);
+/** What happens next — informational, never a check: neither answer is a
+ *  problem, and scoring them made the list cry wolf. */
+const timing = computed(() =>
+  preview.value ? bindingTiming(boundHost.value, preview.value.has_traffic) : ''
 );
 const warned = computed(() => hasBindingWarning(checks.value));
 
@@ -170,9 +197,22 @@ function onHostEdited() {
   <div class="uploader">
     <!-- Step 1 — choose a document. -->
     <div v-if="!preview">
-      <label v-if="needsHost" class="uploader-host">
+      <label v-if="needsHost" class="uploader-host" :class="{ awaiting: awaitingHost }">
         <span>Provider host</span>
-        <input v-model="typedHost" type="text" placeholder="api.acme.test" spellcheck="false" @change="runPreview" />
+        <input
+          ref="hostField"
+          v-model="typedHost"
+          type="text"
+          placeholder="api.acme.test"
+          spellcheck="false"
+          autocapitalize="off"
+          autocorrect="off"
+          @change="onHostEntered"
+          @keydown.enter.prevent="onHostEntered"
+        />
+        <small v-if="awaitingHost" class="host-awaiting">
+          {{ filename ? `“${filename}” is ready — which provider is it for?` : 'Which provider is this for?' }}
+        </small>
       </label>
 
       <div
@@ -232,6 +272,9 @@ function onHostEdited() {
           <span>{{ c.text }}</span>
         </li>
       </ul>
+      <!-- Informational, deliberately OUTSIDE the checks: neither answer is a
+           problem to weigh, and scoring them made the list cry wolf. -->
+      <p v-if="timing" class="confirm-timing">{{ timing }}</p>
 
       <p class="uploader-privacy">{{ UPLOAD_STAYS_LOCAL }}</p>
 

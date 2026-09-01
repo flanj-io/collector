@@ -90,7 +90,6 @@ import {
   SAVE_ERROR,
   SAVE_LABEL,
   SUGGEST_TOO_LONG,
-  badgeLabel,
   beginEdit,
   cancelEdit,
   editorClosed,
@@ -1379,7 +1378,6 @@ watch(tab, (t) => {
                            The domain is the identity; when there is no name there is nothing to
                            render over it. -->
                       <span class="edge-name" :class="{ unnamed: !e.display_name }" :title="e.display_name || e.peer_host">{{ e.display_name || e.peer_host }}</span>
-                      <span v-if="badgeLabel(e.name_source)" class="name-badge" :class="'src-' + (e.name_source || 'auto')">{{ badgeLabel(e.name_source) }}</span>
                       <span v-if="mcpHosts.has(e.peer_host)" class="mcp-badge" :title="MCP_BADGE_TOOLTIP">{{ mcpBadgeLabel(e.class) }}</span>
                     </span>
                     <span v-if="e.display_name" class="peer mono edge-host" :title="e.peer_host">{{ e.peer_host }}</span>
@@ -2380,6 +2378,9 @@ pre.body { background: var(--panel2); border: 1px solid var(--line); border-radi
 .confirm-host { margin: 0.1rem 0 0.6rem; }
 .confirm-host input:disabled { opacity: 0.7; cursor: not-allowed; }
 .host-hint, .host-locked { font-size: 0.72rem; color: var(--muted); }
+.host-awaiting { font-size: 0.75rem; color: var(--ink); }
+.uploader-host.awaiting input { border-color: var(--accent); }
+.confirm-timing { margin: 0 0 0.4rem; font-size: 0.78rem; color: var(--muted); }
 .host-hint code { font-size: 0.95em; }
 .btn.warn { border-color: var(--warn-line, #d1ac1f); }
 .pretraffic h2 { margin-bottom: 0.5rem; }
@@ -2389,7 +2390,6 @@ pre.body { background: var(--panel2); border: 1px solid var(--line); border-radi
 .pill-link { text-decoration: none; display: inline-flex; align-items: center; gap: 0.3rem; }
 .pill-link:hover { text-decoration: underline; }
 .pill-out { font-size: 0.85em; opacity: 0.75; }
-.name-badge { flex: none; font-size: 0.7rem; letter-spacing: 0; color: var(--muted); background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 0.05rem 0.45rem; }
 .edge-actions { display: flex; gap: 0.35rem; justify-content: flex-end; }
 .edge-rename { border-top: 1px dashed var(--line); background: var(--panel2); padding: 0.6rem 0.7rem; display: flex; flex-direction: column; gap: 0.45rem; }
 .edge-rename-input { width: 100%; max-width: 26rem; padding: 0.35rem 0.5rem; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); font-size: 0.85rem; }

@@ -1,13 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
-  BADGE_USER,
   EDIT_NAME_LABEL,
   RENAME_LABEL,
   SAVE_ERROR,
   SUGGEST_FAILED_NOTE,
   SUGGEST_NAME_CAP,
   SUGGEST_TOO_LONG,
-  badgeLabel,
   beginEdit,
   cancelEdit,
   editorClosed,
@@ -30,44 +28,21 @@ const row = {
 };
 
 describe('copy', () => {
-  it('renders the one provenance badge exactly; every other tier carries none', () => {
-    expect(badgeLabel('user')).toBe(BADGE_USER);
-    expect(BADGE_USER).toBe('named by you');
-    // 'contract' — the title of the contract uploaded for this domain — carries
-    // no badge: the row already shows `contract v1.0.0 · uploaded 12d ago` in
-    // the meta line below the host, which says where the name came from more
-    // precisely than a chip AND is a control. It replaced the 'config' tier,
-    // whose badge went with it.
-    expect(badgeLabel('contract')).toBe('');
-    expect(badgeLabel('config')).toBe('');
-    // A directory name carries NO badge (owner ruling 2026-08-31): the directory is
-    // infrastructure, the host stays visible beside the name, and the remaining badges
-    // mark only what the operator themselves did.
-    expect(badgeLabel('directory')).toBe('');
-    // 'auto' carries no badge either (owner ruling 2026-08-31): an unnamed row is
-    // simply its host, so a chip saying "auto" announces nothing actionable.
-    expect(badgeLabel('auto')).toBe('');
-    // Unknown / absent sources read as auto — never an empty badge.
-    expect(badgeLabel(undefined)).toBe('');
-    expect(badgeLabel('???')).toBe('');
-  });
-
-  it('offers Rename on non-user rows and Edit name on user-named rows', () => {
-    expect(renameLabel('directory')).toBe(RENAME_LABEL);
-    expect(renameLabel(undefined)).toBe(RENAME_LABEL);
+  it('there is NO provenance badge on any tier', () => {
+    // `named by you` was the last one standing and went the way of the other
+    // three (owner ruling 2026-09-01): redundant beside a name you typed, and a
+    // chip in the name slot competes with the name for the eye. `Edit name` /
+    // `Remove name` already say the name is yours, where you can act on it.
+    // Nothing to assert but the absence: the module no longer exports a badge,
+    // and this file no longer imports one — a compile failure is the test.
     expect(renameLabel('user')).toBe(EDIT_NAME_LABEL);
   });
 
-  it('names the domain in the placeholder and the opt-in label', () => {
-    expect(placeholderFor('stripe.com')).toBe('Display name for stripe.com');
-    expect(suggestLabelFor('stripe.com')).toBe(
-      'Suggest this name for stripe.com to the Flanj directory — leaves this collector for review'
-    );
-  });
-
-  it('keeps the exact error and partial-success strings', () => {
-    expect(SAVE_ERROR).toBe("Couldn't save the name.");
-    expect(SUGGEST_FAILED_NOTE).toBe("Name saved. The suggestion didn't reach the directory — it stays local.");
+  it('renames still read correctly per tier', () => {
+    expect(renameLabel('user')).toBe(EDIT_NAME_LABEL);
+    expect(renameLabel('contract')).toBe(RENAME_LABEL);
+    expect(renameLabel('directory')).toBe(RENAME_LABEL);
+    expect(renameLabel(undefined)).toBe(RENAME_LABEL);
   });
 });
 
