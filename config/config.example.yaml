@@ -69,7 +69,9 @@ processors:
   # The drift detector. PROVIDER CONTRACTS ARE NOT CONFIGURED HERE — upload them
   # in the UI (Contracts → Add contract), where each binds to exactly one
   # provider host and is stored locally. The processor reads them from the store
-  # at runtime, so an upload starts validating within a minute, with no restart.
+  # at runtime and is told the moment one changes, so an upload starts validating
+  # at once, with no restart. (A tiered front reads from the store pod instead
+  # and converges on its ten-second refresh.)
   #
   # An uploaded contract never leaves this collector.
   #

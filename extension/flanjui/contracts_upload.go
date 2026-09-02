@@ -126,6 +126,12 @@ func (e *uiExtension) handleContractUpload(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// The row is written; tell the cache before anything else. A REPLACE is the
+	// case that needs this most: the host is already covered, so the drift
+	// processor's own first-sight kick never fires and every call until the next
+	// tick would be scored against the document this upload just superseded.
+	e.announceSpecChange()
+
 	out := map[string]any{
 		"contract": info,
 		"replaced": prev.Existed,
@@ -176,6 +182,13 @@ func (e *uiExtension) handleContractRemove(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "store_failed", msgContractStoreFailed)
 		return
+	}
+	if existed {
+		// A removal is a cache HIT on the deleted document, so nothing on the
+		// per-call path notices it either — the contract keeps validating
+		// traffic after the operator removed it. Announce only a real deletion:
+		// removing what was not there changed no contract set.
+		e.announceSpecChange()
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"removed": existed})
 }

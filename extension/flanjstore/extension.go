@@ -62,6 +62,42 @@ type storeExtension struct {
 	// spec_endpoint is set — the tiered topology's store pod.
 	specSrv *http.Server
 	specLn  net.Listener
+
+	// specWatchMu guards specWatchers, and is deliberately NOT e.mu: a
+	// subscriber's callback must never be able to reach the store handle's lock.
+	specWatchMu sync.Mutex
+	// specWatchers are the in-process listeners for a contract-set change
+	// (store.SpecSubscriber). Registered at Start and never removed — the only
+	// subscriber is a processor whose lifetime is this process's.
+	specWatchers []func()
+}
+
+// OnSpecsChanged registers a listener for contract-set changes
+// (store.SpecSubscriber).
+func (e *storeExtension) OnSpecsChanged(fn func()) {
+	if fn == nil {
+		return
+	}
+	e.specWatchMu.Lock()
+	defer e.specWatchMu.Unlock()
+	e.specWatchers = append(e.specWatchers, fn)
+}
+
+// NotifySpecsChanged announces a contract upload, replace or remove
+// (store.SpecPublisher), so a cache converges in the time a callback takes
+// rather than at its next refresh tick.
+//
+// Snapshot under the lock, call outside it: a subscriber is arbitrary code, and
+// holding the registry lock across it would let one listener block every future
+// announcement.
+func (e *storeExtension) NotifySpecsChanged() {
+	e.specWatchMu.Lock()
+	watchers := make([]func(), len(e.specWatchers))
+	copy(watchers, e.specWatchers)
+	e.specWatchMu.Unlock()
+	for _, fn := range watchers {
+		fn()
+	}
 }
 
 // Store exposes the shared store (store.Provider). Nil until Start has opened
@@ -167,6 +203,8 @@ func (e *storeExtension) Shutdown(context.Context) error {
 
 // compile-time assertions.
 var (
-	_ extension.Extension = (*storeExtension)(nil)
-	_ store.Provider      = (*storeExtension)(nil)
+	_ extension.Extension  = (*storeExtension)(nil)
+	_ store.Provider       = (*storeExtension)(nil)
+	_ store.SpecPublisher  = (*storeExtension)(nil)
+	_ store.SpecSubscriber = (*storeExtension)(nil)
 )

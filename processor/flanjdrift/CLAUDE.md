@@ -35,11 +35,29 @@ correctness (pricing, quantities, business rules) — that would be a false-posi
 **Provider contracts come from the STORE, not config** (2026-08-31; `spec_path`,
 `spec_v2_path` and `peer_host` were removed from CONTRACTS §8). They are uploaded
 in the UI, bound to exactly ONE provider host, and read at runtime by
-`speccache.go`: parsed documents keyed by peer host, refreshed on a 60s ticker
-and early on first sight of an uncovered host. **The per-call path is a map read
+`speccache.go`: parsed documents keyed by peer host, refreshed on a 10s ticker,
+early on first sight of an uncovered host, and — the case that matters —
+**early whenever the contract set CHANGES**. **The per-call path is a map read
 and nothing else** — parsing is expensive and the store is a database; neither
-belongs on the hot path. An upload therefore validates within a tick, with no
-restart.
+belongs on the hot path. An upload therefore validates at once, with no restart.
+
+**A change is ANNOUNCED, never polled for.** The store extension carries
+`store.SpecPublisher`; the UI's upload and remove handlers call it, and this
+processor subscribes (`store.SpecSubscriber` → `kickRefresh`) at Start. That
+matters because an upload REPLACING a bound contract, and a REMOVE, are both
+cache HITS: `specs.lookup` finds the superseded (or deleted) document, so the
+first-sight kick never fires and nothing else on the per-call path notices. Until
+2026-09-02 those two waited out the full ticker while the UI said "Validating
+from now on" and the card showed the new version as live — calls scored in that
+window were stamped against the old document permanently, since captured calls
+are never re-checked.
+
+The announcement is in-process by construction. A tiered FRONT runs this
+processor in a different process from the store pod the operator uploads to, and
+each pod of a shared-postgres deployment caches on its own; both converge on the
+ticker, which is why it is ten seconds and not sixty. A kick that arrives inside
+`specRefreshFloor` is DEFERRED to the end of it, never dropped — traffic kicks
+repeat every batch, but an announcement is one-shot.
 
 Where that cache is filled FROM is the `specSource` interface, with two
 implementations:
@@ -80,7 +98,7 @@ store dedups on it — the first call creates the finding, later calls increment
 - `speccache.go` — the `specSource` interface, the co-located store
   implementation, and the parsed-document cache keyed by peer host. The refresh
   is metadata-first: it compares `loaded_at` and downloads only what moved, so
-  steady state on a fifty-provider front is one small request a minute. Read
+  steady state on a fifty-provider front is six small requests a minute. Read
   methods are nil-safe — no contract source degrades to pass-through, never to a
   panic on the hot path.
 - `remotesource.go` — the tiered topology's front-side client.

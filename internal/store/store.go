@@ -116,6 +116,38 @@ type Provider interface {
 	Store() Store
 }
 
+// The contract set is CACHED in memory by the drift processor and refreshed on
+// a ticker — the 2026-08-31 owner ruling: no store read per call. That leaves a
+// window between the moment a contract is uploaded, replaced or removed and the
+// moment detection acts on it, and the UI's copy ("Validating from now on")
+// promises there is none. These two halves close it in-process: the component
+// that CHANGES the contract set announces it, and the component that CACHES it
+// refreshes early. A notification, never a read — the ruling stands.
+//
+// In-process only, by construction. A tiered front runs the drift processor in
+// a DIFFERENT process from the store pod that owns the uploads, and each pod of
+// a shared-postgres deployment caches on its own; those cases converge on the
+// refresh ticker instead, which is why that interval is short enough to be
+// honest about.
+
+// SpecPublisher is the announcing half, implemented by the store extension and
+// called by whatever mutates a contract row (today: the UI's upload and remove
+// handlers). Never blocks the caller on a subscriber.
+type SpecPublisher interface {
+	// NotifySpecsChanged announces that the stored contract set moved.
+	NotifySpecsChanged()
+}
+
+// SpecSubscriber is the listening half, implemented by the same store
+// extension and called by whatever caches contracts (today: the drift
+// processor's spec cache).
+type SpecSubscriber interface {
+	// OnSpecsChanged registers fn, called on every subsequent announcement.
+	// fn runs on the announcer's goroutine and MUST NOT block — the sanctioned
+	// shape is a non-blocking send on a buffered channel.
+	OnSpecsChanged(fn func())
+}
+
 // base holds what both backends share: the connection pool and the read path.
 // Queries are written with `?` placeholders; rebind converts them to the
 // backend's native style ($1..$n for postgres, identity for sqlite).

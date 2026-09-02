@@ -84,6 +84,18 @@ func (p *driftProcessor) start(_ context.Context, host component.Host) error {
 			continue
 		}
 		p.st = prov.Store()
+		// Subscribe to contract-set changes on the same extension. An upload,
+		// replace or remove then reaches this cache in the time a channel send
+		// takes, instead of waiting out a refresh tick — which is what makes
+		// the UI's "Validating from now on" true rather than aspirational.
+		//
+		// This is the SINGLE-PROCESS path only: the tiered front runs this
+		// processor in a different process from the store pod that owns the
+		// uploads, and each pod of a shared-postgres deployment caches on its
+		// own. Those converge on specRefresh, which is why it is short.
+		if sub, ok := ext.(store.SpecSubscriber); ok {
+			sub.OnSpecsChanged(p.kickRefresh)
+		}
 		break
 	}
 
@@ -157,28 +169,58 @@ func (p *driftProcessor) shutdown(_ context.Context) error {
 	return nil
 }
 
-// refreshLoop reconciles the spec cache on a ticker, and early whenever a call
-// arrives for a host with no cached contract. specRefreshFloor spaces those
-// early runs so traffic to uncovered hosts — the common case on a big estate —
-// cannot turn into a refresh per batch.
+// refreshLoop reconciles the spec cache on a ticker, and early on a kick — a
+// call for a host with no cached contract, or a contract-set change announced
+// by the store extension. specRefreshFloor spaces those early runs so traffic
+// to uncovered hosts — the common case on a big estate — cannot turn into a
+// refresh per batch.
+//
+// A kick that arrives inside the floor is DEFERRED to the end of it, never
+// dropped. Traffic kicks repeat every batch, so discarding one cost nothing; an
+// announced change is a one-shot event, and swallowing it would put an upload
+// back on the ticker — precisely the wait the announcement exists to remove.
+// Deferred kicks coalesce: the pending timer is armed once and re-used, so a
+// burst of uploads still costs one refresh.
 func (p *driftProcessor) refreshLoop() {
 	defer p.wg.Done()
 	ticker := time.NewTicker(specRefresh)
 	defer ticker.Stop()
-	var last time.Time
+
+	var (
+		last     time.Time
+		pending  *time.Timer
+		pendingC <-chan time.Time
+	)
+	clearPending := func() {
+		if pending != nil {
+			pending.Stop()
+			pending, pendingC = nil, nil
+		}
+	}
+	defer clearPending()
+
+	refresh := func() {
+		clearPending()
+		p.refreshSpecs()
+		last = time.Now()
+	}
 	for {
 		select {
 		case <-p.done:
 			return
 		case <-ticker.C:
-			p.refreshSpecs()
-			last = time.Now()
+			refresh()
+		case <-pendingC:
+			refresh()
 		case <-p.kick:
-			if time.Since(last) < specRefreshFloor {
+			if wait := specRefreshFloor - time.Since(last); wait > 0 {
+				if pending == nil {
+					pending = time.NewTimer(wait)
+					pendingC = pending.C
+				}
 				continue
 			}
-			p.refreshSpecs()
-			last = time.Now()
+			refresh()
 		}
 	}
 }
@@ -204,8 +246,9 @@ func (p *driftProcessor) refreshSpecs() {
 	}
 }
 
-// kickRefresh asks for an early refresh without ever blocking the pipeline. A
-// kick already queued is the same request, so a full buffer is success.
+// kickRefresh asks for an early refresh without ever blocking the pipeline or
+// the announcer that called it. A kick already queued is the same request, so a
+// full buffer is success.
 func (p *driftProcessor) kickRefresh() {
 	select {
 	case p.kick <- struct{}{}:

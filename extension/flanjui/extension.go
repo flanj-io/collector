@@ -54,6 +54,28 @@ func (e *uiExtension) resolveStore() store.Store {
 	return e.st
 }
 
+// announceSpecChange tells the in-process contract cache that an upload,
+// replace or remove landed, so the drift processor refreshes now instead of at
+// its next tick. Without it the UI's ratified promise ("Validating from now
+// on") is false for up to a full refresh interval, and calls in that window are
+// scored against the superseded document.
+//
+// Not latched, unlike resolveStore: this runs only on the two mutating contract
+// routes, so re-scanning the extensions costs nothing worth caching. A host
+// with no store extension (or one predating the interface) is a legitimate
+// no-op — the refresh ticker still converges.
+func (e *uiExtension) announceSpecChange() {
+	if e.host == nil {
+		return
+	}
+	for _, ext := range e.host.GetExtensions() {
+		if p, ok := ext.(store.SpecPublisher); ok {
+			p.NotifySpecsChanged()
+			return
+		}
+	}
+}
+
 // Start wires the CP client and serves the UI on the loopback endpoint. The
 // store is resolved lazily (see resolveStore).
 func (e *uiExtension) Start(ctx context.Context, host component.Host) error {
