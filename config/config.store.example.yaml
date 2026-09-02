@@ -55,7 +55,10 @@ extensions:
     ui_endpoint: 127.0.0.1:5335 # loopback only — the collector is outbound-only
     integration_id: acme-payments
     consumer_display_name: Acme Consumer Ltd
-    provider_display_name: Acme Payments # DEPRECATED — name edges in the UI (Overview → Edges → Rename); this value migrates into the store on boot and a UI rename beats it
+    provider_display_name: Acme Payments # the fallback provider name sent ON A FLAG, so a thread names the provider when the UI does not.
+    #                                     It does NOT name an edge: edge names come from the UI rename, the uploaded contract's title, or the
+    #                                     directory (Overview → Edges → Rename). Nothing migrates into the store on boot — the config name
+    #                                     tier went with spec_path/peer_host (CONTRACTS §8, 2026-08-31); this key needs no edge linkage at all.
     cp_base_url: https://cp.flanj.test
     cp_deploy_token: ${env:CP_DEPLOY_TOKEN} # used once, for Connect (register); the per-deployment collector key it returns lives in the store
 

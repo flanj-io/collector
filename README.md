@@ -21,6 +21,84 @@ UI embedded in the binary).
 **We turn a detection into something you can act on with your vendor.**
 Open-source SDK (Apache-2.0) and source-available collector (ELv2); hosted network layer.
 
+## Run it on a laptop
+
+No registry image yet (pre-release) — build it, then run it:
+
+```bash
+docker build -t flanj-collector .
+```
+
+```bash
+mkdir -p ./flanj-data
+docker run -d --name flanj \
+  --user "$(id -u):$(id -g)" \
+  -v "$PWD/flanj-data:/data" \
+  -p 4318:4318 -p 5335:5336 \
+  flanj-collector
+```
+
+`:4318` is the OTLP ingest your app points at. `/data` holds the embedded SQLite
+store — bind-mount it and run as yourself, or the store cannot open its file
+(the image runs as `nonroot`, and a fresh Docker *named* volume is root-owned:
+that combination fails at start with `unable to open database file (14)`).
+
+**The UI binds container loopback, by design — and that is not a setting to
+relax.** The collector is outbound-only; nothing it serves is reachable off-host.
+`-p 5335:5335` therefore publishes nothing. Bridge it from *inside* the network
+namespace instead, which is what the e2e harness does
+(`e2e/compose/docker-compose.yml`) — note the port is published on the collector
+above, because a container sharing another's netns cannot publish its own:
+
+```bash
+docker run -d --name flanj-ui --network container:flanj \
+  alpine/socat TCP-LISTEN:5336,fork,reuseaddr TCP:127.0.0.1:5335
+```
+
+Then open **<http://localhost:5335>** — health is at
+<http://localhost:5335/api/health>. On Linux, `--network host` works instead of
+the sidecar (`localhost:5335` is then the same loopback); on Docker Desktop it
+is not equivalent, so use the sidecar. In Kubernetes it is
+`kubectl port-forward <pod> 5335:5335`. Either way the bind stays loopback —
+tunnel to it, never rebind it.
+
+Point your app at the collector with the [SDK](https://github.com/flanj-io/sdk):
+
+```bash
+npm install @flanj/sdk
+```
+
+```bash
+export FLANJ_INTEGRATION_ID=acme-payments        # labels this integration
+export FLANJ_OTLP_ENDPOINT=http://localhost:4318/v1/logs   # this is the default
+node -r @flanj/sdk/register app.js
+```
+
+Also read: `OTEL_SERVICE_NAME`, `FLANJ_BODY_CAP_BYTES` (default 16384),
+`FLANJ_IGNORE_URLS` (comma-separated; the SDK always ignores its own OTLP host).
+Make some calls, then watch **Traffic** fill.
+
+**What leaves your network: nothing, until you Connect.** Unconnected, the
+collector makes no outbound calls at all — the sync loop returns early with no
+collector key. After Connect it talks only to `cp_base_url`: finding *shapes*
+(id, signature, kind, severity, endpoint, counts — never the observed
+expected/actual/detail values), a directory name-table fetch that sends nothing
+about your edges, and the threads you explicitly create by pressing Flag.
+**Raw calls never leave**, on any path.
+
+Measured on this build (Docker Desktop, Apple silicon, single pod, idle):
+
+| | |
+|---|---|
+| Image | **49 MB** |
+| Resident memory | **~13 MiB** |
+| `/api/health` | **~20 ms** from the host through the sidecar hop (~1 ms in-container) |
+| Restart → serving | **~0.1 s** (container start to "Everything is ready") |
+
+Restarting the collector orphans the sidecar (it borrows the collector's
+network namespace) — recreate it rather than `docker start` it. Tear the whole
+thing down with `docker rm -f flanj flanj-ui`.
+
 ## Renamed: Vinifera → Flanj (BREAKING)
 
 This project was renamed from **Vinifera** to **Flanj** before launch. Every brand-carrying

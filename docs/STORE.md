@@ -53,6 +53,17 @@ extensions:
   (same windows, same DSN).
 - No PVC is needed in this mode.
 
+> **Never share a DSN across environments.** Give staging and production
+> separate databases. Sharing one is not "two deployments in one database" —
+> the store has no environment column and the `settings` table is keyed by name
+> alone, so **the second environment silently adopts the first's identity**: it
+> reads the same `connect.collector_key`, merges its findings into the same
+> deduplicated set, and syncs them to the control plane **as the first**. Every
+> layer behaves exactly as designed and nothing errors, which is what makes it
+> hard to notice — staging drift arrives on the production dashboard, staging
+> evidence backs a production thread, and occurrence counts are the sum of both.
+> The same applies to a `db_path` shared by two sqlite deployments.
+
 ## Multi-pod semantics (postgres)
 
 Cross-pod correctness lives in the store, not in the pods — point N identical
@@ -183,12 +194,37 @@ extensions:
 ```
 
 At the next start, the collector runs a **one-shot import** of the file's
-durable evidence into postgres — pinned calls (evidence findings reference),
-all findings (stable ids + occurrence counts, so flag idempotency survives),
-discovered edges, and the per-deployment settings — then renames the file to
-`/data/flanj.db.migrated`.
+durable evidence into postgres, then renames the file to
+`/data/flanj.db.migrated`. It carries five things:
+
+| Carried | Why it must survive |
+|---|---|
+| **Pinned calls** | the evidence the findings reference |
+| **Findings** | stable ids + occurrence counts, so flag idempotency survives |
+| **Edges** | the discovered dependency graph and its counts |
+| **Settings** | the per-deployment KV — the Connect collector key and confirmed contact. Lose it and the deployment is no longer Connected |
+| **Contracts** | the uploaded provider contracts, metadata **and** document — they exist nowhere else |
+
 Unpinned window traffic is deliberately *not* copied: it is a rolling buffer
-and refills within minutes. Loaded contracts re-record themselves at start.
+and refills within minutes.
+
+**Contracts are carried, not rebuilt.** Before uploads existed, contracts came
+from config (`spec_path`) and so "re-recorded themselves at start" from the file
+on disk — that is no longer true and has not been since 2026-08-31. An uploaded
+contract lives ONLY in the store. If the import did not carry it, it would be
+gone, and every REST drift detection with it.
+
+**The summary log line under-reports.** It prints only three of the five:
+
+```
+legacy sqlite store migrated into postgres  source=/data/flanj.db
+  pinned_calls=… findings=… edges=…
+```
+
+Settings and contracts are imported in the same transaction but are not in that
+line (`extension/flanjstore/extension.go`). Absence from the log is not absence
+from the import — confirm them in the UI instead: Settings still shows
+Connected, and the Contracts tab still lists every uploaded contract.
 
 - **Failure aborts start** (a crash loop is visible; silently starting empty is
   not). The import is retry-safe: every insert is conflict-tolerant and the
