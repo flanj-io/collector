@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { callCoverage, notCheckedTitle, NOT_CHECKED_LABEL, type CoverageSpec } from './coverage';
+import {
+  callCoverage,
+  notCheckedTitle,
+  validatedCallsMeta,
+  NOT_CHECKED_LABEL,
+  SINCE_LOAD,
+  SINCE_SNAPSHOT,
+  SINCE_UPLOAD,
+  type CoverageSpec
+} from './coverage';
 
 const providerSpec = (peer_host?: string): CoverageSpec => ({ role: 'provider', format: 'openapi', peer_host });
 const selfSpec: CoverageSpec = { role: 'self', format: 'openapi' };
@@ -89,5 +98,119 @@ describe('callCoverage — mirrors processor/flanjdrift', () => {
       'No contract uploaded for api.globex.test — this call was captured, not validated.'
     );
     expect(notCheckedTitle(undefined)).toBe('No contract uploaded — this call was captured, not validated.');
+  });
+});
+
+/* ── The temporal gate ───────────────────────────────────────────────────
+ *
+ * A contract validates a call only from its own binding time forward. The
+ * whole first-launch false-green family sat on the absence of this: an upload
+ * flipped already-captured calls to CONFORMING with no new traffic, directly
+ * under a notice reading "Calls already captured aren't re-checked".
+ */
+
+/** `TOOLS` above is scoped to the first suite; this one needs its own. */
+const MCP_TOOLS = {
+  'acme-tools': [{ name: 'get_balance', hasOutputSchema: true }]
+};
+
+const BOUND = '2026-09-02T12:00:00Z';
+const BEFORE = '2026-09-02T11:59:59Z';
+const AFTER = '2026-09-02T12:00:01Z';
+
+describe('callCoverage — a contract cannot validate a call it never saw', () => {
+  it('outbound: a call captured BEFORE the upload is not checked by it', () => {
+    const specs = [{ ...providerSpec('api.acme.test'), loaded_at: BOUND }];
+    expect(callCoverage({ ...out('api.acme.test'), captured_at: BEFORE }, specs)).toBe('not-checked');
+    expect(callCoverage({ ...out('api.acme.test'), captured_at: AFTER }, specs)).toBe('checked');
+  });
+
+  it('the QA repro: uploading a contract does not retro-validate the calls already on screen', () => {
+    // Six calls captured, THEN a document dropped in. Nothing re-runs them —
+    // the drift processor saw them before the spec cache had anything to say.
+    const captured = Array.from({ length: 6 }, (_, i) => ({
+      ...out('api.acme.test'),
+      captured_at: `2026-09-02T11:5${i}:00Z`
+    }));
+    const specs = [{ ...providerSpec('api.acme.test'), loaded_at: BOUND }];
+    expect(captured.map((c) => callCoverage(c, specs))).toEqual(Array(6).fill('not-checked'));
+    // The next call to arrive IS validated — the fix is temporal, not a blanket refusal.
+    expect(callCoverage({ ...out('api.acme.test'), captured_at: AFTER }, specs)).toBe('checked');
+  });
+
+  it('a call captured at exactly the binding instant counts as checked', () => {
+    const specs = [{ ...providerSpec('api.acme.test'), loaded_at: BOUND }];
+    expect(callCoverage({ ...out('api.acme.test'), captured_at: BOUND }, specs)).toBe('checked');
+  });
+
+  it('the EARLIEST binding for the host wins when two rows carry the same one', () => {
+    // Between them the host has been bound since 11:00, so an 11:30 call was
+    // in front of the processor while a contract was loaded.
+    const specs = [
+      { ...providerSpec('api.acme.test'), loaded_at: '2026-09-02T13:00:00Z' },
+      { ...providerSpec('api.acme.test'), loaded_at: '2026-09-02T11:00:00Z' }
+    ];
+    expect(callCoverage({ ...out('api.acme.test'), captured_at: '2026-09-02T11:30:00Z' }, specs)).toBe('checked');
+    expect(callCoverage({ ...out('api.acme.test'), captured_at: '2026-09-02T10:30:00Z' }, specs)).toBe('not-checked');
+  });
+
+  it('inbound: the self contract is gated the same way', () => {
+    const specs = [{ ...selfSpec, loaded_at: BOUND }];
+    expect(callCoverage({ ...inb('api.consumer-a.test'), captured_at: BEFORE }, specs)).toBe('not-checked');
+    expect(callCoverage({ ...inb('api.consumer-a.test'), captured_at: AFTER }, specs)).toBe('checked');
+  });
+
+  it('mcp: a call made before the tools/list snapshot arrived is not checked by it', () => {
+    const specs = [{ ...mcpSpec('mcp.acme.test'), loaded_at: BOUND }];
+    const call = (captured_at: string) => ({
+      ...mcp('mcp.acme.test'),
+      integration: 'acme-tools',
+      mcp_tool_name: 'get_balance',
+      captured_at
+    });
+    expect(callCoverage(call(BEFORE), specs, MCP_TOOLS)).toBe('not-checked');
+    expect(callCoverage(call(AFTER), specs, MCP_TOOLS)).toBe('checked');
+  });
+
+  it('a contract bound to ANOTHER host stays not-checked whatever the timestamps say', () => {
+    // The gate is an extra requirement on top of the host match, never a
+    // substitute for it.
+    const specs = [{ ...providerSpec('api.globex.test'), loaded_at: BEFORE }];
+    expect(callCoverage({ ...out('api.acme.test'), captured_at: AFTER }, specs)).toBe('not-checked');
+  });
+
+  it('an unknown timestamp leaves the host-match answer standing, in EITHER slot', () => {
+    // Rows written before these fields were recorded cannot be placed in time.
+    // The gate is then not applied at all rather than guessed at — it must not
+    // invent a fresh verdict from a blank, in either direction.
+    expect(callCoverage({ ...out('api.acme.test'), captured_at: AFTER }, [providerSpec('api.acme.test')])).toBe('checked');
+    expect(callCoverage(out('api.acme.test'), [{ ...providerSpec('api.acme.test'), loaded_at: BOUND }])).toBe('checked');
+    expect(callCoverage({ ...out('api.acme.test'), captured_at: 'not a date' }, [
+      { ...providerSpec('api.acme.test'), loaded_at: BOUND }
+    ])).toBe('checked');
+  });
+
+  it('internal still short-circuits before any of this', () => {
+    expect(
+      callCoverage({ ...out('ledger'), edge_class: 'internal', captured_at: BEFORE }, [
+        { ...providerSpec('ledger'), loaded_at: BOUND }
+      ])
+    ).toBe('internal');
+  });
+});
+
+describe('validatedCallsMeta — the card line that makes zero visible', () => {
+  it('counts, pluralises, and says zero out loud', () => {
+    expect(validatedCallsMeta(0)).toBe('validated 0 calls since upload');
+    expect(validatedCallsMeta(1)).toBe('validated 1 call since upload');
+    expect(validatedCallsMeta(6)).toBe('validated 6 calls since upload');
+  });
+
+  it('anchors the clause to how the contract actually got here', () => {
+    // "since upload" on a config-loaded self contract, or on a tools/list
+    // nobody put there, is the small kind of lie this module exists to stop.
+    expect(validatedCallsMeta(2, SINCE_LOAD)).toBe('validated 2 calls since it loaded');
+    expect(validatedCallsMeta(2, SINCE_SNAPSHOT)).toBe('validated 2 calls since this snapshot');
+    expect(validatedCallsMeta(2, SINCE_UPLOAD)).toBe('validated 2 calls since upload');
   });
 });

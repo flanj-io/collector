@@ -26,6 +26,7 @@ import {
   REPLACE_CONTRACT,
   contractMeta,
   contractOrigin,
+  provenanceWord,
   findingBelongsToContract,
   contractsByHost,
   edgeContractLine,
@@ -106,7 +107,17 @@ import {
   typeDraft,
   type EdgeNameEdit
 } from './edge-names';
-import { callCoverage, notCheckedTitle, NOT_CHECKED_LABEL, type Coverage } from './coverage';
+import {
+  callCoverage,
+  notCheckedTitle,
+  validatedCallsMeta,
+  NOT_CHECKED_LABEL,
+  SINCE_LOAD,
+  SINCE_SNAPSHOT,
+  SINCE_UPLOAD,
+  type Coverage
+} from './coverage';
+import { headlineFor } from './headline';
 import type { Correlation, Finding, FlagResult, Health, RedactedCall } from './types';
 
 interface Edge {
@@ -159,6 +170,9 @@ const contracts = ref<SpecInfo[]>([]);
 // True once /api/contracts has answered OK — older collectors lack the endpoint,
 // and only a real answer lets us assert "no contract loaded" per provider.
 const contractsKnown = ref(false);
+/** The relay itself was unreachable — no response to quote. Shared by the poll
+ *  banner and the per-finding ack error so one failure never wears two names. */
+const COLLECTOR_UNREACHABLE = 'Could not reach this collector.';
 const loadError = ref('');
 // ─── Connect + threads (v0.1a) ───────────────────────────────────────────
 // Connect state comes from the relay (`GET /api/connect`, refreshed from the CP);
@@ -505,11 +519,24 @@ function cardValidatedCalls(p: ContractCard): number {
   const card = { peerHost: p.peerHost, isSelf: p.spec?.role === 'self' };
   let n = 0;
   for (const c of calls.value) {
+    // `checked` now carries the temporal gate (ui/src/coverage.ts): a call
+    // captured BEFORE this contract was bound is not evidence for it, however
+    // well the hosts match. Uploading a document used to flip six already
+    // captured calls to validated with no new traffic at all.
     if (coverageOf(c) !== 'checked') continue;
     if (!isEvidenceFor(c, card)) continue;
     n++;
   }
   return n;
+}
+
+/** The evidence line under a card: `validated 0 calls since upload`. Always
+ *  rendered, because ZERO is the state that used to render CONFORMING and it
+ *  is the only symptom a wrong host binding ever produces. */
+function cardEvidenceMeta(p: ContractCard): string {
+  const word = p.spec ? provenanceWord(p.spec) : 'uploaded';
+  const since = word === 'observed' ? SINCE_SNAPSHOT : word === 'loaded' ? SINCE_LOAD : SINCE_UPLOAD;
+  return validatedCallsMeta(cardValidatedCalls(p), since);
 }
 
 function coverageOf(c: RedactedCall): Coverage {
@@ -997,7 +1024,7 @@ async function setAck(f: Finding, ack: boolean) {
     await apiPost(`/api/findings/${encodeURIComponent(f.id)}/${ack ? 'ack' : 'unack'}`);
     await refresh();
   } catch (e) {
-    ackError.value = { ...ackError.value, [f.id]: e instanceof ApiError ? e.message : 'Could not reach this collector.' };
+    ackError.value = { ...ackError.value, [f.id]: e instanceof ApiError ? e.message : COLLECTOR_UNREACHABLE };
   } finally {
     ackBusy.value = { ...ackBusy.value, [f.id]: false };
   }
@@ -1016,24 +1043,23 @@ const sheetCall = computed(() =>
   sheetFinding.value?.source_call_id ? callsById.value[sheetFinding.value.source_call_id] || null : null
 );
 
+/** Calls in the window that a contract was actually in a position to check —
+ *  the evidence behind the headline, and the same `checked` verdict the Traffic
+ *  chips and the contract cards read. */
+const validatedCallCount = computed(() => calls.value.filter((c) => coverageOf(c) === 'checked').length);
+
 // Headline counts LIVE drift only — spec-version diffs are informational and
-// intentionally excluded from the divergence status.
-//
-// Pre-traffic honesty (v1p1): `integration` is absent from /api/health until
-// the collector has observed an external outbound edge (or a finding). While
-// absent, the "on integration <slug>" fragment simply does not render — no
-// replacement copy, no fallback slug.
-const headline = computed(() => {
-  const n = liveFindings.value.length;
-  const integration = health.value?.integration || '';
-  if (n === 0) return { you: 'No drift detected', ok: true, integration };
-  const endpoints = Array.from(new Set(liveFindings.value.map((f) => f.endpoint)));
-  return {
-    you: `${n} contract drift finding${n === 1 ? '' : 's'} on ${endpoints.join(', ')}`,
-    ok: false,
-    integration
-  };
-});
+// intentionally excluded from the divergence status. The wording, the neutral
+// zero state and the reason it exists all live in ui/src/headline.ts, where
+// vitest can see them: this line used to assert `No drift detected` on an
+// install where nothing had ever been validated.
+const headline = computed(() =>
+  headlineFor({
+    liveFindings: liveFindings.value,
+    validatedCalls: validatedCallCount.value,
+    integration: health.value?.integration
+  })
+);
 
 // ─── Edge naming (v1p1): the inline rename editor ─────────────────────────
 // One editor at a time; all transitions live in edge-names.ts (vitest-covered).
@@ -1118,13 +1144,32 @@ async function removeName(e: Edge) {
   }
 }
 
+/**
+ * The 5s poll — through apiGet, so a failed response can never be mistaken for
+ * data.
+ *
+ * These four used to be `fetch(...).then(r => r.json())`, which does not look
+ * at `r.ok`: a 500 with an error body RESOLVED, and the error object was
+ * assigned straight into `health`. `cp_configured` then read `undefined` and
+ * the header grew a `control plane not configured` pill, Overview said no edges
+ * had been discovered and Traffic said no calls had been captured — a store
+ * outage rendered as a fresh install, and the page invited the operator to fix
+ * configuration that was working. Observed on the postgres lane with the
+ * database stopped; only the Threads tab (which already used the api helpers)
+ * told the truth.
+ *
+ * apiGet throws ApiError on a non-ok response, and Promise.all rejects on the
+ * first of them, so NOTHING is assigned unless all four succeeded. Last-known
+ * data stays on screen — stale beats invented — and the thrown message lands in
+ * the existing "Failed to load" banner.
+ */
 async function refresh() {
   try {
     const [h, f, c, e] = await Promise.all([
-      fetch('/api/health').then((r) => r.json()),
-      fetch('/api/findings').then((r) => r.json()),
-      fetch('/api/calls').then((r) => r.json()),
-      fetch('/api/edges').then((r) => r.json())
+      apiGet<Health>('/api/health'),
+      apiGet<{ findings?: Finding[] }>('/api/findings'),
+      apiGet<{ calls?: RedactedCall[] }>('/api/calls'),
+      apiGet<{ edges?: Edge[] }>('/api/edges')
     ]);
     health.value = h;
     findings.value = f.findings || [];
@@ -1132,7 +1177,11 @@ async function refresh() {
     edges.value = e.edges || [];
     loadError.value = '';
   } catch (e) {
-    loadError.value = String(e);
+    // The relay's own one-sentence message when it answered, and the deck's
+    // line when it did not answer at all. `String(e)` put a raw
+    // `TypeError: Failed to fetch` in front of the operator (QA walk,
+    // 2026-09-02) — the same string the ack path already refuses to show.
+    loadError.value = e instanceof ApiError ? e.message : COLLECTOR_UNREACHABLE;
   }
   await refreshContracts();
 }
@@ -1317,7 +1366,10 @@ watch(tab, (t) => {
 
     <!-- ───────────────────────── OVERVIEW ───────────────────────── -->
     <div v-show="tab === 'overview'">
-      <section class="headline" :class="{ ok: headline.ok, drift: !headline.ok }">
+      <!-- Three tones, not two: `neutral` is the install where nothing has been
+           validated yet, and it must read as neither the green all-clear nor
+           the red drift banner (ui/src/headline.ts). -->
+      <section class="headline" :class="headline.tone">
         <!-- Observed state only — the collector does not measure provider health. -->
         <div class="hl-you">
           You: <strong>{{ headline.you }}</strong>
@@ -1591,6 +1643,11 @@ watch(tab, (t) => {
                 <button type="button" class="btn ghost small" @click="removeContract(p.spec.integration, p.peerHost)">Remove</button>
               </template>
             </template>
+            <!-- How much evidence is actually behind the chip above. ZERO is
+                 the point: it is the state that used to read CONFORMING, and a
+                 contract bound to the wrong host has no other symptom at all —
+                 no error, no finding, a card that looks finished. -->
+            <span class="prov-meta evidence">{{ cardEvidenceMeta(p) }}</span>
           </div>
           <p v-else-if="mcpHosts.has(p.peerHost)" class="prov-nospec">{{ MCP_NO_SPEC_NEEDED }}</p>
           <p v-else class="prov-nospec">{{ NO_CONTRACT_ROW }}</p>
@@ -2144,6 +2201,9 @@ body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 syste
 .hl-sub { color: var(--muted); font-size: 0.85rem; margin-top: 0.3rem; }
 .headline.drift .hl-you strong { color: var(--danger); }
 .headline.ok .hl-you strong { color: var(--ok-text); }
+/* Neutral: nothing has been validated yet. Deliberately uncoloured — the two
+   coloured tones are verdicts, and this state has not reached one. */
+.headline.neutral .hl-you strong { color: var(--muted); font-weight: 600; }
 .hint { color: var(--muted); font-size: 0.88rem; margin-top: 1rem; }
 
 /* Shared */
@@ -2282,6 +2342,9 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .doc-link { color: var(--accent); font-size: 0.85rem; text-decoration: none; border: 1px solid var(--line); border-radius: 8px; padding: 0.28rem 0.7rem; background: var(--panel2); }
 .doc-link:hover { border-color: var(--accent); }
 .prov-meta { color: var(--muted); font-size: 0.8rem; }
+/* The evidence count rides in the same muted channel as provenance — it is a
+   fact about this card, not a warning, and zero must not be dressed as one. */
+.prov-meta.evidence { margin-left: auto; }
 /* The origin sits IN the heading at the same size as the name, muted — the fact
    that separates two servers sharing a name has to be where the eye already is,
    not in a 0.78rem slug at the end of the row. */
