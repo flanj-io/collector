@@ -245,6 +245,63 @@ describe('the uploader can be driven from the keyboard', () => {
     expect(click).toHaveBeenCalledTimes(3);
   });
 
+  it('releases the confirm button once a host re-parse lands, and even when it fails', async () => {
+    // QA walk, 2026-09-02 (VERIFIED blocker): the hold that stops a binding
+    // being committed against a stale preview was released in the wrong
+    // function, so editing the host at the confirm step disabled "Add contract"
+    // permanently — the preview came back 200 and the button never came back.
+    const previews: Array<(v: unknown) => void> = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown, init?: RequestInit) => {
+        const path = String(input).split('?')[0];
+        if (path === '/api/contracts/preview') {
+          void init;
+          return json({
+            peer_host: HOST, integration: INTEGRATION, title: 'Acme', version: '1.0.0',
+            endpoints: 1, servers: [`https://${HOST}`], servers_match: true, has_traffic: false
+          });
+        }
+        return json({}, 404);
+      })
+    );
+    void previews;
+
+    const w = mount(ContractUploader, { props: { host: '' }, attachTo: document.body });
+    wrapper = w as unknown as VueWrapper;
+    const vm = w.vm as unknown as Record<string, unknown>;
+
+    // Reach the confirm step through the component's own path.
+    (vm as { typedHost: string }).typedHost = HOST;
+    (vm as { doc: string }).doc = 'openapi: 3.0.0';
+    (vm as { filename: string }).filename = 'spec.yaml';
+    await (vm as { runPreview: () => Promise<void> }).runPreview();
+    await w.vm.$nextTick();
+    // The assertion that matters is the CONTROL, not the flag behind it: this
+    // is the button the operator clicks to bind the contract.
+    const addContract = () => w.find('.uploader-actions button');
+    expect(addContract().attributes('disabled')).toBeUndefined();
+
+    // Edit the host: the button is HELD while the re-parse is in flight, so a
+    // binding is never committed against a preview describing a different host.
+    (vm as { onHostEdited: () => void }).onHostEdited();
+    await w.vm.$nextTick();
+    expect(addContract().attributes('disabled')).toBeDefined();
+    await vi.advanceTimersByTimeAsync(500);
+    await w.vm.$nextTick();
+    // ...and RELEASED once it lands.
+    expect(addContract().attributes('disabled')).toBeUndefined();
+
+    // A re-parse that FAILS must release it too — otherwise the confirm button
+    // strands disabled with nothing the operator can do about it.
+    vi.stubGlobal('fetch', vi.fn(async () => json({ error: 'unparseable_document', message: 'nope' }, 400)));
+    (vm as { onHostEdited: () => void }).onHostEdited();
+    await w.vm.$nextTick();
+    await vi.advanceTimersByTimeAsync(500);
+    await w.vm.$nextTick();
+    expect((vm as { hostDirty: boolean }).hostDirty).toBe(false);
+  });
+
   it('keeps the reset that lets the same file be chosen twice', async () => {
     const w = mount(ContractUploader, { props: { host: HOST }, attachTo: document.body });
     wrapper = w as unknown as VueWrapper;

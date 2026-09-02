@@ -192,6 +192,10 @@ async function runPreview() {
     error.value = e instanceof ApiError ? e.message : 'Couldn’t read that document.';
   } finally {
     busy.value = false;
+    // In `finally`, not after the await: a re-parse that FAILS must release the
+    // confirm button too. Left on the success path only, a rejected preview
+    // stranded it disabled with "Re-reading the document…" forever.
+    hostDirty.value = false;
   }
 }
 
@@ -215,7 +219,6 @@ async function confirm() {
     emit('uploaded', notice);
   } catch (e) {
     error.value = e instanceof ApiError ? e.message : 'Couldn’t save the contract.';
-    hostDirty.value = false;
   } finally {
     busy.value = false;
   }
