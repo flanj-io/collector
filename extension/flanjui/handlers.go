@@ -57,13 +57,35 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 // storeOrError resolves the shared store, writing a 503 and returning nil when
-// it cannot be found (e.g. the store extension is not configured).
+// it cannot be found (e.g. the store extension is not configured). Same status,
+// same code, same sentence as a store call that fails once resolved
+// (storeErr): to the operator both are "the local store isn't there", and two
+// envelopes for one condition is how a UI ends up rendering two different
+// stories about the same outage.
 func (e *uiExtension) storeOrError(w http.ResponseWriter) store.Store {
 	st := e.resolveStore()
 	if st == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "store extension not available"})
+		writeErr(w, http.StatusServiceUnavailable, "store_error", msgStoreUnavailable)
 	}
 	return st
+}
+
+// storeErr answers a READ route whose store call failed.
+//
+// The raw error goes to the log and nowhere else. A pgx connection error is the
+// DSN in prose — `failed to connect to user=flanj database=flanj … lookup
+// postgres …` — and the read routes used to hand that verbatim to the browser
+// as `{"error": "<the whole thing>"}`, on unauthenticated localhost GETs, while
+// every mutating route answered the deck's one sentence. The operator learns
+// nothing from the DSN they cannot read off their own config; a log line is
+// where it belongs.
+//
+// 503, not 500: the store is a dependency that is down, not a bug in the
+// request — and it is the status storeOrError already answered for the same
+// condition.
+func (e *uiExtension) storeErr(w http.ResponseWriter, op string, err error) {
+	e.telemetry.Logger.Warn("read api: " + op + ": " + err.Error())
+	writeErr(w, http.StatusServiceUnavailable, "store_error", msgStoreUnavailable)
 }
 
 // handleHealth reports the divergence headline inputs: store fill + counts.
@@ -74,7 +96,7 @@ func (e *uiExtension) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, bytes, err := st.Stats()
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		e.storeErr(w, "store stats", err)
 		return
 	}
 	calls, findings, _ := st.Counts()
@@ -165,13 +187,13 @@ func (e *uiExtension) handleEdges(w http.ResponseWriter, r *http.Request) {
 	}
 	edges, err := st.ListEdges(true) // externalOnly
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		e.storeErr(w, "list edges", err)
 		return
 	}
 	since := time.Now().UTC().Add(-time.Minute).Format("2006-01-02T15:04:05Z")
 	counts, err := st.EdgeCallCountsSince(since)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		e.storeErr(w, "edge call counts", err)
 		return
 	}
 	// One resolution context per REQUEST — never a lookup per edge, and never
@@ -334,7 +356,7 @@ func (e *uiExtension) handleContracts(w http.ResponseWriter, r *http.Request) {
 	}
 	infos, err := st.ListSpecInfos()
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		e.storeErr(w, "list contracts", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"contracts": infos})
@@ -350,11 +372,11 @@ func (e *uiExtension) handleContractSpec(w http.ResponseWriter, r *http.Request)
 	integration := r.URL.Query().Get("integration")
 	raw, _, ok, err := st.GetSpecDoc(integration)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		e.storeErr(w, "get contract document", err)
 		return
 	}
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no contract loaded for integration"})
+		writeErr(w, http.StatusNotFound, "contract_not_found", msgContractNotLoaded)
 		return
 	}
 	ct := "application/yaml"
@@ -373,15 +395,16 @@ func (e *uiExtension) handleCalls(w http.ResponseWriter, r *http.Request) {
 	}
 	calls, err := st.ListCalls(200)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		e.storeErr(w, "list calls", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"calls": calls})
 }
 
-// findingView decorates a stored finding with its LOCAL ack state for the UI —
-// a read-API join only. model.Finding itself never gains the field (it mirrors
-// the frozen schema and is what promotes to the CP; the ack never leaves).
+// findingView decorates a stored finding for the UI with its LOCAL ack state
+// and the host of its source call — read-API joins only. model.Finding itself
+// gains neither (it mirrors the frozen schema and is what promotes to the CP;
+// the ack never leaves).
 type findingView struct {
 	model.Finding
 	Acked   bool   `json:"acked,omitempty"`
@@ -392,6 +415,41 @@ type findingView struct {
 	// check that a new change can never inherit an old acknowledgement
 	// (ux-design-v2 §2.8 / §7 risk 2).
 	AckedEvidenceVersion string `json:"acked_evidence_version,omitempty"`
+	// PeerHost is the provider host this finding is ABOUT: the peer host of its
+	// pinned source call, resolved here rather than in the browser.
+	//
+	// The Contracts tab pairs a finding with the contract card for its host,
+	// because host is the only thing the two genuinely share — an uploaded
+	// contract's integration id is derived from the host it binds to while a
+	// finding's integration comes from the call, stamped by the SDK. The SPA
+	// used to resolve that host by looking the source call up in GET /api/calls,
+	// which returns the 200 newest rows: source_call_id is frozen at the FIRST
+	// occurrence, so once that call aged out of the page the finding detached
+	// from its own contract and rendered a second card claiming "No contract for
+	// this provider" — under a BREAKING verdict only that contract could have
+	// produced. The store still holds the call (a finding pins it), so the join
+	// belongs here, where the whole store is in reach.
+	//
+	// Empty when the finding is call-less (version-diff, MCP definition_change)
+	// or its call really is gone; the SPA falls back to integration then.
+	// model.Finding itself never gains the field — it mirrors the frozen schema
+	// and is what promotes to the CP.
+	PeerHost string `json:"peer_host,omitempty"`
+}
+
+// findingPeerHosts resolves the peer host of every finding's source call in one
+// store lookup — never one per finding, on a route the SPA polls.
+func findingPeerHosts(st store.Store, findings []model.Finding) (map[string]string, error) {
+	ids := make([]string, 0, len(findings))
+	for _, f := range findings {
+		if f.SourceCallID != nil && *f.SourceCallID != "" {
+			ids = append(ids, *f.SourceCallID)
+		}
+	}
+	if len(ids) == 0 {
+		return map[string]string{}, nil
+	}
+	return st.CallPeerHosts(ids)
 }
 
 func (e *uiExtension) handleFindings(w http.ResponseWriter, r *http.Request) {
@@ -401,17 +459,25 @@ func (e *uiExtension) handleFindings(w http.ResponseWriter, r *http.Request) {
 	}
 	findings, err := st.ListFindings(200)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		e.storeErr(w, "list findings", err)
 		return
 	}
 	acks, err := loadAckSet(st)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		e.storeErr(w, "load acknowledgements", err)
+		return
+	}
+	hosts, err := findingPeerHosts(st, findings)
+	if err != nil {
+		e.storeErr(w, "resolve finding hosts", err)
 		return
 	}
 	views := make([]findingView, len(findings))
 	for i, f := range findings {
 		views[i] = findingView{Finding: f}
+		if f.SourceCallID != nil {
+			views[i].PeerHost = hosts[*f.SourceCallID]
+		}
 		// ackMatches is what makes the acknowledged band's promise true: a
 		// definition_change whose after-snapshot hash has moved on is NOT
 		// covered by the old record and comes back un-acknowledged.

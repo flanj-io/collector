@@ -3,6 +3,7 @@ package flanjui
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -1892,5 +1893,209 @@ func TestDashboardURLOnlyWhenConnected(t *testing.T) {
 	}
 	if strings.Contains(got, "//d") || strings.HasSuffix(got, "//d") {
 		t.Errorf("dashboard_url has a doubled slash — base URL trailing slash not trimmed: %q", got)
+	}
+}
+
+// brokenStore is a store whose every READ fails with the error a stopped
+// postgres actually produces — the pgx connect error, DSN and all. The reads a
+// test drives are the ones the read API makes; everything else falls through to
+// the embedded fake.
+type brokenStore struct {
+	*fakeStore
+	err error
+}
+
+// storeDSNError is the verbatim shape of a pgx failure against a stopped
+// database: user, database and host, in prose. It is what the read routes used
+// to hand to the browser.
+const storeDSNError = "failed to connect to `user=flanj database=flanj`: " +
+	"[::1]:5432 (localhost): dial error: dial tcp [::1]:5432: connect: connection refused, " +
+	"lookup postgres on 127.0.0.11:53: no such host"
+
+func newBrokenStore() *brokenStore {
+	return &brokenStore{fakeStore: newFakeStore(), err: errors.New(storeDSNError)}
+}
+
+func (b *brokenStore) Stats() (int, int64, error) { return 0, 0, b.err }
+func (b *brokenStore) ListEdges(bool) ([]model.Edge, error) {
+	return nil, b.err
+}
+func (b *brokenStore) EdgeCallCountsSince(string) (map[string]int, error)   { return nil, b.err }
+func (b *brokenStore) ListCalls(int) ([]model.RedactedCall, error)          { return nil, b.err }
+func (b *brokenStore) ListFindings(int) ([]model.Finding, error)            { return nil, b.err }
+func (b *brokenStore) ListSpecInfos() ([]model.SpecInfo, error)             { return nil, b.err }
+func (b *brokenStore) GetSpecDoc(string) ([]byte, string, bool, error)      { return nil, "", false, b.err }
+func (b *brokenStore) CallPeerHosts([]string) (map[string]string, error)    { return nil, b.err }
+func (b *brokenStore) GetSetting(string) (string, bool, error)              { return "", false, b.err }
+
+// TestReadRoutesNeverLeakTheStoreError is the regression for the postgres-lane
+// walk (2026-09-02): with the database stopped, every read route answered
+// `{"error": "failed to connect to user=flanj database=flanj … lookup postgres
+// …"}` — the connection string, in prose, to an unauthenticated localhost GET,
+// at 500, while every mutating route answered the deck's one sentence at the
+// same moment. Two envelopes and two statuses for one condition.
+//
+// Every read route now answers the SAME 503 {error, message} the rest of the
+// relay speaks, and the raw error goes to the log instead.
+func TestReadRoutesNeverLeakTheStoreError(t *testing.T) {
+	core, logs := observer.New(zap.DebugLevel)
+	ext := &uiExtension{
+		cfg:       &Config{UIEndpoint: "127.0.0.1:0", IntegrationID: "acme-payments"},
+		telemetry: component.TelemetrySettings{Logger: zap.New(core)},
+		st:        newBrokenStore(),
+	}
+	ui := httptest.NewServer(ext.routes())
+	t.Cleanup(ui.Close)
+
+	for _, path := range []string{
+		"/api/health",
+		"/api/edges",
+		"/api/calls",
+		"/api/findings",
+		"/api/contracts",
+		"/api/contracts/spec?integration=acme-payments",
+	} {
+		resp, err := http.Get(ui.URL + path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		raw, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if resp.StatusCode != http.StatusServiceUnavailable {
+			t.Errorf("GET %s: status = %d, want 503 (the store is a dependency that is down)", path, resp.StatusCode)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(raw, &body); err != nil {
+			t.Fatalf("GET %s: body is not JSON: %v (%s)", path, err, raw)
+		}
+		if body["error"] != "store_error" {
+			t.Errorf("GET %s: error = %v, want the stable code store_error", path, body["error"])
+		}
+		if body["message"] != msgStoreUnavailable {
+			t.Errorf("GET %s: message = %v, want the deck's sentence %q", path, body["message"], msgStoreUnavailable)
+		}
+		// The leak itself: never the DSN, in any fragment, on any route.
+		for _, secret := range []string{"user=", "database=", "postgres", "5432", storeDSNError} {
+			if bytes.Contains(bytes.ToLower(raw), []byte(strings.ToLower(secret))) {
+				t.Errorf("GET %s leaked %q to the browser: %s", path, secret, raw)
+			}
+		}
+	}
+
+	// The operator still gets the real cause — in the log, where it belongs.
+	var logged bool
+	for _, entry := range logs.All() {
+		if strings.Contains(entry.Message, "user=flanj") {
+			logged = true
+		}
+	}
+	if !logged {
+		t.Error("the raw store error must reach the log — it is diagnosis, not a browser payload")
+	}
+}
+
+// TestStoreOrErrorSpeaksTheSameEnvelope covers the OTHER half of the condition:
+// no store extension resolved at all. It answered a third shape —
+// `{"error": "store extension not available"}`, no message — so a UI switching
+// on the code saw two different stories about one outage.
+func TestStoreOrErrorSpeaksTheSameEnvelope(t *testing.T) {
+	ext := &uiExtension{
+		cfg:       &Config{UIEndpoint: "127.0.0.1:0"},
+		telemetry: component.TelemetrySettings{Logger: zap.NewNop()},
+	}
+	ui := httptest.NewServer(ext.routes())
+	t.Cleanup(ui.Close)
+
+	resp, err := http.Get(ui.URL + "/api/findings")
+	if err != nil {
+		t.Fatalf("GET /api/findings: %v", err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", resp.StatusCode)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatalf("body is not JSON: %v (%s)", err, raw)
+	}
+	if body["error"] != "store_error" || body["message"] != msgStoreUnavailable {
+		t.Errorf("unresolved store answered %v, want the same {store_error, %q} a failed store call answers", body, msgStoreUnavailable)
+	}
+}
+
+// TestFindingsCarryTheirSourceCallHost is the regression for the Contracts-tab
+// split (postgres lane, 2026-09-02): one provider rendered TWICE — the uploaded
+// contract with a green CONFORMING pill, and directly beneath it a second card
+// for the same host saying "No contract for this provider" while carrying the
+// BREAKING finding.
+//
+// The SPA joins a finding to its contract card by HOST (the ids never match: an
+// uploaded contract's integration is derived from the host, a finding's comes
+// from the call), and it used to resolve that host by looking source_call_id up
+// in GET /api/calls — the 200 newest rows. source_call_id is frozen at the
+// FIRST occurrence, so the join broke the moment the evidence call fell off
+// that page, which ordinary traffic does in minutes.
+//
+// The store still HAS the call (a finding pins it), so the host is resolved
+// here and shipped on the row.
+func TestFindingsCarryTheirSourceCallHost(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+
+	// The evidence call — pinned by its finding, and deliberately NOT among the
+	// rows /api/calls would return in the live stack (there it has aged out of
+	// the newest 200; here the point is that the finding row no longer needs it).
+	callID := "call_evidence"
+	if err := r.st.InsertCall(model.RedactedCall{
+		SchemaVersion: 1, ID: callID, CapturedAt: "2026-08-23T09:00:00Z", Integration: "acme-payments",
+		Direction: "client", PeerHost: "api.acme.test", Method: "POST", URL: "https://api.acme.test/v1/charges",
+		Route: "/v1/charges", StatusCode: 200, RequestBody: "{}", ResponseBody: `{"amount":"10"}`,
+		Redaction: model.Redaction{Patterns: []string{}},
+	}); err != nil {
+		t.Fatalf("seed call: %v", err)
+	}
+	if err := r.st.InsertFinding(model.Finding{
+		SchemaVersion: 1, ID: "fnd_host", Kind: model.KindLiveVsSpec, Severity: model.SeverityBreaking,
+		Integration: "acme-payments", Endpoint: "POST /v1/charges", Expected: "integer", Actual: "string",
+		Rule: "type", SourceCallID: &callID, DetectedAt: "2026-08-23T09:00:01Z",
+	}); err != nil {
+		t.Fatalf("seed finding: %v", err)
+	}
+	// A CALL-LESS finding (an MCP definition_change): no source call, so no
+	// host — the SPA falls back to integration for these, and a host invented
+	// here would be a lie about which provider the finding is against.
+	if err := r.st.InsertFinding(model.Finding{
+		SchemaVersion: 1, ID: "fnd_callless", Kind: model.KindDefinitionChange, Severity: model.SeverityInfo,
+		Integration: "acme-tools", Endpoint: "charge", Rule: "description-changed", DetectedAt: "2026-08-23T09:00:02Z",
+	}); err != nil {
+		t.Fatalf("seed call-less finding: %v", err)
+	}
+
+	_, _, raw := r.do(t, http.MethodGet, "/api/findings", nil)
+	var out struct {
+		Findings []struct {
+			ID       string `json:"id"`
+			PeerHost string `json:"peer_host"`
+		} `json:"findings"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("decode findings: %v (%s)", err, raw)
+	}
+	hosts := map[string]string{}
+	for _, f := range out.Findings {
+		hosts[f.ID] = f.PeerHost
+	}
+	if got := hosts["fnd_host"]; got != "api.acme.test" {
+		t.Errorf("finding peer_host = %q, want api.acme.test — without it the finding detaches from its contract card", got)
+	}
+	if got, ok := hosts["fnd_callless"]; ok && got != "" {
+		t.Errorf("a call-less finding must carry no host, got %q", got)
+	}
+	// The seeded rig finding references a call stored WITHOUT a peer host: an
+	// absent host must stay absent rather than become "".
+	if got := hosts["fnd_1"]; got != "" {
+		t.Errorf("a call with no peer host must not invent one, got %q", got)
 	}
 }

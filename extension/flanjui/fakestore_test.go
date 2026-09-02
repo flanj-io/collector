@@ -85,6 +85,20 @@ func (f *fakeStore) ListFindings(limit int) ([]model.Finding, error) {
 	}
 	return out, nil
 }
+func (f *fakeStore) CallPeerHosts(ids []string) (map[string]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := map[string]string{}
+	for _, id := range ids {
+		// Absent calls and calls with no host stay ABSENT from the map — the
+		// real backends answer that way and the read API's fallback depends on
+		// it.
+		if c, ok := f.calls[id]; ok && c.PeerHost != "" {
+			out[id] = c.PeerHost
+		}
+	}
+	return out, nil
+}
 func (f *fakeStore) ListEdges(externalOnly bool) ([]model.Edge, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

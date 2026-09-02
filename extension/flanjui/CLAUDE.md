@@ -20,6 +20,18 @@ API + the flag action.
   `correlation.client_request_id` through untouched; `/api/findings` carries the
   three MCP kinds plus the optional `snapshot_observed_at` (CONTRACTS §4). All
   MCP rendering lives in the SPA (`ui/src/mcp.ts`).
+  `/api/findings` rows also carry two LOCAL read-API joins that never touch
+  `model.Finding`: the ack state, and **`peer_host`** — the host of the
+  finding's pinned source call, which is how the Contracts tab pairs a finding
+  with its provider card (`ui/src/contracts.ts` `findingBelongsToContract`).
+  It is joined here rather than in the browser because `/api/calls` returns only
+  the 200 newest rows while `source_call_id` is frozen at the first occurrence,
+  so the SPA's own lookup lost the pairing as soon as the evidence call aged out
+  and the provider split into two cards.
+  **Every read route answers a store failure the same way**: `503
+  {error: "store_error", message: …}`, with the raw error going to the log and
+  nowhere else — a pgx connection error is the DSN in prose, and the read routes
+  used to hand it to the browser verbatim at 500.
 - **Control-plane relay (v0.1a — CONTRACTS §5, spec Step 4b).** The UI never
   holds a bearer; the relay does, and every mutating route is guarded
   (`guard.go`): POST only (405), `X-Flanj-UI: 1` (403 `ui_header_required`),
