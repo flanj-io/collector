@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/flanj-io/collector/internal/edge"
@@ -59,6 +60,11 @@ type Store interface {
 	GetFinding(id string) (model.Finding, bool, error)
 	ListCalls(limit int) ([]model.RedactedCall, error)
 	ListFindings(limit int) ([]model.Finding, error)
+	// CallPeerHosts resolves call ids to the peer host each call was captured
+	// against. Ids with no stored call — and calls stored without a host, e.g.
+	// a local-process MCP server — are absent from the map rather than present
+	// and empty.
+	CallPeerHosts(ids []string) (map[string]string, error)
 	ListEdges(externalOnly bool) ([]model.Edge, error)
 	EdgeCallCountsSince(sinceISO string) (map[string]int, error)
 	PutSpecInfo(info model.SpecInfo, rawSpec []byte) error
@@ -323,6 +329,75 @@ func (b *base) ListFindings(limit int) ([]model.Finding, error) {
 		limit = 100
 	}
 	return b.scanFindings(`SELECT doc, occurrence_count, last_seen FROM findings ORDER BY seq DESC LIMIT ?`, limit)
+}
+
+// callPeerHostBatch caps how many ids go into one IN list. A read-API page asks
+// about far fewer, but a bounded batch keeps a larger caller comfortably inside
+// postgres's parameter limit.
+const callPeerHostBatch = 500
+
+// CallPeerHosts resolves call ids to their peer host, in one query per batch.
+//
+// It exists for the read API's finding→contract join, which pairs a finding
+// with the provider card it belongs to by HOST — a finding reaches its host
+// only through its source call. Doing that with GetCall per finding would
+// decode a whole call document per row on a poll that repeats every few
+// seconds; peer_host is its own column (it is the edge key), so this reads
+// exactly that and nothing else.
+//
+// Ids with no stored call, and calls stored without a host, are simply missing
+// from the map: callers distinguish "no host" by lookup, never by empty value.
+func (b *base) CallPeerHosts(ids []string) (map[string]string, error) {
+	out := make(map[string]string, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	batch := make([]any, 0, callPeerHostBatch)
+	flush := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+		rows, err := b.db.Query(b.rebind(
+			`SELECT id, peer_host FROM calls WHERE id IN (?`+strings.Repeat(",?", len(batch)-1)+`)`), batch...)
+		if err != nil {
+			return fmt.Errorf("call peer hosts: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var (
+				id   string
+				host sql.NullString
+			)
+			if err := rows.Scan(&id, &host); err != nil {
+				return fmt.Errorf("call peer hosts: %w", err)
+			}
+			if host.Valid && host.String != "" {
+				out[id] = host.String
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("call peer hosts: %w", err)
+		}
+		batch = batch[:0]
+		return nil
+	}
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		batch = append(batch, id)
+		if len(batch) == callPeerHostBatch {
+			if err := flush(); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if err := flush(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // findingEvidenceVersion is the content hash a finding's EVIDENCE is bound to:

@@ -355,6 +355,10 @@ export function contractHeading(spec: ContractSpec): string {
 export interface AttributableFinding {
   integration: string;
   source_call_id?: string | null;
+  /** The host of the finding's source call, pinned server-side by
+   *  GET /api/findings. Present whenever the store still holds that call —
+   *  which is whenever a finding exists, since a finding pins its evidence. */
+  peer_host?: string;
 }
 
 /**
@@ -375,13 +379,23 @@ export interface AttributableFinding {
  * source call. Integration stays as the fallback for CALL-LESS findings
  * (version-diff on replace, MCP definition_change), which have no call to
  * resolve a host from and DO carry the contract's own integration.
+ *
+ * THE HOST COMES FROM THE ROW, not from the calls page. `finding.peer_host` is
+ * decorated server-side from the pinned source call; `hostOfCall` reads
+ * GET /api/calls, which returns the 200 NEWEST rows. source_call_id is frozen
+ * at the first occurrence, so under the lookup alone the join died as soon as
+ * the evidence call aged out of that page — minutes of ordinary traffic — and
+ * the provider split back into two cards (postgres lane, 2026-09-02). The
+ * lookup stays as the fallback for a row from a collector that predates the
+ * field.
  */
 export function findingBelongsToContract(
   finding: AttributableFinding,
   spec: ContractSpec,
   hostOfCall: (callId: string) => string | undefined
 ): boolean {
-  const callHost = finding.source_call_id ? hostOfCall(finding.source_call_id) : undefined;
+  const callHost =
+    finding.peer_host || (finding.source_call_id ? hostOfCall(finding.source_call_id) : undefined);
   if (callHost && spec.peer_host) return callHost === spec.peer_host;
   return finding.integration === spec.integration;
 }

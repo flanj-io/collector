@@ -81,6 +81,13 @@ export interface Finding {
    *  definition_change — the structured sibling of snapshot_observed_at.
    *  Absent on other kinds and older collectors. */
   snapshot_observed_from?: string;
+  /** The provider host this finding is about — the peer host of its pinned
+   *  source call, joined in by GET /api/findings (read-API only, never part of
+   *  the wire contract). It is how a finding finds its contract card: the
+   *  calls page holds only the 200 newest rows, and a finding's source call is
+   *  frozen at the first occurrence, so resolving the host in the browser lost
+   *  the join as soon as that call aged out. Absent on a call-less finding. */
+  peer_host?: string;
   /** Local acknowledge state (read-API join, never part of the wire contract):
    *  true when this finding's signature is acknowledged on this collector. */
   acked?: boolean;

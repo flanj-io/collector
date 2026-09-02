@@ -638,6 +638,49 @@ func TestEdgeCallCountsSince(t *testing.T) {
 	})
 }
 
+// TestCallPeerHosts covers the read API's finding→contract join: a finding is
+// paired with the contract card for its provider by HOST, and it reaches that
+// host only through its source call.
+//
+// The three answers that matter are all about ABSENCE, because the UI's
+// fallback (join by integration instead) depends on telling "no host" from a
+// host that happens to be empty.
+func TestCallPeerHosts(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, b *testBackend) {
+		s := b.open(t, 0, 0)
+		withHost := makeEdgeCall(1, "api.acme.test", "client", "external")
+		// A local-process MCP server has no peer host at all.
+		hostless := makeCall(2)
+		for _, c := range []model.RedactedCall{withHost, hostless} {
+			if err := s.InsertCall(c); err != nil {
+				t.Fatalf("insert: %v", err)
+			}
+		}
+
+		hosts, err := s.CallPeerHosts([]string{withHost.ID, hostless.ID, "call_never_stored", "", withHost.ID})
+		if err != nil {
+			t.Fatalf("call peer hosts: %v", err)
+		}
+		if got := hosts[withHost.ID]; got != "api.acme.test" {
+			t.Errorf("stored call host: got %q want api.acme.test", got)
+		}
+		if _, ok := hosts[hostless.ID]; ok {
+			t.Errorf("a call with no peer host must be ABSENT, not empty: %v", hosts)
+		}
+		if _, ok := hosts["call_never_stored"]; ok {
+			t.Errorf("an evicted call must be absent from the map: %v", hosts)
+		}
+		if len(hosts) != 1 {
+			t.Errorf("got %d entries, want 1 — empty and duplicate ids must not add rows: %v", len(hosts), hosts)
+		}
+
+		empty, err := s.CallPeerHosts(nil)
+		if err != nil || len(empty) != 0 {
+			t.Errorf("no ids: got %v, %v — want an empty map and no query", empty, err)
+		}
+	})
+}
+
 // TestSpecInfo_RoundTrip proves the provider-contract record the drift processor
 // writes at Start: upsert by integration, list metadata, fetch the raw doc.
 func TestSpecInfo_RoundTrip(t *testing.T) {

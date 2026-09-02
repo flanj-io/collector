@@ -376,6 +376,9 @@ describe('rollCall counts MCP from contracts, not edges', () => {
   });
 });
 
+/** No call resolves — the state of the calls page after the window turns over. */
+const evictedAll = (): string | undefined => undefined;
+
 describe('findingBelongsToContract', () => {
   // REGRESSION, found by the blind QA walk on the sqlite lane: one provider
   // rendered as TWO cards — the uploaded contract showing CONFORMING, and
@@ -423,7 +426,67 @@ describe('findingBelongsToContract', () => {
       { integration: 'api-acme-test', source_call_id: 'gone' }, contract, hostOf
     )).toBe(true);
   });
+
+  // REGRESSION, postgres lane 2026-09-02: the SAME provider split into two
+  // cards AGAIN — contract + CONFORMING pill above, "No contract for this
+  // provider" + the BREAKING finding below — minutes after ordinary traffic.
+  //
+  // The host-first join was right and still failed by construction. The
+  // finding's source_call_id is frozen at the FIRST occurrence, and the browser
+  // resolved it through GET /api/calls, which returns only the 200 newest rows:
+  // once that call aged off the page hostOfCall answered undefined, the join
+  // fell through to integration — an SDK slug (acme-payments) against a slug
+  // derived from the host (api-acme-test) — and the finding detached.
+  //
+  // So the host now rides on the finding row itself, decorated server-side from
+  // the pinned call the store still holds. The case the fix exists for is
+  // exactly the one the callsById lookup cannot answer.
+  describe('when the source call has aged out of the calls page', () => {
+    const evicted = () => undefined; // callsById knows nothing about it
+
+    it('still pairs with the contract for its host', () => {
+      expect(findingBelongsToContract(
+        { integration: 'acme-payments', source_call_id: 'call_1', peer_host: 'api.acme.test' },
+        contract,
+        evicted
+      )).toBe(true);
+    });
+
+    it('does not pair with a contract for a different host', () => {
+      expect(findingBelongsToContract(
+        { integration: 'acme-payments', source_call_id: 'call_1', peer_host: 'api.globex.test' },
+        contract,
+        evicted
+      )).toBe(false);
+    });
+
+    it('without the field it is the old bug — the fallback cannot save it', () => {
+      // Pinned deliberately: this is what a row from a collector predating the
+      // decoration does, and it is why the field had to exist. An
+      // integration-only fallback cannot join acme-payments to api-acme-test.
+      expect(findingBelongsToContract(
+        { integration: 'acme-payments', source_call_id: 'call_1' }, contract, evicted
+      )).toBe(false);
+    });
+  });
+
+  it('the row wins over the calls page — they cannot disagree, and the row is the pinned one', () => {
+    // hostOfCall would answer for this id, but the server resolved the call the
+    // finding actually points at. One source of truth, and it is the store's.
+    expect(findingBelongsToContract(
+      { integration: 'acme-payments', source_call_id: 'call_1', peer_host: 'api.globex.test' },
+      contract,
+      hostOf
+    )).toBe(false);
+  });
+
+  it('a call-less finding with no host still falls back to integration', () => {
+    expect(findingBelongsToContract(
+      { integration: 'api-acme-test', source_call_id: null }, contract, evictedAll
+    )).toBe(true);
+  });
 });
+
 
 describe('providerContractsEmptyText', () => {
   // BUG (postgres-lane QA walk, 2026-09-01): the empty state told the operator
