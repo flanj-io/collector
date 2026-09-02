@@ -24,13 +24,13 @@ import (
 // stubCP is a minimal control plane for the relay tests: register / me / flags
 // / thread routes with just enough state to walk the v0.1a loop.
 type stubCP struct {
-	mu               sync.Mutex
-	srv              *httptest.Server
-	deployToken      string
-	collectorKey     string
-	contactStatus    string
-	contactEmail     string // the most recent (possibly pending) contact
-	confirmedEmail   string // the contact usable for threads ("" until the first confirmation)
+	mu             sync.Mutex
+	srv            *httptest.Server
+	deployToken    string
+	collectorKey   string
+	contactStatus  string
+	contactEmail   string // the most recent (possibly pending) contact
+	confirmedEmail string // the contact usable for threads ("" until the first confirmation)
 	// totalCalls counts EVERY request that reached this stub, on any route.
 	totalCalls       int
 	registerCalls    int
@@ -43,6 +43,11 @@ type stubCP struct {
 	lastRegisterBody map[string]any
 	wrongOrigin      bool
 	mintCount        int
+	// CONTRACTS-CP §5.1 (additive): the confirmation-mail outcome the CP
+	// reports on register. "" = the CP reports none (already confirmed, or a
+	// CP predating the field), which must reach the UI as an ABSENT key.
+	confirmationMail           string
+	confirmationMailRetryAfter int
 	// §5.5a list route: insertion order (the stub lists it reversed, so the
 	// most recently touched thread is first), the last query string seen, the
 	// number of list calls, and an optional forced status for the error paths.
@@ -65,8 +70,8 @@ type stubCP struct {
 	// never drift back to serving a bare map.
 	directoryEntries string
 	directoryETag    string
-	directoryCalls int
-	directoryINMs  []string
+	directoryCalls   int
+	directoryINMs    []string
 	// Directory submissions (POST /api/v1/directory/submissions): every raw
 	// body in order, plus an optional forced status (and error message) for
 	// the failure paths.
@@ -126,6 +131,19 @@ func newStubCP(t *testing.T) *stubCP {
 	mux.HandleFunc("POST /api/v1/collectors/register", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		// mailOut is jsonOut plus whatever confirmation-mail outcome this stub
+		// is set to report, so every success path below carries it without
+		// repeating the merge. The 401 branch stays on bare jsonOut: an
+		// unauthorized register never attempted a mail.
+		mailOut := func(w http.ResponseWriter, status int, body map[string]any) {
+			if s.confirmationMail != "" {
+				body["confirmation_mail"] = s.confirmationMail
+				if s.confirmationMailRetryAfter != 0 {
+					body["confirmation_mail_retry_after_s"] = s.confirmationMailRetryAfter
+				}
+			}
+			jsonOut(w, status, body)
+		}
 		auth := r.Header.Get("Authorization")
 		s.registerAuths = append(s.registerAuths, auth)
 		var b map[string]any
@@ -138,23 +156,23 @@ func newStubCP(t *testing.T) *stubCP {
 			// The CP has ONE deploy token: it cannot tell deployments apart by it.
 			if s.registerCalls == 1 {
 				s.contactEmail = email
-				jsonOut(w, 201, map[string]any{"collector_id": "c1", "collector_public_id": "pub_c1", "collector_key": s.collectorKey, "contact_status": "pending"})
+				mailOut(w, 201, map[string]any{"collector_id": "c1", "collector_public_id": "pub_c1", "collector_key": s.collectorKey, "contact_status": "pending"})
 				return
 			}
 			if email == s.contactEmail {
 				// same email → idempotent replay; the key is returned once, never again
-				jsonOut(w, 200, map[string]any{"collector_id": "c1", "collector_public_id": "pub_c1", "contact_status": s.contactStatus})
+				mailOut(w, 200, map[string]any{"collector_id": "c1", "collector_public_id": "pub_c1", "contact_status": s.contactStatus})
 				return
 			}
 			// a different email with only the deploy token = a NEW collector (CONTRACTS-CP §5.1) —
 			// a Connected collector must never land here.
-			jsonOut(w, 201, map[string]any{"collector_id": "c2", "collector_public_id": "pub_c2", "collector_key": "ckey_OTHER_COLLECTOR", "contact_status": "pending"})
+			mailOut(w, 201, map[string]any{"collector_id": "c2", "collector_public_id": "pub_c2", "collector_key": "ckey_OTHER_COLLECTOR", "contact_status": "pending"})
 		case "Bearer " + s.collectorKey:
 			// re-register with the key: same email = resend; different = new pending contact, same key
 			if email != s.contactEmail {
 				s.contactEmail, s.contactStatus = email, "pending"
 			}
-			jsonOut(w, 200, map[string]any{"collector_id": "c1", "collector_public_id": "pub_c1", "contact_status": s.contactStatus})
+			mailOut(w, 200, map[string]any{"collector_id": "c1", "collector_public_id": "pub_c1", "contact_status": s.contactStatus})
 		default:
 			jsonOut(w, 401, map[string]string{"error": "unauthorized", "message": "bad bearer"})
 		}
@@ -2097,5 +2115,68 @@ func TestFindingsCarryTheirSourceCallHost(t *testing.T) {
 	// absent host must stay absent rather than become "".
 	if got := hosts["fnd_1"]; got != "" {
 		t.Errorf("a call with no peer host must not invent one, got %q", got)
+	}
+}
+
+// TestConnectRelaysTheConfirmationMailOutcome pins the middle of the honesty
+// seam (CONTRACTS-CP §5.1). The CP answers 200/201 whether or not the mail left
+// the box, so a 2xx alone can never justify "Check your inbox" — the collector
+// must relay the CP's own verdict, unchanged, and say nothing when there is
+// none. A regression here is silent: the panel keeps rendering, just lying.
+func TestConnectRelaysTheConfirmationMailOutcome(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		mail       string
+		retryAfter int
+		wantMail   any // nil = the key must be ABSENT
+		wantRetry  any
+	}{
+		{name: "sent", mail: "sent", wantMail: "sent"},
+		{name: "failed", mail: "failed", wantMail: "failed"},
+		{name: "cooldown", mail: "cooldown", retryAfter: 360, wantMail: "cooldown", wantRetry: float64(360)},
+		{name: "no outcome reported", mail: "", wantMail: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRig(t)
+			r.start(t)
+			r.cp.confirmationMail = tc.mail
+			r.cp.confirmationMailRetryAfter = tc.retryAfter
+
+			resp, out, raw := r.do(t, http.MethodPost, "/api/connect", map[string]string{
+				"consumer_display_name": "Acme Consumer Ltd",
+				"contact_email":         "ops@acme.test",
+			})
+			if resp.StatusCode != 202 {
+				t.Fatalf("connect: %d %s", resp.StatusCode, raw)
+			}
+			got, present := out["confirmation_mail"]
+			if tc.wantMail == nil {
+				if present {
+					t.Fatalf("no outcome reported, but the view carries confirmation_mail=%v — an absent key is the only honest answer", got)
+				}
+			} else if got != tc.wantMail {
+				t.Fatalf("confirmation_mail = %v (present=%v); want %v", got, present, tc.wantMail)
+			}
+			gotRetry, retryPresent := out["confirmation_mail_retry_after_s"]
+			if tc.wantRetry == nil {
+				if retryPresent {
+					t.Errorf("confirmation_mail_retry_after_s = %v; it rides only on cooldown", gotRetry)
+				}
+			} else if gotRetry != tc.wantRetry {
+				t.Errorf("confirmation_mail_retry_after_s = %v; want %v", gotRetry, tc.wantRetry)
+			}
+
+			// The outcome describes ONE request. It is never persisted, and a
+			// later GET (which attempts no send) must not replay it.
+			for k := range r.st.settings {
+				if strings.Contains(k, "confirmation_mail") {
+					t.Errorf("the mail outcome was persisted as %q — it is transient", k)
+				}
+			}
+			_, after, _ := r.do(t, http.MethodGet, "/api/connect", nil)
+			if _, present := after["confirmation_mail"]; present {
+				t.Errorf("GET /api/connect must report no mail outcome, got %v", after["confirmation_mail"])
+			}
+		})
 	}
 }

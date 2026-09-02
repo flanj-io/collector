@@ -62,6 +62,15 @@ type connectState struct {
 	ConfirmedAt           string
 	LocalUIURL            string
 	ConfirmedContactEmail string // the contact usable for threads ("" until the first confirmation)
+
+	// ConfirmationMail is TRANSIENT — the outcome of the confirmation mail on
+	// THIS request (CONTRACTS-CP §5.1: sent | failed | cooldown), never
+	// persisted and never read back from the store. It describes an attempt,
+	// not deployment state: a page that reloads has no send to report, and
+	// saveConnect deliberately does not carry it.
+	ConfirmationMail string
+	// ConfirmationMailRetryAfterS accompanies a "cooldown" outcome only.
+	ConfirmationMailRetryAfterS int
 }
 
 // hasConfirmedContact is the Create-thread gate: a confirmed contact exists —
@@ -85,8 +94,13 @@ func (cs connectState) status() string {
 
 // view is the JSON the UI sees (GET/POST /api/connect) — no key. Unset
 // fields are null (a fresh collector has no public id, no dates).
+//
+// `confirmation_mail` is the one field that describes THIS request rather than
+// stored state: it is present only when a send was attempted (POST), so the
+// panel can distinguish "we sent it" from "we could not send it" instead of
+// reading a 2xx as delivery.
 func (cs connectState) view() map[string]any {
-	return map[string]any{
+	out := map[string]any{
 		"status":                cs.status(),
 		"consumer_display_name": nullable(cs.ConsumerDisplayName),
 		"contact_email":         nullable(cs.ContactEmail),
@@ -100,6 +114,16 @@ func (cs connectState) view() map[string]any {
 		// available), null until the first confirmation.
 		"confirmed_contact_email": nullable(cs.confirmedContactEmail()),
 	}
+	// Present only when this request actually produced an outcome, so a plain
+	// GET (and a CP too old to report one) simply omits it and the panel falls
+	// back to describing state rather than claiming a send happened.
+	if cs.ConfirmationMail != "" {
+		out["confirmation_mail"] = cs.ConfirmationMail
+		if cs.ConfirmationMail == promote.ConfirmationMailCooldown {
+			out["confirmation_mail_retry_after_s"] = cs.ConfirmationMailRetryAfterS
+		}
+	}
+	return out
 }
 
 // confirmedContactEmail resolves the address usable for threads.
@@ -380,6 +404,11 @@ func (e *uiExtension) handleConnectPost(w http.ResponseWriter, r *http.Request) 
 		writeCPError(w, err, msgCPUnreachableSend)
 		return
 	}
+	// What actually happened to the confirmation mail. Carried straight through
+	// to the view: the collector asserts nothing about delivery on its own, it
+	// relays the CP's own verdict (and stays quiet when there is none).
+	cs.ConfirmationMail = resp.ConfirmationMail
+	cs.ConfirmationMailRetryAfterS = resp.ConfirmationMailRetryAfterS
 	emailChanged := !strings.EqualFold(cs.ContactEmail, body.ContactEmail)
 	if cs.CollectorKey == "" && resp.CollectorKey != "" {
 		cs.CollectorKey = resp.CollectorKey

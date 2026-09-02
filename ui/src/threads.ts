@@ -138,6 +138,14 @@ export interface ConnectState {
   local_ui_url?: string;
   cp_configured?: boolean;
   error?: string;
+  /** What actually happened to the confirmation mail on THIS request (CONTRACTS-CP §5.1):
+   *  `sent` | `failed` | `cooldown`. Present only when a send was attempted — absent on a poll,
+   *  on an already-confirmed contact, and from a control plane predating the field. Absent is
+   *  "no send was attempted here", NEVER "it went out": a 2xx is the registration's verdict, not
+   *  the mail's, and reading it as delivery is the defect this field closes. */
+  confirmation_mail?: 'sent' | 'failed' | 'cooldown';
+  /** Seconds left on the 1-per-10-minutes floor. Rides only on `cooldown`. */
+  confirmation_mail_retry_after_s?: number;
 }
 
 /** Status column / chip label from the derived `turn` + state (copy deck). */

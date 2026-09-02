@@ -58,6 +58,16 @@ type RegisterRequest struct {
 	LocalUIURL          string `json:"local_ui_url,omitempty"`
 }
 
+// Confirmation-mail outcomes (CONTRACTS-CP §5.1, additive). A 2xx says the
+// REGISTRATION succeeded; it says nothing about the mail, which is why this
+// field exists. Empty means the CP reported no outcome — either no mail was
+// warranted (the contact is already confirmed) or the CP predates the field.
+const (
+	ConfirmationMailSent     = "sent"
+	ConfirmationMailFailed   = "failed"
+	ConfirmationMailCooldown = "cooldown"
+)
+
 // RegisterResponse: 201 on first registration, 200 on the idempotent replay
 // (same contact) or a contact change. CollectorKey is returned ONCE — on a
 // replay it may be empty; callers keep the key they already persisted.
@@ -66,6 +76,14 @@ type RegisterResponse struct {
 	CollectorPublicID string `json:"collector_public_id"`
 	CollectorKey      string `json:"collector_key"`
 	ContactStatus     string `json:"contact_status"`
+	// ConfirmationMail is what actually happened to the confirmation mail on
+	// this call: sent | failed | cooldown, or "" when the CP reported none.
+	// NEVER infer "sent" from the 2xx — that inference is the bug this field
+	// closes: a refused SMTP transaction still answers 200/201.
+	ConfirmationMail string `json:"confirmation_mail"`
+	// ConfirmationMailRetryAfterS is the seconds left on the 1/10min resend
+	// floor. Rides only on "cooldown"; 0 everywhere else.
+	ConfirmationMailRetryAfterS int `json:"confirmation_mail_retry_after_s"`
 }
 
 // MeResponse is GET /api/v1/collectors/me (Bearer collector key).
