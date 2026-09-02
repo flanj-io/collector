@@ -106,6 +106,62 @@ func Classify(host string) string {
 // IsExternal reports whether a class string is the external class.
 func IsExternal(class string) bool { return class == ClassExternal }
 
+// SplitHostPort separates a host[:port] — the `flanj.peer.host` spelling
+// (CONTRACTS §2) — into its host and port halves. The port is "" when there is
+// none. Unlike normalizeHost below, the host half KEEPS its IPv6 brackets: they
+// are part of the edge key's spelling, not decoration.
+//
+// A bare, unbracketed IPv6 literal is all host — it is nothing but colons and
+// carries no port — and so is a string whose bracket is never closed.
+func SplitHostPort(hostPort string) (host, port string) {
+	from := 0
+	if strings.HasPrefix(hostPort, "[") {
+		end := strings.Index(hostPort, "]")
+		if end < 0 {
+			return hostPort, ""
+		}
+		from = end
+	} else if strings.Count(hostPort, ":") > 1 {
+		return hostPort, ""
+	}
+	i := strings.Index(hostPort[from:], ":")
+	if i < 0 {
+		return hostPort, ""
+	}
+	i += from
+	return hostPort[:i], hostPort[i+1:]
+}
+
+// StripDefaultPort drops the scheme's OWN default port from a host[:port], and
+// only that one. `flanj.peer.host` is the edge key and the spec cache looks it
+// up by exact string, so one origin must produce one key however it was spelled:
+// `https://api.acme.test:443` and `api.acme.test` are the same listener.
+//
+// A NON-default port is kept — `:8080` is a genuinely different listener, and
+// folding it into the bare host would hand one edge's traffic to another edge's
+// contract. So is a default port under the OTHER scheme: `:443` on plain http is
+// a real, unusual listener, not a redundant spelling. An unknown or empty scheme
+// changes nothing, because guessing would merge a live edge away.
+//
+// Idempotent: a host that is already normalised passes through unchanged. This
+// is the collector's copy of the rule the SDK applies at capture
+// (src/instrumentation/http-args.ts); the two must stay identical.
+func StripDefaultPort(hostPort, scheme string) string {
+	var def string
+	switch strings.ToLower(scheme) {
+	case "http":
+		def = "80"
+	case "https":
+		def = "443"
+	default:
+		return hostPort
+	}
+	if host, port := SplitHostPort(hostPort); port == def {
+		return host
+	}
+	return hostPort
+}
+
 // normalizeHost strips a :port and surrounding IPv6 brackets, returning the bare
 // host. It tolerates bracketed IPv6 with or without a port.
 func normalizeHost(host string) string {

@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/flanj-io/collector/internal/drift"
+	"github.com/flanj-io/collector/internal/edge"
 	"github.com/flanj-io/collector/internal/model"
 	"github.com/flanj-io/collector/internal/store"
 )
@@ -317,33 +319,53 @@ func hostHasTraffic(st store.Store, host string) bool {
 // normalizeHost accepts what an operator is likely to paste and refuses what
 // cannot be a peer host. Errors are the message the UI shows, so each one says
 // what to type instead.
+//
+// It KEEPS a trailing :port. `flanj.peer.host` is host[:port] and it is the edge
+// key (CONTRACTS §2); the spec cache looks it up by exact string. Truncating at
+// the colon meant a host:port edge could not be bound AT ALL — the UI locked the
+// uploader to `api.acme.test:28080`, the confirm step said so, and the server
+// silently bound `api.acme.test` instead: a different edge, whose contract this
+// upload would then report as a replace and overwrite.
+//
+// The scheme's own default port is dropped, because that is the same listener
+// under a longer name and the SDK already emits it short.
 func normalizeHost(raw string) (string, error) {
 	h := strings.ToLower(strings.TrimSpace(raw))
 	if h == "" {
 		return "", fmt.Errorf("%s", msgContractHostRequired)
 	}
 	// A pasted URL is the overwhelmingly likely mistake, and the host is right
-	// there — take it rather than refusing.
+	// there — take it rather than refusing. Its scheme decides which port is
+	// redundant, so read it before it is stripped.
+	scheme := ""
 	if i := strings.Index(h, "://"); i >= 0 {
-		h = h[i+3:]
+		scheme, h = h[:i], h[i+3:]
 	}
 	if i := strings.IndexAny(h, "/?#"); i >= 0 {
 		h = h[:i]
 	}
-	if i := strings.Index(h, ":"); i >= 0 {
-		h = h[:i]
+	// A pasted URL can carry userinfo (`user@host`); the host is after the last @.
+	if i := strings.LastIndex(h, "@"); i >= 0 {
+		h = h[i+1:]
 	}
-	h = strings.Trim(h, ".")
-	if h == "" {
+	// `https://api.acme.test:443/v1` and `api.acme.test` are one listener, and
+	// the SDK already emits the short spelling — converge on it.
+	h = edge.StripDefaultPort(h, scheme)
+
+	// From here the host and the port are checked apart: the ceiling and the
+	// DNS-shape rules are the HOST's, and the port has rules of its own.
+	host, port := edge.SplitHostPort(h)
+	host = strings.Trim(host, ".")
+	if host == "" {
 		return "", fmt.Errorf("%s", msgContractHostRequired)
 	}
-	if len(h) > maxHostLen {
+	if len(host) > maxHostLen {
 		return "", fmt.Errorf("%s", msgContractHostTooLong)
 	}
-	if strings.ContainsAny(h, " \t\r\n,\\\"'<>") {
+	if strings.ContainsAny(host, " \t\r\n,\\\"'<>") {
 		return "", fmt.Errorf("%s", msgContractHostInvalid)
 	}
-	for _, r := range h {
+	for _, r := range host {
 		if r > 127 {
 			// Internationalised hosts arrive punycoded on the wire, and the
 			// edges this binds to are the wire's hosts. Accepting a unicode
@@ -351,7 +373,16 @@ func normalizeHost(raw string) (string, error) {
 			return "", fmt.Errorf("%s", msgContractHostPunycode)
 		}
 	}
-	return h, nil
+	if port == "" {
+		return host, nil
+	}
+	// A port that is not a port would bind a contract to a key no call can ever
+	// carry — the silent-no-op this whole function exists to stop.
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 || strings.TrimLeft(port, "0") != port {
+		return "", fmt.Errorf("%s", msgContractHostBadPort)
+	}
+	return host + ":" + port, nil
 }
 
 // integrationForHost derives the contract's id from the host it binds to. The

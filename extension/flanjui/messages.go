@@ -41,6 +41,7 @@ const (
 	msgContractHostInvalid         = "That doesn't look like a host. Enter just the domain, e.g. api.acme.test."
 	msgContractHostTooLong         = "That host is too long to be a domain name."
 	msgContractHostPunycode        = "Enter the host as it appears in the traffic (ASCII, punycode for international domains)."
+	msgContractHostBadPort         = "That port isn't a number between 1 and 65535. Enter the host as the traffic carries it, e.g. api.acme.test:8080."
 	msgContractDocumentRequired    = "Choose an OpenAPI document to upload."
 	msgContractTooLarge            = "That document is larger than 8 MB. Contracts this size are usually a bundle — upload the API's own document."
 	msgContractStoreFailed         = "Couldn't save the contract to the local store."

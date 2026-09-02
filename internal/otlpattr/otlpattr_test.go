@@ -235,3 +235,35 @@ func TestSpecInfoRecord_RoundTrip(t *testing.T) {
 		t.Errorf("record without %s should be rejected", AttrSpecInfoJSON)
 	}
 }
+
+// TestCallFromRecord_ConvergesTheEdgeKey: an SDK from before the host[:port] fix
+// emits `api.acme.test:443` for an options-object dial and `api.acme.test` for
+// the same origin dialled as a URL string. Both are ONE listener, and
+// `flanj.peer.host` is the edge key the spec cache looks up by exact string — so
+// ingest folds the scheme's default port away and the old SDK converges on the
+// key the contract is bound to. A NON-default port is a different listener and
+// survives; without a scheme to say otherwise, nothing is assumed.
+func TestCallFromRecord_ConvergesTheEdgeKey(t *testing.T) {
+	cases := []struct{ peerHost, urlFull, want string }{
+		{"api.acme.test:443", "https://api.acme.test:443/v1/charges", "api.acme.test"},
+		{"api.acme.test", "https://api.acme.test/v1/charges", "api.acme.test"},
+		{"api.acme.test:80", "http://api.acme.test:80/v1/charges", "api.acme.test"},
+		// A real, different listener — never folded into the bare host.
+		{"api.acme.test:28080", "https://api.acme.test:28080/v1", "api.acme.test:28080"},
+		{"api.acme.test:443", "http://api.acme.test:443/v1", "api.acme.test:443"},
+		// No url.full, or one with no default port of its own: change nothing.
+		{"api.acme.test:443", "", "api.acme.test:443"},
+		{"mcp.acme.test:443", "mcp://mcp.acme.test:443/tools.call", "mcp.acme.test:443"},
+	}
+	for _, c := range cases {
+		lr := plog.NewLogRecord()
+		lr.Attributes().PutStr(AttrDirection, "client")
+		lr.Attributes().PutStr(AttrPeerHost, c.peerHost)
+		if c.urlFull != "" {
+			lr.Attributes().PutStr(AttrURLFull, c.urlFull)
+		}
+		if got := CallFromRecord(lr).PeerHost; got != c.want {
+			t.Errorf("peer_host %q on %q = %q, want %q", c.peerHost, c.urlFull, got, c.want)
+		}
+	}
+}

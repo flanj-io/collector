@@ -6,6 +6,7 @@ package otlpattr
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -190,7 +191,11 @@ func CallFromRecord(lr plog.LogRecord) model.RedactedCall {
 	if id == "" {
 		id = NewID()
 	}
-	peerHost := getStr(m, AttrPeerHost)
+	// Converge older SDKs onto one edge key. An SDK before the host[:port] fix
+	// emits `api.acme.test:443` for an options-object dial and `api.acme.test`
+	// for the same origin dialled as a URL string; keying both is two edges for
+	// one listener, and a contract bound to either never validates the other.
+	peerHost := edge.StripDefaultPort(getStr(m, AttrPeerHost), schemeOf(getStr(m, AttrURLFull)))
 	edgeClass := getStr(m, AttrEdgeClass)
 	// Defense-in-depth: if the SDK omitted the class, reconstruct it from the
 	// peer host with the identical heuristic so classification is never lost.
@@ -353,6 +358,17 @@ func SpecInfoFromRecord(lr plog.LogRecord) (model.SpecInfo, []byte, error) {
 		raw = lr.Body().Bytes().AsRaw()
 	}
 	return info, raw, nil
+}
+
+// schemeOf reads the lowercased scheme from an absolute URL, "" when there is
+// none. `flanj.http.url.full` is the only place a call record carries the scheme
+// its peer host was dialled on.
+func schemeOf(rawURL string) string {
+	i := strings.Index(rawURL, "://")
+	if i < 0 {
+		return ""
+	}
+	return strings.ToLower(rawURL[:i])
 }
 
 // NewID returns a fresh uuidv7 string (time-ordered — good for FIFO windows).
