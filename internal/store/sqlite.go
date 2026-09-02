@@ -285,7 +285,15 @@ func (s *sqliteStore) InsertFinding(f model.Finding) error {
 	// reproducible — drift is a property of every call that produced a finding,
 	// and losing the repeats is what forced the UI to guess per endpoint and
 	// relabel conforming neighbours.
-	if sourceCallID != nil && f.Kind == model.KindLiveVsSpec {
+	//
+	// Per-call kinds only, and BOTH transports have one: an MCP output_mismatch
+	// names the call whose structuredContent violated the tool's own declared
+	// outputSchema, exactly as live-vs-spec names the call whose body violated
+	// the OpenAPI document. Leaving MCP out here is what sent the Traffic tab
+	// back to asking "does this TOOL have a mismatch?" — a set keyed by
+	// integration and tool, which relabelled every historic call of the tool and
+	// accused the provider over results nothing had judged.
+	if sourceCallID != nil && marksSourceCallDrifted(f.Kind) {
 		if _, err := s.db.Exec(`UPDATE calls SET drifted=1 WHERE id=?`, *sourceCallID); err != nil {
 			return fmt.Errorf("mark call drifted: %w", err)
 		}

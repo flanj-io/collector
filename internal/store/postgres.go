@@ -314,9 +314,18 @@ func (p *postgresStore) InsertFinding(f model.Finding) error {
 	// Distinct from the pin, which marks the ONE representative call kept
 	// reproducible — drift is a property of every call that produced a finding,
 	// and losing the repeats is what forced the UI to guess per endpoint and
-	// relabel conforming neighbours. Inside the transaction so it lands with
-	// the finding or not at all.
-	if sourceCallID != nil && f.Kind == model.KindLiveVsSpec {
+	// relabel conforming neighbours.
+	//
+	// Per-call kinds only, and BOTH transports have one: an MCP output_mismatch
+	// names the call whose structuredContent violated the tool's own declared
+	// outputSchema, exactly as live-vs-spec names the call whose body violated
+	// the OpenAPI document. Leaving MCP out here is what sent the Traffic tab
+	// back to asking "does this TOOL have a mismatch?" — a set keyed by
+	// integration and tool, which relabelled every historic call of the tool and
+	// accused the provider over results nothing had judged.
+	//
+	// Inside the transaction so it lands with the finding or not at all.
+	if sourceCallID != nil && marksSourceCallDrifted(f.Kind) {
 		if _, err := tx.Exec(p.rebind(`SELECT pg_advisory_xact_lock(?, hashtext(?))`), pgLockNSCallPin, *sourceCallID); err != nil {
 			return fmt.Errorf("insert finding: lock: %w", err)
 		}

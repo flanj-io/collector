@@ -113,9 +113,15 @@ type RedactedCall struct {
 	// Such a record carries the ENVELOPE, never the tool's output, so nothing
 	// may validate or model response shape from it.
 	MCPTaskID string `json:"mcp_task_id,omitempty"`
-	// Drifted is TRUE when THIS call produced a live-vs-spec finding. Set by the
-	// store on every finding insert, including repeat occurrences of a signature
-	// that was already recorded.
+	// Drifted is TRUE when THIS call produced a finding saying the call itself
+	// departed from a contract — live-vs-spec on REST, output_mismatch on MCP
+	// (store.marksSourceCallDrifted owns the list). Set by the store on every
+	// finding insert, including repeat occurrences of a signature that was
+	// already recorded.
+	//
+	// NOT set by definition_change (the snapshot detector: no call produced it),
+	// stale_client (the consumer's own arguments were stale — the provider's
+	// contract was not departed from) or version-diff (document vs document).
 	//
 	// It exists because the UI otherwise had to ask "has this ENDPOINT ever
 	// drifted?", which marked every call on the endpoint — including ones that

@@ -110,14 +110,15 @@ import {
   type EdgeNameEdit
 } from './edge-names';
 import {
-  callCoverage,
+  callCoverageDetail,
   notCheckedTitle,
   validatedCallsMeta,
   NOT_CHECKED_LABEL,
   SINCE_LOAD,
   SINCE_SNAPSHOT,
   SINCE_UPLOAD,
-  type Coverage
+  type Coverage,
+  type CoverageVerdict
 } from './coverage';
 import { headlineFor } from './headline';
 import type { Correlation, Finding, FlagResult, Health, RedactedCall } from './types';
@@ -541,31 +542,48 @@ function cardEvidenceMeta(p: ContractCard): string {
   return validatedCallsMeta(cardValidatedCalls(p), since);
 }
 
-function coverageOf(c: RedactedCall): Coverage {
+function coverageVerdictOf(c: RedactedCall): CoverageVerdict {
   // MCP coverage is per TOOL, not per server: only a tool publishing an
-  // outputSchema can have its result validated (drift/mcp.go). Hand the parsed
-  // snapshot rows in so the chip cannot claim a check the processor never runs.
+  // outputSchema, answering without isError, can have its result validated
+  // (drift/mcp.go). Hand the parsed snapshot rows in so the chip cannot claim a
+  // check the processor never runs.
   const tools: Record<string, McpToolRow[]> = {};
   for (const [integration, entry] of Object.entries(mcpTools.value)) tools[integration] = entry.rows;
-  return callCoverage(c, contracts.value, tools);
+  return callCoverageDetail(c, contracts.value, tools);
+}
+
+function coverageOf(c: RedactedCall): Coverage {
+  return coverageVerdictOf(c).coverage;
+}
+
+/** The `not checked` tooltip for THIS row, named after the actual cause — a
+ *  tool that declares no outputSchema is not a missing upload, and MCP
+ *  contracts are never uploaded at all. */
+function notCheckedTitleOf(c: RedactedCall): string {
+  return notCheckedTitle(coverageVerdictOf(c).reason ?? 'no-contract', c);
 }
 
 /**
  * Did THIS call drift?
  *
  * Read off the call's own `drifted` flag, which the store sets when the call
- * produced a live-vs-spec finding — on every occurrence, not just the first.
+ * produced a finding saying the call departed from a contract — live-vs-spec on
+ * REST, output_mismatch on MCP — on every occurrence, not just the first.
  *
  * It used to ask "has this ENDPOINT ever drifted?" (a set built from findings),
  * so ONE drifting charge marked every call on `POST /v1/charges` as drifted:
  * the conforming ones, and the ones captured before the drift existed. Same
  * false-assurance class as CONFORMING-with-no-evidence, pointing the other way.
  *
- * MCP keeps its per-tool lookup: an MCP finding is per tool and the snapshot
- * detector does not stamp calls, so that path is unchanged.
+ * MCP kept that fallback — a set keyed by (integration, tool) — for one wrong
+ * reason: the comment said the snapshot detector does not stamp calls, which is
+ * true of definition_change and NOT of output_mismatch, a per-call finding that
+ * has carried a source_call_id all along. The store simply was not marking it.
+ * It does now, so MCP reads the same per-call fact as REST and the tool-level
+ * guess is gone: no more relabelling a tool's whole history from one mismatch,
+ * and no more DRIFTED on an isError result the processor never judged.
  */
 function isDrifted(c: RedactedCall): boolean {
-  if (c.transport === 'mcp') return mcpDriftedTools.value.has(`${c.integration} ${toolNameOf(c)}`);
   return c.drifted === true;
 }
 
@@ -1057,13 +1075,6 @@ async function setAck(f: Finding, ack: boolean) {
     ackBusy.value = { ...ackBusy.value, [f.id]: false };
   }
 }
-
-// Drifted MCP tools: "<integration> <tool>" for every output_mismatch.
-const mcpDriftedTools = computed(() => {
-  const s = new Set<string>();
-  for (const f of mcpFindings.value) if (f.kind === 'output_mismatch') s.add(`${f.integration} ${f.endpoint}`);
-  return s;
-});
 
 // The finding the sheet is open for rides with its representative source call
 // (MCP server identity + JSON-RPC id live on the call).
@@ -2090,7 +2101,7 @@ watch(tab, (t) => {
                 <span
                   v-else-if="coverageOf(c) === 'not-checked'"
                   class="tag none"
-                  :title="notCheckedTitle(c.peer_host)"
+                  :title="notCheckedTitleOf(c)"
                 >{{ NOT_CHECKED_LABEL }}</span>
                 <span v-else class="tag ok">conforming</span>
               </span>

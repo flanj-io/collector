@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   callCoverage,
+  callCoverageDetail,
   notCheckedTitle,
+  ERROR_RESULT_NOT_CHECKED,
   validatedCallsMeta,
   NOT_CHECKED_LABEL,
   SINCE_LOAD,
@@ -87,17 +89,77 @@ describe('callCoverage — mirrors processor/flanjdrift', () => {
     expect(callCoverage(mcpCall('get_balance'), specs, {})).toBe('not-checked');
   });
 
+  it('mcp: an isError result is NOT checked — error output is not contract evidence', () => {
+    // The processor skips isError by name (`op.OutputSchema != nil &&
+    // !call.MCPIsError`), so nothing ever compared this result to the schema.
+    // Reading it as `conforming` claimed a check that never ran; the per-tool
+    // drift fallback read it as DRIFTED, filing an execution failure against
+    // the provider as a contract breach — two slots from the status tooltip
+    // saying it is no such thing.
+    const specs = [mcpSpec('mcp.acme.test')];
+    expect(callCoverage({ ...mcpCall('get_balance'), mcp_is_error: true }, specs, TOOLS)).toBe('not-checked');
+    // The same tool, same snapshot, answering normally: still checked. The
+    // gate is per CALL — it must not take the tool's other calls down with it.
+    expect(callCoverage(mcpCall('get_balance'), specs, TOOLS)).toBe('checked');
+  });
+
   it('mcp is not covered by an unscoped REST spec, and vice versa', () => {
     expect(callCoverage(mcpCall('get_balance'), [providerSpec(undefined)], TOOLS)).toBe('not-checked');
     expect(callCoverage(out('api.acme.test'), [mcpSpec('api.acme.test')])).toBe('not-checked');
   });
 
-  it('copy: the chip and a host-naming tooltip', () => {
+  /* ── The chip names its CAUSE ────────────────────────────────────────────
+   *
+   * One chip, three causes, and they were all wearing the no-contract string.
+   * "No contract uploaded for mcp.acme.test" on a tool that simply declares no
+   * outputSchema is false to the cause AND non-actionable: MCP contracts are
+   * never uploaded — the server publishes its own on tools/list — so the
+   * sentence describes a control the operator does not have.
+   */
+  it('the not-checked causes are distinguished, not merged', () => {
+    const specs = [mcpSpec('mcp.acme.test')];
+    const reasonOf = (c: Parameters<typeof callCoverageDetail>[0]) =>
+      callCoverageDetail(c, specs, TOOLS).reason;
+
+    // No snapshot for the host at all — nothing is bound.
+    expect(callCoverageDetail(mcpCall('get_balance'), [], TOOLS).reason).toBe('no-contract');
+    // Bound, but this tool publishes nothing to check its result against.
+    expect(reasonOf(mcpCall('list_transactions'))).toBe('no-output-contract');
+    // Bound and declared, but the result was an execution failure.
+    expect(reasonOf({ ...mcpCall('get_balance'), mcp_is_error: true })).toBe('error-result');
+    // A checked call carries no reason at all.
+    expect(callCoverageDetail(mcpCall('get_balance'), specs, TOOLS)).toEqual({ coverage: 'checked' });
+    // REST keeps the original cause.
+    expect(callCoverageDetail(out('api.globex.test'), [], {}).reason).toBe('no-contract');
+  });
+
+  it('copy: the chip, and one tooltip per cause', () => {
     expect(NOT_CHECKED_LABEL).toBe('not checked');
-    expect(notCheckedTitle('api.globex.test')).toBe(
+
+    // no-contract — unchanged, and still names the host so it is actionable.
+    expect(notCheckedTitle('no-contract', { peer_host: 'api.globex.test' })).toBe(
       'No contract uploaded for api.globex.test — this call was captured, not validated.'
     );
-    expect(notCheckedTitle(undefined)).toBe('No contract uploaded — this call was captured, not validated.');
+    expect(notCheckedTitle('no-contract')).toBe('No contract uploaded — this call was captured, not validated.');
+
+    // no-output-contract — the honest string the Contracts tab already shows
+    // for this very tool, so the two surfaces cannot say different things.
+    const noSchema = notCheckedTitle('no-output-contract', {
+      integration: 'acme-tools',
+      mcp_tool_name: 'list_transactions'
+    });
+    expect(noSchema).toBe(
+      "No output contract declared — acme-tools doesn't say what list_transactions returns, " +
+        "so output drift on this tool can't be checked."
+    );
+    expect(noSchema).not.toContain('uploaded');
+
+    // error-result — its own sentence, echoing the status chip beside it.
+    expect(notCheckedTitle('error-result', { mcp_is_error: true })).toBe(ERROR_RESULT_NOT_CHECKED);
+    expect(ERROR_RESULT_NOT_CHECKED).toContain('isError');
+
+    // THE POINT: three causes, three different strings.
+    expect(new Set([notCheckedTitle('no-contract'), noSchema, ERROR_RESULT_NOT_CHECKED]).size).toBe(3);
   });
 });
 
