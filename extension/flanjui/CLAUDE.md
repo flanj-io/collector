@@ -139,7 +139,12 @@ collector is outbound-only; nothing serves off-host.
 - `contracts_upload.go` — `POST /api/contracts/{preview,upload,remove}`: the only
   way a provider contract enters this collector. Parse-before-persist, mandatory
   host binding, integration id DERIVED from the host, replace with one previous
-  document kept, and the version diff on replace. Nothing on this path reaches
+  document kept, and the version diff on replace. The binding is
+  **`host[:port]`** — the CONTRACTS §2 edge key, matched by exact string — so
+  `normalizeHost` KEEPS a trailing port and strips only scheme, userinfo, path,
+  query, fragment and the scheme's OWN default port (`https://h:443` → `h`, via
+  `internal/edge.StripDefaultPort`, the same rule the SDK applies at capture).
+  A non-default port is a different listener and must never be folded away. Nothing on this path reaches
   the control plane — an uploaded contract never leaves.
 
 ## Invariants

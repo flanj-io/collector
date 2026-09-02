@@ -152,7 +152,14 @@ func TestUploadNormalisesAPastedURL(t *testing.T) {
 		"https://api.acme.test/v1/charges",
 		"http://api.acme.test",
 		"API.ACME.TEST",
-		"api.acme.test:443",
+		// A scheme names its own default port, so `:443` under https is the same
+		// listener under a longer name — and the spelling the SDK already drops.
+		// A BARE `api.acme.test:443` is not in this list: with no scheme nothing
+		// says that port is redundant, and it keeps its port
+		// (TestUploadKeepsANonDefaultPortAndDropsTheSchemeDefault).
+		"https://api.acme.test:443/v1/charges",
+		"http://api.acme.test:80",
+		"https://user:pw@api.acme.test/v1",
 		"  api.acme.test  ",
 	} {
 		r := newRig(t)
@@ -445,5 +452,144 @@ func TestIntegrationForHostIsStableAndSafe(t *testing.T) {
 	}
 	if got := integrationForHost("api.acme.test"); got == integrationForHost("api.globex.test") {
 		t.Error("two different hosts derived the same id")
+	}
+}
+
+// TestUploadBindsAHostWithAPort is the seam this file exists to hold. CONTRACTS
+// §2 defines `flanj.peer.host` as host[:port] and names it THE EDGE KEY; the
+// spec cache looks it up by exact string. Truncating at the colon meant a
+// host:port edge could not be bound at all — and worse than "not at all": the UI
+// locked the uploader to api.acme.test:28080, the confirm step said it was
+// binding to that, and the server bound api.acme.test instead. On a stack that
+// already has a contract there, that reads as a replace and overwrites a
+// DIFFERENT edge's contract with this document.
+func TestUploadBindsAHostWithAPort(t *testing.T) {
+	const withPort = "api.acme.test:28080"
+
+	r := newRig(t)
+	r.start(t)
+
+	// A contract already bound to the bare host — the neighbour that got
+	// overwritten. Its presence is what makes the silent rewrite destructive.
+	resp, _, raw := r.do(t, http.MethodPost, "/api/contracts/upload", map[string]string{
+		"peer_host": "api.acme.test",
+		"document":  specV1Doc(t),
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("seeding the bare-host contract = %d: %s", resp.StatusCode, raw)
+	}
+
+	// Preview must describe the binding the operator asked for, and must not
+	// claim it would displace the bare host's contract.
+	_, prev, praw := r.do(t, http.MethodPost, "/api/contracts/preview", map[string]string{
+		"peer_host": withPort,
+		"document":  specV2Doc(t),
+	})
+	if prev["peer_host"] != withPort {
+		t.Errorf("preview bound to %v, want %s — the confirm step must not promise a binding the upload won't make: %s",
+			prev["peer_host"], withPort, praw)
+	}
+	if prev["integration"] != "api-acme-test-28080" {
+		t.Errorf("preview integration = %v, want api-acme-test-28080 derived from host:port", prev["integration"])
+	}
+	if prev["replaces"] != nil && prev["replaces"] != "" {
+		t.Errorf("preview reports replacing %v — a different listener's contract is not this upload's to displace", prev["replaces"])
+	}
+
+	resp, out, raw := r.do(t, http.MethodPost, "/api/contracts/upload", map[string]string{
+		"peer_host": withPort,
+		"document":  specV2Doc(t),
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("upload = %d: %s", resp.StatusCode, raw)
+	}
+	if out["replaced"] != false {
+		t.Errorf("binding %s reported a replace — it overwrote the bare host's contract", withPort)
+	}
+
+	infos, _ := r.st.ListSpecInfos()
+	if len(infos) != 2 {
+		t.Fatalf("stored %d contracts, want 2 — host and host:port are different edges: %+v", len(infos), infos)
+	}
+	byHost := map[string]model.SpecInfo{}
+	for _, si := range infos {
+		byHost[si.PeerHost] = si
+	}
+	bound, ok := byHost[withPort]
+	if !ok {
+		t.Fatalf("nothing bound to %s; stored %+v", withPort, infos)
+	}
+	if bound.Integration != "api-acme-test-28080" {
+		t.Errorf("integration = %q, want api-acme-test-28080", bound.Integration)
+	}
+	bare, ok := byHost["api.acme.test"]
+	if !ok {
+		t.Fatal("the bare host's contract is gone — the port upload overwrote a different edge")
+	}
+	if bare.Version == bound.Version {
+		t.Errorf("both edges carry version %q — the bare host's document was replaced", bare.Version)
+	}
+}
+
+// TestUploadKeepsANonDefaultPortAndDropsTheSchemeDefault: a non-default port is
+// a genuinely different listener and stays; the scheme's own default is the same
+// listener under a longer name and goes, because that is what the SDK emits.
+func TestUploadKeepsANonDefaultPortAndDropsTheSchemeDefault(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"api.acme.test:28080", "api.acme.test:28080"},
+		{"https://api.acme.test:8080/v1", "api.acme.test:8080"},
+		{"api.acme.test:80", "api.acme.test:80"}, // no scheme: nothing says :80 is redundant
+		{"http://api.acme.test:80", "api.acme.test"},
+		{"https://api.acme.test:443", "api.acme.test"},
+		// :443 is not HTTP's default — a listener on it is real, not a spelling.
+		{"http://api.acme.test:443", "api.acme.test:443"},
+		{"HTTPS://API.ACME.TEST:8443/v1", "api.acme.test:8443"},
+		{"[::1]:8080", "[::1]:8080"},
+		{"https://[::1]:443/v1", "[::1]"},
+	} {
+		r := newRig(t)
+		r.start(t)
+		resp, _, raw := r.do(t, http.MethodPost, "/api/contracts/upload", map[string]string{
+			"peer_host": tc.in,
+			"document":  specV1Doc(t),
+		})
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%q: status = %d: %s", tc.in, resp.StatusCode, raw)
+		}
+		infos, _ := r.st.ListSpecInfos()
+		if len(infos) != 1 || infos[0].PeerHost != tc.want {
+			t.Errorf("%q bound to %+v, want %s", tc.in, infos, tc.want)
+		}
+	}
+}
+
+// TestUploadRefusesAMalformedPort: the port is half the edge key, so a port that
+// is not a port would bind a contract to a string no call can ever carry — the
+// silent no-op the host binding is mandatory to prevent.
+func TestUploadRefusesAMalformedPort(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+
+	for _, host := range []string{
+		"api.acme.test:https",
+		"api.acme.test:0",
+		"api.acme.test:65536",
+		"api.acme.test:8080x",
+		"api.acme.test:-1",
+		"api.acme.test:08080",
+	} {
+		resp, out, raw := r.do(t, http.MethodPost, "/api/contracts/upload", map[string]string{
+			"peer_host": host,
+			"document":  specV1Doc(t),
+		})
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("host %q: status = %d, want 400: %s", host, resp.StatusCode, raw)
+		}
+		if out["error"] != "invalid_host" {
+			t.Errorf("host %q: error = %v, want invalid_host", host, out["error"])
+		}
+	}
+	if infos, _ := r.st.ListSpecInfos(); len(infos) != 0 {
+		t.Fatalf("a contract bound to an unreachable key was persisted: %+v", infos)
 	}
 }
