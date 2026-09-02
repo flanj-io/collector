@@ -148,10 +148,12 @@ Flow specifics:
 - **Contracts flow store → front** — the reverse of every other record here.
   They are uploaded in the UI, which lives on the store pod, so the store pod
   is their source of truth; each front READS them back from the store pod's
-  `spec_endpoint` on a one-minute ticker (and early on first sight of a host it
+  `spec_endpoint` on a ten-second ticker (and early on first sight of a host it
   has no contract for), keeping the parsed documents in memory. An upload
-  therefore starts validating within about a minute, with no restart and no
-  front rollout. What still travels front → store as `spec_info` is a front's
+  therefore starts validating within about ten seconds, with no restart and no
+  front rollout. The ticker is what a front has: the store pod announces a
+  contract change in-process, and a front is a different process, so it cannot
+  hear it. The reads are metadata-only and download nothing when nothing moved. What still travels front → store as `spec_info` is a front's
   own SELF contract (`self_spec_path`) and its observed MCP `tools/list`
   snapshots — never a provider contract.
 - The flag action runs on the store pod (it holds the evidence); its outbound

@@ -19,13 +19,34 @@ import (
 //
 // The per-call path is a map read and nothing else. Parsing an OpenAPI document
 // is expensive and the store is a database — neither belongs on the hot path.
+// A change to the contract set arrives as a NOTIFICATION from the store
+// extension (store.SpecSubscriber → an early refresh), never as a read per
+// call: the 2026-08-31 owner ruling is what shapes this file.
 const (
-	// specRefresh bounds how often the cache re-reads its source. An upload
-	// therefore starts validating within one tick, which is what the UI
-	// promises ("Validating from now on").
-	specRefresh = 60 * time.Second
+	// specRefresh bounds how often the cache re-reads its source — the ceiling
+	// on how long a contract change stays invisible to detection.
+	//
+	// In-process the ceiling is not this: the store extension ANNOUNCES an
+	// upload, replace or remove and the loop refreshes on the spot
+	// (store.SpecSubscriber). This interval is what the announcement CANNOT
+	// reach: a tiered front, which runs this processor in a different process
+	// from the store pod the operator uploads to, and the other pods of a
+	// shared-postgres deployment, which cache independently.
+	//
+	// Sixty seconds was the ceiling for both until 2026-09-02, and the UI does
+	// not offer that caveat: its ratified copy says "Validating from now on"
+	// and its card shows the new version as live. A minute of scoring calls
+	// against a superseded document — and stamping them CONFORMING permanently,
+	// since captured calls are never re-checked — is the version of that
+	// sentence being false that costs evidence. Ten seconds is the version that
+	// is nearly true, at a metadata request every ten seconds per front:
+	// listSpecs is metadata-only and downloads nothing when nothing moved, so
+	// steady state on a fifty-provider front is six small requests a minute.
+	specRefresh = 10 * time.Second
 	// specRefreshFloor is the minimum spacing between refreshes, so a burst of
 	// traffic to uncovered hosts cannot turn first-sight kicks into a hot loop.
+	// A kick inside the floor is deferred to the end of it, not dropped
+	// (refreshLoop) — an announced change gets exactly one chance to be heard.
 	specRefreshFloor = 5 * time.Second
 )
 

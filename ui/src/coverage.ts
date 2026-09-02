@@ -56,10 +56,14 @@
 // re-vendor. Until then, temporal-local and conservative.
 //
 // Two residuals, both accepted and both in the safe direction:
-//   - the processor's spec cache refreshes within a minute of an upload, so a
-//     call captured in that window can read `checked` while the processor had
-//     not yet loaded the document. Sub-minute, and it shrinks to nothing the
-//     moment the server-side stamp lands
+//   - the processor's spec cache is told the moment a contract changes and
+//     refreshes on the spot, so in a single-pod collector this window is now
+//     the length of one refresh. It survives only where the announcement
+//     cannot reach — a tiered front, and the other pods of a shared-postgres
+//     deployment — bounded there by the cache's ten-second ticker. A call
+//     captured in that window can read `checked` while the processor had not
+//     yet loaded the document; it shrinks to nothing the moment the
+//     server-side stamp lands
 //   - a REPLACED contract keeps only the current row's `loaded_at`, so calls
 //     validated against the document it replaced read `not checked`. That
 //     understates coverage rather than overstating it, which is the whole

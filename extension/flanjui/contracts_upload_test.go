@@ -1,11 +1,15 @@
 package flanjui
 
 import (
+	"context"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+
+	"go.opentelemetry.io/collector/component"
 
 	"github.com/flanj-io/collector/internal/model"
 )
@@ -621,5 +625,162 @@ func TestUploadRefusesAMalformedPort(t *testing.T) {
 	}
 	if infos, _ := r.st.ListSpecInfos(); len(infos) != 0 {
 		t.Fatalf("a contract bound to an unreachable key was persisted: %+v", infos)
+	}
+}
+
+/* ── The contract-change announcement ───────────────────────────────────── */
+
+// recordingPublisher stands in for the store extension: in a real collector it
+// is `flanjstore` that carries store.SpecPublisher, and the drift processor
+// subscribes to it.
+type recordingPublisher struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (p *recordingPublisher) NotifySpecsChanged() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.n++
+}
+
+func (p *recordingPublisher) count() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.n
+}
+
+func (p *recordingPublisher) Start(context.Context, component.Host) error { return nil }
+func (p *recordingPublisher) Shutdown(context.Context) error              { return nil }
+
+// extHost is a component.Host carrying a fixed extension set.
+type extHost struct{ exts map[component.ID]component.Component }
+
+func (h extHost) GetExtensions() map[component.ID]component.Component { return h.exts }
+
+// withPublisher attaches a store-extension stand-in to the rig's host, the way
+// the collector's own extension set does.
+func (r *testRig) withPublisher(t *testing.T) *recordingPublisher {
+	t.Helper()
+	pub := &recordingPublisher{}
+	r.ext.host = extHost{exts: map[component.ID]component.Component{
+		component.MustNewID("flanjstore"): pub,
+	}}
+	return pub
+}
+
+// TestUploadAnnouncesTheContractChange: the drift processor caches parsed
+// contracts and refreshes on a ticker, so a write to the store is invisible to
+// detection until it hears about it. A REPLACE is the case that needs the
+// announcement: the host is already covered, so the processor's own first-sight
+// kick never fires, and every call until the next tick would be scored against
+// the document this upload just superseded — while the UI says "Validating from
+// now on" and the card shows the new version as live.
+func TestUploadAnnouncesTheContractChange(t *testing.T) {
+	r := newRig(t)
+	pub := r.withPublisher(t)
+	r.start(t)
+
+	resp, _, raw := r.do(t, http.MethodPost, "/api/contracts/upload", map[string]string{
+		"peer_host": "api.acme.test",
+		"document":  specV1Doc(t),
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("first upload = %d: %s", resp.StatusCode, raw)
+	}
+	if pub.count() != 1 {
+		t.Fatalf("announcements after a first upload = %d, want 1", pub.count())
+	}
+
+	resp, out, raw := r.do(t, http.MethodPost, "/api/contracts/upload", map[string]string{
+		"peer_host": "api.acme.test",
+		"document":  specV2Doc(t),
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("replace = %d: %s", resp.StatusCode, raw)
+	}
+	if out["replaced"] != true {
+		t.Fatalf("second upload did not report a replace: %v", out["replaced"])
+	}
+	if pub.count() != 2 {
+		t.Fatalf("announcements after a REPLACE = %d, want 2 — a replaced contract "+
+			"is a cache HIT, so nothing else tells detection the document moved", pub.count())
+	}
+}
+
+// TestRefusedUploadAnnouncesNothing: an upload that never reached the store
+// changed no contract set, and announcing one would cost every subscriber a
+// refresh for nothing.
+func TestRefusedUploadAnnouncesNothing(t *testing.T) {
+	r := newRig(t)
+	pub := r.withPublisher(t)
+	r.start(t)
+
+	resp, _, _ := r.do(t, http.MethodPost, "/api/contracts/upload", map[string]string{
+		"peer_host": "api.acme.test",
+		"document":  "this is not an OpenAPI document",
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("unparseable upload = %d, want 400", resp.StatusCode)
+	}
+	if pub.count() != 0 {
+		t.Errorf("announcements after a refused upload = %d, want 0", pub.count())
+	}
+}
+
+// TestRemoveAnnouncesTheContractChange: a removal is a cache HIT on the deleted
+// document, so without the announcement the contract keeps validating traffic
+// after the operator removed it — the undo that does not undo. Removing a
+// contract that was not there changed nothing and must stay quiet.
+func TestRemoveAnnouncesTheContractChange(t *testing.T) {
+	r := newRig(t)
+	pub := r.withPublisher(t)
+	r.start(t)
+
+	if resp, _, raw := r.do(t, http.MethodPost, "/api/contracts/upload", map[string]string{
+		"peer_host": "api.acme.test",
+		"document":  specV1Doc(t),
+	}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("upload = %d: %s", resp.StatusCode, raw)
+	}
+	before := pub.count()
+
+	resp, out, raw := r.do(t, http.MethodPost, "/api/contracts/remove", map[string]string{
+		"integration": "api-acme-test",
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("remove = %d: %s", resp.StatusCode, raw)
+	}
+	if out["removed"] != true {
+		t.Fatalf("remove did not report a deletion: %v", out["removed"])
+	}
+	if pub.count() != before+1 {
+		t.Fatalf("announcements after a remove = %d, want %d", pub.count(), before+1)
+	}
+
+	after := pub.count()
+	if resp, _, raw := r.do(t, http.MethodPost, "/api/contracts/remove", map[string]string{
+		"integration": "api-acme-test",
+	}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("second remove = %d: %s", resp.StatusCode, raw)
+	}
+	if pub.count() != after {
+		t.Errorf("removing a contract that was not there announced a change (%d -> %d)", after, pub.count())
+	}
+}
+
+// TestAnnouncingWithNoStoreExtensionIsANoOp: the UI must not depend on a
+// subscriber existing. A tiered store pod runs no drift processor at all, and
+// the handler tests run with no host — neither may turn an upload into a 500.
+func TestAnnouncingWithNoStoreExtensionIsANoOp(t *testing.T) {
+	r := newRig(t) // no host, no publisher
+	r.start(t)
+
+	resp, _, raw := r.do(t, http.MethodPost, "/api/contracts/upload", map[string]string{
+		"peer_host": "api.acme.test",
+		"document":  specV1Doc(t),
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("upload with no store extension = %d: %s", resp.StatusCode, raw)
 	}
 }

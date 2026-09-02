@@ -19,6 +19,18 @@ func specV1(t *testing.T) []byte {
 	return b
 }
 
+// specV2 is the vendored SUCCESSOR contract: it declares `amount` as a string,
+// which is what the golden call actually carries. So the same call drifts
+// against v1 and conforms against v2 — the verdict says which document is live.
+func specV2(t *testing.T) []byte {
+	t.Helper()
+	b, err := os.ReadFile("../../contracts/spec-v2.yaml")
+	if err != nil {
+		t.Fatalf("read spec-v2: %v", err)
+	}
+	return b
+}
+
 // fakeSource is a specSource whose rows the test controls, counting document
 // fetches so the "only re-download what changed" contract is testable rather
 // than assumed.

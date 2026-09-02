@@ -36,7 +36,10 @@ inbound off-host.
 detection is an OPTIONAL enhancer, and **provider contracts are UPLOADED in the UI, never configured**
 (2026-08-31 — `spec_path`/`spec_v2_path`/`peer_host` removed from CONTRACTS §8). Each upload binds to exactly
 ONE provider host, stays on this collector, and is read from the store at runtime by the drift processor's spec
-cache — so it validates within a minute, no restart. A call to a host with no contract is captured, not
+cache — so it validates immediately, no restart: the store extension ANNOUNCES an upload, replace or remove and
+the cache refreshes on the spot (`store.SpecPublisher`/`SpecSubscriber`). Announcements are in-process, so the
+two topologies the announcement cannot cross — a tiered front, and the other pods of a shared-postgres
+deployment — converge on the cache's own ticker instead, within ten seconds. A call to a host with no contract is captured, not
 validated, and the UI says exactly that. **MCP edges (v0.5) need no spec at all**: the SDK's observed `tools/list` arrives as a
 `contract_snapshot` record — the self-delivering local spec — versioned by content hash in the drift processor
 (previous snapshot kept for diffing; persisted as a `spec_infos` row, format `"mcp"`, so the Contracts tab lists
