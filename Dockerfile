@@ -2,7 +2,7 @@
 #
 #   1. ui      : node builds the Vue/Vite SPA -> dist/
 #   2. build   : golang + ocb build the collector binary, embedding the SPA
-#   3. runtime : distroless, static binary + config + specs
+#   3. runtime : distroless, static binary + the three role configs
 #
 # The version triad is pinned in builder-config.yaml (ocb v0.159.0, beta v0.159.0,
 # stable v1.65.0). CGO is OFF — modernc.org/sqlite is pure Go — so the binary is
@@ -58,8 +58,11 @@ COPY --from=build /src/config/config.example.yaml /etc/flanj/config.yaml
 # otlp -> redaction -> store + UI). The default CMD stays the single-pod config.
 COPY --from=build /src/config/config.front.example.yaml /etc/flanj/front.yaml
 COPY --from=build /src/config/config.store.example.yaml /etc/flanj/store.yaml
-COPY --from=build /src/contracts/spec-v1.yaml /etc/flanj/spec-v1.yaml
-COPY --from=build /src/contracts/spec-v2.yaml /etc/flanj/spec-v2.yaml
+# NOTE: /etc/flanj/spec-v1.yaml and spec-v2.yaml were baked here until 2026-09-02
+# and are deliberately gone. Nothing read them at runtime: provider contracts are
+# UPLOADED in the UI and read from the store (CONTRACTS §8, 2026-08-31), and the
+# `spec_path` keys that once pointed at them no longer exist. They remain in
+# contracts/ as test fixtures, which is the only thing that ever used them.
 
 # OTLP/HTTP ingest. The UI (127.0.0.1:5335) is loopback-only and deliberately
 # NOT exposed — reach it via `kubectl port-forward` / an SSH tunnel.

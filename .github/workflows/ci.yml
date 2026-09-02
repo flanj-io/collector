@@ -2,7 +2,8 @@ name: ci
 
 # Per-PR CI for the collector. Fixtures-only — never needs the private control-plane (flag POST is
 # tested against a stub). Builds the multi-stage image, runs Go unit + contract tests (ingest
-# contracts/golden-otlp-call.json -> expected Finding; redaction vs vectors). Pings e2e on merge.
+# contracts/golden-otlp-call.json -> expected Finding; redaction vs vectors), and checks the
+# operator doc still matches the config surface. Pings e2e on merge.
 
 on:
   pull_request:
@@ -32,6 +33,19 @@ jobs:
             fi
           done
           exit $missing
+
+  docs:
+    # The operator doc is the only reference README.md links to, and it is not
+    # covered by any other job. PR #19 changed the config surface without
+    # touching it, leaving DEPLOYMENT.md describing a store pod that refuses to
+    # boot (a REQUIRED FLANJ_SPEC_TOKEN was missing from its env table). This
+    # asserts that every FLANJ_* variable the shipped example configs reference
+    # is documented there, so the next config change cannot strand it silently.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Operator env contract — config/*.example.yaml vs DEPLOYMENT.md
+        run: bash scripts/check-env-documented.sh
 
   go-test:
     runs-on: ubuntu-latest
@@ -106,7 +120,7 @@ jobs:
         run: docker build -t flanj-collector:ci .
 
   notify-e2e:
-    needs: [dco, go-test, docker-build]
+    needs: [dco, docs, go-test, docker-build]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
