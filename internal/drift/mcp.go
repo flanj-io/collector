@@ -85,6 +85,7 @@ func (d *MCPDetector) LoadSnapshot(snap otlpattr.ContractSnapshot) ([]model.Find
 	if err != nil {
 		return nil, model.SpecInfo{}, nil, fmt.Errorf("mcp snapshot: %w", err)
 	}
+	tools = dropUndecodableSchemas(tools)
 	edgeRef := mcpEdgeRef(snap.PeerHost, snap.Direction)
 	c, err := contract.FromToolsList(tools, edgeRef, snap.ObservedAt, "observed tools/list at "+snap.ObservedAt)
 	if err != nil {
@@ -97,13 +98,13 @@ func (d *MCPDetector) LoadSnapshot(snap otlpattr.ContractSnapshot) ([]model.Find
 		// publish the same serverInfo.name, and a local-process server has no
 		// edge row to look it up from.
 		EdgeClass: snap.EdgeClass,
-		Role:        model.SpecRoleProvider,
-		PeerHost:    snap.PeerHost,
-		Format:      model.SpecFormatMCP,
-		Title:       snap.ServerName,
-		Version:     snap.ServerVersion,
-		Endpoints:   len(tools),
-		LoadedAt:    snap.ObservedAt,
+		Role:      model.SpecRoleProvider,
+		PeerHost:  snap.PeerHost,
+		Format:    model.SpecFormatMCP,
+		Title:     snap.ServerName,
+		Version:   snap.ServerVersion,
+		Endpoints: len(tools),
+		LoadedAt:  snap.ObservedAt,
 	}
 
 	d.mu.Lock()
@@ -139,6 +140,51 @@ func (d *MCPDetector) LoadSnapshot(snap otlpattr.ContractSnapshot) ([]model.Find
 	return findings, info, []byte(snap.SnapshotJSON), nil
 }
 
+// dropUndecodableSchemas blanks any tool schema contract.CanonicalizeSchema
+// cannot represent, leaving the rest of the list intact.
+//
+// It is a blast radius limiter, not leniency. FromToolsList fails the WHOLE
+// contract on one bad schema, and LoadSnapshot turns that into a dropped
+// tools/list: the edge then keeps whatever contract it last held, forever, and
+// no definition_change ever fires again — a silent false green, caused by one
+// tool nobody was even looking at. A tool whose schema we cannot decode
+// degrades to the honest "no contract declared" state (exactly what a tool
+// publishing no outputSchema already gets) and its siblings keep theirs.
+//
+// Boolean schemas are NOT this path — CanonicalizeSchema represents those
+// exactly. This catches what is left: a schema that is a bare array, number or
+// string, which is not a JSON Schema in any draft.
+func dropUndecodableSchemas(tools []contract.ToolDef) []contract.ToolDef {
+	out := tools
+	copied := false
+	for i := range tools {
+		inBad := schemaUndecodable(tools[i].InputSchema)
+		outBad := schemaUndecodable(tools[i].OutputSchema)
+		if !inBad && !outBad {
+			continue
+		}
+		if !copied { // copy-on-write: the caller's slice is never mutated
+			out = append([]contract.ToolDef(nil), tools...)
+			copied = true
+		}
+		if inBad {
+			out[i].InputSchema = nil
+		}
+		if outBad {
+			out[i].OutputSchema = nil
+		}
+	}
+	return out
+}
+
+func schemaUndecodable(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	_, err := contract.CanonicalizeSchema(raw)
+	return err != nil
+}
+
 // Seed restores an edge's CURRENT snapshot from the store (spec_infos rows
 // with format "mcp", written by earlier LoadSnapshots) so a restarted
 // collector diffs the next observed list against the last persisted one
@@ -151,6 +197,7 @@ func (d *MCPDetector) Seed(info model.SpecInfo, raw []byte) error {
 	if err != nil {
 		return fmt.Errorf("seed mcp contract %q: %w", info.Integration, err)
 	}
+	tools = dropUndecodableSchemas(tools)
 	edgeRef := mcpEdgeRef(info.PeerHost, "client")
 	c, err := contract.FromToolsList(tools, edgeRef, info.LoadedAt, "observed tools/list at "+info.LoadedAt)
 	if err != nil {
@@ -201,6 +248,25 @@ func (d *MCPDetector) DetectCall(call model.RedactedCall) []model.Finding {
 		return []model.Finding{staleToolFinding(call, toolName, now)}
 	}
 
+	// MCP revision 2026-07-28, `resultType: "input_required"`. The server is
+	// asking the caller for more input; the exchange is MID-FLIGHT. Neither half
+	// of it is contract evidence:
+	//   - the result is partial by design, so validating it against outputSchema
+	//     reports every required field the server has not filled in yet;
+	//   - the arguments are partial by design too — an interactive tool is
+	//     designed to be called without them and to ask — so validating them
+	//     against inputSchema.required accuses the client of being stale for
+	//     doing exactly what the tool asked for.
+	// Both would fire on NORMAL traffic, on precisely the tools an agent uses
+	// most. The call is still captured; it is simply not judged.
+	//
+	// This sits AFTER the tool-not-listed check on purpose: calling a tool the
+	// current catalog does not declare is a fact about the tool name, not the
+	// payload, and stays true whatever the result type.
+	if call.MCPResultType == model.MCPResultTypeInputRequired {
+		return nil
+	}
+
 	var findings []model.Finding
 
 	// stale_client: arguments vs the CURRENT inputSchema (spec §4.C.3).
@@ -221,7 +287,13 @@ func (d *MCPDetector) DetectCall(call model.RedactedCall) []model.Finding {
 	// error-rate metric instead (spec §1 "Schema-vs-implementation").
 	// structuredContent is stored with content-type application/json; the
 	// content[] text fallback (text/plain) is not governed by outputSchema.
-	if op.OutputSchema != nil && !call.MCPIsError &&
+	// A Tasks handle (revision 2026-07-28) is an ENVELOPE: the call returned
+	// {task:{taskId,…}} and the tool's real payload arrives later via tasks/get,
+	// a surface the SDK does not instrument yet. The SDK already drops the body
+	// of such a record; this second gate states the rule where the judgment is
+	// made, so a future capture change cannot quietly start validating a task
+	// envelope against the tool's outputSchema.
+	if op.OutputSchema != nil && !call.MCPIsError && call.MCPTaskID == "" &&
 		call.ResponseBody != "" && !call.ResponseBodyTruncated &&
 		isJSONContentType(call.ResponseContentType) {
 		for _, v := range validateAgainstSchema(op.OutputSchema, call.ResponseBody, call, "response") {

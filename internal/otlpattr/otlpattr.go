@@ -71,7 +71,27 @@ const (
 	AttrMCPServerVersion   = "flanj.mcp.server.version"
 	AttrMCPProtocolVersion = "flanj.mcp.protocol.version"
 	// AttrMCPSessionID is the Mcp-Session-Id when the transport exposes one.
+	// Protocol-level sessions were removed in revision 2026-07-28, so this is
+	// permanently absent against a current server; the slot stays for clients
+	// still on the 2025-11-25 line.
 	AttrMCPSessionID = "flanj.mcp.session.id"
+	// AttrMCPResultType is the result's `resultType` (revision 2026-07-28) —
+	// "complete", "input_required", or whatever a later revision adds, verbatim.
+	// ABSENT means an older server, NEVER "complete": an interactive tool's
+	// input_required result carries a payload that is partial by design, and
+	// judging it against a contract manufactures findings out of normal traffic.
+	AttrMCPResultType = "flanj.mcp.result.type"
+	// AttrMCPTaskID is set when the result was a Tasks HANDLE rather than a
+	// payload: the tool's real output arrives later via tasks/get, on a surface
+	// the SDK does not yet instrument. The record describes the envelope, so
+	// nothing may validate response shape from it.
+	AttrMCPTaskID = "flanj.mcp.task.id"
+	// AttrMCPCatalogTTLMs / AttrMCPCatalogCacheScope are the `ttlMs` /
+	// `cacheScope` a tools/list result published (revision 2026-07-28). Clients
+	// are now told to CACHE catalogs, so a snapshot may legitimately be up to
+	// ttlMs behind the server — see the stale_client note in internal/drift/mcp.go.
+	AttrMCPCatalogTTLMs      = "flanj.mcp.catalog.ttl_ms"
+	AttrMCPCatalogCacheScope = "flanj.mcp.catalog.cache_scope"
 	// AttrCorrClientRequestID is the JSON-RPC id observed on the client's OWN
 	// outgoing message — CLIENT-generated, labeled as such, never merged into
 	// AttrCorrRequestID (which stays provider-issued only).
@@ -246,6 +266,8 @@ func CallFromRecord(lr plog.LogRecord) model.RedactedCall {
 		MCPServerVersion:   getStr(m, AttrMCPServerVersion),
 		MCPProtocolVersion: getStr(m, AttrMCPProtocolVersion),
 		MCPSessionID:       getStr(m, AttrMCPSessionID),
+		MCPResultType:      getStr(m, AttrMCPResultType),
+		MCPTaskID:          getStr(m, AttrMCPTaskID),
 	}
 }
 
@@ -263,6 +285,11 @@ type ContractSnapshot struct {
 	ProtocolVersion string
 	ToolCount       int
 	SnapshotJSON    string
+	// CatalogTTLMs / CatalogCacheScope are the tools/list cache directives
+	// (revision 2026-07-28), when the server published them. They also ride
+	// INSIDE SnapshotJSON, so the stored document stays self-describing.
+	CatalogTTLMs      int
+	CatalogCacheScope string
 	// ObservedAt is the record's own timestamp (the spec's "<ts>" in
 	// provenance "observed tools/list at <ts>").
 	ObservedAt string
@@ -278,16 +305,18 @@ func ContractSnapshotFromRecord(lr plog.LogRecord) (ContractSnapshot, error) {
 		return ContractSnapshot{}, errNoSnapshot
 	}
 	return ContractSnapshot{
-		Integration:     getStr(m, AttrIntegration),
-		Direction:       getStr(m, AttrDirection),
-		PeerHost:        getStr(m, AttrPeerHost),
-		EdgeClass:       getStr(m, AttrEdgeClass),
-		ServerName:      getStr(m, AttrMCPServerName),
-		ServerVersion:   getStr(m, AttrMCPServerVersion),
-		ProtocolVersion: getStr(m, AttrMCPProtocolVersion),
-		ToolCount:       getInt(m, AttrMCPToolCount),
-		SnapshotJSON:    raw,
-		ObservedAt:      recordTime(lr),
+		Integration:       getStr(m, AttrIntegration),
+		Direction:         getStr(m, AttrDirection),
+		PeerHost:          getStr(m, AttrPeerHost),
+		EdgeClass:         getStr(m, AttrEdgeClass),
+		ServerName:        getStr(m, AttrMCPServerName),
+		ServerVersion:     getStr(m, AttrMCPServerVersion),
+		ProtocolVersion:   getStr(m, AttrMCPProtocolVersion),
+		ToolCount:         getInt(m, AttrMCPToolCount),
+		SnapshotJSON:      raw,
+		CatalogTTLMs:      getInt(m, AttrMCPCatalogTTLMs),
+		CatalogCacheScope: getStr(m, AttrMCPCatalogCacheScope),
+		ObservedAt:        recordTime(lr),
 	}, nil
 }
 

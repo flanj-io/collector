@@ -95,7 +95,24 @@ type RedactedCall struct {
 	// MCPProtocolVersion is the negotiated MCP protocol version, when surfaced.
 	MCPProtocolVersion string `json:"mcp_protocol_version,omitempty"`
 	// MCPSessionID is the Mcp-Session-Id when the transport exposes one.
+	// Protocol sessions were removed in MCP revision 2026-07-28, so this is
+	// permanently absent against a current server.
 	MCPSessionID string `json:"mcp_session_id,omitempty"`
+	// MCPResultType is the result's `resultType` (revision 2026-07-28):
+	// "complete", "input_required", or a later revision's value, verbatim.
+	// Empty means an older server said nothing — NOT "complete".
+	//
+	// `input_required` is normal traffic on an interactive tool: the server is
+	// asking for more input, so the payload is partial BY DESIGN. Detection
+	// skips it rather than judging it, or every elicitation turn becomes a
+	// finding.
+	MCPResultType string `json:"mcp_result_type,omitempty"`
+	// MCPTaskID is set when the result was a Tasks HANDLE rather than a payload
+	// (revision 2026-07-28 moved long-running work to the Tasks extension: the
+	// call returns `{task:{taskId,…}}` and the payload arrives via tasks/get).
+	// Such a record carries the ENVELOPE, never the tool's output, so nothing
+	// may validate or model response shape from it.
+	MCPTaskID string `json:"mcp_task_id,omitempty"`
 	// Drifted is TRUE when THIS call produced a live-vs-spec finding. Set by the
 	// store on every finding insert, including repeat occurrences of a signature
 	// that was already recorded.
@@ -130,6 +147,12 @@ const (
 	// CURRENT tools/list, or with args violating the current inputSchema.
 	// Consumer-side, LOCAL ONLY — never flaggable, no flag control anywhere.
 	KindStaleClient = "stale_client"
+
+	// MCPResultTypeComplete / MCPResultTypeInputRequired are the two `resultType`
+	// values MCP revision 2026-07-28 defines. They are compared, never assumed:
+	// an EMPTY MCPResultType is an older server, not a complete result.
+	MCPResultTypeComplete      = "complete"
+	MCPResultTypeInputRequired = "input_required"
 
 	SeverityBreaking = "breaking"
 	SeverityWarning  = "warning"

@@ -146,6 +146,19 @@ func Finish(c *Contract) (*Contract, error) {
 // CanonicalizeSchema round-trips v through JSON and normalizes set-semantics
 // keyword arrays, so schemas from ANY loader compare with reflect.DeepEqual.
 // v may be a json.RawMessage/[]byte (decoded) or any JSON-marshalable value.
+//
+// A BOOLEAN JSON Schema (`true` / `false`) is legal at any schema position and
+// became reachable at the root when MCP revision 2026-07-28 dropped the
+// root-type restriction on `outputSchema`. Schema is map-shaped, so booleans are
+// mapped to their exact object equivalents rather than rejected:
+//
+//	true  -> {}            (the empty schema: accepts anything)
+//	false -> {"not": {}}   (accepts nothing)
+//
+// This is not leniency for its own sake. Before it, one tool declaring `true`
+// made this function error, FromToolsList propagate, and the collector's
+// snapshot loader drop the ENTIRE tools/list — freezing that edge's contract at
+// whatever it last held, so no definition_change ever fired again, silently.
 func CanonicalizeSchema(v any) (Schema, error) {
 	if v == nil {
 		return nil, nil
@@ -166,15 +179,25 @@ func CanonicalizeSchema(v any) (Schema, error) {
 	if len(raw) == 0 {
 		return nil, nil
 	}
-	var out map[string]any
-	if err := json.Unmarshal(raw, &out); err != nil {
+	var node any
+	if err := json.Unmarshal(raw, &node); err != nil {
 		return nil, fmt.Errorf("canonicalize schema: %w", err)
 	}
-	if out == nil {
+	switch t := node.(type) {
+	case nil:
 		return nil, nil
+	case bool:
+		if t {
+			return Schema{}, nil
+		}
+		return Schema{"not": map[string]any{}}, nil
+	case map[string]any:
+		canonicalizeNode(t)
+		return t, nil
+	default:
+		// A number, string or array is not a schema in any JSON Schema draft.
+		return nil, fmt.Errorf("canonicalize schema: %T is not a JSON Schema", node)
 	}
-	canonicalizeNode(out)
-	return out, nil
 }
 
 // canonicalizeNode sorts the keyword arrays whose order is set-semantics, at
