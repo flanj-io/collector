@@ -1,9 +1,12 @@
 package drift
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
@@ -99,6 +102,7 @@ func DetectVersionDiff(pathV1, pathV2, integration string) ([]model.Finding, err
 		if ac, ok := c.(checker.ApiChange); ok {
 			endpoint = ac.Operation + " " + ac.Path
 		}
+		fieldPath := versionDiffFieldPath(c.GetArgs())
 		vf := model.Finding{
 			SchemaVersion:   model.SchemaVersion,
 			ID:              otlpattr.NewID(),
@@ -106,6 +110,7 @@ func DetectVersionDiff(pathV1, pathV2, integration string) ([]model.Finding, err
 			Severity:        model.SeverityBreaking,
 			Integration:     integration,
 			Endpoint:        endpoint,
+			FieldPath:       model.Ptr(fieldPath),
 			Expected:        "spec " + fromV,
 			Actual:          "spec " + toV,
 			Rule:            c.GetId(),
@@ -121,4 +126,49 @@ func DetectVersionDiff(pathV1, pathV2, integration string) ([]model.Finding, err
 		findings = append(findings, vf)
 	}
 	return findings, nil
+}
+
+// maxFieldPath is the frozen per-field cap on `field_path` (CONTRACTS §5).
+const maxFieldPath = 256
+
+// versionDiffFieldPath is what makes two version-diff findings on ONE endpoint
+// under ONE rule two findings rather than one.
+//
+// The signature is `integration|endpoint|kind|rule|field_path` (CONTRACTS §4)
+// and the store's unique index dedups on it, so an empty field_path collapsed
+// every change a rule found on an endpoint into a single row: the upload
+// counted the changes it emitted while the store kept a fraction of them, and
+// the "N breaking changes against the version it replaced" notice disagreed
+// with the API and the tab beneath it (observed: notice 4, API 2, UI 0).
+//
+// oasdiff carries no field path of its own. What names the changed element is
+// the change's ARGUMENTS — the locale-independent substitutions in its message
+// template ("removed the `pending` enum value from the `status` response
+// property for the response status `200`" -> ["pending", "status", "200"]), so
+// they are the discriminator. They also carry the BEFORE and AFTER values on
+// the "changed from X to Y" rules, which is what stops a ROLLBACK from being
+// recorded as the forward change recurring: v1->v2 and v2->v1 fire the same
+// rule on the same endpoint with their values swapped, so they now hold
+// distinct signatures instead of one row with occurrence_count 2. (Rules that
+// only fire one way — a removal, whose inverse is a non-breaking addition —
+// never had that problem: the rollback emits nothing at all.)
+func versionDiffFieldPath(args []any) string {
+	if len(args) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(args))
+	for _, a := range args {
+		parts = append(parts, strings.TrimSpace(fmt.Sprint(a)))
+	}
+	p := strings.Join(parts, " ")
+	r := []rune(p)
+	if len(r) <= maxFieldPath {
+		return p
+	}
+	// A plain truncation would let two long changes collapse back into one
+	// signature, which is the bug this field exists to fix — so the tail
+	// carries a digest of the WHOLE value rather than dropping it.
+	sum := sha256.Sum256([]byte(p))
+	digest := hex.EncodeToString(sum[:6])
+	return string(r[:maxFieldPath-len(digest)-1]) + "…" + digest
 }

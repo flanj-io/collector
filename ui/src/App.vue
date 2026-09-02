@@ -24,6 +24,8 @@ import {
   NO_CONTRACT_ROW,
   NO_CONTRACT_SECTION,
   REPLACE_CONTRACT,
+  UPLOADER_DISCARD_CONFIRM,
+  VERSION_DIFF_NO_CALL,
   contractMeta,
   contractOrigin,
   provenanceWord,
@@ -728,7 +730,7 @@ const contractCards = computed<{ self: ContractCard[]; mcpServers: ContractCard[
   // see findingBelongsToContract. An uploaded contract's integration is derived
   // from its host while a finding's comes from the call, so an
   // integration-only join split one provider into two cards.
-  const unclaimed = [...liveFindings.value, ...mcpContractFindings.value];
+  const unclaimed = [...liveFindings.value, ...versionDiffFindings.value, ...mcpContractFindings.value];
   const hostOfCall = (id: string) => callsById.value[id]?.peer_host;
   const claim = (spec: SpecInfo): Finding[] => {
     const mine: Finding[] = [];
@@ -805,15 +807,28 @@ const contractByHost = computed(() => contractsByHost(contracts.value));
 const uploadFor = ref('');
 const uploadNotice = ref('');
 const uploadError = ref('');
+/** Whether the open uploader is holding work — reported by the child, because
+ *  the document it has read and the confirm step it is showing are its state,
+ *  not App's. */
+const uploaderDirty = ref(false);
 
 function openUploader(host: string) {
-  uploadFor.value = host || '*';
+  const next = host || '*';
+  // One uploader, mounted on the row that opened it — so opening another
+  // UNMOUNTS this one and its in-progress confirm goes with it. Ask first;
+  // Remove already asks, and this discards work the operator did by hand.
+  if (uploadFor.value && uploadFor.value !== next && uploaderDirty.value) {
+    if (!window.confirm(UPLOADER_DISCARD_CONFIRM)) return;
+  }
+  uploadFor.value = next;
+  uploaderDirty.value = false;
   uploadNotice.value = '';
   uploadError.value = '';
 }
 
 function closeUploader() {
   uploadFor.value = '';
+  uploaderDirty.value = false;
 }
 
 /**
@@ -900,6 +915,19 @@ const cardGroups = computed(() => [
 ]);
 
 const liveFindings = computed(() => findings.value.filter((f) => f.kind === 'live-vs-spec'));
+
+// Version diffs: the breaking changes between an uploaded contract and the one
+// it replaced. Call-less by construction (the drift is in the two documents),
+// which is why they are their OWN list and not folded into liveFindings — that
+// one feeds the Overview headline, which counts LIVE drift only and must stay
+// that way.
+//
+// They were in the Finding type union and produced by the upload path, and
+// reached no surface at all: the tab built its rows from live-vs-spec + the two
+// MCP kinds, so the notice announced "N breaking changes against the version it
+// replaced" over a tab showing none of them, and the control plane's
+// `#contracts/<id>` deep link landed on an anchor that did not exist.
+const versionDiffFindings = computed(() => findings.value.filter((f) => f.kind === 'version-diff'));
 
 // ─── MCP (v0.5 Step D) ───────────────────────────────────────────────────
 // The MCP contract surface is SELF-DELIVERING: the server's observed
@@ -992,7 +1020,7 @@ const mcpContractFindings = computed(() =>
 // severity decides the tier, never the protocol); amber = informational rows
 // (NON-BREAKING + DESCRIPTION) not yet acknowledged. Invariant: red + amber +
 // acknowledged = the rows listed on the tab.
-const contractTabRows = computed(() => [...liveFindings.value, ...mcpContractFindings.value]);
+const contractTabRows = computed(() => [...liveFindings.value, ...versionDiffFindings.value, ...mcpContractFindings.value]);
 const contractBreakingCount = computed(() => contractTabRows.value.filter((f) => isBreakingFinding(f)).length);
 const contractInfoCount = computed(
   () => contractTabRows.value.filter((f) => !isBreakingFinding(f) && !isAcked(f)).length
@@ -1620,6 +1648,7 @@ watch(tab, (t) => {
             :host="p.peerHost"
             @uploaded="onUploaded"
             @cancel="closeUploader"
+            @dirty="uploaderDirty = $event"
           />
 
           <div v-if="p.spec" class="prov-links">
@@ -1681,7 +1710,11 @@ watch(tab, (t) => {
               <span v-else class="badge" :class="f.severity">{{ f.severity }}</span>
               <span class="endpoint">{{ f.endpoint }}</span>
               <span class="rule">{{ f.rule }}</span>
-              <template v-if="f.kind !== 'definition_change'">
+              <!-- Call counts belong to call-evidenced kinds only. A
+                   definition_change and a version-diff are both found by
+                   comparing two documents, so "1 call" would be a fabricated
+                   count of evidence that does not exist. -->
+              <template v-if="f.kind !== 'definition_change' && f.kind !== 'version-diff'">
                 <span v-if="f.occurrence_count && f.occurrence_count > 1" class="occ" title="calls carrying this same drift">
                   ×{{ f.occurrence_count }} calls
                 </span>
@@ -1699,6 +1732,22 @@ watch(tab, (t) => {
               <div class="arrow">≠</div>
               <div class="col">
                 <div class="k">{{ afterColLabel(f.spec_version_to || '', snapshotTimes(f.detail).to) }}</div>
+                <div class="v actual">{{ f.actual }}</div>
+              </div>
+            </div>
+            <!-- version-diff: the contract you replaced vs the one you uploaded.
+                 `expected`/`actual` already ARE the two versions, so only the
+                 labels change — neither side is "live", and there is no
+                 location, because the change is in the documents. The `detail`
+                 paragraph below names the field the rule fired on. -->
+            <div v-else-if="f.kind === 'version-diff'" class="drift-row">
+              <div class="col">
+                <div class="k">replaced</div>
+                <div class="v expected">{{ f.expected }}</div>
+              </div>
+              <div class="arrow">≠</div>
+              <div class="col">
+                <div class="k">uploaded</div>
                 <div class="v actual">{{ f.actual }}</div>
               </div>
             </div>
@@ -1783,12 +1832,12 @@ watch(tab, (t) => {
                    and deliberately so: a stale_client row must NEVER reach a
                    Flag control, and one guard is one edit away from being lost.
                    The trailing hint is likewise a fallback no row reaches today
-                   (contractTabRows is live-vs-spec + output_mismatch +
-                   definition_change, and the first two always carry their call)
-                   — it is what a call-less kind arriving here would say, rather
-                   than an empty actions row. -->
+                   — the trailing hint is where a CALL-LESS kind lands, and
+                   since the version diffs joined contractTabRows that is a real
+                   surface, not a fallback: a version-diff has no source call by
+                   construction, so every one of its rows renders it. -->
               <button v-else-if="f.source_call_id && !isLocalNotice(f)" type="button" class="btn primary flag" @click="openSheet(f)">Flag this</button>
-              <span v-else-if="!isLocalNotice(f)" class="hint-inline">Informational — spec-version findings have no failing call to share.</span>
+              <span v-else-if="!isLocalNotice(f)" class="hint-inline">{{ VERSION_DIFF_NO_CALL }}</span>
             </div>
           </article>
         </article>
@@ -1832,6 +1881,7 @@ watch(tab, (t) => {
               :host="host"
               @uploaded="onUploaded"
               @cancel="closeUploader"
+              @dirty="uploaderDirty = $event"
             />
           </div>
         </div>
@@ -1843,7 +1893,7 @@ watch(tab, (t) => {
       <section class="pretraffic">
         <h2>Add a contract <small>for a provider you haven’t sent traffic to yet</small></h2>
         <button v-if="uploadFor !== '*'" type="button" class="btn" @click="openUploader('')">{{ ADD_CONTRACT }}</button>
-        <ContractUploader v-else host="" @uploaded="onUploaded" @cancel="closeUploader" />
+        <ContractUploader v-else host="" @uploaded="onUploaded" @cancel="closeUploader" @dirty="uploaderDirty = $event" />
       </section>
     </div>
 

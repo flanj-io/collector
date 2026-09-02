@@ -19,7 +19,7 @@
  * parses whatever is in the store and a bad row would cost that host detection
  * with no symptom left for the operator to see.
  */
-import { computed, nextTick, ref } from 'vue';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { ApiError, apiPost } from './api';
 import {
   BIND_ANYWAY,
@@ -44,6 +44,11 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'uploaded', notice: string): void;
   (e: 'cancel'): void;
+  /** True once this uploader holds work that closing it would throw away — a
+   *  document read, or a confirm step on screen. App.vue asks before swapping
+   *  one uploader for another, because there is only one at a time and the
+   *  swap used to discard an in-progress confirm without a word. */
+  (e: 'dirty', dirty: boolean): void;
 }>();
 
 interface ContractPreview {
@@ -72,12 +77,62 @@ const dragging = ref(false);
  *  control. */
 const awaitingHost = ref(false);
 const hostField = ref<HTMLInputElement | null>(null);
+/** The file input is `hidden`, which takes it OUT of the tab order — so the
+ *  control the operator reaches is a real button that forwards its click here.
+ *  A `<label>` wrapping it, which is what this used to be, is not focusable at
+ *  all: the recorded tab order went host field -> Cancel -> page header and
+ *  never once landed on "Choose a file". With paste-the-document and URL fetch
+ *  both cut from v1, the picker is the ONLY way a contract enters the
+ *  collector, so a keyboard-only operator could not complete the Aha at all. */
+const fileInput = ref<HTMLInputElement | null>(null);
+const chooseButton = ref<HTMLButtonElement | null>(null);
+/** The host field has been edited since the preview that is on screen was
+ *  parsed. The confirm button is held until the re-parse lands, so a binding is
+ *  never committed against a preview describing a different host. */
+const hostDirty = ref(false);
 
 /** Arriving from a provider row the host is already known, so the confirm step
  *  shows one line and there is no field to fill. Zero-question binding for the
  *  common case is the whole ergonomic reason to route through this tab. */
 const boundHost = computed(() => (props.host || typedHost.value).trim());
 const needsHost = computed(() => !props.host);
+
+/**
+ * The host the SERVER will bind, echoed back by the preview — not the string in
+ * the field.
+ *
+ * `normalizeHost` (contracts_upload.go) strips a pasted URL's scheme, path,
+ * query and userinfo, lowercases, trims, and drops a scheme's default port. So
+ * pasting `https://API.Acme.test:443/v1` binds `api.acme.test` while the confirm
+ * step quoted the URL back — describing a binding that was never going to
+ * happen. Re-deriving that in TypeScript would be a second normalizer to keep in
+ * step; the preview already carries the server's own answer, and the
+ * post-commit notice already reads it.
+ */
+const previewHost = computed(() => preview.value?.peer_host || '');
+
+/** Work that closing this uploader would throw away. */
+const dirty = computed(() => !!preview.value || !!doc.value);
+watch(dirty, (d) => emit('dirty', d), { immediate: true });
+
+/**
+ * Focus lands INSIDE the uploader when it opens. It did not before: the panel
+ * appeared mid-page and the caret stayed wherever it was, so reaching the new
+ * controls meant tabbing forward through the whole card that opened it.
+ *
+ * Where it lands is what the operator has to answer first — the host when this
+ * is the pre-traffic route and there is a field, the picker when the host came
+ * from the row it opened on.
+ */
+onMounted(() => {
+  if (needsHost.value) hostField.value?.focus();
+  else chooseButton.value?.focus();
+});
+
+/** Both the button and Enter/Space on the drop zone route here. */
+function openPicker() {
+  fileInput.value?.click();
+}
 
 async function readFile(file: File | null | undefined) {
   if (!file) return;
@@ -137,6 +192,10 @@ async function runPreview() {
     error.value = e instanceof ApiError ? e.message : 'Couldn’t read that document.';
   } finally {
     busy.value = false;
+    // In `finally`, not after the await: a re-parse that FAILS must release the
+    // confirm button too. Left on the success path only, a rejected preview
+    // stranded it disabled with "Re-reading the document…" forever.
+    hostDirty.value = false;
   }
 }
 
@@ -170,16 +229,19 @@ async function confirm() {
  * shown together. A typo'd host trips all three at once and that pattern is
  * unmistakable; one whispered line was not.
  *
- * Recomputed from the LIVE host field, not the preview's echo, so editing the
- * host updates the verdict immediately instead of after a re-parse.
+ * Read off the preview's echo — the host the SERVER resolved — so the verdict
+ * describes the binding that will actually happen (see previewHost). Editing
+ * the host re-parses on a debounce, and `hostDirty` holds the confirm button
+ * until it lands, so the checks on screen are never about a different host than
+ * the one the button would bind.
  */
 const checks = computed(() =>
-  preview.value ? bindingChecks(boundHost.value, preview.value.servers) : []
+  preview.value ? bindingChecks(previewHost.value, preview.value.servers) : []
 );
 /** What happens next — informational, never a check: neither answer is a
  *  problem, and scoring them made the list cry wolf. */
 const timing = computed(() =>
-  preview.value ? bindingTiming(boundHost.value, preview.value.has_traffic) : ''
+  preview.value ? bindingTiming(previewHost.value, preview.value.has_traffic) : ''
 );
 const warned = computed(() => hasBindingWarning(checks.value));
 
@@ -188,6 +250,10 @@ const warned = computed(() => hasBindingWarning(checks.value));
 let hostDebounce: ReturnType<typeof setTimeout> | undefined;
 function onHostEdited() {
   if (!preview.value) return;
+  // Held from the first keystroke, not from the re-parse: between the two the
+  // checks below describe a host the field no longer names, and confirming
+  // there would bind against a preview of something else.
+  hostDirty.value = true;
   clearTimeout(hostDebounce);
   hostDebounce = setTimeout(() => void runPreview(), 400);
 }
@@ -215,19 +281,35 @@ function onHostEdited() {
         </small>
       </label>
 
+      <!-- The zone itself is reachable and operable: tabindex puts it in the
+           order, Enter/Space opens the picker. Deliberately NOT role="button" —
+           it contains a real button, and nesting one widget inside another
+           announces badly; a focusable region whose prompt is read out, with the
+           explicit control one Tab further on, is the honest shape. -->
       <div
         class="dropzone"
         :class="{ dragging }"
+        tabindex="0"
+        :aria-label="UPLOAD_PROMPT"
         @dragover.prevent="dragging = true"
         @dragleave.prevent="dragging = false"
         @drop.prevent="onDrop"
+        @keydown.enter.prevent="openPicker"
+        @keydown.space.prevent="openPicker"
       >
         <p class="dz-prompt">{{ UPLOAD_PROMPT }}</p>
         <p class="dz-formats">{{ UPLOAD_FORMATS }}</p>
-        <label class="btn small">
-          Choose a file
-          <input type="file" accept=".json,.yaml,.yml,application/json,text/yaml" hidden @change="onFilePicked" />
-        </label>
+        <!-- A real button, because `hidden` takes the input out of the tab
+             order and the <label> that used to wrap it was never focusable —
+             so this control could not be reached by keyboard at all. -->
+        <button ref="chooseButton" type="button" class="btn small" @click="openPicker">Choose a file</button>
+        <input
+          ref="fileInput"
+          type="file"
+          accept=".json,.yaml,.yml,application/json,text/yaml"
+          hidden
+          @change="onFilePicked"
+        />
       </div>
 
       <p class="uploader-privacy">{{ UPLOAD_STAYS_LOCAL }}</p>
@@ -279,7 +361,14 @@ function onHostEdited() {
       <p class="uploader-privacy">{{ UPLOAD_STAYS_LOCAL }}</p>
 
       <div class="uploader-actions">
-        <button type="button" class="btn" :class="{ warn: warned }" :disabled="busy || !boundHost" @click="confirm">
+        <button
+          type="button"
+          class="btn"
+          :class="{ warn: warned }"
+          :disabled="busy || hostDirty || !boundHost"
+          :title="hostDirty ? 'Re-reading the document against the new host…' : ''"
+          @click="confirm"
+        >
           {{ warned ? BIND_ANYWAY : 'Add contract' }}
         </button>
         <button type="button" class="btn ghost" :disabled="busy" @click="preview = null">Choose a different file</button>
