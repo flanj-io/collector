@@ -276,17 +276,47 @@ func TestReplaceKeepsThePreviousAndDiffsIt(t *testing.T) {
 	if len(after) <= len(before) {
 		t.Fatalf("findings did not grow: %d -> %d", len(before), len(after))
 	}
-	var sawVersionDiff bool
+	var stored []model.Finding
 	for _, f := range after {
 		if f.Kind == model.KindVersionDiff {
-			sawVersionDiff = true
+			stored = append(stored, f)
 			if f.SourceCallID != nil {
 				t.Errorf("version-diff finding has a source call — it is call-less by construction")
 			}
 		}
 	}
-	if !sawVersionDiff {
-		t.Error("no version-diff finding was stored")
+	if len(stored) == 0 {
+		t.Fatal("no version-diff finding was stored")
+	}
+
+	// EXACTLY the number the notice announces, not merely non-zero.
+	//
+	// This assertion used to be `n == 0` / `len(after) > len(before)`, which
+	// both passed while the two numbers disagreed: `breaking_changes` counts
+	// the findings the diff EMITTED, the store keeps one row per signature, and
+	// an empty field_path collapsed every change one rule found on one endpoint
+	// into a single row. So the uploader announced "4 breaking changes against
+	// the version it replaced" over an API holding 2. A count the operator is
+	// shown and a count they can go and look at have to be the same count.
+	if int(n) != len(stored) {
+		t.Errorf("the notice says %d breaking changes, the store holds %d version-diff rows", int(n), len(stored))
+	}
+	// The fixtures' two changes are a removed response enum value and a changed
+	// response property type — both on POST /v1/charges.
+	if len(stored) != 2 {
+		t.Errorf("stored %d version-diff findings, want 2 (spec-v1 -> spec-v2)", len(stored))
+		for _, f := range stored {
+			t.Logf("  %s  %s", f.Rule, f.Signature)
+		}
+	}
+	// Every row is separately addressable: the Contracts tab renders one card
+	// row per finding and the CP deep-links to `#contracts/<finding_id>`.
+	seen := map[string]bool{}
+	for _, f := range stored {
+		if seen[f.Signature] {
+			t.Errorf("two stored findings share signature %q — dedup would have collapsed them", f.Signature)
+		}
+		seen[f.Signature] = true
 	}
 
 	// One row, the new version live, the old one kept.

@@ -48,14 +48,20 @@ const (
 	msgContractIntegrationRequired = "integration is required."
 	msgContractNotRemovable        = "This contract comes from the collector's config file, not an upload — remove it there."
 	msgContractNotLoaded           = "No contract is loaded for that integration."
-	msgNotFlaggable        = "This finding is a local notice — stale-client calls stay on this collector and can't be flagged to the provider."
-	msgNotAckable          = "Only non-breaking informational findings can be acknowledged — breaking findings need a fix or a thread."
-	msgFindingNotFound     = "That finding is no longer in the local store."
-	msgFindingNoCall       = "This finding has no failing call to share (spec-version findings are informational)."
-	msgCallEvicted         = "The failing call is no longer in the local store (it was evicted from the rolling window)."
-	msgThreadNotFound      = "No thread with that id was created from this collector."
-	msgWrongOrigin         = "This thread was created by another collector key — it can only be changed from there."
-	msgKeyMissing          = "The control plane already knows this collector, but this store never received its key. Set a new cp_deploy_token and Connect again."
+	msgNotFlaggable                = "This finding is a local notice — stale-client calls stay on this collector and can't be flagged to the provider."
+	msgNotAckable                  = "Only non-breaking informational findings can be acknowledged — breaking findings need a fix or a thread."
+	msgFindingNotFound             = "That finding is no longer in the local store."
+	// The parenthetical used to read "(spec-version findings are informational)"
+	// — which contradicted the finding it refused: a version-diff is emitted at
+	// severity `breaking` (CONTRACTS §4, oasdiff Level=ERR), and the UI renders
+	// it under a red breaking badge counted by the red tab pill. The refusal is
+	// about EVIDENCE, not severity: a change found by diffing two documents has
+	// no failing call to send. Say that instead.
+	msgFindingNoCall  = "This finding has no failing call to share — it was found by comparing two versions of the contract, not by a call."
+	msgCallEvicted    = "The failing call is no longer in the local store (it was evicted from the rolling window)."
+	msgThreadNotFound = "No thread with that id was created from this collector."
+	msgWrongOrigin    = "This thread was created by another collector key — it can only be changed from there."
+	msgKeyMissing     = "The control plane already knows this collector, but this store never received its key. Set a new cp_deploy_token and Connect again."
 	// Edge naming (v1 phase 1).
 	msgEdgeHostRequired = "host is required."
 	msgEdgeNotFound     = "No outbound edge with that host has been discovered."

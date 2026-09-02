@@ -62,6 +62,35 @@ export const UPLOAD_FORMATS = 'JSON or YAML.';
 export const UPLOAD_TAKES_EFFECT = 'Validating from now on. Calls already captured aren’t re-checked.';
 export const BIND_ANYWAY = 'Bind anyway';
 
+/**
+ * Asked before one uploader is swapped for another.
+ *
+ * There is exactly one uploader open at a time, mounted on whichever row opened
+ * it, so clicking Add contract or Replace anywhere else unmounted the first —
+ * taking the document it had read and the confirm step on screen with it,
+ * without a word. The operator's own click caused it, which is what made it
+ * read as the app losing their work rather than as a choice they made.
+ */
+export const UPLOADER_DISCARD_CONFIRM =
+  'You have a contract waiting to be confirmed. Opening another discards it — continue?';
+
+/**
+ * Why a version-diff row carries no Flag control.
+ *
+ * It used to read "Informational — spec-version findings have no failing call
+ * to share", which contradicted the row it sat under: the model assigns these
+ * findings `severity: breaking` (CONTRACTS §4, oasdiff Level=ERR), the badge
+ * beside this line says `breaking`, and the red tab pill counts them. Calling
+ * the same row informational in the footer told the operator the pill above was
+ * wrong.
+ *
+ * What is actually true is the SECOND half: there is no failing call, because
+ * the change was found by comparing two documents. So say that, and nothing
+ * about severity.
+ */
+export const VERSION_DIFF_NO_CALL =
+  'Found by comparing this contract with the version it replaced — there’s no failing call to attach, so it can’t be flagged from here.';
+
 /** Pre-traffic upload is legitimate — on a fresh install there are no edges at
  *  all — so this explains rather than warns. */
 export function noTrafficYet(host: string): string {
