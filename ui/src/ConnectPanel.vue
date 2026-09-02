@@ -3,10 +3,11 @@
 // org name + a contact email the control plane confirms with one click. Shown
 // on the Settings tab and inline in the Flag sheet. Local data viewing is never
 // gated on it; only creating a thread link is.
-import { computed, nextTick, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { ApiError, apiPost } from './api';
 import { needsCollectorAddress, type ConnectState } from './threads';
 import { applySeed, seededValues, untouched, type ConnectFormTouched } from './connect-form';
+import { mailNotice, type MailAttempt } from './connect-mail';
 
 const props = defineProps<{
   state: ConnectState | null;
@@ -25,9 +26,36 @@ const email = ref('');
 const localUrl = ref('');
 const editing = ref(false);
 const busy = ref(false);
-const resent = ref(false);
 const errorMsg = ref('');
 const validation = ref('');
+
+/**
+ * The last send this panel actually attempted. Held HERE, not read off `props.state`: the outcome
+ * describes one request, so the next background poll (~5s) carries no `confirmation_mail` and
+ * would otherwise wipe a "not sent" warning and restore "check your inbox".
+ */
+const attempt = ref<MailAttempt | null>(null);
+/** Ticks only while a cooldown notice is on screen, so its countdown expires by itself. */
+const now = ref(Date.now());
+let ticker: ReturnType<typeof setInterval> | null = null;
+const notice = computed(() => mailNotice(attempt.value, now.value));
+
+watch(
+  () => notice.value.kind === 'cooldown',
+  (counting) => {
+    if (ticker) {
+      clearInterval(ticker);
+      ticker = null;
+    }
+    // Without this the floor's "try again in about 6 minutes" would still read the same — and
+    // Resend would still be disabled — long after the floor had actually lifted.
+    if (counting) ticker = setInterval(() => (now.value = Date.now()), 1000);
+  },
+  { immediate: true }
+);
+onBeforeUnmount(() => {
+  if (ticker) clearInterval(ticker);
+});
 
 const touched = ref<ConnectFormTouched>(untouched());
 const focusedField = ref<keyof ConnectFormTouched | null>(null);
@@ -72,7 +100,7 @@ const showAddressNudge = computed(
 async function addAddress() {
   seedForm(true);
   editing.value = true;
-  resent.value = false;
+  attempt.value = null;
   validation.value = '';
   errorMsg.value = '';
   await nextTick();
@@ -102,7 +130,7 @@ async function submit(resend = false) {
     return;
   }
   busy.value = true;
-  resent.value = false;
+  attempt.value = null;
   try {
     const s = await apiPost<ConnectState>('/api/connect', {
       consumer_display_name: org.value.trim(),
@@ -111,7 +139,16 @@ async function submit(resend = false) {
       local_ui_url: localUrl.value.trim()
     });
     editing.value = false;
-    resent.value = resend;
+    // A send WAS attempted (this is the register call), so the reply's `confirmation_mail` is the
+    // thing to render — whichever of the three it says. `resend` is deliberately not consulted:
+    // what happened to the mail does not depend on which button was pressed.
+    now.value = Date.now();
+    attempt.value = {
+      outcome: s.confirmation_mail,
+      retryAfterS: s.confirmation_mail_retry_after_s,
+      email: s.contact_email ?? email.value.trim(),
+      at: now.value
+    };
     touched.value = untouched(); // the server state is now the truth; future seeds may fill every field
     emit('update:state', s);
   } catch (e) {
@@ -124,7 +161,7 @@ async function submit(resend = false) {
 function changeEmail() {
   seedForm(true);
   editing.value = true;
-  resent.value = false;
+  attempt.value = null;
   errorMsg.value = '';
 }
 
@@ -164,15 +201,23 @@ function cancelEdit() {
       </p>
     </div>
 
-    <!-- pending -->
-    <div v-else-if="status === 'pending' && !editing" class="connect-state pending">
-      <p class="connect-line">
+    <!-- pending: the standing line describes the CONTACT's state; the notice below describes what
+         happened to the mail on the last click, and only when a send was actually attempted. -->
+    <div v-else-if="status === 'pending' && !editing" class="connect-state pending" :class="{ 'mail-failed': notice.kind === 'failed' }">
+      <p v-if="notice.kind === 'failed'" class="connect-line">
+        Waiting on <strong>{{ state?.contact_email }}</strong> to confirm — but the last confirmation mail did not go out.
+      </p>
+      <p v-else class="connect-line">
         Check your inbox — we sent "Confirm your Flanj contact" to <strong>{{ state?.contact_email }}</strong>. The link works once, for 72 hours.
       </p>
-      <p v-if="resent" class="connect-note">Sent again to {{ state?.contact_email }}.</p>
+      <p v-if="notice.kind === 'sent'" class="connect-note">{{ notice.text }}</p>
+      <p v-else-if="notice.kind === 'failed'" class="error" role="alert">{{ notice.text }}</p>
+      <p v-else-if="notice.kind === 'cooldown'" class="connect-note muted" role="status">{{ notice.text }}</p>
       <p v-if="errorMsg" class="error">{{ errorMsg }}</p>
       <div class="connect-actions">
-        <button type="button" class="btn" :disabled="busy" @click="submit(true)">{{ busy ? 'Sending…' : 'Resend' }}</button>
+        <button type="button" class="btn" :disabled="busy || !notice.canSend" @click="submit(true)">
+          {{ busy ? 'Sending…' : notice.retryable ? 'Retry' : 'Resend' }}
+        </button>
         <button type="button" class="btn ghost" :disabled="busy" @click="changeEmail">Change email</button>
       </div>
     </div>
@@ -219,8 +264,11 @@ function cancelEdit() {
 .connect-state { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 0.8rem 1rem; }
 .connect-state.ok { border-color: var(--ok-text); }
 .connect-state.pending { border-color: var(--warn-text); }
+/* A mail that never left is a failure, not a "waiting" state — the border must not say otherwise. */
+.connect-state.pending.mail-failed { border-color: var(--danger); }
 .connect-line { margin: 0; }
 .connect-note { margin: 0.35rem 0 0; color: var(--ok-text); font-size: 0.85rem; }
+.connect-note.muted { color: var(--muted); }
 .connect-nudge { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin: 0.6rem 0 0; padding-top: 0.6rem; border-top: 1px dashed var(--line); color: var(--muted); font-size: 0.88rem; }
 .connect-nudge-actions { display: flex; gap: 0.5rem; }
 .connect-form { display: flex; flex-direction: column; gap: 0.7rem; background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 0.9rem 1rem; }
