@@ -46,10 +46,11 @@ const RuleContentTypeMismatch = "content-type-mismatch"
 // DetectLiveVsSpec reconstructs the request from the stored call and validates
 // the recorded response against doc using ValidateResponse (MultiError: true).
 // Each schema violation becomes one Finding; an undeclared response media type
-// becomes one finding too. The remaining ways a response evades judgement — an
-// undeclared status, an empty, truncated or non-JSON body — yield no finding
-// here; the per-call verdict stamp (feat/per-call-validated-stamp) is what
-// records those as NOT validated, so they must never read clean downstream.
+// on a status the contract DECLARES becomes one finding too. The remaining
+// ways a response evades judgement — an undeclared status (whatever its media
+// type), an empty, truncated or non-JSON body — yield no finding here; the
+// per-call verdict stamp (feat/per-call-validated-stamp) is what records those
+// as NOT validated, so they must never read clean downstream.
 func DetectLiveVsSpec(doc *openapi3.T, call model.RedactedCall) ([]model.Finding, error) {
 	router, err := gorillamux.NewRouter(doc)
 	if err != nil {
@@ -98,15 +99,23 @@ func DetectLiveVsSpec(doc *openapi3.T, call model.RedactedCall) ([]model.Finding
 	// lookup falls back to the base type — the LOOKUP only: the body is still
 	// decoded and validated as JSON against the schema the contract declares.
 	// A wire type the contract declares under none of those names is drift
-	// evidence, not noise: one finding, and the call reads drifted.
+	// evidence, not noise: one finding, and the call reads drifted — but only
+	// on a status the provider explicitly declared (the code or its NXX
+	// range). A status the contract covers by `default` alone, or not at all,
+	// is not the provider breaching a promise: a gateway's `502 text/html`
+	// error page must not become a breaking finding on every intermediary
+	// hiccup. Those fall through to kin-openapi, whose refusal is the verdict
+	// stamp's to name.
 	lookupType := wireContentType
 	if !responseUnjudged(call.Method, call.StatusCode) {
 		if declared := declaredContent(route.Operation, call.StatusCode); len(declared) > 0 {
 			resolved, ok := resolveContentType(declared, wireContentType)
-			if !ok {
+			switch {
+			case ok:
+				lookupType = resolved
+			case statusDeclared(route.Operation, call.StatusCode):
 				return []model.Finding{contentTypeMismatchFinding(call, endpoint, now, wireContentType, declared)}, nil
 			}
-			lookupType = resolved
 		}
 	}
 
@@ -234,6 +243,13 @@ func resolveResponse(op *openapi3.Operation, status int) *openapi3.Response {
 		return nil
 	}
 	return ref.Value
+}
+
+// statusDeclared reports whether the operation declares the status itself — the
+// exact code or its `4XX`-style range — as opposed to catching it with `default`
+// or not at all. Only a declared status can carry a media-type finding.
+func statusDeclared(op *openapi3.Operation, status int) bool {
+	return op != nil && op.Responses != nil && op.Responses.Status(status) != nil
 }
 
 // declaredContent is the content map the contract declares for a status, or nil

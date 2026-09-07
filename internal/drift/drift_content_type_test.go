@@ -75,6 +75,19 @@ paths:
                   code: { type: integer }
             application/json:
               schema: { $ref: "#/components/schemas/Problem" }
+  /v1/payouts:
+    post:
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { type: object }
+        default:
+          description: every other status, caught by default only
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Problem" }
   /v1/vendor:
     post:
       responses:
@@ -255,6 +268,22 @@ func TestLiveVsSpec_AnUndeclaredStatusManufacturesNoFinding(t *testing.T) {
 	findings, err := detectContentType(t, contentTypeCall("/v1/charges", 500, "text/html", "<html>"))
 	if err != nil || len(findings) != 0 {
 		t.Fatalf("undeclared status: findings=%+v err=%v", findings, err)
+	}
+}
+
+func TestLiveVsSpec_ADefaultOnlyStatusCarriesNoMediaTypeFinding(t *testing.T) {
+	// /v1/payouts catches every other status with `default` (JSON). A gateway's
+	// 502 text/html error page is not the provider breaching a promise it made
+	// about a 502 — it made none — so it is not a finding; kin-openapi refuses
+	// it and the verdict stamp names that. The lookup still serves default:
+	// a 502 problem+json body IS judged against the default Problem schema.
+	findings, err := detectContentType(t, contentTypeCall("/v1/payouts", 502, "text/html", "<html>bad gateway</html>"))
+	if err != nil || len(findings) != 0 {
+		t.Fatalf("default-only 502 text/html: findings=%+v err=%v", findings, err)
+	}
+	f := onlyFinding(t, contentTypeCall("/v1/payouts", 502, "application/problem+json", driftingProblem))
+	if f.Rule != "type-mismatch" {
+		t.Fatalf("default-only 502 problem+json not judged against default: %+v", f)
 	}
 }
 
