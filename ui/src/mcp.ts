@@ -13,6 +13,7 @@
 // Nothing auto-flags: a finding only leaves this collector when a human presses
 // the control.
 
+import { NOTHING_VALIDATED_YET_CLAUSE, type HeadlineTone } from './headline';
 import { requestIdsLine } from './threads';
 import type { Correlation, Finding, RedactedCall } from './types';
 
@@ -183,10 +184,28 @@ function serverLead(s: McpServerRef): string {
   return `Server: ${s.name}${version}${origin}. You: `;
 }
 
+/** One MCP server's Overview health line, and its tone — three of them, like
+ *  the REST headline's (ui/src/headline.ts HeadlineTone). */
+export interface McpHeadline {
+  text: string;
+  tone: HeadlineTone;
+}
+
 /**
  * The per-server MCP health headline. Priority: output mismatch (drift) →
  * breaking definition change (no calls affected yet) → description change →
- * clean.
+ * nothing validated yet (neutral) → clean.
+ *
+ * The NEUTRAL clause (2026-09-07): a server whose tools/list has arrived — so
+ * the Contracts tab lists it and this line renders at all — can still have
+ * validated nothing. Every call so far hit a tool that declares no
+ * outputSchema, or came back isError, or was captured before the snapshot
+ * landed; the processor judged none of them (ui/src/coverage.ts). Reporting
+ * `no drift detected` in green there is the REST headline's original lie,
+ * told per server. So the all-clear costs at least one validated call to THIS
+ * server, and the zero state reads as the same neutral the REST line uses —
+ * neither verdict tone, because no verdict was reached. Findings outrank it:
+ * a drift or a definition change is positive evidence in itself.
  *
  * The DESCRIPTION clause exists because qfix2-2026-08-26 moved description
  * changes OUT of the Overview "Local notices" band (they are flaggable now, and
@@ -201,8 +220,11 @@ function serverLead(s: McpServerRef): string {
 export function mcpHeadline(
   s: McpServerRef,
   findings: Finding[],
-  fmtTime: (iso: string) => string
-): { text: string; ok: boolean } {
+  fmtTime: (iso: string) => string,
+  /** Calls to THIS server that its snapshot actually validated: a tool with an
+   *  outputSchema, answering without isError, captured after the snapshot. */
+  validatedCalls: number
+): McpHeadline {
   const mismatches = findings.filter((f) => f.kind === 'output_mismatch');
   if (mismatches.length > 0) {
     const tools = Array.from(new Set(mismatches.map((f) => f.endpoint))).join(', ');
@@ -213,20 +235,23 @@ export function mcpHeadline(
       .sort()[0];
     return {
       text: serverLead(s) + `output mismatch on ${tools} — ${calls} call${calls === 1 ? '' : 's'} since ${fmtTime(since || '')}.`,
-      ok: false
+      tone: 'drift'
     };
   }
   const breaking = findings.filter((f) => f.kind === 'definition_change' && definitionClass(f) === 'BREAKING');
   if (breaking.length > 0) {
     const tools = Array.from(new Set(breaking.map((f) => f.endpoint))).join(', ');
-    return { text: serverLead(s) + `definition change on ${tools} — breaking, no calls affected yet.`, ok: false };
+    return { text: serverLead(s) + `definition change on ${tools} — breaking, no calls affected yet.`, tone: 'drift' };
   }
   const described = findings.filter((f) => f.kind === 'definition_change' && definitionClass(f) === 'DESCRIPTION');
   if (described.length > 0) {
     const tools = Array.from(new Set(described.map((f) => f.endpoint))).join(', ');
-    return { text: serverLead(s) + `definition change on ${tools} — description only, no schema change.`, ok: false };
+    return { text: serverLead(s) + `definition change on ${tools} — description only, no schema change.`, tone: 'drift' };
   }
-  return { text: serverLead(s) + 'no drift detected.', ok: true };
+  if (validatedCalls <= 0) {
+    return { text: serverLead(s) + NOTHING_VALIDATED_YET_CLAUSE, tone: 'neutral' };
+  }
+  return { text: serverLead(s) + 'no drift detected.', tone: 'ok' };
 }
 
 /** Local notices band (deck §2): title + sub. Items carry no Flag control, ever. */
