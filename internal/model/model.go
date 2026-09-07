@@ -317,9 +317,11 @@ type SpecInfo struct {
 	// Source is how this contract got here: SpecSourceUpload (an operator
 	// uploaded it in the UI), SpecSourceConfig (a mounted self_spec_path), or
 	// SpecSourceObserved (an MCP tools/list, which delivers itself). The UI's
-	// provenance word tracks it — "uploaded" vs "loaded" — so which one is live
-	// is legible on sight. Empty means config, for rows written before uploads
-	// existed.
+	// provenance word tracks it — "uploaded" / "loaded" / "observed" — so
+	// which one is live is legible on sight. Every writer sets it; the store
+	// classifies an empty one by format (mcp → observed, else config) and
+	// repairs rows stored before 2026-09-07, when the observed path left it
+	// unset and the column default filed every MCP snapshot as config.
 	Source string `json:"source,omitempty"`
 
 	// PrevVersion / PrevLoadedAt describe the document this one REPLACED, kept

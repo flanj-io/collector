@@ -167,6 +167,12 @@ ALTER TABLE spec_infos ADD COLUMN IF NOT EXISTS prev_version TEXT;
 ALTER TABLE spec_infos ADD COLUMN IF NOT EXISTS prev_loaded_at TEXT;
 ALTER TABLE spec_infos ADD COLUMN IF NOT EXISTS edge_class TEXT;
 ALTER TABLE calls ADD COLUMN IF NOT EXISTS drifted INTEGER NOT NULL DEFAULT 0;
+
+-- One-shot repair, idempotent: until 2026-09-07 PutSpecInfo never wrote
+-- source, so every observed MCP snapshot took the column default and was
+-- listed as a CONFIG-loaded contract. The rule is specSourceOf's — format
+-- "mcp" was observed on the wire. Same statement as the sqlite backend.
+UPDATE spec_infos SET source='observed' WHERE format='mcp' AND source='config';
 `
 	tx, err := p.db.Begin()
 	if err != nil {
@@ -487,15 +493,17 @@ func (p *postgresStore) PutSpecInfo(info model.SpecInfo, rawSpec []byte) error {
 	if role == "" {
 		role = model.SpecRoleProvider
 	}
+	// `source` is written, and rewritten on conflict, so the row's provenance
+	// always describes the document in it — see the sqlite twin.
 	_, err := p.db.Exec(p.rebind(
-		`INSERT INTO spec_infos (integration, role, peer_host, edge_class, format, title, version, docs_url, endpoints, loaded_at, doc)
-		   VALUES (?,?,?,?,?,?,?,?,?,?,?)
+		`INSERT INTO spec_infos (integration, role, peer_host, edge_class, format, title, version, docs_url, endpoints, loaded_at, doc, source)
+		   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
 		 ON CONFLICT (integration) DO UPDATE SET
 		   role=excluded.role, peer_host=excluded.peer_host, edge_class=excluded.edge_class, format=excluded.format, title=excluded.title,
 		   version=excluded.version, docs_url=excluded.docs_url, endpoints=excluded.endpoints,
-		   loaded_at=excluded.loaded_at, doc=excluded.doc`),
+		   loaded_at=excluded.loaded_at, doc=excluded.doc, source=excluded.source`),
 		info.Integration, role, nullStr(info.PeerHost), nullStr(info.EdgeClass), info.Format, nullStr(info.Title),
-		nullStr(info.Version), nullStr(info.DocsURL), info.Endpoints, info.LoadedAt, string(rawSpec),
+		nullStr(info.Version), nullStr(info.DocsURL), info.Endpoints, info.LoadedAt, string(rawSpec), specSourceOf(info),
 	)
 	if err != nil {
 		return fmt.Errorf("put spec info: %w", err)
