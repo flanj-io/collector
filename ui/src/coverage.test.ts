@@ -340,7 +340,8 @@ describe('callCoverage — the drift processor stamp is the fact', () => {
   it('the processor reasons pass through as their own causes', () => {
     for (const reason of [
       'not-routable',
-      'response-not-in-contract',
+      'status-undeclared',
+      'media-type-undeclared',
       'body-not-decodable',
       'validator-error',
       'tool-not-listed',
@@ -393,20 +394,26 @@ describe('notCheckedTitle — one sentence per cause, each true', () => {
     expect(notCheckedTitle('not-routable', {})).toContain('this call');
   });
 
-  it('a response the contract does not declare names the status and media type, and claims no check', () => {
+  it('an undeclared status and an undeclared media type are different sentences — the fixes differ', () => {
     // The peer-review case: a problem+json body under a contract that declares
-    // application/json. kin-openapi refuses before any schema comparison, and
-    // the finding path used to read that refusal as "no findings" — clean.
-    const s = notCheckedTitle('response-not-in-contract', {
+    // application/json for the status. kin-openapi refuses before any schema
+    // comparison, and the finding path used to read that refusal as "no
+    // findings" — clean. The operator's fix is to declare (or map) the media
+    // type; for an undeclared status it is to declare the status.
+    const mt = notCheckedTitle('media-type-undeclared', {
       ...rest,
-      status_code: 502,
+      status_code: 422,
       response_content_type: 'application/problem+json'
     });
-    expect(s).toContain('POST /v1/charges');
-    expect(s).toContain('status 502');
-    expect(s).toContain('application/problem+json');
-    expect(s).toContain('nothing was compared');
-    expect(notCheckedTitle('response-not-in-contract', rest)).not.toContain('()');
+    expect(mt).toContain('POST /v1/charges');
+    expect(mt).toContain('status 422');
+    expect(mt).toContain('application/problem+json');
+    expect(mt).toContain('nothing was compared');
+    const st = notCheckedTitle('status-undeclared', { ...rest, status_code: 422 });
+    expect(st).toContain('declares no response for status 422');
+    expect(st).not.toContain('application/');
+    expect(notCheckedTitle('status-undeclared', {})).toContain('this status');
+    expect(notCheckedTitle('media-type-undeclared', {})).toContain('this media type');
     expect(notCheckedTitle('body-not-decodable', { response_content_type: 'application/json' })).toContain('application/json');
     expect(notCheckedTitle('body-not-decodable', {})).toContain('its declared media type');
     expect(notCheckedTitle('validator-error')).toContain('not validated');
@@ -431,7 +438,8 @@ describe('notCheckedTitle — one sentence per cause, each true', () => {
       'contract-not-reached',
       'no-verdict',
       'not-routable',
-      'response-not-in-contract',
+      'status-undeclared',
+      'media-type-undeclared',
       'body-not-decodable',
       'validator-error',
       'tool-not-listed',

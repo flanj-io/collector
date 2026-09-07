@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/getkin/kin-openapi/openapi3"
+	"github.com/getkin/kin-openapi/openapi3filter"
 
 	"github.com/flanj-io/collector/internal/model"
 )
@@ -78,8 +79,8 @@ func TestJudgeLiveVsSpec_Verdicts(t *testing.T) {
 		if len(fs) != 0 {
 			t.Fatalf("findings = %+v, want none (the detector reports schema violations only)", fs)
 		}
-		if v.Verdict != model.ValidatedNot || v.Reason != model.NotValidatedResponseNotInContract {
-			t.Errorf("verdict = %+v, want not-validated / response-not-in-contract", v)
+		if v.Verdict != model.ValidatedNot || v.Reason != model.NotValidatedMediaTypeUndeclared {
+			t.Errorf("verdict = %+v, want not-validated / media-type-undeclared (200 is declared, problem+json is not)", v)
 		}
 		// The old reading, pinned: no error, no finding — which is exactly why
 		// the processor stamps off the verdict and not off this pair.
@@ -88,13 +89,22 @@ func TestJudgeLiveVsSpec_Verdicts(t *testing.T) {
 		}
 	})
 
-	t.Run("undeclared status is NOT clean", func(t *testing.T) {
+	t.Run("undeclared status is NOT clean, and is its own reason", func(t *testing.T) {
+		// The operator's fix differs from the media-type case — declare the
+		// status — so the two must not share a word.
 		c := golden
 		c.StatusCode = 502
 		c.ResponseBody = conformingCharge
 		_, v := JudgeLiveVsSpec(doc, c)
-		if v.Verdict != model.ValidatedNot || v.Reason != model.NotValidatedResponseNotInContract {
-			t.Errorf("verdict = %+v, want not-validated / response-not-in-contract (spec-v1 declares 200 only)", v)
+		if v.Verdict != model.ValidatedNot || v.Reason != model.NotValidatedStatusUndeclared {
+			t.Errorf("verdict = %+v, want not-validated / status-undeclared (spec-v1 declares 200 only)", v)
+		}
+		// Undeclared status AND undeclared media type: the status is named,
+		// because that is the first thing the validator refuses.
+		c.ResponseContentType = "application/problem+json"
+		_, v = JudgeLiveVsSpec(doc, c)
+		if v.Reason != model.NotValidatedStatusUndeclared {
+			t.Errorf("verdict = %+v, want status-undeclared when both are undeclared", v)
 		}
 	})
 
@@ -112,8 +122,14 @@ func TestJudgeLiveVsSpec_Verdicts(t *testing.T) {
 // refusal shapes to reasons, so a validator upgrade that changes a message
 // cannot silently move a case between them.
 func TestUnjudgedReason_ClassifiesByShape(t *testing.T) {
-	if got := unjudgedReason(errNoFindingShape{}); got != model.NotValidatedValidatorError {
+	if got := unjudgedReason(errNoFindingShape{}, nil, 200); got != model.NotValidatedValidatorError {
 		t.Errorf("unknown error shape = %q, want validator-error", got)
+	}
+	if got := unjudgedReason(&openapi3filter.ResponseError{Reason: "x", Err: errNoFindingShape{}}, nil, 200); got != model.NotValidatedBodyNotDecodable {
+		t.Errorf("ResponseError with an inner error = %q, want body-not-decodable", got)
+	}
+	if got := unjudgedReason(&openapi3filter.ResponseError{Reason: "status is not supported"}, nil, 200); got != model.NotValidatedStatusUndeclared {
+		t.Errorf("ResponseError with no route declaring the status = %q, want status-undeclared", got)
 	}
 }
 

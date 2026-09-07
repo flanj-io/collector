@@ -66,8 +66,8 @@ export interface CoverageCall {
   direction?: string;
   edge_class?: string;
   transport?: string;
-  /** For the not-routable / response-not-in-contract sentences: which call,
-   *  and which response, the document did not describe. */
+  /** For the not-routable / status-undeclared / media-type-undeclared
+   *  sentences: which call, and which response, the document did not describe. */
   method?: string;
   route?: string;
   status_code?: number;
@@ -123,9 +123,11 @@ export type NotCheckedReason =
   | 'no-verdict'
   /** The bound document does not describe this call (method + path). */
   | 'not-routable'
-  /** REST: the document routes the call but declares neither this response's
-   *  status nor its media type — nothing to compare the body to. */
-  | 'response-not-in-contract'
+  /** REST: the document routes the call but declares no response for this status. */
+  | 'status-undeclared'
+  /** REST: the status is declared, but not with this media type (problem+json
+   *  under a contract that declares application/json). */
+  | 'media-type-undeclared'
   /** REST: the response body could not be decoded as its declared media type. */
   | 'body-not-decodable'
   /** The validator refused the call for a reason the collector does not classify. */
@@ -189,13 +191,16 @@ export function notCheckedTitle(reason: NotCheckedReason, call: CoverageCall = {
       const which = call.method && call.route ? ` ${call.method} ${call.route}` : ' this call';
       return `The bound contract${host} does not describe${which}, so nothing validated it.`;
     }
-    case 'response-not-in-contract': {
+    case 'status-undeclared': {
       const which = call.method && call.route ? ` ${call.method} ${call.route}` : ' this call';
-      const parts = [call.status_code ? `status ${call.status_code}` : '', call.response_content_type || '']
-        .filter(Boolean)
-        .join(', ');
-      const resp = parts ? ` (${parts})` : '';
-      return `The bound contract${host} describes${which} but not this response${resp} — nothing was compared to a schema.`;
+      const status = call.status_code ? `status ${call.status_code}` : 'this status';
+      return `The bound contract${host} describes${which} but declares no response for ${status} — nothing was compared to a schema.`;
+    }
+    case 'media-type-undeclared': {
+      const which = call.method && call.route ? ` ${call.method} ${call.route}` : ' this call';
+      const status = call.status_code ? `status ${call.status_code}` : 'this status';
+      const ct = call.response_content_type || 'this media type';
+      return `The bound contract${host} describes${which} and ${status}, but not with ${ct} — nothing was compared to a schema.`;
     }
     case 'body-not-decodable':
       return `The response body could not be decoded as ${call.response_content_type || 'its declared media type'}, so nothing was compared to the contract.`;
@@ -277,7 +282,8 @@ export function callCoverage(
 
 const PASSTHROUGH_REASONS: ReadonlySet<string> = new Set<NotCheckedReason>([
   'not-routable',
-  'response-not-in-contract',
+  'status-undeclared',
+  'media-type-undeclared',
   'body-not-decodable',
   'validator-error',
   'tool-not-listed',

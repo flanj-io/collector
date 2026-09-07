@@ -183,15 +183,22 @@ const (
 	// NotValidatedNotRoutable: a document was bound but could not route the call
 	// (method + path not in it, or the request could not be reconstructed).
 	NotValidatedNotRoutable = "not-routable"
-	// NotValidatedResponseNotInContract: REST — the bound document routes the
-	// call but declares neither this response's status nor its media type (an
-	// `application/problem+json` body under a contract that declares only
-	// `application/json`; an undocumented status), so there was no schema to
-	// compare the body to. kin-openapi reports these as a ResponseError with no
-	// SchemaError, which the finding path drops — until 2026-09-07 that read as
-	// "no findings", i.e. clean. Not a finding kind yet (the detector reports
-	// schema violations only), but never clean.
-	NotValidatedResponseNotInContract = "response-not-in-contract"
+	// NotValidatedStatusUndeclared: REST — the bound document routes the call
+	// but declares no response for this status (a 422 the contract never
+	// mentions), so there was no schema to compare the body to. kin-openapi
+	// reports it as a ResponseError with no SchemaError, which the finding path
+	// drops — until 2026-09-07 that read as "no findings", i.e. clean. Not a
+	// finding kind yet (the detector reports schema violations only), but never
+	// clean. Split from the media-type case because the operator's fix differs:
+	// declare the status, versus declare (or map) the media type.
+	NotValidatedStatusUndeclared = "status-undeclared"
+	// NotValidatedMediaTypeUndeclared: REST — the status is declared, but not
+	// with this media type (an `application/problem+json` body under a
+	// contract that declares only `application/json` for it). Same refusal
+	// shape as above. The RFC 6839 `+json`-suffix follow-up — validating such
+	// a body against the declared application/json schema — lands at the
+	// ValidateResponse call, and retires most of this reason's traffic.
+	NotValidatedMediaTypeUndeclared = "media-type-undeclared"
 	// NotValidatedBodyNotDecodable: REST — the response body could not be read
 	// or decoded as its declared media type, so nothing was compared.
 	NotValidatedBodyNotDecodable = "body-not-decodable"

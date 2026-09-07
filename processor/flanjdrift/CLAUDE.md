@@ -144,7 +144,7 @@ the store's mark). REST verdicts come from `drift.JudgeLiveVsSpec`, MCP from
 `MCPDetector.JudgeCall`; the `Detect*` names stay as finding-only wrappers.
 Never stamp `clean` for a call nothing compared: kin-openapi's refusals that
 carry no SchemaError (an undeclared status or media type, an undecodable body)
-are `not-validated` / `response-not-in-contract` / `body-not-decodable`, not
+are `not-validated` / `status-undeclared` / `media-type-undeclared` / `body-not-decodable`, not
 "no findings". Tests: `validated_stamp_test.go` (every branch), and
 `internal/drift`'s `verdict_test.go` / `mcp_verdict_test.go` (every gate).
 

@@ -13,6 +13,7 @@ import (
 
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/getkin/kin-openapi/openapi3filter"
+	"github.com/getkin/kin-openapi/routers"
 	"github.com/getkin/kin-openapi/routers/gorillamux"
 
 	contractopenapi "github.com/flanj-io/collector/contract/openapi"
@@ -66,19 +67,47 @@ func JudgeLiveVsSpec(doc *openapi3.T, call model.RedactedCall) ([]model.Finding,
 
 // unjudgedReason classifies a ValidateResponse error that carries no
 // SchemaError — the validator stopped before comparing anything to a schema.
-func unjudgedReason(err error) string {
+//
+// Classified by SHAPE, never by kin-openapi's message text: a ResponseError
+// with an inner error is a body it could not read or decode; one without is a
+// refusal of the response itself, and the route's own declarations say whether
+// that was the status (undeclared) or, the status being declared, the media
+// type. The two are split because the operator's fix differs — declare the
+// status, versus declare (or map) the media type.
+//
+// RFC 6839 `+json` suffixes land in the media-type case today: a
+// `application/problem+json` body under a contract that declares
+// `application/json` for that status is not compared to the declared schema.
+// The follow-up that validates such a body against that schema belongs at the
+// ValidateResponse call in judgeLiveVsSpec (map the suffixed type onto the
+// declared one before validating), not in this classifier; it will retire
+// most of this reason's traffic, and this function need not change for it.
+func unjudgedReason(err error, route *routers.Route, status int) string {
 	var re *openapi3filter.ResponseError
-	if errors.As(err, &re) {
-		if re.Err == nil {
-			// "status is not supported" / "response Content-Type … invalid":
-			// the document routes the call but declares nothing for THIS
-			// response — its status, or its media type.
-			return model.NotValidatedResponseNotInContract
-		}
+	if !errors.As(err, &re) {
+		return model.NotValidatedValidatorError
+	}
+	if re.Err != nil {
 		// "failed to read/decode response body".
 		return model.NotValidatedBodyNotDecodable
 	}
-	return model.NotValidatedValidatorError
+	if !responseDeclared(route, status) {
+		// "status is not supported": the document has no response for it.
+		return model.NotValidatedStatusUndeclared
+	}
+	// The status is declared, so the refusal is about the media type ("response
+	// Content-Type … invalid"). An unresolved response reference lands here too.
+	return model.NotValidatedMediaTypeUndeclared
+}
+
+// responseDeclared mirrors ValidateResponse's own lookup: the operation
+// declares this status, or a default response.
+func responseDeclared(route *routers.Route, status int) bool {
+	if route == nil || route.Operation == nil || route.Operation.Responses == nil {
+		return false
+	}
+	rs := route.Operation.Responses
+	return rs.Status(status) != nil || rs.Default() != nil
 }
 
 func judgeLiveVsSpec(doc *openapi3.T, call model.RedactedCall) ([]model.Finding, model.Validation, error) {
@@ -143,7 +172,7 @@ func judgeLiveVsSpec(doc *openapi3.T, call model.RedactedCall) ([]model.Finding,
 		// status or media type is not in the document, or its body would not
 		// decode. No finding (the detector reports schema violations only), and
 		// NOT clean: nothing was compared.
-		return nil, model.NotValidated(unjudgedReason(verr)), nil
+		return nil, model.NotValidated(unjudgedReason(verr, route, call.StatusCode)), nil
 	}
 	findings := make([]model.Finding, 0, len(schemaErrs))
 	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00")

@@ -152,8 +152,8 @@ func TestStamp_ResponseTheContractDoesNotDescribe(t *testing.T) {
 	problem.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0).Attributes().PutStr(otlpattr.AttrRespBody,
 		`{"type":"about:blank","title":"Bad Gateway","status":502}`)
 	v, counts := processOne(t, p, problem)
-	if v.Verdict != model.ValidatedNot || v.Reason != model.NotValidatedResponseNotInContract {
-		t.Errorf("problem+json under an application/json contract: verdict = %+v, want not-validated / response-not-in-contract", v)
+	if v.Verdict != model.ValidatedNot || v.Reason != model.NotValidatedMediaTypeUndeclared {
+		t.Errorf("problem+json under an application/json contract: verdict = %+v, want not-validated / media-type-undeclared", v)
 	}
 	if counts[otlpattr.RecordTypeFinding] != 0 {
 		t.Errorf("problem+json: findings = %d, want 0", counts[otlpattr.RecordTypeFinding])
