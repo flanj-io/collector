@@ -128,7 +128,17 @@ front reads them from it.
 ## Detection lives in `internal/drift`
 
 - `DetectLiveVsSpec` — `openapi3filter.ValidateResponse` with `MultiError:true`,
-  reconstructing the request from the stored call.
+  reconstructing the request from the stored call. The response media type is
+  resolved against the contract RFC 6839-aware — verbatim, then parsed, then the
+  base its `+json` suffix denotes (`application/problem+json` → the contract's
+  `application/json` entry; the body still decodes and validates as JSON). A
+  media type the contract declares under none of those names is a
+  `content-type-mismatch` finding (one per endpoint). Anything else kin-openapi
+  refuses to judge — undeclared status, empty/truncated/non-JSON body — comes
+  back as a `*drift.NotValidatedError` with a stable `Reason`, never a silent
+  `(nil, nil)`: the processor's per-call verdict stamp must read it as
+  NOT validated (`model.NotValidated(nv.Reason)`), not as `not-routable` and
+  never as clean.
 - `MCPDetector` (`mcp.go`) — `LoadSnapshot` (contract_snapshot →
   `contract.FromToolsList`, versioned by content hash, previous kept, diff via
   `contract/diff`) + `DetectCall` (the three MCP findings; SAME kin-openapi
