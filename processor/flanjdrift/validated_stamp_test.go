@@ -141,10 +141,11 @@ func TestStamp_NotRoutable(t *testing.T) {
 }
 
 // TestStamp_ResponseTheContractDoesNotDescribe: the contract is bound and routes
-// the call, but kin-openapi refuses the RESPONSE before any schema comparison —
-// an undeclared media type (the sdk #24 session's problem+json case), or a body
-// it cannot decode. No finding is produced for those, and the stamp must not
-// read that as clean.
+// the call. A +json body under an application/json declaration (the sdk #24
+// session's problem+json case) is JUDGED since collector#44 — the lookup
+// resolves the suffix — so it stamps drifted with the schema violations as
+// findings; a body kin-openapi cannot decode still produces no finding, and the
+// stamp must not read that as clean.
 func TestStamp_ResponseTheContractDoesNotDescribe(t *testing.T) {
 	p := processorWith(t, map[string][]byte{"api.acme.test": specV1(t)})
 
@@ -152,11 +153,11 @@ func TestStamp_ResponseTheContractDoesNotDescribe(t *testing.T) {
 	problem.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0).Attributes().PutStr(otlpattr.AttrRespBody,
 		`{"type":"about:blank","title":"Bad Gateway","status":502}`)
 	v, counts := processOne(t, p, problem)
-	if v.Verdict != model.ValidatedNot || v.Reason != model.NotValidatedMediaTypeUndeclared {
-		t.Errorf("problem+json under an application/json contract: verdict = %+v, want not-validated / media-type-undeclared", v)
+	if v.Verdict != model.ValidatedDrifted {
+		t.Errorf("problem+json under an application/json contract: verdict = %+v, want drifted (judged against Charge)", v)
 	}
-	if counts[otlpattr.RecordTypeFinding] != 0 {
-		t.Errorf("problem+json: findings = %d, want 0", counts[otlpattr.RecordTypeFinding])
+	if counts[otlpattr.RecordTypeFinding] == 0 {
+		t.Errorf("problem+json: findings = 0, want the schema violations of a problem document held against Charge")
 	}
 
 	garbage := goldenBatchWith(t, otlpattr.AttrRespBody, `<html>upstream error</html>`)

@@ -67,25 +67,36 @@ func TestJudgeLiveVsSpec_Verdicts(t *testing.T) {
 		}
 	})
 
-	// The peer-review case (sdk #24 session): an application/problem+json body
-	// under a contract that declares application/json. kin-openapi returns a
-	// ResponseError with no SchemaError; collectSchemaErrors yields nothing;
-	// DetectLiveVsSpec returns (nil, nil) — and that "no finding" was CLEAN.
-	t.Run("undeclared media type is NOT clean", func(t *testing.T) {
+	// The peer-review case (sdk #24 session), as RULED with collector#44: an
+	// application/problem+json body under a contract that declares
+	// application/json for a DECLARED status is JUDGED — the +json suffix
+	// resolves to the declared entry for the lookup and the body is held
+	// against that schema. Here a problem document against the Charge schema:
+	// drifted, with the schema violations as findings. Never not-validated.
+	t.Run("a +json media type under an application/json declaration is judged", func(t *testing.T) {
 		c := golden
 		c.ResponseContentType = "application/problem+json"
 		c.ResponseBody = `{"type":"about:blank","title":"Bad Gateway","status":502}`
 		fs, v := JudgeLiveVsSpec(doc, c)
-		if len(fs) != 0 {
-			t.Fatalf("findings = %+v, want none (the detector reports schema violations only)", fs)
+		if len(fs) == 0 || v.Verdict != model.ValidatedDrifted {
+			t.Fatalf("findings = %d verdict = %+v, want schema findings and drifted (the body was judged against Charge)", len(fs), v)
 		}
-		if v.Verdict != model.ValidatedNot || v.Reason != model.NotValidatedMediaTypeUndeclared {
-			t.Errorf("verdict = %+v, want not-validated / media-type-undeclared (200 is declared, problem+json is not)", v)
+		if dfs, err := DetectLiveVsSpec(doc, c); err != nil || len(dfs) != len(fs) {
+			t.Errorf("DetectLiveVsSpec = (%d, %v), want the same findings and no error", len(dfs), err)
 		}
-		// The old reading, pinned: no error, no finding — which is exactly why
-		// the processor stamps off the verdict and not off this pair.
-		if fs, err := DetectLiveVsSpec(doc, c); err != nil || len(fs) != 0 {
-			t.Errorf("DetectLiveVsSpec = (%+v, %v), want (none, nil) for an undeclared media type", fs, err)
+	})
+
+	// A media type the contract declares under NO name, on a declared status,
+	// is the provider breaching a promise: collector#44's content-type-mismatch
+	// finding, and drifted through VerdictOf — media-type-undeclared is
+	// unreachable here (it remains for a default-only status).
+	t.Run("an undeclared media type on a declared status is a finding, drifted", func(t *testing.T) {
+		c := golden
+		c.ResponseContentType = "text/html; charset=utf-8"
+		c.ResponseBody = `<html>declined</html>`
+		fs, v := JudgeLiveVsSpec(doc, c)
+		if len(fs) != 1 || fs[0].Rule != RuleContentTypeMismatch || v.Verdict != model.ValidatedDrifted {
+			t.Fatalf("findings = %+v verdict = %+v, want one content-type-mismatch and drifted", fs, v)
 		}
 	})
 

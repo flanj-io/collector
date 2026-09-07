@@ -139,7 +139,7 @@ func inputSchema(item *openapi3.PathItem, op *openapi3.Operation) (contract.Sche
 	bodyRequired := false
 	if op.RequestBody != nil && op.RequestBody.Value != nil {
 		bodyRequired = op.RequestBody.Value.Required
-		if mt := op.RequestBody.Value.Content.Get("application/json"); mt != nil && mt.Schema != nil {
+		if mt := jsonContent(op.RequestBody.Value.Content); mt != nil && mt.Schema != nil {
 			m, err := schemaRefToMap(mt.Schema, map[*openapi3.Schema]bool{})
 			if err != nil {
 				return nil, err
@@ -214,8 +214,36 @@ func inputSchema(item *openapi3.PathItem, op *openapi3.Operation) (contract.Sche
 	return contract.CanonicalizeSchema(out)
 }
 
-// outputSchema picks the lowest-status 2xx response's application/json
-// schema; nil when the operation declares none (an honest "no output contract").
+// jsonContent is the JSON body a content map declares: `application/json` by
+// name (kin-openapi's lookup, wildcards included), else the first RFC 6839
+// `+json` media type in name order — application/problem+json,
+// application/hal+json, application/vnd.acme.v2+json all carry JSON, so a
+// contract that spells only the suffixed name still yields a schema instead of
+// an "honest" no-contract that is not honest at all.
+func jsonContent(content openapi3.Content) *openapi3.MediaType {
+	if mt := content.Get("application/json"); mt != nil {
+		return mt
+	}
+	names := make([]string, 0, len(content))
+	for name := range content {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		mediaType := name
+		if i := strings.IndexByte(mediaType, ';'); i >= 0 {
+			mediaType = mediaType[:i]
+		}
+		if strings.HasSuffix(strings.ToLower(strings.TrimSpace(mediaType)), "+json") {
+			return content[name]
+		}
+	}
+	return nil
+}
+
+// outputSchema picks the lowest-status 2xx response's JSON schema —
+// application/json or a `+json` name (jsonContent); nil when the operation
+// declares none (an honest "no output contract").
 func outputSchema(op *openapi3.Operation) (contract.Schema, error) {
 	if op.Responses == nil {
 		return nil, nil
@@ -232,7 +260,7 @@ func outputSchema(op *openapi3.Operation) (contract.Schema, error) {
 	}
 	sort.Ints(codes)
 	for _, n := range codes {
-		if mt := byCode[n].Value.Content.Get("application/json"); mt != nil && mt.Schema != nil {
+		if mt := jsonContent(byCode[n].Value.Content); mt != nil && mt.Schema != nil {
 			m, err := schemaRefToMap(mt.Schema, map[*openapi3.Schema]bool{})
 			if err != nil {
 				return nil, err
