@@ -192,19 +192,23 @@ const (
 	// clean. Split from the media-type case because the operator's fix differs:
 	// declare the status, versus declare (or map) the media type.
 	NotValidatedStatusUndeclared = "status-undeclared"
-	// NotValidatedMediaTypeUndeclared: REST — the status is declared, but not
-	// with this media type (an `application/problem+json` body under a
-	// contract that declares only `application/json` for it). Same refusal
-	// shape as above.
+	// NotValidatedMediaTypeUndeclared: REST — the status is declared ONLY via
+	// the operation's `default` response, and not with this media type (a
+	// gateway's `502 text/html` under a contract whose `default` declares
+	// `application/json`). Same refusal shape as above, and permanent: a
+	// `default` response is a catch-all, so an unexpected media type on it is
+	// not evidence that the provider breached anything — not-validated, named.
 	//
-	// TRANSITIONAL. flanj-io/collector#44 turns exactly this case into a
-	// live-vs-spec finding (rule `content-type-mismatch`: the provider's own
-	// response shape departed from what it published), so the call is stamped
-	// drifted via VerdictOf, and it validates an RFC 6839 `+json` body against
-	// the declared application/json schema before any of these gates. Whichever
-	// of the two lands second removes this constant on rebase — the
-	// status-undeclared case above stays not-validated either way (a gateway's
-	// `502 text/html` is not the provider breaching its contract).
+	// The OTHER media-type case — a status declared by exact code or NXX range,
+	// answered with a media type it does not declare — is not this reason:
+	// flanj-io/collector#44 makes it a live-vs-spec finding (rule
+	// `content-type-mismatch`: the provider's own published response shape
+	// departed), synthesized in judgeLiveVsSpec BEFORE this classifier runs, so
+	// VerdictOf stamps the call drifted. #44's gate is deliberately stricter than
+	// responseDeclared (which counts `default`, as ValidateResponse does); the
+	// split between the two is exactly the `default` case. #44 also validates an
+	// RFC 6839 `+json` body against the declared application/json schema —
+	// `default` included — before kin-openapi refuses it.
 	NotValidatedMediaTypeUndeclared = "media-type-undeclared"
 	// NotValidatedBodyNotDecodable: REST — the response body could not be read
 	// or decoded as its declared media type, so nothing was compared.

@@ -75,14 +75,18 @@ func JudgeLiveVsSpec(doc *openapi3.T, call model.RedactedCall) ([]model.Finding,
 // type. The two are split because the operator's fix differs — declare the
 // status, versus declare (or map) the media type.
 //
-// The media-type case is TRANSITIONAL: flanj-io/collector#44 turns "status
-// declared, media type not" into a live-vs-spec finding (rule
-// `content-type-mismatch`) — findings are non-empty, VerdictOf says drifted,
-// and this branch is never reached — and it validates an RFC 6839 `+json` body
-// against the declared `application/json` schema before ValidateResponse
-// refuses it. Whichever lands second rebases; the status-undeclared branch
-// stays not-validated either way (a gateway's `502 text/html` is not the
-// provider breaching its contract, and must never raise a breaking finding).
+// How this composes with flanj-io/collector#44 (content-type-mismatch): #44
+// synthesizes a live-vs-spec finding for a status declared by EXACT code or
+// NXX range that is answered with an undeclared media type — in
+// judgeLiveVsSpec, before this classifier runs, so VerdictOf stamps drifted and
+// this function never sees that case. What DOES reach the media-type branch
+// here is a status declared only via `default` (responseDeclared counts it,
+// exactly as ValidateResponse does; #44's gate deliberately does not): a
+// gateway's `502 text/html` under a JSON `default` is not-validated, named —
+// a catch-all response is not evidence the provider breached anything, and it
+// must never raise a breaking finding. #44 also validates an RFC 6839 `+json`
+// body against the declared `application/json` schema, `default` included,
+// before kin-openapi refuses it, so a problem+json body never lands here.
 func unjudgedReason(err error, route *routers.Route, status int) string {
 	var re *openapi3filter.ResponseError
 	if !errors.As(err, &re) {

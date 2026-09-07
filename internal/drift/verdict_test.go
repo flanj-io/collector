@@ -118,6 +118,57 @@ func TestJudgeLiveVsSpec_Verdicts(t *testing.T) {
 	})
 }
 
+// TestJudgeLiveVsSpec_DefaultOnlyStatus pins the split with flanj-io/collector#44
+// (content-type-mismatch): a status declared ONLY via `default`, answered with
+// an undeclared media type, is not-validated / media-type-undeclared here — a
+// catch-all response is not evidence that the provider breached anything, so a
+// gateway's `502 text/html` under a JSON `default` never raises a breaking
+// finding — while the same response under a contract with no `default` is
+// status-undeclared. A status declared by exact code or NXX range with an
+// undeclared media type is #44's finding and is synthesized before this
+// classifier runs; #44's gate excludes `default` on purpose, and this is the
+// case that falls through it.
+func TestJudgeLiveVsSpec_DefaultOnlyStatus(t *testing.T) {
+	gateway := loadGoldenCall(t)
+	gateway.StatusCode = 502
+	gateway.ResponseContentType = "text/html"
+	gateway.ResponseBody = "<html>Bad Gateway</html>"
+
+	// spec-v1 declares 200 only: the status itself is undeclared.
+	_, v := JudgeLiveVsSpec(specV1Doc(t), gateway)
+	if v.Verdict != model.ValidatedNot || v.Reason != model.NotValidatedStatusUndeclared {
+		t.Errorf("no default: verdict = %+v, want not-validated / status-undeclared", v)
+	}
+
+	// The same document with a JSON `default` response: the status is now
+	// declared (via the catch-all), the media type is not.
+	withDefault := specV1Doc(t)
+	desc := "any other response"
+	withDefault.Paths.Find("/v1/charges").Post.Responses.Set("default", &openapi3.ResponseRef{Value: &openapi3.Response{
+		Description: &desc,
+		Content:     openapi3.NewContentWithJSONSchema(openapi3.NewObjectSchema()),
+	}})
+	fs, v := JudgeLiveVsSpec(withDefault, gateway)
+	if len(fs) != 0 {
+		t.Fatalf("default-only 502 text/html produced findings: %+v — a catch-all is not evidence of a breach", fs)
+	}
+	if v.Verdict != model.ValidatedNot || v.Reason != model.NotValidatedMediaTypeUndeclared {
+		t.Errorf("default-only: verdict = %+v, want not-validated / media-type-undeclared", v)
+	}
+
+	// A 502 problem+json under that JSON default reaches the same branch today.
+	// #44's RFC 6839 lookup validates it against the default's schema BEFORE
+	// this point; pinning the current answer makes that rebase a deliberate
+	// change to this line, not a silent one.
+	problem := gateway
+	problem.ResponseContentType = "application/problem+json"
+	problem.ResponseBody = `{"type":"about:blank","title":"Bad Gateway","status":502}`
+	_, v = JudgeLiveVsSpec(withDefault, problem)
+	if v.Reason != model.NotValidatedMediaTypeUndeclared {
+		t.Errorf("default-only problem+json (pre-#44): verdict = %+v, want media-type-undeclared", v)
+	}
+}
+
 // TestUnjudgedReason_ClassifiesByShape pins the mapping from kin-openapi's
 // refusal shapes to reasons, so a validator upgrade that changes a message
 // cannot silently move a case between them.
