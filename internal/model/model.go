@@ -195,9 +195,16 @@ const (
 	// NotValidatedMediaTypeUndeclared: REST — the status is declared, but not
 	// with this media type (an `application/problem+json` body under a
 	// contract that declares only `application/json` for it). Same refusal
-	// shape as above. The RFC 6839 `+json`-suffix follow-up — validating such
-	// a body against the declared application/json schema — lands at the
-	// ValidateResponse call, and retires most of this reason's traffic.
+	// shape as above.
+	//
+	// TRANSITIONAL. flanj-io/collector#44 turns exactly this case into a
+	// live-vs-spec finding (rule `content-type-mismatch`: the provider's own
+	// response shape departed from what it published), so the call is stamped
+	// drifted via VerdictOf, and it validates an RFC 6839 `+json` body against
+	// the declared application/json schema before any of these gates. Whichever
+	// of the two lands second removes this constant on rebase — the
+	// status-undeclared case above stays not-validated either way (a gateway's
+	// `502 text/html` is not the provider breaching its contract).
 	NotValidatedMediaTypeUndeclared = "media-type-undeclared"
 	// NotValidatedBodyNotDecodable: REST — the response body could not be read
 	// or decoded as its declared media type, so nothing was compared.

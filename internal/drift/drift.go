@@ -75,13 +75,14 @@ func JudgeLiveVsSpec(doc *openapi3.T, call model.RedactedCall) ([]model.Finding,
 // type. The two are split because the operator's fix differs — declare the
 // status, versus declare (or map) the media type.
 //
-// RFC 6839 `+json` suffixes land in the media-type case today: a
-// `application/problem+json` body under a contract that declares
-// `application/json` for that status is not compared to the declared schema.
-// The follow-up that validates such a body against that schema belongs at the
-// ValidateResponse call in judgeLiveVsSpec (map the suffixed type onto the
-// declared one before validating), not in this classifier; it will retire
-// most of this reason's traffic, and this function need not change for it.
+// The media-type case is TRANSITIONAL: flanj-io/collector#44 turns "status
+// declared, media type not" into a live-vs-spec finding (rule
+// `content-type-mismatch`) — findings are non-empty, VerdictOf says drifted,
+// and this branch is never reached — and it validates an RFC 6839 `+json` body
+// against the declared `application/json` schema before ValidateResponse
+// refuses it. Whichever lands second rebases; the status-undeclared branch
+// stays not-validated either way (a gateway's `502 text/html` is not the
+// provider breaching its contract, and must never raise a breaking finding).
 func unjudgedReason(err error, route *routers.Route, status int) string {
 	var re *openapi3filter.ResponseError
 	if !errors.As(err, &re) {
