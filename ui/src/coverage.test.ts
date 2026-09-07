@@ -276,3 +276,174 @@ describe('validatedCallsMeta — the card line that makes zero visible', () => {
     expect(validatedCallsMeta(2, SINCE_UPLOAD)).toBe('validated 2 calls since upload');
   });
 });
+
+/* ── The processor's verdict decides (2026-09-07) ────────────────────────
+ *
+ * BUG: upload spec-v1 for api.acme.test, drive a drifting charge one to four
+ * seconds later, and the chip read CONFORMING with no finding and no drifted
+ * flag. The processor's spec cache had not loaded the document yet, so nothing
+ * validated the call — while the temporal mirror above read `checked` off the
+ * STORE's `loaded_at`. Permanent on a tiered front with the wrong
+ * store_pod_token, which never loads the document at all. The processor now
+ * stamps every call with what it did; this module reads the stamp, and the
+ * mirror answers only for rows that predate it.
+ */
+describe('callCoverage — the drift processor stamp is the fact', () => {
+  const bound = [{ ...providerSpec('api.acme.test'), loaded_at: BOUND }];
+  const stamped = (validated: string, validated_reason?: string, extra: Record<string, unknown> = {}) => ({
+    ...out('api.acme.test'),
+    captured_at: AFTER,
+    validated,
+    validated_reason,
+    ...extra
+  });
+
+  it('THE bug: a call stamped not-validated is not checked, whatever the timestamps say', () => {
+    // Captured AFTER the upload landed in the store — the temporal gate says
+    // checked — but the processor had nothing for the host when it went through.
+    const c = stamped('not-validated', 'no-contract');
+    expect(callCoverage(c, bound)).toBe('not-checked');
+    // A contract IS bound now, so the cause is named as such — "No contract
+    // uploaded" would be false to the operator looking at the card.
+    expect(callCoverageDetail(c, bound).reason).toBe('contract-not-reached');
+  });
+
+  it('the same stamp with nothing bound now is the plain no-contract', () => {
+    expect(callCoverageDetail(stamped('not-validated', 'no-contract'), []).reason).toBe('no-contract');
+    // ...and a not-validated stamp with no reason at all resolves the same way.
+    expect(callCoverageDetail(stamped('not-validated'), []).reason).toBe('no-contract');
+    expect(callCoverageDetail(stamped('not-validated'), bound).reason).toBe('contract-not-reached');
+  });
+
+  it('clean and drifted are checked — even when the UI no longer sees a contract for the host', () => {
+    // The check HAPPENED. A contract removed afterwards, or a call captured
+    // before the store's loaded_at (a replaced document), changes nothing.
+    expect(callCoverage({ ...stamped('clean'), captured_at: BEFORE }, [])).toBe('checked');
+    expect(callCoverage({ ...stamped('drifted'), captured_at: BEFORE }, [])).toBe('checked');
+    expect(callCoverageDetail(stamped('clean'), bound)).toEqual({ coverage: 'checked' });
+  });
+
+  it('a record with no verdict at all is not checked, and says so', () => {
+    // An older front, or a pipeline with no drift processor: the store writes
+    // `unknown`. The temporal mirror would have said checked.
+    expect(callCoverageDetail(stamped('unknown'), bound)).toEqual({ coverage: 'not-checked', reason: 'no-verdict' });
+  });
+
+  it('a verdict word this UI does not know is never checked', () => {
+    expect(callCoverageDetail(stamped('validated-partially'), bound)).toEqual({
+      coverage: 'not-checked',
+      reason: 'unspecified'
+    });
+    expect(callCoverageDetail(stamped('not-validated', 'some-future-gate'), bound).reason).toBe('unspecified');
+  });
+
+  it('the processor reasons pass through as their own causes', () => {
+    for (const reason of [
+      'not-routable',
+      'response-not-in-contract',
+      'body-not-decodable',
+      'validator-error',
+      'tool-not-listed',
+      'input-required',
+      'no-output-contract',
+      'error-result',
+      'task-handle',
+      'result-not-json'
+    ] as const) {
+      expect(callCoverageDetail(stamped('not-validated', reason), bound).reason).toBe(reason);
+    }
+  });
+
+  it('a stamped MCP call is judged off the stamp, not the snapshot rows', () => {
+    // Pre-stamp, an MCP tool with no outputSchema was `not-checked` only if the
+    // snapshot rows had loaded. The processor already knows.
+    const mcpCall = { ...mcp('mcp.acme.test'), integration: 'acme-tools', mcp_tool_name: 'list_transactions' };
+    expect(callCoverageDetail({ ...mcpCall, validated: 'not-validated', validated_reason: 'no-output-contract' }, [], {}).reason).toBe(
+      'no-output-contract'
+    );
+    expect(callCoverage({ ...mcpCall, mcp_tool_name: 'get_balance', validated: 'clean' }, [], {})).toBe('checked');
+  });
+
+  it('internal still short-circuits before the stamp', () => {
+    expect(callCoverage({ ...stamped('clean'), edge_class: 'internal' }, bound)).toBe('internal');
+  });
+
+  it('the legacy mirror answers ONLY for rows with no verdict', () => {
+    // The pre-migration row: no `validated` at all. The temporal gate decides.
+    expect(callCoverage({ ...out('api.acme.test'), captured_at: AFTER }, bound)).toBe('checked');
+    expect(callCoverage({ ...out('api.acme.test'), captured_at: BEFORE }, bound)).toBe('not-checked');
+    // An EMPTY string is the same absence (the column's migration default).
+    expect(callCoverage({ ...out('api.acme.test'), captured_at: AFTER, validated: '' }, bound)).toBe('checked');
+  });
+});
+
+describe('notCheckedTitle — one sentence per cause, each true', () => {
+  const rest = { peer_host: 'api.acme.test', method: 'POST', route: '/v1/charges' };
+  const tool = { integration: 'acme-tools', mcp_tool_name: 'get_balance' };
+
+  it('contract-not-reached names the host and does not blame a missing upload', () => {
+    const s = notCheckedTitle('contract-not-reached', rest);
+    expect(s).toContain('for api.acme.test is bound now');
+    expect(s).toContain('had not reached the drift processor');
+    expect(s).not.toContain('No contract uploaded');
+  });
+
+  it('not-routable names the call the document does not describe', () => {
+    expect(notCheckedTitle('not-routable', rest)).toContain('POST /v1/charges');
+    expect(notCheckedTitle('not-routable', {})).toContain('this call');
+  });
+
+  it('a response the contract does not declare names the status and media type, and claims no check', () => {
+    // The peer-review case: a problem+json body under a contract that declares
+    // application/json. kin-openapi refuses before any schema comparison, and
+    // the finding path used to read that refusal as "no findings" — clean.
+    const s = notCheckedTitle('response-not-in-contract', {
+      ...rest,
+      status_code: 502,
+      response_content_type: 'application/problem+json'
+    });
+    expect(s).toContain('POST /v1/charges');
+    expect(s).toContain('status 502');
+    expect(s).toContain('application/problem+json');
+    expect(s).toContain('nothing was compared');
+    expect(notCheckedTitle('response-not-in-contract', rest)).not.toContain('()');
+    expect(notCheckedTitle('body-not-decodable', { response_content_type: 'application/json' })).toContain('application/json');
+    expect(notCheckedTitle('body-not-decodable', {})).toContain('its declared media type');
+    expect(notCheckedTitle('validator-error')).toContain('not validated');
+  });
+
+  it('the MCP causes name the tool', () => {
+    expect(notCheckedTitle('tool-not-listed', tool)).toContain('get_balance');
+    expect(notCheckedTitle('result-not-json', tool)).toContain("get_balance's outputSchema");
+    expect(notCheckedTitle('task-handle', tool)).toContain('Tasks handle');
+    expect(notCheckedTitle('input-required', tool)).toContain('input_required');
+  });
+
+  it('no-verdict and unspecified never claim a check happened', () => {
+    for (const r of ['no-verdict', 'unspecified'] as const) {
+      expect(notCheckedTitle(r)).toContain('not validated');
+    }
+  });
+
+  it('every cause has its own sentence', () => {
+    const reasons = [
+      'no-contract',
+      'contract-not-reached',
+      'no-verdict',
+      'not-routable',
+      'response-not-in-contract',
+      'body-not-decodable',
+      'validator-error',
+      'tool-not-listed',
+      'input-required',
+      'no-output-contract',
+      'error-result',
+      'task-handle',
+      'result-not-json',
+      'unspecified'
+    ] as const;
+    const strings = reasons.map((r) => notCheckedTitle(r, { ...rest, ...tool }));
+    expect(new Set(strings).size).toBe(reasons.length);
+    for (const s of strings) expect(s.length).toBeGreaterThan(20);
+  });
+});

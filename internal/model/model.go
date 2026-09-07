@@ -129,6 +129,147 @@ type RedactedCall struct {
 	// property of a CALL; anything coarser is a false accusation against the
 	// provider and against the operator's own reading of their traffic.
 	Drifted bool `json:"drifted,omitempty"`
+
+	// Validated is the drift processor's OWN verdict on THIS call — stamped
+	// where validation runs, at the moment it ran or explicitly could not
+	// (CONTRACTS §2 `flanj.validated`, §3). One of ValidatedClean,
+	// ValidatedDrifted, ValidatedNot (ValidatedReason says why) or
+	// ValidatedUnknown (the record reached the store carrying no verdict);
+	// EMPTY on a row stored before verdicts were recorded, and on nothing else.
+	//
+	// It exists because the UI used to DERIVE "was this call checked?" from
+	// facts about the EDGE: a contract bound to the host, later refined to a
+	// contract bound BEFORE the call was captured. That mirror said `checked`
+	// over calls the processor never validated — the operator's upload had
+	// landed in the store while the processor's spec cache still held nothing
+	// for the host (up to five seconds on a single pod, ten on a tiered front,
+	// forever on a front whose store_pod_token is wrong) — and a call nothing
+	// judged, with no finding and no drifted flag, rendered CONFORMING. Only the
+	// process that validates can say whether it did; this is it saying so.
+	Validated string `json:"validated,omitempty"`
+	// ValidatedReason names WHY when Validated is ValidatedNot — one of the
+	// NotValidated* constants, the first gate the processor hit in its own
+	// order. Empty otherwise.
+	ValidatedReason string `json:"validated_reason,omitempty"`
+}
+
+// Per-call validation verdicts — RedactedCall.Validated, stamped by the drift
+// processor as CONTRACTS §2 `flanj.validated` (additive; schema_version stays 1).
+const (
+	// ValidatedClean: the processor validated the call and found nothing.
+	ValidatedClean = "clean"
+	// ValidatedDrifted: validated, and the call departed from its contract — a
+	// per-call finding (PerCallDriftKinds) names it.
+	ValidatedDrifted = "drifted"
+	// ValidatedNot: the processor saw the call and explicitly could not
+	// validate it; RedactedCall.ValidatedReason says why.
+	ValidatedNot = "not-validated"
+	// ValidatedUnknown: the record reached the store carrying no verdict at
+	// all — the collector that captured it predates the stamp, or its pipeline
+	// runs no drift processor. Decoder-assigned (otlpattr.CallFromRecord), never
+	// stamped by a processor. Readers treat it as NOT validated.
+	ValidatedUnknown = "unknown"
+)
+
+// Why a call was not validated — RedactedCall.ValidatedReason, CONTRACTS §2
+// `flanj.validated.reason`. Named after the processor's own gates, in the order
+// it applies them, so the reason stamped is the first one that stopped it.
+const (
+	// NotValidatedNoContract: nothing was bound to the call's edge in the
+	// processor's cache at that moment. REST: no upload for the host, an upload
+	// not yet loaded, a tiered front that cannot reach the store pod, no self
+	// contract configured. MCP: no tools/list snapshot observed yet.
+	NotValidatedNoContract = "no-contract"
+	// NotValidatedNotRoutable: a document was bound but could not route the call
+	// (method + path not in it, or the request could not be reconstructed).
+	NotValidatedNotRoutable = "not-routable"
+	// NotValidatedResponseNotInContract: REST — the bound document routes the
+	// call but declares neither this response's status nor its media type (an
+	// `application/problem+json` body under a contract that declares only
+	// `application/json`; an undocumented status), so there was no schema to
+	// compare the body to. kin-openapi reports these as a ResponseError with no
+	// SchemaError, which the finding path drops — until 2026-09-07 that read as
+	// "no findings", i.e. clean. Not a finding kind yet (the detector reports
+	// schema violations only), but never clean.
+	NotValidatedResponseNotInContract = "response-not-in-contract"
+	// NotValidatedBodyNotDecodable: REST — the response body could not be read
+	// or decoded as its declared media type, so nothing was compared.
+	NotValidatedBodyNotDecodable = "body-not-decodable"
+	// NotValidatedValidatorError: the validator refused the call for a reason
+	// the collector does not classify; nothing was compared.
+	NotValidatedValidatorError = "validator-error"
+	// NotValidatedToolNotListed: MCP — the CURRENT tools/list does not declare
+	// the called tool (a stale_client finding says so); there is nothing to
+	// judge the result against.
+	NotValidatedToolNotListed = "tool-not-listed"
+	// NotValidatedInputRequired: MCP — resultType input_required, a mid-flight
+	// exchange whose payload is partial by design.
+	NotValidatedInputRequired = "input-required"
+	// NotValidatedNoOutputContract: MCP — the tool declares no outputSchema.
+	NotValidatedNoOutputContract = "no-output-contract"
+	// NotValidatedErrorResult: MCP — isError; error output is not contract evidence.
+	NotValidatedErrorResult = "error-result"
+	// NotValidatedTaskHandle: MCP — the result was a Tasks handle, an envelope.
+	NotValidatedTaskHandle = "task-handle"
+	// NotValidatedResultNotJSON: MCP — no complete JSON structuredContent to
+	// judge (empty, truncated, not application/json, or not parseable).
+	NotValidatedResultNotJSON = "result-not-json"
+)
+
+// Validation is one call's verdict as the drift processor stamps it.
+type Validation struct {
+	Verdict string
+	// Reason is set iff Verdict == ValidatedNot.
+	Reason string
+}
+
+// NotValidated builds the verdict for a call the processor could not judge.
+func NotValidated(reason string) Validation {
+	return Validation{Verdict: ValidatedNot, Reason: reason}
+}
+
+// VerdictOf is the verdict for a call the processor DID judge: drifted when any
+// finding it produced is a per-call drift kind, clean otherwise. A stale_client
+// finding on its own leaves the verdict clean — it is about the consumer's
+// arguments, not the provider's response.
+func VerdictOf(findings []Finding) Validation {
+	for _, f := range findings {
+		if MarksCallDrifted(f.Kind) {
+			return Validation{Verdict: ValidatedDrifted}
+		}
+	}
+	return Validation{Verdict: ValidatedClean}
+}
+
+// PerCallDriftKinds are the finding kinds that mean THE CALL they name departed
+// from its contract — one per transport, and the same fact: live-vs-spec (a
+// REST response violated the bound OpenAPI document) and output_mismatch (an
+// MCP result's structuredContent violated the tool's own declared outputSchema,
+// internal/drift/mcp.go). Both are per-call and carry a SourceCallID.
+//
+// The kinds that must NOT qualify:
+//   - definition_change — the SNAPSHOT detector, comparing two tools/list
+//     observations. Call-less: no call produced it, so no call drifted.
+//   - stale_client — the CONSUMER's own arguments were stale. The call is
+//     evidence about this agent, not about the provider's contract, and
+//     marking it drifted would accuse the provider of our bug.
+//   - version-diff — a document-to-document comparison, not traffic.
+//
+// ONE list, read by everything that answers "did this call drift": the drift
+// processor's per-call stamp (VerdictOf) and the store's `calls.drifted` mark —
+// on insert, on InsertFinding for both backends, and on the late-pin repair. A
+// kind honoured on one path and not another makes a call's verdict depend on
+// which record arrived first.
+var PerCallDriftKinds = []string{KindLiveVsSpec, KindOutputMismatch}
+
+// MarksCallDrifted reports whether kind is one of PerCallDriftKinds.
+func MarksCallDrifted(kind string) bool {
+	for _, k := range PerCallDriftKinds {
+		if kind == k {
+			return true
+		}
+	}
+	return false
 }
 
 // Finding kinds and severities (contracts §4).

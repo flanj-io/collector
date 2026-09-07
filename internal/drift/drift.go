@@ -5,6 +5,7 @@ package drift
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -36,11 +37,54 @@ func LoadSpecData(b []byte) (*openapi3.T, error) {
 
 // DetectLiveVsSpec reconstructs the request from the stored call and validates
 // the recorded response against doc using ValidateResponse (MultiError: true).
-// Each schema violation becomes one Finding.
+// Each schema violation becomes one Finding. The error is a route miss (or a
+// request that could not be reconstructed). A response the document does not
+// describe — an undeclared status or media type, a body that will not decode —
+// is neither a finding nor an error HERE: it comes back as no findings, which
+// is why the processor stamps off JudgeLiveVsSpec instead.
 func DetectLiveVsSpec(doc *openapi3.T, call model.RedactedCall) ([]model.Finding, error) {
+	fs, _, err := judgeLiveVsSpec(doc, call)
+	return fs, err
+}
+
+// JudgeLiveVsSpec is DetectLiveVsSpec plus the verdict the processor stamps on
+// the call (model.Validation): clean or drifted when the response was compared
+// to a schema, and otherwise the first gate that stopped it — not-routable, or
+// one of the refusals kin-openapi reports WITHOUT a SchemaError (an undeclared
+// status or media type, a body it cannot decode). Those refusals carry no
+// finding, and until 2026-09-07 "no finding" was read as clean: a
+// `problem+json` body under a contract that declares `application/json`
+// rendered CONFORMING. Nothing was compared to anything, and the verdict now
+// says so.
+func JudgeLiveVsSpec(doc *openapi3.T, call model.RedactedCall) ([]model.Finding, model.Validation) {
+	fs, v, err := judgeLiveVsSpec(doc, call)
+	if err != nil {
+		return nil, model.NotValidated(model.NotValidatedNotRoutable)
+	}
+	return fs, v
+}
+
+// unjudgedReason classifies a ValidateResponse error that carries no
+// SchemaError — the validator stopped before comparing anything to a schema.
+func unjudgedReason(err error) string {
+	var re *openapi3filter.ResponseError
+	if errors.As(err, &re) {
+		if re.Err == nil {
+			// "status is not supported" / "response Content-Type … invalid":
+			// the document routes the call but declares nothing for THIS
+			// response — its status, or its media type.
+			return model.NotValidatedResponseNotInContract
+		}
+		// "failed to read/decode response body".
+		return model.NotValidatedBodyNotDecodable
+	}
+	return model.NotValidatedValidatorError
+}
+
+func judgeLiveVsSpec(doc *openapi3.T, call model.RedactedCall) ([]model.Finding, model.Validation, error) {
 	router, err := gorillamux.NewRouter(doc)
 	if err != nil {
-		return nil, fmt.Errorf("build router: %w", err)
+		return nil, model.Validation{}, fmt.Errorf("build router: %w", err)
 	}
 
 	reqURL := call.URL
@@ -49,7 +93,7 @@ func DetectLiveVsSpec(doc *openapi3.T, call model.RedactedCall) ([]model.Finding
 	}
 	req, err := http.NewRequest(call.Method, reqURL, strings.NewReader(call.RequestBody))
 	if err != nil {
-		return nil, fmt.Errorf("reconstruct request: %w", err)
+		return nil, model.Validation{}, fmt.Errorf("reconstruct request: %w", err)
 	}
 	if call.RequestContentType != "" {
 		req.Header.Set("Content-Type", call.RequestContentType)
@@ -60,7 +104,7 @@ func DetectLiveVsSpec(doc *openapi3.T, call model.RedactedCall) ([]model.Finding
 		// No matching route in the spec is itself a drift signal, but v0's
 		// deterministic finding is the response-schema mismatch; surface the
 		// route miss as an error the caller can log.
-		return nil, fmt.Errorf("route not found in spec for %s %s: %w", call.Method, reqURL, err)
+		return nil, model.Validation{}, fmt.Errorf("route not found in spec for %s %s: %w", call.Method, reqURL, err)
 	}
 
 	reqInput := &openapi3filter.RequestValidationInput{
@@ -90,12 +134,16 @@ func DetectLiveVsSpec(doc *openapi3.T, call model.RedactedCall) ([]model.Finding
 	endpoint := endpointLabel(call.Method, call.Route)
 	verr := openapi3filter.ValidateResponse(context.Background(), respInput)
 	if verr == nil {
-		return nil, nil
+		return nil, model.Validation{Verdict: model.ValidatedClean}, nil
 	}
 
 	schemaErrs := collectSchemaErrors(verr)
 	if len(schemaErrs) == 0 {
-		return nil, nil
+		// kin-openapi refused before any schema comparison — the response's
+		// status or media type is not in the document, or its body would not
+		// decode. No finding (the detector reports schema violations only), and
+		// NOT clean: nothing was compared.
+		return nil, model.NotValidated(unjudgedReason(verr)), nil
 	}
 	findings := make([]model.Finding, 0, len(schemaErrs))
 	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00")
@@ -125,7 +173,10 @@ func DetectLiveVsSpec(doc *openapi3.T, call model.RedactedCall) ([]model.Finding
 		}
 		findings = append(findings, liveVsSpecFinding(se, call, endpoint, now, actualFromValue(se.Value)))
 	}
-	return findings, nil
+	// Every schema error on a redacted, undecidable value: the comparison ran
+	// and nothing decidable failed — clean, exactly as before the verdict
+	// existed (redacted = unknown, never violated).
+	return findings, model.VerdictOf(findings), nil
 }
 
 // propsVerdict is the outcome of judging a redacted value's schema error against

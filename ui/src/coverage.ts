@@ -1,85 +1,62 @@
-// Contract COVERAGE — is a call validated against anything at all?
+// Contract COVERAGE — was a call validated against anything at all?
 //
 // This is deliberately separate from DRIFT. Two different facts share the word
 // "contract" in this UI and conflating them is what shipped a false assurance:
-//   - coverage  — is a contract bound to this call's edge? (a property of the EDGE)
-//   - validated — did this call actually run against that contract? (the CALL)
+//   - coverage  — did the drift processor validate this call?           (the CALL)
+//   - drift     — did that validation find the call departing? (also the CALL)
 // A call to a host with no loaded spec was captured and NEVER validated, so it
 // can be neither "conforming" nor "drifted". It previously rendered
 // "conforming", which told an operator their traffic was checked when nothing
 // had looked at it.
 //
-// The rules below MIRROR processor/flanjdrift/processor.go — if that changes,
-// this must change with it, or the UI resumes lying. As of 2026-08-31:
+// ─── The verdict is a FACT on the call (2026-09-07) ──────────────────────
+//
+// `RedactedCall.validated` is the drift processor's own statement, stamped on
+// the record where validation runs (CONTRACTS §2 `flanj.validated`, §3):
+//   clean          → validated, nothing found               → checked
+//   drifted        → validated, departed from the contract  → checked (+ drifted)
+//   not-validated  → the processor saw the call and explicitly could not
+//                    judge it; `validated_reason` names the gate → not checked
+//   unknown        → the record reached the store carrying no verdict — an
+//                    older front, or a pipeline running no drift processor
+//                                                            → not checked
+//   absent         → a row stored before verdicts were recorded (the column's
+//                    migration default). ONLY here does this module fall back
+//                    to its old guess, below.
+//
+// Why a fact and not an inference. Until 2026-09-07 this module DECIDED
+// `checked` from the contract list: a document bound to the call's host, later
+// refined to a document bound before the call was captured (`spec.loaded_at <=
+// call.captured_at`). Both are facts about the STORE. Validation happens in
+// the drift PROCESSOR, whose spec cache learns of an upload later than the
+// store does — an announced refresh floors at five seconds, a tiered front
+// polls a ten-second ticker, a front with the wrong store_pod_token never
+// loads the document at all — so a drifting charge driven one to four seconds
+// after an upload went through the processor unvalidated, produced no finding
+// and no drifted flag, and this module read `checked` off the store's own
+// timestamp: CONFORMING. Reproduced on sqlite, postgres (both pods) and tiered
+// (both fronts), and PERMANENT on the mis-tokened front. The mirror had also
+// diverged from processor.go twice before that. A verdict only the validating
+// process can give is now stamped by it, and this module reads it.
+//
+// ─── The legacy mirror (pre-migration rows ONLY) ─────────────────────────
+//
+// Rows stored before the `validated` column existed carry no verdict, and no
+// one will ever stamp one. For those — and ONLY those, `validated` absent —
+// the old rules still answer, so an upgrade does not flip an install's whole
+// history to `not checked`:
 //   server (inbound)  → validated iff a `self` contract is loaded (no host scoping)
 //   client (outbound) → validated iff an UPLOADED provider contract is bound to
-//                       this call's peer_host. Binding is mandatory at upload,
-//                       so the host is the whole lookup — there is no longer an
-//                       unscoped spec that validates every outbound call (the
-//                       config `spec_path`/`peer_host` pair was removed from
-//                       CONTRACTS §8 when contracts moved into the UI). A row
-//                       with no peer_host therefore validates NOTHING, and must
-//                       never be read as covering the call in front of it
+//                       this call's peer_host AND was bound before the call was
+//                       captured (the temporal gate of 2026-09-02). An unbound
+//                       row validates NOTHING
 //   mcp               → validated iff a snapshot exists for that host, the
-//                       CALLED TOOL declares an `outputSchema` in it, AND the
-//                       result was not an error. A tool without an outputSchema
-//                       publishes nothing to check its result against, so its
-//                       calls are never validated even though the server's
-//                       tools/list is present. Per-TOOL, not per-host — the
-//                       mock's `list_transactions` omits it deliberately, and
-//                       treating the whole server as covered would restate the
-//                       very lie this module exists to kill. An `isError`
-//                       result carries error output, not contract evidence: the
-//                       processor skips it explicitly, so nothing judged it.
-//                       Both gates are the same line of drift/mcp.go —
-//                       `op.OutputSchema != nil && !call.MCPIsError`
+//                       CALLED TOOL declares an `outputSchema` in it, the
+//                       result was not an error, and the snapshot arrived first
 //   internal          → never validated by design (metadata-only, no bodies)
-//
-// ─── The temporal gate (2026-09-02) ──────────────────────────────────────
-//
-// Every rule above answers a question about the EDGE, and the header comment
-// says so in its second line — yet the answer was being rendered per CALL. So
-// coverage travelled backwards in time: uploading a contract flipped calls
-// captured MINUTES EARLIER from `not checked` to CONFORMING, with no new
-// traffic, directly beneath a notice reading "Calls already captured aren't
-// re-checked". Reproduced on all three tiers of the first-launch QA, including
-// a call whose body carried a drifted `1200` that the bound document could not
-// have routed, and the tiered shape where the store pod drawing this UI is not
-// even the process that validates.
-//
-// Validation happens ONCE, in the drift processor, at the moment the call goes
-// through it. A contract that arrived afterwards never saw the call. So a
-// contract covers a call only from its own binding time forward, and the two
-// facts needed to say that are already on the wire: `SpecInfo.loaded_at` and
-// `RedactedCall.captured_at`.
-//
-// This is a MIRROR of processor.go, not the fact itself, and it is the second
-// time this mirror has diverged. The durable fix is a per-call validated fact
-// stamped server-side where validation actually happens, which retires this
-// module's guesswork entirely — a new OTLP attribute, a store migration and a
-// re-vendor. Until then, temporal-local and conservative.
-//
-// Two residuals, both accepted and both in the safe direction:
-//   - the processor's spec cache is told the moment a contract changes and
-//     refreshes on the spot, so in a single-pod collector this window is now
-//     the length of one refresh. It survives only where the announcement
-//     cannot reach — a tiered front, and the other pods of a shared-postgres
-//     deployment — bounded there by the cache's ten-second ticker. A call
-//     captured in that window can read `checked` while the processor had not
-//     yet loaded the document; it shrinks to nothing the moment the
-//     server-side stamp lands
-//   - a REPLACED contract keeps only the current row's `loaded_at`, so calls
-//     validated against the document it replaced read `not checked`. That
-//     understates coverage rather than overstating it, which is the whole
-//     point of this module
-//
-// One residual in the UNSAFE direction, and it is a wire gap rather than a
-// judgment: drift/mcp.go also skips a result whose body is a Tasks HANDLE
-// (revision 2026-07-28), truncated, or not `application/json`. Of those,
-// `mcp_task_id` is the only one the store records — and it is not on the UI's
-// RedactedCall, so this module cannot ask. Closing it means widening the wire
-// type, and the server-side `validated` stamp that retires this whole module
-// closes it for free. Until then a task-envelope MCP call can read `checked`.
+// It is a mirror of what processor.go USED to do, frozen. Do not extend it, and
+// never route a stamped call into it: a stamped call that lands there is a bug
+// in the switch above, not a reason to widen the fallback.
 
 import { noOutputContractNote } from './mcp';
 
@@ -89,6 +66,12 @@ export interface CoverageCall {
   direction?: string;
   edge_class?: string;
   transport?: string;
+  /** For the not-routable / response-not-in-contract sentences: which call,
+   *  and which response, the document did not describe. */
+  method?: string;
+  route?: string;
+  status_code?: number;
+  response_content_type?: string;
   /** MCP only: the tool this call invoked, used for the per-tool schema check. */
   mcp_tool_name?: string;
   /** MCP only: which server's snapshot to look the tool up in. */
@@ -96,9 +79,14 @@ export interface CoverageCall {
   /** MCP only: the result was an execution failure. Error output is not
    *  contract evidence — the processor skips these, so nothing validated them. */
   mcp_is_error?: boolean;
-  /** RFC3339, from the store. Half of the temporal gate — a call captured
+  /** RFC3339, from the store. Half of the legacy temporal gate — a call captured
    *  before a contract was bound cannot have been validated against it. */
   captured_at?: string;
+  /** The drift processor's verdict on THIS call (CONTRACTS §3): `clean`,
+   *  `drifted`, `not-validated`, `unknown`. Absent on a pre-migration row. */
+  validated?: string;
+  /** The gate that stopped validation, when `validated` is `not-validated`. */
+  validated_reason?: string;
 }
 
 /** The minimum shape this module needs from a loaded contract (spec_infos). */
@@ -106,8 +94,8 @@ export interface CoverageSpec {
   role?: 'provider' | 'self';
   peer_host?: string;
   format?: string;
-  /** RFC3339, from the store. The other half of the temporal gate: the moment
-   *  this contract became readable by the drift processor. */
+  /** RFC3339, from the store. The other half of the legacy temporal gate: the
+   *  moment this contract became readable by the drift processor. */
   loaded_at?: string;
 }
 
@@ -117,20 +105,45 @@ export type Coverage = 'internal' | 'checked' | 'not-checked';
  * WHY a call was not checked. One chip, several causes, and they are not
  * interchangeable: the chip is only actionable if it names the actual gap.
  *
- * `no-contract` was being shown for all of them, so a tool that simply declares
- * no `outputSchema` read "No contract uploaded for mcp.acme.test" — false to
- * the cause and impossible to act on, because MCP contracts are never uploaded
- * by design (the server publishes its own on tools/list). The operator's only
- * move there is to ask the provider to declare one, which is exactly what the
- * Contracts tab already says.
+ * Most of these are the processor's own words (CONTRACTS §2
+ * `flanj.validated.reason`), passed through. Two are this module's: the
+ * processor's `no-contract` is split by whether a contract for the edge is
+ * bound NOW — because "No contract uploaded" is false, and unactionable, when
+ * the operator is looking at the card that says one is — and `no-verdict` is
+ * the record that carries no verdict at all.
  */
 export type NotCheckedReason =
-  /** Nothing is bound to this call's edge — or it was bound after the call. */
+  /** Nothing is bound to this call's edge (and nothing was when it went through). */
   | 'no-contract'
+  /** A contract for the edge is bound NOW, but had not reached the drift
+   *  processor when this call went through — the upload was seconds old, or
+   *  the front cannot read the store pod. */
+  | 'contract-not-reached'
+  /** The record carries no verdict: an older front, or no drift processor. */
+  | 'no-verdict'
+  /** The bound document does not describe this call (method + path). */
+  | 'not-routable'
+  /** REST: the document routes the call but declares neither this response's
+   *  status nor its media type — nothing to compare the body to. */
+  | 'response-not-in-contract'
+  /** REST: the response body could not be decoded as its declared media type. */
+  | 'body-not-decodable'
+  /** The validator refused the call for a reason the collector does not classify. */
+  | 'validator-error'
+  /** MCP: the current tools/list does not declare the called tool. */
+  | 'tool-not-listed'
+  /** MCP: resultType input_required — a mid-flight exchange. */
+  | 'input-required'
   /** MCP: the called tool declares no `outputSchema`, so its result is unjudgeable. */
   | 'no-output-contract'
   /** MCP: the result was an execution failure — error output, not contract evidence. */
-  | 'error-result';
+  | 'error-result'
+  /** MCP: the result was a Tasks handle, an envelope with no payload. */
+  | 'task-handle'
+  /** MCP: no complete JSON structuredContent to check. */
+  | 'result-not-json'
+  /** The processor did not validate the call and gave a reason this UI does not know. */
+  | 'unspecified';
 
 /** A coverage answer with its cause. `reason` is set iff `not-checked`. */
 export interface CoverageVerdict {
@@ -154,66 +167,58 @@ export const ERROR_RESULT_NOT_CHECKED =
   'The tool returned isError — an execution failure, not contract evidence. ' +
   'Nothing validated this result against the declared outputSchema.';
 
+/** The `no-verdict` tooltip: the record reached the store with no verdict. */
+export const NO_VERDICT_NOT_CHECKED =
+  'The collector that captured this call recorded no verdict — it predates per-call ' +
+  'verdicts, or its pipeline runs no drift processor. Captured, not validated.';
+
 /** Tooltip for the `not checked` chip, one string per CAUSE. */
 export function notCheckedTitle(reason: NotCheckedReason, call: CoverageCall = {}): string {
+  const host = call.peer_host ? ` for ${call.peer_host}` : '';
+  const tool = call.mcp_tool_name || 'this tool';
   switch (reason) {
+    case 'contract-not-reached':
+      return (
+        `A contract${host} is bound now, but had not reached the drift processor when this call went ` +
+        'through — it was captured, not validated. A contract validates only the calls that follow its ' +
+        'arrival; a tiered front that cannot read the store pod never receives it.'
+      );
+    case 'no-verdict':
+      return NO_VERDICT_NOT_CHECKED;
+    case 'not-routable': {
+      const which = call.method && call.route ? ` ${call.method} ${call.route}` : ' this call';
+      return `The bound contract${host} does not describe${which}, so nothing validated it.`;
+    }
+    case 'response-not-in-contract': {
+      const which = call.method && call.route ? ` ${call.method} ${call.route}` : ' this call';
+      const parts = [call.status_code ? `status ${call.status_code}` : '', call.response_content_type || '']
+        .filter(Boolean)
+        .join(', ');
+      const resp = parts ? ` (${parts})` : '';
+      return `The bound contract${host} describes${which} but not this response${resp} — nothing was compared to a schema.`;
+    }
+    case 'body-not-decodable':
+      return `The response body could not be decoded as ${call.response_content_type || 'its declared media type'}, so nothing was compared to the contract.`;
+    case 'validator-error':
+      return 'The validator could not judge this response, so nothing was compared to the contract — captured, not validated.';
+    case 'tool-not-listed':
+      return `The server's current tools/list does not declare ${tool}, so its result could not be checked — see the stale_client notice.`;
+    case 'input-required':
+      return 'The server asked for more input (resultType input_required) — a mid-flight exchange, not contract evidence.';
     case 'no-output-contract':
       // The honest string the Contracts tab already shows for this very tool.
-      return noOutputContractNote(call.integration || call.peer_host || 'this server', call.mcp_tool_name || 'this tool');
+      return noOutputContractNote(call.integration || call.peer_host || 'this server', tool);
     case 'error-result':
       return ERROR_RESULT_NOT_CHECKED;
-    default: {
-      const where = call.peer_host ? ` for ${call.peer_host}` : '';
-      return `No contract uploaded${where} — this call was captured, not validated.`;
-    }
+    case 'task-handle':
+      return "The result was a Tasks handle, not the tool's output — nothing to validate against the outputSchema.";
+    case 'result-not-json':
+      return `The result carried no complete JSON structuredContent, so nothing was checked against ${tool}'s outputSchema.`;
+    case 'unspecified':
+      return 'The drift processor did not validate this call — it was captured, not validated.';
+    default:
+      return `No contract uploaded${host} — this call was captured, not validated.`;
   }
-}
-
-/* ── The temporal gate ─────────────────────────────────────────────────── */
-
-/** RFC3339 → epoch ms, or undefined when it is absent or unparseable. */
-function epoch(t?: string): number | undefined {
-  if (!t) return undefined;
-  const n = Date.parse(t);
-  return Number.isNaN(n) ? undefined : n;
-}
-
-/**
- * The earliest moment any of these contracts could have validated anything.
- *
- * `undefined` means the question cannot be answered from this data — a row
- * written before `loaded_at` was recorded. The gate is then not applied at all
- * rather than guessed at in either direction: it is an ADDITIONAL requirement
- * on top of the host match, and a missing timestamp leaves the pre-existing
- * host-match answer standing instead of inventing a new verdict from a blank.
- */
-function earliestBinding(specs: readonly CoverageSpec[]): number | undefined {
-  let earliest: number | undefined;
-  for (const s of specs) {
-    const t = epoch(s.loaded_at);
-    if (t === undefined) return undefined;
-    if (earliest === undefined || t < earliest) earliest = t;
-  }
-  return earliest;
-}
-
-/**
- * Was this call still in front of the collector when one of these contracts
- * was bound? Calls captured strictly earlier were never offered to it.
- */
-function capturedAfterBinding(call: CoverageCall, matched: readonly CoverageSpec[]): boolean {
-  const bound = earliestBinding(matched);
-  const captured = epoch(call.captured_at);
-  if (bound === undefined || captured === undefined) return true;
-  return captured >= bound;
-}
-
-/** `checked` only when a contract matched AND it was bound before the call.
- *  Both failures are the same cause from the operator's side — no contract was
- *  in a position to look at this call. */
-function verdict(call: CoverageCall, matched: readonly CoverageSpec[]): CoverageVerdict {
-  if (!matched.length) return NOT_CHECKED;
-  return capturedAfterBinding(call, matched) ? CHECKED : NOT_CHECKED;
 }
 
 const CHECKED: CoverageVerdict = { coverage: 'checked' };
@@ -237,51 +242,26 @@ export function callCoverageDetail(
 ): CoverageVerdict {
   if (call.edge_class === 'internal') return INTERNAL;
 
-  if (call.transport === 'mcp') {
-    // Snapshots only — NOT the wider "hosts we have seen MCP traffic from".
-    // A server whose tools/list has not arrived yet has nothing to validate
-    // against, and claiming otherwise would be the same lie in a new place.
-    const snapshots = specs.filter(
-      (s) => s.format === 'mcp' && s.peer_host && s.peer_host === call.peer_host
-    );
-    if (!snapshots.length) return NOT_CHECKED;
-    // The gates below run in the processor's own order (drift/mcp.go), so the
-    // cause the chip names is the first one the processor would have hit.
-    //
-    // Per TOOL: only a tool that publishes an outputSchema can have its result
-    // validated. Rows not loaded yet resolve conservatively — never claim a
-    // check we cannot evidence.
-    const rows = (call.integration && mcpTools[call.integration]) || [];
-    const tool = rows.find((t) => t.name === call.mcp_tool_name);
-    if (!tool?.hasOutputSchema) return notChecked('no-output-contract');
-    // isError: the result is error output, not the tool's payload, and the
-    // processor skips it by name. Reading it as `conforming` claimed a check
-    // nothing ran; reading it as DRIFTED — which the per-tool fallback did —
-    // filed an execution failure against the provider as a contract breach,
-    // two slots away from a tooltip saying it is no such thing.
-    if (call.mcp_is_error) return notChecked('error-result');
-    // And the snapshot has to have ARRIVED first. An MCP server's tools/list is
-    // observed rather than uploaded, but it reaches the drift processor the
-    // same way and just as late.
-    return verdict(call, snapshots);
+  switch (call.validated) {
+    case 'clean':
+    case 'drifted':
+      // The processor ran validation. Whether a contract is still bound, or
+      // when it was bound, is beside the point — the check happened.
+      return CHECKED;
+    case 'not-validated':
+      return notChecked(serverReason(call, specs));
+    case 'unknown':
+      return notChecked('no-verdict');
+    case undefined:
+    case '':
+      // A pre-migration row: no verdict was ever recorded for it. The one
+      // place the legacy mirror still answers.
+      return legacyVerdict(call, specs, mcpTools);
+    default:
+      // A verdict word this UI does not know (a newer processor). Never
+      // `checked` on a word we cannot read.
+      return notChecked('unspecified');
   }
-
-  if (call.direction === 'server') {
-    return verdict(
-      call,
-      specs.filter((s) => s.role === 'self')
-    );
-  }
-
-  // Outbound. Uploaded contracts bind to exactly one host, so coverage is a
-  // host match and nothing else. An unbound row (only reachable from a store
-  // written before uploads existed) validates nothing and is not coverage.
-  return verdict(
-    call,
-    specs.filter(
-      (s) => s.role !== 'self' && s.format !== 'mcp' && !!s.peer_host && s.peer_host === call.peer_host
-    )
-  );
 }
 
 /** The state alone, for the many callers that only filter or count on it. */
@@ -291,6 +271,116 @@ export function callCoverage(
   mcpTools: Readonly<Record<string, readonly McpToolCoverage[]>> = {}
 ): Coverage {
   return callCoverageDetail(call, specs, mcpTools).coverage;
+}
+
+/* ── The processor's reason → the chip's cause ────────────────────────── */
+
+const PASSTHROUGH_REASONS: ReadonlySet<string> = new Set<NotCheckedReason>([
+  'not-routable',
+  'response-not-in-contract',
+  'body-not-decodable',
+  'validator-error',
+  'tool-not-listed',
+  'input-required',
+  'no-output-contract',
+  'error-result',
+  'task-handle',
+  'result-not-json'
+]);
+
+/**
+ * The processor's `no-contract` covers every way its cache can hold nothing
+ * for the edge: nothing uploaded, an upload it has not loaded yet, a front that
+ * cannot read the store pod. From the operator's chair those are two different
+ * sentences, and the contract list on this screen tells them apart.
+ */
+function serverReason(call: CoverageCall, specs: readonly CoverageSpec[]): NotCheckedReason {
+  const reason = call.validated_reason ?? '';
+  if (PASSTHROUGH_REASONS.has(reason)) return reason as NotCheckedReason;
+  if (reason === 'no-contract' || reason === '') {
+    return boundNow(call, specs).length ? 'contract-not-reached' : 'no-contract';
+  }
+  return 'unspecified';
+}
+
+/** The contracts that would validate this call's edge if they reached the
+ *  processor — the same host match the legacy mirror uses. */
+function boundNow(call: CoverageCall, specs: readonly CoverageSpec[]): CoverageSpec[] {
+  if (call.transport === 'mcp') {
+    return specs.filter((s) => s.format === 'mcp' && !!s.peer_host && s.peer_host === call.peer_host);
+  }
+  if (call.direction === 'server') return specs.filter((s) => s.role === 'self');
+  return specs.filter(
+    (s) => s.role !== 'self' && s.format !== 'mcp' && !!s.peer_host && s.peer_host === call.peer_host
+  );
+}
+
+/* ── The legacy mirror — pre-migration rows only ──────────────────────── */
+
+/** RFC3339 → epoch ms, or undefined when it is absent or unparseable. */
+function epoch(t?: string): number | undefined {
+  if (!t) return undefined;
+  const n = Date.parse(t);
+  return Number.isNaN(n) ? undefined : n;
+}
+
+/**
+ * The earliest moment any of these contracts could have validated anything.
+ *
+ * `undefined` means the question cannot be answered from this data — a row
+ * written before `loaded_at` was recorded. The gate is then not applied at all
+ * rather than guessed at in either direction.
+ */
+function earliestBinding(specs: readonly CoverageSpec[]): number | undefined {
+  let earliest: number | undefined;
+  for (const s of specs) {
+    const t = epoch(s.loaded_at);
+    if (t === undefined) return undefined;
+    if (earliest === undefined || t < earliest) earliest = t;
+  }
+  return earliest;
+}
+
+/** Was this call still in front of the collector when one of these contracts
+ *  was bound? Calls captured strictly earlier were never offered to it. */
+function capturedAfterBinding(call: CoverageCall, matched: readonly CoverageSpec[]): boolean {
+  const bound = earliestBinding(matched);
+  const captured = epoch(call.captured_at);
+  if (bound === undefined || captured === undefined) return true;
+  return captured >= bound;
+}
+
+/** `checked` only when a contract matched AND it was bound before the call. */
+function legacyGate(call: CoverageCall, matched: readonly CoverageSpec[]): CoverageVerdict {
+  if (!matched.length) return NOT_CHECKED;
+  return capturedAfterBinding(call, matched) ? CHECKED : NOT_CHECKED;
+}
+
+/**
+ * What processor.go used to do, mirrored — for rows that carry no verdict and
+ * never will. Frozen: see the header.
+ */
+function legacyVerdict(
+  call: CoverageCall,
+  specs: readonly CoverageSpec[],
+  mcpTools: Readonly<Record<string, readonly McpToolCoverage[]>>
+): CoverageVerdict {
+  if (call.transport === 'mcp') {
+    // Snapshots only — NOT the wider "hosts we have seen MCP traffic from".
+    const snapshots = boundNow(call, specs);
+    if (!snapshots.length) return NOT_CHECKED;
+    // Per TOOL: only a tool that publishes an outputSchema can have its result
+    // validated. Rows not loaded yet resolve conservatively.
+    const rows = (call.integration && mcpTools[call.integration]) || [];
+    const tool = rows.find((t) => t.name === call.mcp_tool_name);
+    if (!tool?.hasOutputSchema) return notChecked('no-output-contract');
+    // isError: error output, not the tool's payload; the processor skipped it.
+    if (call.mcp_is_error) return notChecked('error-result');
+    // And the snapshot has to have ARRIVED first.
+    return legacyGate(call, snapshots);
+  }
+  // Inbound against the self contract; outbound against the host's upload.
+  return legacyGate(call, boundNow(call, specs));
 }
 
 /* ── The evidence line, per card ───────────────────────────────────────── */
@@ -313,11 +403,11 @@ export const SINCE_SNAPSHOT = 'this snapshot';
  * validated.
  *
  * ZERO is the whole reason this line exists. A contract can be bound and have
- * checked nothing — no traffic yet, a quiet edge, or a host binding that is
- * simply wrong — and that last case has no other symptom at all: no error, no
- * finding, a card that looks complete. The chip beside it already refuses to
- * say "conforming" without evidence; this says how much evidence there is, so
- * "none" is visible rather than merely implied.
+ * checked nothing — no traffic yet, a quiet edge, a host binding that is simply
+ * wrong, or a front that cannot reach the store pod — and none of those has any
+ * other symptom: no error, no finding, a card that looks complete. The chip
+ * beside it already refuses to say "conforming" without evidence; this says
+ * how much evidence there is, so "none" is visible rather than merely implied.
  */
 export function validatedCallsMeta(n: number, since: string = SINCE_UPLOAD): string {
   return `validated ${n} ${n === 1 ? 'call' : 'calls'} since ${since}`;
