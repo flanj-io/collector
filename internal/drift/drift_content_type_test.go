@@ -1,7 +1,6 @@
 package drift
 
 import (
-	"errors"
 	"strings"
 	"testing"
 
@@ -16,7 +15,8 @@ import (
 // no verdict, a call that read clean. These pin the three outcomes that replace
 // that silence — the suffix resolves to its base for the LOOKUP and the body
 // still validates as JSON; a media type declared under no name is a finding;
-// everything else kin-openapi refuses to judge is an explicit NotValidatedError.
+// what kin-openapi otherwise refuses to judge yields no finding here (the per-call
+// verdict stamp records it as NOT validated — never a manufactured finding).
 
 const contentTypeSpec = `
 openapi: 3.0.3
@@ -248,44 +248,26 @@ func TestLiveVsSpec_UnknownSuffixIsNotJSON(t *testing.T) {
 	}
 }
 
-func TestLiveVsSpec_AnUndeclaredStatusIsNotValidated(t *testing.T) {
-	// /v1/charges declares 200 and 422 and no default: a 500 has nothing to be
-	// held against — say so instead of returning clean.
-	findings, err := detectContentType(t, contentTypeCall("/v1/charges", 500, "application/json", `{"error":"boom"}`))
-
-	var nv *NotValidatedError
-	if !errors.As(err, &nv) || nv.Reason != NotValidatedStatusNotDeclared {
-		t.Fatalf("want NotValidatedError(%s), got findings=%+v err=%v", NotValidatedStatusNotDeclared, findings, err)
-	}
-	if !strings.Contains(nv.Detail, "500") || !strings.Contains(nv.Detail, "POST /v1/charges") {
-		t.Fatalf("detail: %q", nv.Detail)
+func TestLiveVsSpec_AnUndeclaredStatusManufacturesNoFinding(t *testing.T) {
+	// /v1/charges declares 200 and 422 and no default: a 500 resolves to no
+	// content map, so no media-type finding may be invented for it — the
+	// verdict stamp is what records "not validated" for this call.
+	findings, err := detectContentType(t, contentTypeCall("/v1/charges", 500, "text/html", "<html>"))
+	if err != nil || len(findings) != 0 {
+		t.Fatalf("undeclared status: findings=%+v err=%v", findings, err)
 	}
 }
 
-func TestLiveVsSpec_ABodyTheValidatorCannotReadIsNotValidated(t *testing.T) {
-	cases := []struct {
-		name      string
-		body      string
-		truncated bool
-		reason    string
-	}{
-		{"empty body under a declared schema", "", false, NotValidatedBodyEmpty},
-		{"body cut at the capture cap", `{"type":"https://acme.test/e","ti`, true, NotValidatedBodyTruncated},
-		{"body that is not JSON", "declined", false, NotValidatedBodyNotJSON},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			call := contentTypeCall("/v1/charges", 422, "application/problem+json", tc.body)
-			call.ResponseBodyTruncated = tc.truncated
-
-			findings, err := detectContentType(t, call)
-
-			var nv *NotValidatedError
-			if !errors.As(err, &nv) || nv.Reason != tc.reason {
-				t.Fatalf("want NotValidatedError(%s), got findings=%+v err=%v", tc.reason, findings, err)
-			}
-			if len(findings) != 0 {
-				t.Fatalf("an unjudged call carries no findings: %+v", findings)
+func TestLiveVsSpec_ABodyTheValidatorCannotReadManufacturesNoFinding(t *testing.T) {
+	for name, body := range map[string]string{
+		"empty":     "",
+		"truncated": `{"type":"https://acme.test/e","ti`,
+		"not json":  "declined",
+	} {
+		t.Run(name, func(t *testing.T) {
+			findings, err := detectContentType(t, contentTypeCall("/v1/charges", 422, "application/problem+json", body))
+			if err != nil || len(findings) != 0 {
+				t.Fatalf("%s body: findings=%+v err=%v", name, findings, err)
 			}
 		})
 	}

@@ -5,7 +5,6 @@ package drift
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"mime"
 	"net/http"
@@ -38,40 +37,6 @@ func LoadSpecData(b []byte) (*openapi3.T, error) {
 	return contractopenapi.LoadData(b)
 }
 
-// NotValidatedError is the detector's explicit "could not judge this call": the
-// contract was found and the route matched, but the exchange gave the validator
-// nothing it could hold against the declared schema. Reason is a stable token for
-// the per-call verdict the processor stamps (CONTRACTS §2 `flanj.validated`; the
-// vocabulary sits beside model's NotValidated* reasons), Detail the operator-facing
-// sentence. It is returned INSTEAD of a silent (nil, nil): a call that was never
-// judged must not read as clean.
-type NotValidatedError struct {
-	Reason string
-	Detail string
-}
-
-func (e *NotValidatedError) Error() string { return e.Reason + ": " + e.Detail }
-
-// Reasons a routed call can still go unjudged (NotValidatedError.Reason).
-const (
-	// NotValidatedStatusNotDeclared: the contract declares neither the
-	// response's status (nor its 4XX-style range) nor a default response.
-	NotValidatedStatusNotDeclared = "response-status-not-declared"
-	// NotValidatedBodyEmpty: the row carries no response body where the
-	// contract declares one — the SDK stored none (a content-encoding it could
-	// not undo, CONTRACTS §2) or the provider sent none.
-	NotValidatedBodyEmpty = "response-body-empty"
-	// NotValidatedBodyTruncated: the body was cut at body_cap_bytes and no
-	// longer parses; raise the cap to judge this endpoint.
-	NotValidatedBodyTruncated = "response-body-truncated"
-	// NotValidatedBodyNotJSON: the body is not JSON, so it cannot be held
-	// against the declared JSON schema.
-	NotValidatedBodyNotJSON = "response-body-not-json"
-	// NotValidatedUnclassified: kin-openapi refused the exchange for a reason
-	// this detector does not classify; Detail carries its message.
-	NotValidatedUnclassified = "validation-error"
-)
-
 // RuleContentTypeMismatch is the live-vs-spec rule of a response whose media
 // type the contract declares under no name for that status — not verbatim,
 // not normalized, not by its RFC 6839 base. The provider answers in a shape the
@@ -81,9 +46,10 @@ const RuleContentTypeMismatch = "content-type-mismatch"
 // DetectLiveVsSpec reconstructs the request from the stored call and validates
 // the recorded response against doc using ValidateResponse (MultiError: true).
 // Each schema violation becomes one Finding; an undeclared response media type
-// becomes one finding too. Every other way the response evades judgement is
-// returned as a *NotValidatedError — never a silent (nil, nil) — so the
-// processor can stamp the call as NOT validated rather than clean.
+// becomes one finding too. The remaining ways a response evades judgement — an
+// undeclared status, an empty, truncated or non-JSON body — yield no finding
+// here; the per-call verdict stamp (feat/per-call-validated-stamp) is what
+// records those as NOT validated, so they must never read clean downstream.
 func DetectLiveVsSpec(doc *openapi3.T, call model.RedactedCall) ([]model.Finding, error) {
 	router, err := gorillamux.NewRouter(doc)
 	if err != nil {
@@ -168,8 +134,9 @@ func DetectLiveVsSpec(doc *openapi3.T, call model.RedactedCall) ([]model.Finding
 	schemaErrs := collectSchemaErrors(verr)
 	if len(schemaErrs) == 0 {
 		// kin-openapi refused the exchange without holding a single value
-		// against the schema. Silence here used to read as clean; say why.
-		return nil, notValidated(route.Operation, call, endpoint, verr)
+		// against the schema (undeclared status, undecodable body): nothing to
+		// report as drift. The verdict stamp owns saying "not validated".
+		return nil, nil
 	}
 	findings := make([]model.Finding, 0, len(schemaErrs))
 	for _, se := range schemaErrs {
@@ -368,37 +335,6 @@ func joinNames(names []string) string {
 		quoted[i] = "`" + n + "`"
 	}
 	return strings.Join(quoted, ", ")
-}
-
-// notValidated classifies a validation that produced no schema error: what about
-// THIS exchange stopped kin-openapi from judging it, named from the call and the
-// contract (public API only — never the library's message text), with kin's own
-// message as the last resort.
-func notValidated(op *openapi3.Operation, call model.RedactedCall, endpoint string, verr error) *NotValidatedError {
-	switch {
-	case resolveResponse(op, call.StatusCode) == nil:
-		return &NotValidatedError{
-			Reason: NotValidatedStatusNotDeclared,
-			Detail: fmt.Sprintf("the contract declares no %d response and no default for %s", call.StatusCode, endpoint),
-		}
-	case call.ResponseBody == "":
-		return &NotValidatedError{
-			Reason: NotValidatedBodyEmpty,
-			Detail: "the row carries no response body to hold against the declared schema",
-		}
-	case call.ResponseBodyTruncated && !json.Valid([]byte(call.ResponseBody)):
-		return &NotValidatedError{
-			Reason: NotValidatedBodyTruncated,
-			Detail: "the response body was cut at the capture cap and no longer parses; raise body_cap_bytes to judge this endpoint",
-		}
-	case !json.Valid([]byte(call.ResponseBody)):
-		return &NotValidatedError{
-			Reason: NotValidatedBodyNotJSON,
-			Detail: "the response body is not JSON, so it cannot be held against the declared schema",
-		}
-	default:
-		return &NotValidatedError{Reason: NotValidatedUnclassified, Detail: verr.Error()}
-	}
 }
 
 // propsVerdict is the outcome of judging a redacted value's schema error against
