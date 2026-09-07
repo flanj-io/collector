@@ -54,6 +54,10 @@ const (
 // co-located store handle (single pod, and every pod of a shared-postgres
 // deployment), and — for a front collector of the tiered topology, which has no
 // store of its own — the store pod over HTTP.
+//
+// It carries two kinds of row. Uploaded OpenAPI contracts fill this cache;
+// observed MCP tools/list snapshots (format "mcp") seed the MCP detector's
+// per-edge baseline (mcpbaseline.go). One listing serves both.
 type specSource interface {
 	// listSpecs returns contract METADATA only. Cheap by construction: the
 	// refresh compares it against what is cached and downloads nothing when
@@ -149,22 +153,33 @@ func (c *specCache) stats() (docs int, rawBytes int) {
 	return len(c.byHost), rawBytes
 }
 
-// refresh reconciles the cache against the source: it downloads and parses only
-// the contracts whose stored document actually changed, and drops the ones that
-// are gone. A per-document failure is logged by the caller and skipped — one bad
-// row must never cost the other contracts their detection.
-//
-// Returns the hosts whose contract changed, for logging.
+// refresh lists the source and reconciles the cache against it. The processor
+// lists once per tick and feeds the same rows to reconcile AND to the MCP
+// seeding (mcpbaseline.go); this wrapper is the one-caller form.
 func (c *specCache) refresh(src specSource) (changed []string, errs []error) {
 	infos, err := src.listSpecs()
 	if err != nil {
 		return nil, []error{err}
 	}
+	return c.reconcile(infos, src)
+}
+
+// reconcile brings the cache in line with the listed rows: it downloads and
+// parses only the contracts whose stored document actually changed, and drops
+// the ones that are gone. A per-document failure is logged by the caller and
+// skipped — one bad row must never cost the other contracts their detection.
+//
+// Returns the hosts whose contract changed, for logging.
+func (c *specCache) reconcile(infos []model.SpecInfo, src specSource) (changed []string, errs []error) {
+	if c == nil {
+		return nil, nil
+	}
 
 	// The rows this cache is for: uploaded (or otherwise stored) OpenAPI
 	// contracts for PROVIDERS, each bound to a host. Self contracts stay
-	// config-loaded in v1, and MCP snapshots are self-delivering and handled by
-	// the MCP detector, so neither belongs here.
+	// config-loaded in v1. MCP snapshots travel the same channel but are not
+	// OpenAPI documents: they seed the MCP detector's per-edge baseline
+	// instead (mcpbaseline.go), from the same listing.
 	want := make(map[string]model.SpecInfo, len(infos))
 	for _, si := range infos {
 		if si.Role != model.SpecRoleProvider || si.Format != model.SpecFormatOpenAPI || si.PeerHost == "" {

@@ -547,12 +547,18 @@ func TestSnapshotVersioning(t *testing.T) {
 	}
 	edge := mcpEdgeRef(v1.PeerHost, v1.Direction)
 
-	// Re-observation of the SAME list (later ts): no findings, no rotation.
+	// Re-observation of the SAME list (later ts): no findings, no rotation —
+	// and the row it reports carries the FIRST observation's stamp, so the
+	// store's loaded_at (the UI's "since this snapshot" anchor, the contract
+	// channel's change token) does not move for a list that did not.
 	again := v1
 	again.ObservedAt = "2026-08-24T13:00:00.000Z"
-	fs, _, _, err := d.LoadSnapshot(again)
+	fs, againInfo, _, err := d.LoadSnapshot(again)
 	if err != nil || len(fs) != 0 {
 		t.Fatalf("identical snapshot: findings=%v err=%v", fs, err)
+	}
+	if againInfo.LoadedAt != v1.ObservedAt {
+		t.Errorf("re-observed identical list restamped the row: loaded_at=%s, want %s", againInfo.LoadedAt, v1.ObservedAt)
 	}
 	d.mu.Lock()
 	st := d.edges[edge]
@@ -571,9 +577,12 @@ func TestSnapshotVersioning(t *testing.T) {
 	v2.SnapshotJSON = mutateSnapshotJSON(t, v1.SnapshotJSON, func(doc map[string]any) {
 		tool(t, doc, "get_balance")["description"] = "Balance, reworded."
 	})
-	fs, _, _, err = d.LoadSnapshot(v2)
+	fs, v2Info, _, err := d.LoadSnapshot(v2)
 	if err != nil || len(fs) != 1 {
 		t.Fatalf("changed snapshot: findings=%v err=%v, want the one description change", fs, err)
+	}
+	if v2Info.LoadedAt != v2.ObservedAt {
+		t.Errorf("changed list must stamp the row with its own observation: loaded_at=%s, want %s", v2Info.LoadedAt, v2.ObservedAt)
 	}
 	d.mu.Lock()
 	st = d.edges[edge]
@@ -598,25 +607,37 @@ func TestSnapshotVersioning(t *testing.T) {
 	d.mu.Unlock()
 }
 
-// TestSeed: a persisted snapshot restores the baseline across a restart — the
-// next identical list emits nothing, a changed one diffs against the seed; a
-// live baseline is never overridden by a late seed.
+// TestSeed: the store's snapshot is the org-wide baseline, and the newer
+// observation wins. Empty → adopted; an identical observed list → no findings
+// and the row keeps the seed's stamp; a changed observed list → diffs against
+// the seed; an OLDER seed → live wins; a NEWER seed with the same content →
+// nothing to learn; a NEWER seed with different content — a sibling front
+// observed a change — → adopted with NO findings and the live list rotated to
+// previous; the next observed change then diffs against what the STORE held.
 func TestSeed(t *testing.T) {
 	v1 := goldenSnapshot(t)
 	info := model.SpecInfo{Integration: "acme-payments", Role: model.SpecRoleProvider,
 		PeerHost: "mcp.acme.test", Format: model.SpecFormatMCP, LoadedAt: v1.ObservedAt}
+	edge := mcpEdgeRef(v1.PeerHost, "client")
 
 	d := NewMCPDetector()
-	if err := d.Seed(info, []byte(v1.SnapshotJSON)); err != nil {
-		t.Fatalf("seed: %v", err)
+	if d.HasBaseline(v1.PeerHost, "client") {
+		t.Fatal("an empty detector claims a baseline")
+	}
+	adopted, err := d.Seed(info, []byte(v1.SnapshotJSON))
+	if err != nil || !adopted {
+		t.Fatalf("first seed: adopted=%v err=%v, want adopted", adopted, err)
+	}
+	if !d.HasBaseline(v1.PeerHost, "client") {
+		t.Fatal("seeded edge reports no baseline")
 	}
 	// Seeded baseline validates calls…
 	if fs := d.DetectCall(goldenMCPCall(t)); len(fs) != 1 {
 		t.Fatalf("seeded detection = %+v, want the golden output_mismatch", fs)
 	}
-	// …an identical observed list is a no-op…
-	if fs, _, _, err := d.LoadSnapshot(v1); err != nil || len(fs) != 0 {
-		t.Fatalf("identical-after-seed: findings=%v err=%v", fs, err)
+	// …an identical observed list is a no-op that keeps the seed's stamp…
+	if fs, again, _, err := d.LoadSnapshot(v1); err != nil || len(fs) != 0 || again.LoadedAt != v1.ObservedAt {
+		t.Fatalf("identical-after-seed: findings=%v loaded_at=%s err=%v", fs, again.LoadedAt, err)
 	}
 	// …and a changed one diffs against the seed (no silent re-baseline).
 	v2 := v1
@@ -628,20 +649,86 @@ func TestSeed(t *testing.T) {
 		t.Fatalf("changed-after-seed: findings=%v err=%v", fs, err)
 	}
 
-	// Live state wins over a late seed.
-	if err := d.Seed(info, []byte(v1.SnapshotJSON)); err != nil {
-		t.Fatalf("late seed: %v", err)
+	observed := func() (cur, prev string) {
+		t.Helper()
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		st := d.edges[edge]
+		if st.previous != nil {
+			prev = st.previous.Version.ObservedAt
+		}
+		return st.current.Version.ObservedAt, prev
 	}
-	edge := mcpEdgeRef(v1.PeerHost, "client")
-	d.mu.Lock()
-	if d.edges[edge].current.Version.ObservedAt != v2.ObservedAt {
-		t.Errorf("late seed overrode live state")
+
+	// An OLDER seed never displaces live state: this process is ahead of the
+	// store, and the store catches up from the spec_info it forwards.
+	if adopted, err := d.Seed(info, []byte(v1.SnapshotJSON)); err != nil || adopted {
+		t.Fatalf("older seed: adopted=%v err=%v, want live state kept", adopted, err)
 	}
-	d.mu.Unlock()
+	if cur, _ := observed(); cur != v2.ObservedAt {
+		t.Errorf("older seed overrode live state: current observed_at=%s", cur)
+	}
+
+	// A NEWER seed with the SAME content is nothing to learn — and must not
+	// restamp the live version (that stamp is what "since this snapshot" and
+	// the row's loaded_at are anchored on).
+	same := info
+	same.LoadedAt = "2026-08-24T17:00:00.000Z"
+	if adopted, err := d.Seed(same, []byte(v2.SnapshotJSON)); err != nil || adopted {
+		t.Fatalf("same-content newer seed: adopted=%v err=%v, want nothing learned", adopted, err)
+	}
+	if cur, _ := observed(); cur != v2.ObservedAt {
+		t.Errorf("same-content seed restamped the live version: %s", cur)
+	}
+
+	// A NEWER seed with DIFFERENT content: a sibling front observed a change
+	// this process never saw. Adopted, silently — the sibling reported it and
+	// findings dedup by signature — with the live list kept as previous.
+	v3JSON := mutateSnapshotJSON(t, v1.SnapshotJSON, func(doc map[string]any) {
+		tool(t, doc, "get_balance")["description"] = "Balance, reworded again."
+	})
+	newer := info
+	newer.LoadedAt = "2026-08-24T18:00:00.000Z"
+	if adopted, err := d.Seed(newer, []byte(v3JSON)); err != nil || !adopted {
+		t.Fatalf("newer seed: adopted=%v err=%v, want adopted", adopted, err)
+	}
+	if cur, prev := observed(); cur != newer.LoadedAt || prev != v2.ObservedAt {
+		t.Errorf("newer seed: current=%s previous=%s, want %s / %s", cur, prev, newer.LoadedAt, v2.ObservedAt)
+	}
+	// Re-observing the adopted list reports the STORE's stamp, not this record's.
+	v3 := v1
+	v3.ObservedAt = "2026-08-24T19:00:00.000Z"
+	v3.SnapshotJSON = v3JSON
+	if fs, ri, _, err := d.LoadSnapshot(v3); err != nil || len(fs) != 0 || ri.LoadedAt != newer.LoadedAt {
+		t.Fatalf("re-observe adopted: findings=%v loaded_at=%s err=%v, want none / %s", fs, ri.LoadedAt, err, newer.LoadedAt)
+	}
+	// The next observed CHANGE diffs against what the store held: the
+	// finding's before-snapshot is the sibling's observation, not this one's.
+	v4 := v1
+	v4.ObservedAt = "2026-08-24T20:00:00.000Z"
+	v4.SnapshotJSON = mutateSnapshotJSON(t, v3JSON, func(doc map[string]any) {
+		tool(t, doc, "get_balance")["description"] = "Balance, final."
+	})
+	fs, _, _, err := d.LoadSnapshot(v4)
+	if err != nil || len(fs) != 1 {
+		t.Fatalf("change after adoption: findings=%v err=%v", fs, err)
+	}
+	if fs[0].SnapshotObservedFrom != newer.LoadedAt || fs[0].SnapshotObservedAt != v4.ObservedAt {
+		t.Errorf("finding spans %s → %s, want %s → %s", fs[0].SnapshotObservedFrom, fs[0].SnapshotObservedAt, newer.LoadedAt, v4.ObservedAt)
+	}
+
+	// Stamps order by instant, not by text: a whole-second stamp and a
+	// millisecond one compare correctly, and equal instants are a tie.
+	if !observedAfter("2026-08-24T18:00:01Z", "2026-08-24T18:00:00.500Z") {
+		t.Error("18:00:01 is after 18:00:00.500")
+	}
+	if observedAfter("2026-08-24T18:00:00Z", "2026-08-24T18:00:00.000Z") {
+		t.Error("equal instants must not be 'after' — a tie never displaces live state")
+	}
 
 	// A non-MCP row never seeds.
-	if err := d.Seed(model.SpecInfo{Format: model.SpecFormatOpenAPI}, []byte("openapi: 3.0.3")); err != nil {
-		t.Errorf("openapi rows must be ignored, got %v", err)
+	if adopted, err := d.Seed(model.SpecInfo{Format: model.SpecFormatOpenAPI}, []byte("openapi: 3.0.3")); err != nil || adopted {
+		t.Errorf("openapi rows must be ignored, got adopted=%v err=%v", adopted, err)
 	}
 }
 

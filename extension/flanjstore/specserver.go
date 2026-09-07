@@ -92,8 +92,9 @@ func (e *storeExtension) authSpec(next http.Handler) http.Handler {
 }
 
 // handleSpecList returns contract METADATA — never the documents. That is what
-// keeps a front's steady-state refresh one small request a minute: it compares
-// this list against what it has cached and downloads only what moved.
+// keeps a front's steady-state refresh one small request per tick: it compares
+// this list against what it has cached (OpenAPI) or seeded (MCP) and downloads
+// only what moved.
 func (e *storeExtension) handleSpecList(w http.ResponseWriter, _ *http.Request) {
 	st := e.Store()
 	if st == nil {
@@ -121,18 +122,25 @@ func (e *storeExtension) handleSpecList(w http.ResponseWriter, _ *http.Request) 
 // `?integration=self` returned the organisation's own OpenAPI document — the
 // exact thing the list route was written to withhold.
 //
-// A front validates its dependencies' REST traffic. The self contract is the
-// store pod's own; an unbound contract names no edge; and an MCP snapshot is
-// self-delivering from the traffic the front already sees (and is not OpenAPI,
-// so the front's cache would reject it anyway). None has business here.
+// A front validates its dependencies' traffic, so it gets a PROVIDER's
+// contract bound to the edge it applies to, in either format the store holds:
+// an uploaded OpenAPI document, or an observed MCP tools/list snapshot. The
+// self contract is the store pod's own and an unbound contract names no edge;
+// neither has business here.
 //
-// The format check is load-bearing, not belt-and-braces: an MCP snapshot is
-// persisted as role=provider WITH a peer_host, so the role+host pair alone
-// never excluded one, whatever the old comment claimed.
+// MCP snapshots were withheld until 2026-09-07 on the reasoning that they are
+// self-delivering from traffic the front already sees. They are — for the ONE
+// front that saw it. Every other front's baseline was whatever that process
+// had personally witnessed: a rename observed through front-a raised nothing
+// when the stale client called through front-b, and a restarted front forgot
+// the baseline entirely. The store holds the org-wide baseline (every front
+// forwards its snapshots as spec_info records); this channel is how it gets
+// back down. The front's drift processor routes the two formats apart on its
+// side (an MCP row never enters its OpenAPI cache).
 func servableContract(si model.SpecInfo) bool {
 	return si.Role == model.SpecRoleProvider &&
 		si.PeerHost != "" &&
-		si.Format == model.SpecFormatOpenAPI
+		(si.Format == model.SpecFormatOpenAPI || si.Format == model.SpecFormatMCP)
 }
 
 // handleSpecDoc returns one raw contract document.

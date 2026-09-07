@@ -38,6 +38,10 @@ type driftProcessor struct {
 	// in the background from src. The per-call path reads this map and nothing
 	// else (speccache.go).
 	specs *specCache
+	// mcpSeeds tracks which of src's MCP snapshot rows have been offered to
+	// the detector as its per-edge baseline (mcpbaseline.go). Same listing,
+	// same ticker, same download-only-what-moved rule as specs.
+	mcpSeeds mcpSeeds
 	// src is where contracts come from: the co-located store, or — on a front
 	// of the tiered topology, which has none — the store pod over HTTP.
 	src specSource
@@ -69,14 +73,15 @@ type specInfoRecord struct {
 const specInfoRefresh = 10 * time.Minute
 
 // start resolves where provider contracts come from, fills the spec cache once
-// so detection is live on the first call rather than a tick later, and launches
-// the background refresh. It also records the self contract in the shared store
-// (title/version/docs link + the raw document) and seeds the MCP detector from
-// the persisted snapshots.
+// so detection is live on the first call rather than a tick later — the same
+// first refresh seeds the MCP detector's per-edge baselines from the store's
+// persisted snapshots, whichever source they come from — and launches the
+// background refresh. It also records the self contract in the shared store
+// (title/version/docs link + the raw document).
 //
 // Best effort throughout: a collector with no contract source still detects MCP
-// drift and still stamps call ids, which is what makes front->store retries
-// idempotent.
+// drift from the lists it observes itself and still stamps call ids, which is
+// what makes front->store retries idempotent.
 func (p *driftProcessor) start(_ context.Context, host component.Host) error {
 	for _, ext := range host.GetExtensions() {
 		prov, ok := ext.(store.Provider)
@@ -128,30 +133,6 @@ func (p *driftProcessor) start(_ context.Context, host component.Host) error {
 	for _, si := range p.specInfos {
 		if err := p.st.PutSpecInfo(si.info, si.raw); err != nil && p.logger != nil {
 			p.logger.Warn("record spec info failed", zap.String("role", si.info.Role), zap.Error(err))
-		}
-	}
-	// Seed the MCP baseline from the persisted snapshots (spec_infos rows with
-	// format "mcp"), so a restart diffs the next observed tools/list against
-	// the last persisted one instead of silently re-baselining.
-	if p.mcp != nil {
-		infos, err := p.st.ListSpecInfos()
-		if err != nil {
-			if p.logger != nil {
-				p.logger.Warn("list spec infos for mcp seed failed", zap.Error(err))
-			}
-			return nil
-		}
-		for _, info := range infos {
-			if info.Format != model.SpecFormatMCP {
-				continue
-			}
-			raw, _, ok, err := p.st.GetSpecDoc(info.Integration)
-			if err != nil || !ok {
-				continue
-			}
-			if err := p.mcp.Seed(info, raw); err != nil && p.logger != nil {
-				p.logger.Warn("seed mcp contract failed", zap.String("integration", info.Integration), zap.Error(err))
-			}
 		}
 	}
 	return nil
@@ -225,17 +206,31 @@ func (p *driftProcessor) refreshLoop() {
 	}
 }
 
-// refreshSpecs pulls the current contracts into the cache and logs what moved.
+// refreshSpecs lists the source once and reconciles both halves of the
+// contract channel against it: uploaded OpenAPI contracts into the cache, and
+// observed MCP snapshots into the detector's per-edge baselines. Logs what
+// moved.
 func (p *driftProcessor) refreshSpecs() {
 	if p.src == nil {
 		return
 	}
-	changed, errs := p.specs.refresh(p.src)
+	infos, err := p.src.listSpecs()
+	if err != nil {
+		if p.logger != nil {
+			p.logger.Warn("contract refresh failed", zap.Error(err))
+		}
+		return
+	}
+	changed, errs := p.specs.reconcile(infos, p.src)
+	seeded, seedErrs := p.mcpSeeds.reconcile(infos, p.src, p.mcp)
 	if p.logger == nil {
 		return
 	}
 	for _, err := range errs {
 		p.logger.Warn("contract refresh failed", zap.Error(err))
+	}
+	for _, err := range seedErrs {
+		p.logger.Warn("mcp baseline seed failed", zap.Error(err))
 	}
 	if len(changed) > 0 {
 		docs, rawBytes := p.specs.stats()
@@ -243,6 +238,12 @@ func (p *driftProcessor) refreshSpecs() {
 			zap.Strings("hosts", changed),
 			zap.Int("contracts", docs),
 			zap.Int("source_bytes", rawBytes))
+	}
+	for _, sd := range seeded {
+		p.logger.Info(mcpSeedLogMessage,
+			zap.String("integration", sd.integration),
+			zap.String("peer_host", sd.peerHost),
+			zap.String("observed_at", sd.observedAt))
 	}
 }
 
@@ -334,7 +335,16 @@ func (p *driftProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.Logs
 				// against the observed snapshot), NEVER the OpenAPI one.
 				if otlpattr.Transport(lr) == otlpattr.TransportMCP {
 					if p.mcp != nil {
-						findings = append(findings, p.mcp.DetectCall(otlpattr.CallFromRecord(lr))...)
+						call := otlpattr.CallFromRecord(lr)
+						// No baseline for this edge: the call is captured, not
+						// judged. On a tiered front the store pod may well hold
+						// the tools/list a sibling front observed, so ask for
+						// an early refresh — the same first-sight kick the REST
+						// path gives an uncovered host. Never blocks; floored.
+						if !p.mcp.HasBaseline(call.PeerHost, call.Direction) {
+							p.kickRefresh()
+						}
+						findings = append(findings, p.mcp.DetectCall(call)...)
 					}
 					continue
 				}

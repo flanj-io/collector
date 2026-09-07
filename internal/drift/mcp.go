@@ -104,7 +104,6 @@ func (d *MCPDetector) LoadSnapshot(snap otlpattr.ContractSnapshot) ([]model.Find
 		Title:     snap.ServerName,
 		Version:   snap.ServerVersion,
 		Endpoints: len(tools),
-		LoadedAt:  snap.ObservedAt,
 	}
 
 	d.mu.Lock()
@@ -129,6 +128,18 @@ func (d *MCPDetector) LoadSnapshot(snap otlpattr.ContractSnapshot) ([]model.Find
 	}
 	cur := st.current
 	d.mu.Unlock()
+
+	// The row's loaded_at is when THIS CONTENT was first observed — the
+	// current contract's own stamp — not when this record happened to arrive.
+	// The two differ on every re-observation of an unchanged list, and the
+	// store row is what the UI anchors "validated N calls since this snapshot"
+	// on: restamping it on each identical tools/list flipped every call
+	// captured before the restamp to NOT CHECKED with no change to the
+	// contract at all (seen on the tiered lane, 2026-09-07, where a second
+	// front's first listing did exactly that to the first front's calls). The
+	// same stability is what lets the store's loaded_at serve as the change
+	// token the contract channel refreshes on.
+	info.LoadedAt = cur.Version.ObservedAt
 
 	var findings []model.Finding
 	if prev != nil {
@@ -185,31 +196,87 @@ func schemaUndecodable(raw json.RawMessage) bool {
 	return err != nil
 }
 
-// Seed restores an edge's CURRENT snapshot from the store (spec_infos rows
-// with format "mcp", written by earlier LoadSnapshots) so a restarted
-// collector diffs the next observed list against the last persisted one
-// instead of silently re-baselining. It never overrides live state.
-func (d *MCPDetector) Seed(info model.SpecInfo, raw []byte) error {
+// Seed offers an edge the snapshot the STORE holds — the org-wide baseline —
+// and reports whether it was adopted.
+//
+// The store's spec_infos rows of format "mcp" are written by every collector
+// that observes a tools/list (directly when a store is co-located, as a
+// forwarded spec_info record from a tiered front). Seeding from them is what
+// keeps the baseline from being one process's memory. At Start it is how a
+// restarted collector diffs the next observed list against the last one
+// anyone persisted instead of silently re-baselining. On every refresh it is
+// how a tiered FRONT — which owns no store and has witnessed nothing — learns
+// what a SIBLING front observed: the rename front-a saw must make the stale
+// client calling through front-b a stale_client finding, not a NOT CHECKED
+// call, and it must not take a restart of front-b to get there.
+//
+// The newer observation wins, ordered by when each list was observed
+// (contract.Version.ObservedAt; on the seed side that is the row's loaded_at):
+//   - no live baseline: the seed becomes it;
+//   - same content as the live baseline: nothing to learn, and the live
+//     version metadata is kept — a seed must never restamp "since this
+//     snapshot" for a list that did not change;
+//   - the seed was observed strictly later: adopted; the live baseline
+//     rotates to previous, and NO findings are emitted. The collector that
+//     observed the change already reported it, and findings dedup by
+//     signature, so reporting it again from here would only inflate
+//     occurrence_count for a drift this process never witnessed;
+//   - otherwise — the live baseline is newer, or the two cannot be ordered —
+//     live wins. This process is ahead of the store, and the store catches
+//     up the way it always has: the spec_info record LoadSnapshot emitted.
+func (d *MCPDetector) Seed(info model.SpecInfo, raw []byte) (bool, error) {
 	if info.Format != model.SpecFormatMCP || len(raw) == 0 {
-		return nil
+		return false, nil
 	}
 	tools, err := contract.ParseToolsList(raw)
 	if err != nil {
-		return fmt.Errorf("seed mcp contract %q: %w", info.Integration, err)
+		return false, fmt.Errorf("seed mcp contract %q: %w", info.Integration, err)
 	}
 	tools = dropUndecodableSchemas(tools)
 	edgeRef := mcpEdgeRef(info.PeerHost, "client")
 	c, err := contract.FromToolsList(tools, edgeRef, info.LoadedAt, "observed tools/list at "+info.LoadedAt)
 	if err != nil {
-		return fmt.Errorf("seed mcp contract %q: %w", info.Integration, err)
+		return false, fmt.Errorf("seed mcp contract %q: %w", info.Integration, err)
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if st := d.edges[edgeRef]; st != nil && st.current != nil {
-		return nil // live state wins
+	st := d.edges[edgeRef]
+	if st == nil || st.current == nil {
+		d.edges[edgeRef] = &mcpEdgeState{integration: info.Integration, current: c}
+		return true, nil
 	}
-	d.edges[edgeRef] = &mcpEdgeState{integration: info.Integration, current: c}
-	return nil
+	if st.current.Version.ContentHash == c.Version.ContentHash {
+		return false, nil // same list; the live stamp stays
+	}
+	if !observedAfter(c.Version.ObservedAt, st.current.Version.ObservedAt) {
+		return false, nil // live is newer (or the order is unknowable): live wins
+	}
+	st.integration = info.Integration
+	st.previous = st.current
+	st.current = c
+	return true, nil
+}
+
+// observedAfter reports whether a was observed strictly later than b. Both are
+// RFC 3339 stamps — the SDK's record time on one side, the store row's
+// loaded_at on the other — parsed rather than compared as text so a
+// millisecond stamp and a whole-second one order correctly. A pair that will
+// not parse falls back to the lexical order ISO-8601 UTC provides, and a tie
+// is never "after": it must not displace live state.
+func observedAfter(a, b string) bool {
+	ta, errA := time.Parse(time.RFC3339Nano, a)
+	tb, errB := time.Parse(time.RFC3339Nano, b)
+	if errA == nil && errB == nil {
+		return ta.After(tb)
+	}
+	return a > b
+}
+
+// HasBaseline reports whether the edge holds a CURRENT snapshot — observed or
+// seeded — to judge calls against. A call to an edge without one is captured,
+// not judged, which is the caller's cue to ask the store for a baseline.
+func (d *MCPDetector) HasBaseline(peerHost, direction string) bool {
+	return d.currentContract(peerHost, direction) != nil
 }
 
 // currentContract returns the edge's CURRENT contract (nil when no snapshot

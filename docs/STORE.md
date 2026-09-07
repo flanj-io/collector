@@ -92,6 +92,7 @@ shape and the Kubernetes objects each needs — in [DEPLOYMENT.md](DEPLOYMENT.md
 |---|---|---|---|
 | Pipeline | one collector: otlp → redaction → drift → store + UI | N identical collectors, each the full pipeline, `backend: postgres` | **fronts**: otlp → redaction → drift → `otlphttp`; **store pod**: otlp → redaction → store + UI |
 | Uploaded contracts | read from the co-located store, in-process | same — every pod holds a store handle onto the shared database | uploaded on the **store pod**; fronts read them back over `spec_endpoint` (set it, or drift never runs on a front) |
+| MCP baseline (observed `tools/list`) | the process's own, re-seeded from the store at restart | every pod seeds from the shared rows, so one pod's observation is every pod's baseline | each front forwards its snapshots up as `spec_info`; every front reads the store pod's back over `spec_endpoint`, so a rename observed through one front is judged on all of them |
 | Config | `/etc/flanj/config.yaml` | same, `backend: postgres` | `/etc/flanj/front.yaml` + `/etc/flanj/store.yaml` (`config/config.*.example.yaml`) |
 | State | sqlite on a PVC (or postgres) | postgres only | store pod: sqlite on ONE PVC (or postgres); fronts: none |
 | Scale | 1 | N writers (postgres) | N stateless fronts (HPA on cpu/memory); store = 1 on sqlite, may scale on postgres |
@@ -123,13 +124,23 @@ no custom protocol exists between the tiers.
 - **Contracts flow the OTHER way** (2026-08-31). Provider contracts are uploaded
   in the UI, which lives on the store pod, so the store pod is their source of
   truth and the fronts READ them — the reverse of every other record here.
-  A front polls the store pod's `spec_endpoint` on a one-minute ticker (and
+  A front polls the store pod's `spec_endpoint` on a ten-second ticker (and
   early on first sight of a host it has no contract for), keeps the parsed
   documents in memory, and re-downloads only what changed. Without
   `store_pod_endpoint` set on a front, an uploaded contract reaches it never and
   REST drift detection simply does not run there; the front says so once at
   start. A front's SELF contract (`self_spec_path`, still config) still crosses
   upward as a `spec_info` record, first batch after start then every 10 minutes.
+- **MCP baselines flow BOTH ways** (2026-09-07). An observed `tools/list` goes
+  up from the front that saw it as a `spec_info` record (format `mcp`), and the
+  store pod serves those rows back down over the same `spec_endpoint`, so every
+  front's per-edge baseline is the store's — the org-wide one — rather than
+  what that one process happened to witness. Before this, a tool renamed while
+  front-a was watching raised nothing when a stale client called through
+  front-b, and restarting a front forgot the baseline. The newer observation
+  wins on each front, silently: the front that observed a change is the one
+  that reports it, and findings dedup by signature. An MCP call to an edge a
+  front has no baseline for asks for an early refresh, like an uncovered host.
 
 ### Tiered: invariants
 
@@ -151,9 +162,11 @@ no custom protocol exists between the tiers.
    nothing until the store pod caught up.
 6. **The contract endpoint is not the UI.** `spec_endpoint` is a separate,
    read-only, contracts-only listener on the cluster interface — a sibling of
-   `:4318`, requiring the shared `spec_token`. It exposes no calls, no findings
-   and no settings, and it mutates nothing. The UI stays loopback (invariant 4),
-   which is what lets this exist without weakening it.
+   `:4318`, requiring the shared `spec_token`. It serves a provider's contract
+   bound to an edge, in either format the store holds (uploaded OpenAPI,
+   observed MCP snapshot); it exposes no calls, no findings, no settings and
+   never the self contract, and it mutates nothing. The UI stays loopback
+   (invariant 4), which is what lets this exist without weakening it.
 
 The e2e harness proves this shape end-to-end: `make gate-tiered` /
 `make stress-tiered` run the unchanged gate, the contracts check and the
