@@ -136,6 +136,13 @@ export interface ConnectState {
    *  confirmation. Create thread is available whenever this is set. */
   confirmed_contact_email?: string | null;
   local_ui_url?: string;
+  /** The CP dashboard link — the ONE door out of the local UI. Present only
+   *  while Connected AND the collector has an address a browser can open
+   *  (`cp_public_url`, or a public-looking `cp_base_url`); absent otherwise,
+   *  and absence keeps the Connected pill a Settings button. A collector on a
+   *  split network (docker DNS, a k8s Service) used to send its in-network
+   *  base here, which was a dead link off-host. */
+  dashboard_url?: string;
   cp_configured?: boolean;
   error?: string;
   /** What actually happened to the confirmation mail on THIS request (CONTRACTS-CP §5.1):

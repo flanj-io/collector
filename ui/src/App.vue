@@ -227,10 +227,12 @@ const connectPill = computed(() => {
       return 'Not connected';
   }
 });
-/** The CP dashboard link, emitted by /api/connect ONLY while Connected. When
- *  absent the pill stays a button into Settings — the door is never offered to
- *  a control plane this collector has no identity at. */
-const dashboardUrl = computed(() => (connect.value as { dashboard_url?: string } | null)?.dashboard_url || '');
+/** The CP dashboard link, emitted by /api/connect ONLY while Connected and
+ *  only when the collector holds an address a BROWSER can open. When absent the
+ *  pill stays a button into Settings — the door is never offered to a control
+ *  plane this collector has no identity at, nor to one this browser cannot
+ *  reach (the collector's own in-network address is not a link for us). */
+const dashboardUrl = computed(() => connect.value?.dashboard_url || '');
 
 const threadsByFinding = computed(() => {
   const m: Record<string, ThreadRow> = {};

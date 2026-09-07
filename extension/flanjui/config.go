@@ -1,6 +1,9 @@
 package flanjui
 
-import "errors"
+import (
+	"errors"
+	"net/url"
+)
 
 // Config for the localhost UI extension. Keys frozen in CONTRACTS §8.
 type Config struct {
@@ -21,8 +24,21 @@ type Config struct {
 	// operator actually did. Naming a provider on a thread needs no linkage at
 	// all, which is why this key survives that removal.
 	ProviderDisplayName string `mapstructure:"provider_display_name"`
-	// CPBaseURL is the control-plane base URL for the flag POST.
+	// CPBaseURL is the control-plane base URL this collector's OWN requests go
+	// to (register, me, flags, threads, the syncs). It may well be an
+	// in-network address — a docker service name, a k8s Service, a VPC-private
+	// ingress — because only the collector has to reach it.
 	CPBaseURL string `mapstructure:"cp_base_url"`
+	// CPPublicURL is the control-plane origin the OPERATOR'S BROWSER can open:
+	// the base of the one link the local UI offers out (the Connected pill's
+	// dashboard door, `dashboard_url` on GET /api/connect). Optional. Set it
+	// wherever cp_base_url is not resolvable from a laptop; with it unset the
+	// door is minted from cp_base_url only when that host is not obviously
+	// non-public (loopback / private IP / single-label / .local-style names)
+	// and omitted otherwise — the pill then stays a Settings button, which is
+	// honest, where a dead link is not (dashboardURL in connect.go). Neither
+	// URL is ever logged.
+	CPPublicURL string `mapstructure:"cp_public_url"`
 	// CPDeployToken is the static Bearer token (the only outbound auth).
 	CPDeployToken string `mapstructure:"cp_deploy_token"`
 	// FindingSync enables the periodic shape-only findings sync to the control
@@ -58,6 +74,18 @@ func (c *Config) Validate() error {
 	}
 	if !isLoopback(c.UIEndpoint) {
 		return errors.New("flanjui: ui_endpoint must bind a loopback address (127.0.0.1/localhost/::1) — the collector is outbound-only")
+	}
+	if c.CPPublicURL != "" {
+		// A typo here ships a dead link on every page load, so refuse it at
+		// boot; and the value is handed to a browser verbatim, so it must not
+		// carry credentials.
+		u, err := url.Parse(c.CPPublicURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return errors.New("flanjui: cp_public_url must be an absolute http(s) URL — the control-plane origin the operator's browser can reach")
+		}
+		if u.User != nil {
+			return errors.New("flanjui: cp_public_url must not carry credentials — it is handed to the browser as a link")
+		}
 	}
 	return nil
 }
