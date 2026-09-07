@@ -140,14 +140,16 @@ async function submit(resend = false) {
     });
     editing.value = false;
     // A send WAS attempted (this is the register call), so the reply's `confirmation_mail` is the
-    // thing to render — whichever of the three it says. `resend` is deliberately not consulted:
-    // what happened to the mail does not depend on which button was pressed.
+    // thing to render — whichever of the three it says. What happened to the mail does not depend
+    // on which button was pressed; `resend` decides only the wording of a success: "Sent again" is
+    // true after Resend and false after the first Connect (or Change contact to a new address).
     now.value = Date.now();
     attempt.value = {
       outcome: s.confirmation_mail,
       retryAfterS: s.confirmation_mail_retry_after_s,
       email: s.contact_email ?? email.value.trim(),
-      at: now.value
+      at: now.value,
+      resend
     };
     touched.value = untouched(); // the server state is now the truth; future seeds may fill every field
     emit('update:state', s);
@@ -210,7 +212,7 @@ function cancelEdit() {
       <p v-else class="connect-line">
         Check your inbox — we sent "Confirm your Flanj contact" to <strong>{{ state?.contact_email }}</strong>. The link works once, for 72 hours.
       </p>
-      <p v-if="notice.kind === 'sent'" class="connect-note">{{ notice.text }}</p>
+      <p v-if="notice.kind === 'sent' && notice.text" class="connect-note">{{ notice.text }}</p>
       <p v-else-if="notice.kind === 'failed'" class="error" role="alert">{{ notice.text }}</p>
       <p v-else-if="notice.kind === 'cooldown'" class="connect-note muted" role="status">{{ notice.text }}</p>
       <p v-if="errorMsg" class="error">{{ errorMsg }}</p>
