@@ -20,15 +20,19 @@
 //                       CONTRACTS §8 when contracts moved into the UI). A row
 //                       with no peer_host therefore validates NOTHING, and must
 //                       never be read as covering the call in front of it
-//   mcp               → validated iff a snapshot exists for that host AND the
-//                       CALLED TOOL declares an `outputSchema` in it. A tool
-//                       without one publishes nothing to check its result
-//                       against, so its calls are never validated even though
-//                       the server's tools/list is present (drift/mcp.go:220
-//                       gates on `op.OutputSchema != nil`). Per-TOOL, not
-//                       per-host — the mock's `list_transactions` omits it
-//                       deliberately, and treating the whole server as covered
-//                       would restate the very lie this module exists to kill
+//   mcp               → validated iff a snapshot exists for that host, the
+//                       CALLED TOOL declares an `outputSchema` in it, AND the
+//                       result was not an error. A tool without an outputSchema
+//                       publishes nothing to check its result against, so its
+//                       calls are never validated even though the server's
+//                       tools/list is present. Per-TOOL, not per-host — the
+//                       mock's `list_transactions` omits it deliberately, and
+//                       treating the whole server as covered would restate the
+//                       very lie this module exists to kill. An `isError`
+//                       result carries error output, not contract evidence: the
+//                       processor skips it explicitly, so nothing judged it.
+//                       Both gates are the same line of drift/mcp.go —
+//                       `op.OutputSchema != nil && !call.MCPIsError`
 //   internal          → never validated by design (metadata-only, no bodies)
 //
 // ─── The temporal gate (2026-09-02) ──────────────────────────────────────
@@ -68,6 +72,16 @@
 //     validated against the document it replaced read `not checked`. That
 //     understates coverage rather than overstating it, which is the whole
 //     point of this module
+//
+// One residual in the UNSAFE direction, and it is a wire gap rather than a
+// judgment: drift/mcp.go also skips a result whose body is a Tasks HANDLE
+// (revision 2026-07-28), truncated, or not `application/json`. Of those,
+// `mcp_task_id` is the only one the store records — and it is not on the UI's
+// RedactedCall, so this module cannot ask. Closing it means widening the wire
+// type, and the server-side `validated` stamp that retires this whole module
+// closes it for free. Until then a task-envelope MCP call can read `checked`.
+
+import { noOutputContractNote } from './mcp';
 
 /** The minimum shape this module needs from a call row. */
 export interface CoverageCall {
@@ -79,6 +93,9 @@ export interface CoverageCall {
   mcp_tool_name?: string;
   /** MCP only: which server's snapshot to look the tool up in. */
   integration?: string;
+  /** MCP only: the result was an execution failure. Error output is not
+   *  contract evidence — the processor skips these, so nothing validated them. */
+  mcp_is_error?: boolean;
   /** RFC3339, from the store. Half of the temporal gate — a call captured
    *  before a contract was bound cannot have been validated against it. */
   captured_at?: string;
@@ -96,6 +113,31 @@ export interface CoverageSpec {
 
 export type Coverage = 'internal' | 'checked' | 'not-checked';
 
+/**
+ * WHY a call was not checked. One chip, several causes, and they are not
+ * interchangeable: the chip is only actionable if it names the actual gap.
+ *
+ * `no-contract` was being shown for all of them, so a tool that simply declares
+ * no `outputSchema` read "No contract uploaded for mcp.acme.test" — false to
+ * the cause and impossible to act on, because MCP contracts are never uploaded
+ * by design (the server publishes its own on tools/list). The operator's only
+ * move there is to ask the provider to declare one, which is exactly what the
+ * Contracts tab already says.
+ */
+export type NotCheckedReason =
+  /** Nothing is bound to this call's edge — or it was bound after the call. */
+  | 'no-contract'
+  /** MCP: the called tool declares no `outputSchema`, so its result is unjudgeable. */
+  | 'no-output-contract'
+  /** MCP: the result was an execution failure — error output, not contract evidence. */
+  | 'error-result';
+
+/** A coverage answer with its cause. `reason` is set iff `not-checked`. */
+export interface CoverageVerdict {
+  coverage: Coverage;
+  reason?: NotCheckedReason;
+}
+
 /** One tool from a server's tools/list snapshot (ui/src/mcp.ts parseToolRows). */
 export interface McpToolCoverage {
   name: string;
@@ -105,10 +147,26 @@ export interface McpToolCoverage {
 /** The Traffic chip for an unvalidated call, and its filter value. */
 export const NOT_CHECKED_LABEL = 'not checked';
 
-/** Tooltip for the `not checked` chip — names the host so it is actionable. */
-export function notCheckedTitle(host?: string): string {
-  const where = host ? ` for ${host}` : '';
-  return `No contract uploaded${where} — this call was captured, not validated.`;
+/** The `error-result` tooltip. Deliberately echoes MCP_ERROR_TOOLTIP on the
+ *  status chip beside it — the row already says isError is an execution failure
+ *  and not contract drift; this says what follows for the contract verdict. */
+export const ERROR_RESULT_NOT_CHECKED =
+  'The tool returned isError — an execution failure, not contract evidence. ' +
+  'Nothing validated this result against the declared outputSchema.';
+
+/** Tooltip for the `not checked` chip, one string per CAUSE. */
+export function notCheckedTitle(reason: NotCheckedReason, call: CoverageCall = {}): string {
+  switch (reason) {
+    case 'no-output-contract':
+      // The honest string the Contracts tab already shows for this very tool.
+      return noOutputContractNote(call.integration || call.peer_host || 'this server', call.mcp_tool_name || 'this tool');
+    case 'error-result':
+      return ERROR_RESULT_NOT_CHECKED;
+    default: {
+      const where = call.peer_host ? ` for ${call.peer_host}` : '';
+      return `No contract uploaded${where} — this call was captured, not validated.`;
+    }
+  }
 }
 
 /* ── The temporal gate ─────────────────────────────────────────────────── */
@@ -150,11 +208,18 @@ function capturedAfterBinding(call: CoverageCall, matched: readonly CoverageSpec
   return captured >= bound;
 }
 
-/** `checked` only when a contract matched AND it was bound before the call. */
-function verdict(call: CoverageCall, matched: readonly CoverageSpec[]): Coverage {
-  if (!matched.length) return 'not-checked';
-  return capturedAfterBinding(call, matched) ? 'checked' : 'not-checked';
+/** `checked` only when a contract matched AND it was bound before the call.
+ *  Both failures are the same cause from the operator's side — no contract was
+ *  in a position to look at this call. */
+function verdict(call: CoverageCall, matched: readonly CoverageSpec[]): CoverageVerdict {
+  if (!matched.length) return NOT_CHECKED;
+  return capturedAfterBinding(call, matched) ? CHECKED : NOT_CHECKED;
 }
+
+const CHECKED: CoverageVerdict = { coverage: 'checked' };
+const INTERNAL: CoverageVerdict = { coverage: 'internal' };
+const NOT_CHECKED: CoverageVerdict = { coverage: 'not-checked', reason: 'no-contract' };
+const notChecked = (reason: NotCheckedReason): CoverageVerdict => ({ coverage: 'not-checked', reason });
 
 /**
  * Coverage for one call, given every loaded contract.
@@ -165,12 +230,12 @@ function verdict(call: CoverageCall, matched: readonly CoverageSpec[]): Coverage
  * external call with no contract is a real gap in what the operator can see.
  * Rendering them the same would turn a deliberate policy into an apparent hole.
  */
-export function callCoverage(
+export function callCoverageDetail(
   call: CoverageCall,
   specs: readonly CoverageSpec[],
   mcpTools: Readonly<Record<string, readonly McpToolCoverage[]>> = {}
-): Coverage {
-  if (call.edge_class === 'internal') return 'internal';
+): CoverageVerdict {
+  if (call.edge_class === 'internal') return INTERNAL;
 
   if (call.transport === 'mcp') {
     // Snapshots only — NOT the wider "hosts we have seen MCP traffic from".
@@ -179,13 +244,22 @@ export function callCoverage(
     const snapshots = specs.filter(
       (s) => s.format === 'mcp' && s.peer_host && s.peer_host === call.peer_host
     );
-    if (!snapshots.length) return 'not-checked';
+    if (!snapshots.length) return NOT_CHECKED;
+    // The gates below run in the processor's own order (drift/mcp.go), so the
+    // cause the chip names is the first one the processor would have hit.
+    //
     // Per TOOL: only a tool that publishes an outputSchema can have its result
     // validated. Rows not loaded yet resolve conservatively — never claim a
     // check we cannot evidence.
     const rows = (call.integration && mcpTools[call.integration]) || [];
     const tool = rows.find((t) => t.name === call.mcp_tool_name);
-    if (!tool?.hasOutputSchema) return 'not-checked';
+    if (!tool?.hasOutputSchema) return notChecked('no-output-contract');
+    // isError: the result is error output, not the tool's payload, and the
+    // processor skips it by name. Reading it as `conforming` claimed a check
+    // nothing ran; reading it as DRIFTED — which the per-tool fallback did —
+    // filed an execution failure against the provider as a contract breach,
+    // two slots away from a tooltip saying it is no such thing.
+    if (call.mcp_is_error) return notChecked('error-result');
     // And the snapshot has to have ARRIVED first. An MCP server's tools/list is
     // observed rather than uploaded, but it reaches the drift processor the
     // same way and just as late.
@@ -208,6 +282,15 @@ export function callCoverage(
       (s) => s.role !== 'self' && s.format !== 'mcp' && !!s.peer_host && s.peer_host === call.peer_host
     )
   );
+}
+
+/** The state alone, for the many callers that only filter or count on it. */
+export function callCoverage(
+  call: CoverageCall,
+  specs: readonly CoverageSpec[],
+  mcpTools: Readonly<Record<string, readonly McpToolCoverage[]>> = {}
+): Coverage {
+  return callCoverageDetail(call, specs, mcpTools).coverage;
 }
 
 /* ── The evidence line, per card ───────────────────────────────────────── */

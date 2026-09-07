@@ -109,7 +109,7 @@ func TestLatePin_RepairsDrifted(t *testing.T) {
 			t.Fatalf("GetCall(%s) ok=%v err=%v", call.ID, ok, err)
 		}
 		if !got.Drifted {
-			t.Errorf("late-arriving call: drifted=false, want true — the store holds a "+
+			t.Errorf("late-arriving call: drifted=false, want true — the store holds a " +
 				"live-vs-spec finding against it and would render it `conforming`")
 		}
 
@@ -133,17 +133,110 @@ func TestLatePin_RepairsDrifted(t *testing.T) {
 	})
 }
 
-// TestLatePin_DoesNotMarkNonDriftKinds: the flag means "this call drifted from
-// its contract", so only a live-vs-spec finding may set it. A call pinned by
-// some other finding kind must stay unmarked — the repair must not overshoot
-// what InsertFinding itself does.
+// TestOutputMismatchMarksItsCall: an MCP output_mismatch is a PER-CALL finding
+// and must mark the call it names, exactly as live-vs-spec does on REST.
+//
+// BUG (2026-09-02): the gate read `f.Kind == model.KindLiveVsSpec`, so an
+// output_mismatch left `calls.drifted` at 0 even though the finding carries a
+// SourceCallID pointing straight at the offending call. The Traffic tab had
+// nothing per-call to read for MCP and fell back to a set keyed by
+// (integration, tool) — "does this tool CURRENTLY have a mismatch?" — which:
+//   - relabelled every historic call of the tool, including ones captured
+//     before the mismatch and ones whose results conformed;
+//   - accused the provider over calls the processor never judged (an isError
+//     result, whose own tooltip says it is an execution failure and not
+//     contract drift).
+//
+// The whole point of this column is that a verdict is a property of the CALL.
+func TestOutputMismatchMarksItsCall(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, b *testBackend) {
+		s := b.open(t, 50, 0)
+		defer s.Close()
+
+		// Two calls of the SAME tool: one whose result violated the declared
+		// outputSchema, one the processor never produced a finding for.
+		bad := makeEdgeCall(2200, "mcp.acme.test", "client", "external")
+		clean := makeEdgeCall(2201, "mcp.acme.test", "client", "external")
+		for _, c := range []model.RedactedCall{bad, clean} {
+			if err := s.InsertCall(c); err != nil {
+				t.Fatalf("insert %s: %v", c.ID, err)
+			}
+		}
+
+		f := driftFinding("0191e8c4-eeee-7000-8000-000000000002", bad.ID)
+		f.Kind = model.KindOutputMismatch
+		f.Integration = "acme-tools"
+		f.Endpoint = "get_balance"
+		f.Signature = f.ComputeSignature()
+		if err := s.InsertFinding(f); err != nil {
+			t.Fatalf("insert output_mismatch: %v", err)
+		}
+
+		got, ok, err := s.GetCall(bad.ID)
+		if err != nil || !ok {
+			t.Fatalf("GetCall(%s) ok=%v err=%v", bad.ID, ok, err)
+		}
+		if !got.Drifted {
+			t.Errorf("the call an output_mismatch names: drifted=false, want true — " +
+				"without it the UI has to guess per tool, and relabels the tool's whole history")
+		}
+
+		// The neighbour is the other half: marking the call must not mark the TOOL.
+		other, ok, err := s.GetCall(clean.ID)
+		if err != nil || !ok {
+			t.Fatalf("GetCall(%s) ok=%v err=%v", clean.ID, ok, err)
+		}
+		if other.Drifted {
+			t.Errorf("a sibling call of the same tool produced no finding but is marked drifted")
+		}
+	})
+}
+
+// TestLatePin_MarksOutputMismatch: and it must survive the finding-before-call
+// ordering too. latePin's repair mirrors InsertFinding off ONE kind list; a kind
+// honoured on one path and not the other would make an MCP call's verdict depend
+// on which record the store happened to see first.
+func TestLatePin_MarksOutputMismatch(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, b *testBackend) {
+		s := b.open(t, 50, 0)
+		defer s.Close()
+		call := makeEdgeCall(2300, "mcp.acme.test", "client", "external")
+
+		f := driftFinding("0191e8c4-eeee-7000-8000-000000000003", call.ID)
+		f.Kind = model.KindOutputMismatch
+		f.Signature = f.ComputeSignature()
+		if err := s.InsertFinding(f); err != nil {
+			t.Fatalf("insert finding before call: %v", err)
+		}
+		if err := s.InsertCall(call); err != nil {
+			t.Fatalf("insert late call: %v", err)
+		}
+
+		got, ok, err := s.GetCall(call.ID)
+		if err != nil || !ok {
+			t.Fatalf("GetCall(%s) ok=%v err=%v", call.ID, ok, err)
+		}
+		if !got.Drifted {
+			t.Errorf("late-arriving MCP call: drifted=false, want true — the store holds an " +
+				"output_mismatch against it and the UI would render it `conforming`")
+		}
+	})
+}
+
+// TestLatePin_DoesNotMarkNonDriftKinds: the flag means "this call departed from
+// a contract", so only the per-call kinds may set it. A call pinned by a
+// stale_client finding must stay unmarked: that finding is about the CONSUMER's
+// own stale arguments, and marking it drifted would file our bug against the
+// provider. The repair must not overshoot what InsertFinding itself does.
 func TestLatePin_DoesNotMarkNonDriftKinds(t *testing.T) {
 	forEachBackend(t, func(t *testing.T, b *testBackend) {
 		s := b.open(t, 50, 0)
+		defer s.Close()
 		call := makeEdgeCall(2100, "mcp.acme.test", "client", "external")
 
-		f := driftFinding("0191e8c4-eeee-7000-8000-000000000002", call.ID)
-		f.Kind = model.KindOutputMismatch
+		f := driftFinding("0191e8c4-eeee-7000-8000-000000000004", call.ID)
+		f.Kind = model.KindStaleClient
+		f.Signature = f.ComputeSignature()
 		if err := s.InsertFinding(f); err != nil {
 			t.Fatalf("insert non-drift finding before call: %v", err)
 		}
@@ -157,7 +250,7 @@ func TestLatePin_DoesNotMarkNonDriftKinds(t *testing.T) {
 		}
 		if got.Drifted {
 			t.Errorf("call pinned by a %s finding: drifted=true, want false — "+
-				"the late repair must mirror InsertFinding, which marks live-vs-spec only", f.Kind)
+				"the late repair must mirror InsertFinding's kind list exactly", f.Kind)
 		}
 	})
 }

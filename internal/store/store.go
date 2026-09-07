@@ -190,6 +190,41 @@ type execer interface {
 	Exec(query string, args ...any) (sql.Result, error)
 }
 
+// marksSourceCallDrifted reports whether a finding of this kind means THE CALL
+// it names departed from the contract — the question `calls.drifted` answers.
+//
+// TWO kinds qualify, one per transport, and they are the same fact:
+//   - live-vs-spec  — a REST response violated the bound OpenAPI document
+//   - output_mismatch — an MCP result's structuredContent violated the tool's
+//     own declared outputSchema (internal/drift/mcp.go). It is per-call and
+//     carries a SourceCallID exactly like live-vs-spec; the only reason it was
+//     excluded is that the gate was written before MCP had a per-call kind, and
+//     the UI paid for it by asking "does this TOOL have a mismatch?" instead —
+//     the endpoint-level guess this column exists to retire.
+//
+// The kinds that must NOT qualify:
+//   - definition_change — the SNAPSHOT detector, comparing two tools/list
+//     observations. Call-less: no call produced it, so no call drifted.
+//   - stale_client — the CONSUMER's own arguments were stale. The call is
+//     evidence about this agent, not about the provider's contract, and
+//     marking it drifted would accuse the provider of our bug.
+//   - version-diff — a document-to-document comparison, not traffic.
+//
+// Every site that writes `calls.drifted` reads THIS slice: InsertFinding on
+// both backends (via marksSourceCallDrifted) and latePin's repair (which
+// expands it into the SQL `IN` list). They must never disagree — a kind marked
+// on one path and not the other makes drift depend on record ORDER.
+var perCallDriftKinds = []string{model.KindLiveVsSpec, model.KindOutputMismatch}
+
+func marksSourceCallDrifted(kind string) bool {
+	for _, k := range perCallDriftKinds {
+		if kind == k {
+			return true
+		}
+	}
+	return false
+}
+
 // latePin closes the "finding before its call" gap. InsertFinding pins its
 // source call and attributes the drift to the call's edge only if the call row
 // exists at that moment; a finding that arrives first (cross-request reordering
@@ -211,14 +246,19 @@ func latePin(ex execer, rebind func(string) string, c model.RedactedCall) (pinne
 	// matched no row when the finding arrived first, and nothing else ever
 	// recomputes the column — so without this the call is kept as evidence,
 	// counted as a drift on its edge, and still rendered `conforming`. Mirror
-	// InsertFinding exactly: live-vs-spec is the only kind that means THIS call
-	// departed from its contract. Idempotent (`drifted=0` guard), so a replayed
-	// call cannot double anything.
+	// InsertFinding exactly — the same per-call kinds, no more and no less, off
+	// the one shared list. Idempotent (`drifted=0` guard), so a replayed call
+	// cannot double anything.
+	args := []any{c.ID, c.ID}
+	for _, k := range perCallDriftKinds {
+		args = append(args, k)
+	}
 	if _, err := ex.Exec(rebind(
 		`UPDATE calls SET drifted=1
 		  WHERE id=? AND drifted=0
-		    AND EXISTS (SELECT 1 FROM findings WHERE source_call_id=? AND kind=?)`),
-		c.ID, c.ID, model.KindLiveVsSpec,
+		    AND EXISTS (SELECT 1 FROM findings WHERE source_call_id=? AND kind IN (`+
+			placeholders(len(perCallDriftKinds))+`))`),
+		args...,
 	); err != nil {
 		return false, fmt.Errorf("late pin: repair drifted: %w", err)
 	}
@@ -247,6 +287,16 @@ func latePin(ex execer, rebind func(string) string, c model.RedactedCall) (pinne
 		}
 	}
 	return true, nil
+}
+
+// placeholders renders `?,?,…` for an n-element IN list, so a kind list can
+// grow in ONE place (perCallDriftKinds) without a hand-counted SQL literal
+// drifting out of step with it.
+func placeholders(n int) string {
+	if n <= 0 {
+		return "NULL"
+	}
+	return strings.Repeat(",?", n)[1:]
 }
 
 // rebindIdentity leaves `?` placeholders untouched (sqlite).
