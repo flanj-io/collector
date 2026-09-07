@@ -152,6 +152,13 @@ CREATE TABLE IF NOT EXISTS settings (
   value        TEXT NOT NULL,
   updated_at   TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS finding_occurrences (
+  id             TEXT PRIMARY KEY,
+  signature      TEXT NOT NULL,
+  source_call_id TEXT,
+  seen_at        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_finding_occurrences_call ON finding_occurrences(source_call_id);
 CREATE INDEX IF NOT EXISTS idx_calls_pinned_seq ON calls(pinned, seq);
 CREATE INDEX IF NOT EXISTS idx_findings_source ON findings(source_call_id);
 CREATE INDEX IF NOT EXISTS idx_calls_captured_edge ON calls(captured_at, peer_host, direction);
@@ -272,6 +279,13 @@ func (p *postgresStore) upsertEdgeTx(tx *sql.Tx, peerHost, direction, class, at 
 // Cross-pod correctness: a concurrent insert of a new signature blocks on the
 // unique index until the winner commits, so the loser's insert reports 0 rows
 // and its counter bump (a fresh statement snapshot) sees the committed row.
+//
+// Idempotent on the finding's OWN id (the occurrence ledger — recordOccurrence,
+// the first statement of the transaction): a re-delivered record — a batch the
+// store exporter retried after a failed write, a front re-sending after a lost
+// ACK, the same batch landing on two pods — applies nothing the second time.
+// The ledger row commits with the finding or not at all, so a write that fails
+// half-way leaves nothing behind for the retry to trip over.
 func (p *postgresStore) InsertFinding(f model.Finding) error {
 	if f.Signature == "" {
 		f.Signature = f.ComputeSignature()
@@ -298,6 +312,14 @@ func (p *postgresStore) InsertFinding(f model.Finding) error {
 		return fmt.Errorf("insert finding: begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	applied, err := recordOccurrence(tx, p.rebind, f, sourceCallID, seen)
+	if err != nil {
+		return err
+	}
+	if !applied {
+		return nil // a re-delivered record: already applied, nothing to do
+	}
 
 	res, err := tx.Exec(p.rebind(
 		`INSERT INTO findings
@@ -460,13 +482,10 @@ func (p *postgresStore) evict(keepID string) error {
 				batch = evictBatchMax
 			}
 		}
-		res, err := tx.Exec(
-			`DELETE FROM calls WHERE seq IN (SELECT seq FROM calls WHERE pinned=0 AND id<>$1 ORDER BY seq ASC LIMIT $2)`, keepID, batch,
-		)
+		n, err := evictOldest(tx, p.rebind, keepID, batch)
 		if err != nil {
-			return fmt.Errorf("evict: %w", err)
+			return err
 		}
-		n, _ := res.RowsAffected()
 		if n == 0 {
 			// Everything left is pinned (or is keepID); the window can
 			// legitimately exceed the caps to preserve evidence. Stop rather than spin.

@@ -87,8 +87,25 @@ processors:
     # self_integration_id: self # optional — labels self findings (default "self"; must differ from integration_id)
 
 exporters:
-  # Discovers the flanjstore extension via the collector host; nothing to tune.
-  flanjstore: {}
+  # Discovers the flanjstore extension via the collector host — nothing here
+  # says WHERE to write. What it says is what happens when a store write FAILS
+  # (postgres away mid-write, a locked sqlite file): the two upstream sections
+  # every OpenTelemetry exporter has, both ON by default with these values, so
+  # `flanjstore: {}` is the same thing. An accepted batch survives a store
+  # outage of up to 15 minutes; the store is idempotent on call id and finding
+  # id, so a retried batch never duplicates a row.
+  flanjstore:
+    sending_queue:
+      enabled: true
+      sizer: bytes # the bound is memory, not a request count
+      queue_size: 67108864 # 64 MiB of accepted, not-yet-written batches — past it the receiver
+      #                      answers 503 and the SDK retries (the queue REJECTS when full; it never blocks)
+      num_consumers: 4
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 30s
+      max_elapsed_time: 900s # then the batch is dropped (logged); 0 = never give up
 
 service:
   extensions: [flanjstore, flanjui]

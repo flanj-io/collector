@@ -70,7 +70,7 @@ Dockerfile                         # multi-stage: ui (node) -> build (go+ocb) ->
 processor/flanjredaction/       # defense-in-depth redaction floor (Go; idempotent, add-only; also re-scans MCP contract snapshots)
 processor/flanjdrift/           # live-vs-spec (kin-openapi) + version-diff (oasdiff) + the v0.5 MCP path
                                    # (contract_snapshot loader → output_mismatch / definition_change / stale_client); emits Finding records
-exporter/flanjstore/            # writes call + finding records into the store
+exporter/flanjstore/            # writes call + finding records into the store (queued + retried, idempotent — its CLAUDE.md "Durability")
 extension/flanjstore/           # SINGLE store owner (sqlite default | postgres for multi-pod); shared via host.GetExtensions()
 extension/flanjui/              # localhost HTTP: embed.FS Vue SPA + read API + CP relay (connect / flag / threads)
 ui/                                # Vue/Vite SPA (Overview incl. MCP server health + local notices, Traffic live-tail incl.

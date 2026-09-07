@@ -537,3 +537,10 @@ is deliberately unaffected: one document per deployment, not one per vendor.
 flanj keys: a front's forwarding is the core OpenTelemetry `otlphttp` exporter (upstream's keys —
 `endpoint` = the store pod's base URL, e.g. `http://flanj-store:4318`), and the store pod runs the
 same `flanjstore` / `flanjui` keys above. Role is chosen by which config file runs.*
+
+*The `flanjstore` EXPORTER (2026-09-07) likewise adds no flanj keys: it accepts upstream's
+`sending_queue` and `retry_on_failure` sections (the exporterhelper keys `otlphttp` has), both ON by
+default — a bounded in-memory queue (64 MiB, rejecting when full) and backoff retry (1s→30s, 15 min)
+on a failed store write — so `flanjstore: {}` keeps every default. The store is idempotent on
+`flanj.call.id` and on the finding id, so a retried batch never duplicates a row or an
+`occurrence_count`.*

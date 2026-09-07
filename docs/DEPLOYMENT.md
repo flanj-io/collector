@@ -145,6 +145,14 @@ Flow specifics:
   redaction again (idempotent) and **never drift** (it would double-count).
 - Fronts forward with the core `otlphttp` exporter: in-memory queue + retries
   ride out a store-pod restart; a front crash loses only its queue.
+- The store pod's write is queued + retried the same way (`flanjstore`
+  exporter, on by default — 64 MiB in memory, 15 minutes of backoff, rejecting
+  when full so the front's queue takes over), and the store is idempotent on
+  call id and finding id: a database outage shorter than that loses nothing
+  the store pod accepted, and a re-sent batch duplicates nothing. This holds on
+  the single-pod and shared-postgres shapes too — there it is the SDK's own
+  retry that the full queue hands back to. Tune or disable it under
+  `exporters.flanjstore` (`config/config.example.yaml`).
 - **Contracts flow store → front** — the reverse of every other record here.
   They are uploaded in the UI, which lives on the store pod, so the store pod
   is their source of truth; each front READS them back from the store pod's
