@@ -194,17 +194,100 @@ async function openThread() {
   }
 }
 
+// ─── Modal behaviour ──────────────────────────────────────────────────────
+// `aria-modal="true"` is a promise: while the sheet is open, the rest of the
+// page is unreachable. Three things make it true (launch-week item 9 found all
+// three missing — a screen reader believed the page was gone while a keyboard
+// user was tabbing through the Overview behind the backdrop):
+//   1. `inert` on everything outside the sheet — pointer, focus and the
+//      accessibility tree at once. Every targeted browser honours it (the build
+//      targets Vite's baseline-widely-available set: Chrome 107 / Firefox 104 /
+//      Safari 16 and up, all past `inert`'s arrival), so there is no
+//      aria-hidden fallback to maintain.
+//   2. Tab / Shift+Tab wrap inside the sheet's own controls (first ↔ last).
+//   3. Focus returns to the control that opened the sheet when it closes.
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
+
+const backdrop = ref<HTMLElement | null>(null);
+/** The control that opened the sheet, and where it stood — see returnFocus. */
+let opener: HTMLElement | null = null;
+let openerHome: HTMLElement | null = null;
+let restoreOutside: (() => void) | null = null;
+
+function focusables(): HTMLElement[] {
+  return sheet.value ? Array.from(sheet.value.querySelectorAll<HTMLElement>(FOCUSABLE)) : [];
+}
+
+/** Mark every element outside `el` inert — its siblings, its parent's siblings,
+ *  and so on up to <body> — and return the undo. Elements that were already
+ *  inert are left alone both ways. */
+function inertOutside(el: HTMLElement): () => void {
+  const marked: Element[] = [];
+  for (let node: HTMLElement | null = el; node && node !== document.body && node.parentElement; node = node.parentElement) {
+    for (const sibling of Array.from(node.parentElement.children)) {
+      if (sibling === node || sibling.hasAttribute('inert')) continue;
+      sibling.setAttribute('inert', '');
+      marked.push(sibling);
+    }
+  }
+  return () => marked.forEach((n) => n.removeAttribute('inert'));
+}
+
 function onKey(ev: KeyboardEvent) {
-  if (ev.key === 'Escape') emit('close');
+  if (ev.key === 'Escape') {
+    emit('close');
+    return;
+  }
+  if (ev.key !== 'Tab' || !sheet.value) return;
+  const items = focusables();
+  const active = document.activeElement;
+  const inside = active instanceof HTMLElement && sheet.value.contains(active);
+  if (items.length === 0) {
+    // Everything is disabled (a create in flight): hold focus on the sheet.
+    ev.preventDefault();
+    sheet.value.focus();
+    return;
+  }
+  const first = items[0];
+  const last = items[items.length - 1];
+  if (ev.shiftKey) {
+    if (!inside || active === first) {
+      ev.preventDefault();
+      last.focus();
+    }
+  } else if (!inside || active === last) {
+    ev.preventDefault();
+    first.focus();
+  }
+}
+
+function returnFocus() {
+  if (opener?.isConnected) {
+    opener.focus();
+    return;
+  }
+  // The opener can be gone by the time the sheet closes: a flagged row swaps
+  // its Flag button for the In-thread chip. Land on whatever now stands where
+  // it stood (the chip's View thread) rather than dropping focus on <body>.
+  openerHome?.querySelector<HTMLElement>(FOCUSABLE)?.focus();
 }
 
 onMounted(() => {
+  opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  openerHome = opener?.parentElement ?? null;
+  if (backdrop.value) restoreOutside = inertOutside(backdrop.value);
   document.addEventListener('keydown', onKey);
-  nextTick(() => sheet.value?.querySelector<HTMLElement>('textarea, input, button')?.focus());
+  nextTick(() => (sheet.value?.querySelector<HTMLElement>('textarea, input, button') ?? sheet.value)?.focus());
 });
 onUnmounted(() => {
   document.removeEventListener('keydown', onKey);
   window.clearTimeout(copiedTimer);
+  // Un-inert first: an inert element cannot take focus.
+  restoreOutside?.();
+  restoreOutside = null;
+  returnFocus();
+  opener = openerHome = null;
 });
 
 watch(result, (r) => {
@@ -213,8 +296,8 @@ watch(result, (r) => {
 </script>
 
 <template>
-  <div class="sheet-backdrop" @click.self="emit('close')">
-    <div ref="sheet" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+  <div ref="backdrop" class="sheet-backdrop" @click.self="emit('close')">
+    <div ref="sheet" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title" tabindex="-1">
       <!-- ─── Connect-first prompt ─── -->
       <template v-if="!connected && !result">
         <h2 id="sheet-title" class="sheet-title">New thread with {{ provider }}</h2>
