@@ -1,0 +1,254 @@
+# Flanj Collector — default values.
+#
+# This chart installs the TIERED shape only (docs/DEPLOYMENT.md "Tiered: N
+# fronts -> 1 store pod"): N stateless front collectors and ONE store pod, the
+# same image in two roles. The single-pod and shared-postgres shapes stay in
+# DEPLOYMENT.md as raw objects — they are one Deployment each and do not need a
+# chart.
+#
+# Three supported tiers, all of them this same topology:
+#
+#   eval        store.persistence.enabled=false          (sqlite on an emptyDir — data dies with the pod)
+#   small prod  store.persistence.enabled=true           (sqlite on a PVC — the default)
+#   scale       store.backend=postgres                   (no PVC; store.replicas may exceed 1)
+#
+# REQUIRED on every tier: specToken. The store pod refuses to start without it
+# and a front without it reads no contracts (see "specToken" below). The values
+# schema refuses an install that omits it rather than shipping a pod that exits.
+
+# -- Image -------------------------------------------------------------------
+image:
+  repository: flanj/collector
+  # Defaults to .Chart.AppVersion when empty.
+  tag: ""
+  pullPolicy: IfNotPresent
+  # Names of image-pull Secrets, e.g. [{name: regcred}].
+  pullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  # Used when create=false, or to name the created account.
+  name: ""
+  annotations: {}
+
+# -- The shared contract token (FLANJ_SPEC_TOKEN) ----------------------------
+# The store pod serves the contracts uploaded in its UI to the fronts over an
+# intra-cluster port; this token is the only thing guarding it. It MUST be the
+# same value on both roles, which is what the chart does for you — but it has
+# to exist:
+#
+#   * the store pod REFUSES TO START without it (it will not bind a
+#     cluster-reachable port unauthenticated), and
+#   * a front with a wrong or empty one starts fine, gets 401 on every contract
+#     read, and silently detects no REST drift at all.
+#
+# So this chart will not render without one. Supply either `value` (the chart
+# creates the Secret) or `existingSecret` (you created it).
+specToken:
+  value: ""
+  existingSecret: ""
+  key: spec-token
+
+# -- Identity ----------------------------------------------------------------
+integration:
+  # Labels this integration on flags and findings (flanjdrift.integration_id +
+  # flanjui.integration_id). Optional, but a thread reads better with one.
+  id: ""
+  # "shared by <name>" on the peek screen — who is running this collector.
+  consumerDisplayName: ""
+  # Fallback provider name sent ON A FLAG. Does not name an edge.
+  providerDisplayName: ""
+
+# -- Control plane (store pod only; the fronts never talk off-cluster) -------
+controlPlane:
+  # Where THIS COLLECTOR's requests go. May be an in-cluster address.
+  # Leave empty to run fully local — the collector captures normally, it just
+  # cannot create thread links.
+  baseUrl: ""
+  # The control-plane origin YOUR BROWSER can open, for the Connected pill's
+  # dashboard link. Set it whenever baseUrl is an address a laptop cannot
+  # resolve — which includes every in-cluster Service name.
+  publicUrl: ""
+  deployToken:
+    value: ""
+    existingSecret: ""
+    key: cp-deploy-token
+  # Periodic shape-only findings sync (never the observed values).
+  findingSync: true
+  # Periodic display-name refresh (sends nothing about your edges).
+  directorySync: true
+
+# -- Front collectors (stateless; this is the tier you scale) ----------------
+collector:
+  # Ignored when autoscaling.enabled.
+  replicas: 2
+
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 10
+    # Set either or both; 0 disables that metric.
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 0
+    behavior: {}
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  priorityClassName: ""
+  # Extra env vars (list of core/v1 EnvVar).
+  extraEnv: []
+  extraVolumes: []
+  extraVolumeMounts: []
+
+  # The contract YOU publish as a provider, validating your own inbound
+  # responses (flanjdrift.self_spec_path). Mount it yourself via extraVolumes /
+  # extraVolumeMounts and name the path here; empty disables self validation.
+  selfSpecPath: ""
+  selfIntegrationId: ""
+
+  # Escape hatch: a complete front config that REPLACES everything the chart
+  # renders. You then own every key, including store_pod_endpoint and
+  # store_pod_token — the chart still injects FLANJ_SPEC_TOKEN into the pod, so
+  # `${env:FLANJ_SPEC_TOKEN}` keeps working.
+  config: ""
+
+# -- The store pod (one, unless backend=postgres) ----------------------------
+store:
+  # sqlite  -> StatefulSet, replicas fixed at 1, one db file
+  # postgres -> Deployment, replicas may exceed 1, no PVC
+  backend: sqlite
+
+  # Only ever >1 with backend=postgres. With sqlite exactly one pod may own the
+  # db file, so the schema refuses anything else.
+  replicas: 1
+
+  persistence:
+    # sqlite only. false = emptyDir: the eval tier, and the window dies with
+    # the pod. Must be false with backend=postgres (there is nothing to persist
+    # locally, and a PVC there is a durability claim the deployment does not
+    # make).
+    enabled: true
+    size: 10Gi
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    # Use a PVC you already created instead of the volumeClaimTemplate.
+    existingClaim: ""
+
+  # Rolling-window caps (flanjstore.window_max_rows / window_max_bytes).
+  window:
+    maxRows: 10000
+    maxBytes: 268435456 # 256 MiB
+
+  # backend=postgres: the DSN. Supply `value`, or `existingSecret` + `key`, or
+  # enable the bundled evaluation postgres below.
+  dsn:
+    value: ""
+    existingSecret: ""
+    key: dsn
+
+  # backend=postgres only: path to a legacy sqlite file to import ONCE at start
+  # (flanjstore.db_path). Mount it yourself; empty means no import.
+  sqliteImportPath: ""
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  priorityClassName: ""
+  extraEnv: []
+  extraVolumes: []
+  extraVolumeMounts: []
+
+  # Escape hatch — a complete store config replacing everything the chart
+  # renders. You own spec_endpoint and spec_token then; the pod still gets
+  # FLANJ_SPEC_TOKEN, CP_DEPLOY_TOKEN and FLANJ_PG_DSN in its environment.
+  config: ""
+
+# -- Bundled postgres (EVALUATION ONLY) --------------------------------------
+# One replica, one PVC, no backups, no HA, no tuning. It exists so the postgres
+# tier can be tried in one command. For anything real, point store.dsn at a
+# database you operate.
+postgres:
+  enabled: false
+  image: postgres:16-alpine
+  imagePullPolicy: IfNotPresent
+  database: flanj
+  username: flanj
+  # Required when enabled. Deliberately NOT generated: a password regenerated
+  # on the next `helm upgrade` locks the store out of its own database, and the
+  # failure reads as a database outage.
+  password: ""
+  persistence:
+    enabled: true
+    size: 8Gi
+    storageClass: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+
+# -- Services ----------------------------------------------------------------
+service:
+  # The SDK's target. ClusterIP by design — the collector is outbound-only and
+  # nothing here should be exposed to the internet.
+  front:
+    type: ClusterIP
+    port: 4318
+    annotations: {}
+  # Intra-cluster only: :4318 front->store ingest, :5337 the contract read.
+  store:
+    annotations: {}
+
+# -- NetworkPolicy (optional) ------------------------------------------------
+# Restricts the store pod's two cluster ports to the front pods of this
+# release. Leave it off unless your cluster runs a policy controller.
+networkPolicy:
+  enabled: false
+  # Extra ingress peers allowed to reach the store's ports, e.g. another
+  # namespace's fronts. List of networking.k8s.io/v1 NetworkPolicyPeer.
+  extraStorePeers: []
+
+# -- Security contexts -------------------------------------------------------
+# The image runs as nonroot (uid 65532) on distroless/static. fsGroup is what
+# makes a freshly provisioned PVC writable without a pre-chown.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+# Common labels/annotations added to every rendered object.
+commonLabels: {}
+commonAnnotations: {}

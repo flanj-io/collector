@@ -1,0 +1,26 @@
+{{- include "flanj-collector.validate" . -}}
+{{- if eq .Values.store.backend "postgres" }}
+{{/*
+postgres: no local file, so no StatefulSet identity to keep and no PVC. The
+store tier may scale here — every cross-pod race (dedup, pin, evict) is
+resolved inside internal/store, never by callers.
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "flanj-collector.store.fullname" . }}
+  labels:
+    {{- include "flanj-collector.labels" . | nindent 4 }}
+    app.kubernetes.io/component: store
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: {{ int .Values.store.replicas }}
+  selector:
+    matchLabels:
+      {{- include "flanj-collector.store.selectorLabels" . | nindent 6 }}
+  template:
+    {{- include "flanj-collector.store.podTemplate" (dict "ctx" . "claimTemplate" false) | nindent 4 }}
+{{- end }}

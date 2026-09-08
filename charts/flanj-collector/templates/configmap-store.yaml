@@ -1,0 +1,105 @@
+{{- include "flanj-collector.validate" . -}}
+{{/*
+The STORE role's config (config/config.store.example.yaml is the annotated
+original). The store pod never runs flanjdrift — it would re-detect every
+forwarded call and double each finding's occurrence_count. Drift runs exactly
+once per call, on the front.
+
+spec_endpoint + spec_token are the tiered shape's contract channel. The
+collector refuses to start when the endpoint is bound without a token, which is
+why the chart refuses to render without specToken rather than letting you find
+out from a CrashLoopBackOff.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "flanj-collector.store.fullname" . }}
+  labels:
+    {{- include "flanj-collector.labels" . | nindent 4 }}
+    app.kubernetes.io/component: store
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+data:
+  store.yaml: |
+{{- if .Values.store.config }}
+{{ .Values.store.config | indent 4 }}
+{{- else }}
+    extensions:
+      flanjstore:
+        backend: {{ .Values.store.backend | quote }}
+        {{- if eq .Values.store.backend "sqlite" }}
+        db_path: /data/flanj.db
+        {{- else }}
+        dsn: ${env:FLANJ_PG_DSN}
+        {{- with .Values.store.sqliteImportPath }}
+        db_path: {{ . | quote }}
+        {{- end }}
+        {{- end }}
+        window_max_rows: {{ int .Values.store.window.maxRows }}
+        window_max_bytes: {{ int64 .Values.store.window.maxBytes }}
+        spec_endpoint: 0.0.0.0:5337
+        spec_token: ${env:FLANJ_SPEC_TOKEN}
+
+      # The key is rendered only when a token is configured: an unset ${env:...}
+      # expands to the empty string AND logs "Configuration references unset
+      # environment variable" at start, which is a warning about a deployment
+      # that is simply not Connected — real, and the wrong thing to make an
+      # operator look at.
+      flanjui:
+        ui_endpoint: 127.0.0.1:5335
+        {{- with .Values.integration.id }}
+        integration_id: {{ . | quote }}
+        {{- end }}
+        {{- with .Values.integration.consumerDisplayName }}
+        consumer_display_name: {{ . | quote }}
+        {{- end }}
+        {{- with .Values.integration.providerDisplayName }}
+        provider_display_name: {{ . | quote }}
+        {{- end }}
+        {{- with .Values.controlPlane.baseUrl }}
+        cp_base_url: {{ . | quote }}
+        {{- end }}
+        {{- with .Values.controlPlane.publicUrl }}
+        cp_public_url: {{ . | quote }}
+        {{- end }}
+        {{- if or .Values.controlPlane.deployToken.value .Values.controlPlane.deployToken.existingSecret }}
+        cp_deploy_token: ${env:CP_DEPLOY_TOKEN}
+        {{- end }}
+        finding_sync: {{ .Values.controlPlane.findingSync }}
+        directory_sync: {{ .Values.controlPlane.directorySync }}
+
+    receivers:
+      otlp:
+        protocols:
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      flanjredaction: {}
+
+    exporters:
+      flanjstore:
+        sending_queue:
+          enabled: true
+          sizer: bytes
+          queue_size: 67108864
+          num_consumers: 4
+        retry_on_failure:
+          enabled: true
+          initial_interval: 1s
+          max_interval: 30s
+          max_elapsed_time: 900s
+
+    service:
+      extensions: [flanjstore, flanjui]
+      pipelines:
+        logs:
+          receivers: [otlp]
+          processors: [flanjredaction]
+          exporters: [flanjstore]
+      telemetry:
+        logs:
+          level: info
+{{- end }}

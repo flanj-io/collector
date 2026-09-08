@@ -1,0 +1,64 @@
+{{/*
+Two Services for the store pod, both ClusterIP:
+
+  :4318  the fronts' ingest hop (calls, findings, spec_info)
+  :5337  the contract channel the fronts read back (uploads, and every front's
+         MCP tools/list snapshots)
+
+The UI is NOT here. It binds 127.0.0.1 inside the pod and is reached with
+`kubectl port-forward` — that is a non-negotiable, not a default to relax.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "flanj-collector.store.fullname" . }}
+  labels:
+    {{- include "flanj-collector.labels" . | nindent 4 }}
+    app.kubernetes.io/component: store
+  {{- if or .Values.service.store.annotations .Values.commonAnnotations }}
+  annotations:
+    {{- with .Values.commonAnnotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.service.store.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: otlp-http
+      port: 4318
+      targetPort: otlp-http
+      protocol: TCP
+    - name: spec
+      port: 5337
+      targetPort: spec
+      protocol: TCP
+  selector:
+    {{- include "flanj-collector.store.selectorLabels" . | nindent 4 }}
+{{- if eq .Values.store.backend "sqlite" }}
+---
+{{/* Governing Service for the StatefulSet (stable pod DNS). */}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "flanj-collector.store.headlessName" . }}
+  labels:
+    {{- include "flanj-collector.labels" . | nindent 4 }}
+    app.kubernetes.io/component: store
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+    - name: otlp-http
+      port: 4318
+      targetPort: otlp-http
+      protocol: TCP
+  selector:
+    {{- include "flanj-collector.store.selectorLabels" . | nindent 4 }}
+{{- end }}

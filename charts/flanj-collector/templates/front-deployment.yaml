@@ -1,0 +1,133 @@
+{{- include "flanj-collector.validate" . -}}
+{{/*
+The front tier: stateless, no store, no UI, no PVC. It is the tier that scales
+and the tier the SDK points at. It always runs flanjdrift even with nothing
+uploaded — the processor stamps flanj.call.id, which is what makes the
+front->store retries idempotent and ties a finding to its call across the hop.
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "flanj-collector.front.fullname" . }}
+  labels:
+    {{- include "flanj-collector.labels" . | nindent 4 }}
+    app.kubernetes.io/component: front
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if not .Values.collector.autoscaling.enabled }}
+  replicas: {{ int .Values.collector.replicas }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "flanj-collector.front.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        # Roll the fronts when the rendered config changes — a front reads its
+        # config once, at start.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap-front.yaml") . | sha256sum }}
+        {{- with .Values.commonAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with .Values.collector.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "flanj-collector.front.selectorLabels" . | nindent 8 }}
+        {{- with .Values.commonLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with .Values.collector.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "flanj-collector.serviceAccountName" . }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.collector.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- with .Values.collector.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.collector.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.collector.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.collector.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: collector
+          image: {{ include "flanj-collector.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --config
+            - /etc/flanj/chart/front.yaml
+          ports:
+            - name: otlp-http
+              containerPort: 4318
+              protocol: TCP
+          env:
+            {{- include "flanj-collector.specTokenEnv" . | nindent 12 }}
+            {{- with .Values.collector.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          # The UI is loopback-bound on the store pod and absent here, so
+          # kubelet cannot httpGet anything: probe the OTLP receiver's socket.
+          startupProbe:
+            tcpSocket:
+              port: otlp-http
+            periodSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            tcpSocket:
+              port: otlp-http
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: otlp-http
+            periodSeconds: 20
+            failureThreshold: 3
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.collector.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/flanj/chart
+              readOnly: true
+            # readOnlyRootFilesystem is on; give the process a writable /tmp.
+            - name: tmp
+              mountPath: /tmp
+            {{- with .Values.collector.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "flanj-collector.front.fullname" . }}
+        - name: tmp
+          emptyDir: {}
+        {{- with .Values.collector.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}

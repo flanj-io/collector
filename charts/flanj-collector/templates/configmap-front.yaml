@@ -1,0 +1,76 @@
+{{- include "flanj-collector.validate" . -}}
+{{/*
+The FRONT role's config (config/config.front.example.yaml is the annotated
+original). Rendered rather than using the image's baked /etc/flanj/front.yaml,
+because the baked file carries example identity (integration_id: acme-payments)
+and the example store Service name — this one carries yours and the Services
+this release actually created. Mounted at /etc/flanj/chart/front.yaml so the
+baked files stay readable next to it.
+
+Two keys make or break this role and both are set here, never left to a default:
+`store_pod_endpoint` (unset = this front detects no REST drift at all, however
+many contracts have been uploaded) and `store_pod_token` (wrong = 401 on every
+read, same silence, and the pod still reports Ready).
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "flanj-collector.front.fullname" . }}
+  labels:
+    {{- include "flanj-collector.labels" . | nindent 4 }}
+    app.kubernetes.io/component: front
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+data:
+  front.yaml: |
+{{- if .Values.collector.config }}
+{{ .Values.collector.config | indent 4 }}
+{{- else }}
+    receivers:
+      otlp:
+        protocols:
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      flanjredaction: {}
+
+      flanjdrift:
+        {{- with .Values.integration.id }}
+        integration_id: {{ . | quote }}
+        {{- end }}
+        store_pod_endpoint: {{ include "flanj-collector.storeSpecEndpoint" . | quote }}
+        store_pod_token: ${env:FLANJ_SPEC_TOKEN}
+        {{- with .Values.collector.selfSpecPath }}
+        self_spec_path: {{ . | quote }}
+        {{- end }}
+        {{- with .Values.collector.selfIntegrationId }}
+        self_integration_id: {{ . | quote }}
+        {{- end }}
+
+    exporters:
+      otlphttp:
+        endpoint: {{ include "flanj-collector.storeIngestEndpoint" . | quote }}
+        timeout: 10s
+        retry_on_failure:
+          enabled: true
+          initial_interval: 1s
+          max_interval: 30s
+          max_elapsed_time: 300s
+        sending_queue:
+          enabled: true
+          num_consumers: 4
+          queue_size: 1000
+
+    service:
+      pipelines:
+        logs:
+          receivers: [otlp]
+          processors: [flanjredaction, flanjdrift]
+          exporters: [otlphttp]
+      telemetry:
+        logs:
+          level: info
+{{- end }}
