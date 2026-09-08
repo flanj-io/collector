@@ -282,10 +282,13 @@ func (e *storeExtension) handleSpecDoc(w http.ResponseWriter, r *http.Request) {
 // listing sweep clears, so the two routes cannot each log the row once.
 func (e *storeExtension) refuseOverCap(w http.ResponseWriter, integration, peerHost string, bytes int) {
 	if e.overCap.Raise(integration, int64(bytes)) && e.logger != nil {
+		// Int64, matching reportOverCap's field exactly: the two routes write
+		// the SAME line, and a reader (or a test) must not have to know which
+		// one produced it.
 		e.logger.Warn(msgSpecOverCap,
 			zap.String("integration", integration),
 			zap.String("peer_host", peerHost),
-			zap.Int("bytes", bytes),
+			zap.Int64("bytes", int64(bytes)),
 			zap.Int("cap_bytes", specMaxDoc))
 	}
 	http.Error(w, "contract document larger than the cap", http.StatusRequestEntityTooLarge)
