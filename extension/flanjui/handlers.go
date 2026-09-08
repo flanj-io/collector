@@ -243,8 +243,7 @@ func (e *uiExtension) handleEdgeName(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body edgeNameRequestBody
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid_json", msgInvalidJSON)
+	if !readJSONBody(w, r, maxSmallBodyBytes, &body, "request_too_large", msgRequestTooLarge) {
 		return
 	}
 	body.Host = strings.TrimSpace(body.Host)
@@ -515,8 +514,11 @@ func (e *uiExtension) handleFlag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body flagRequestBody
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid_json", msgInvalidJSON)
+	// The flag message is free text the operator types into a textarea with no
+	// length limit, so this is the one small envelope a person can overflow
+	// without meaning to — by pasting a log. It must say "too large", not "not
+	// valid JSON".
+	if !readJSONBody(w, r, maxSmallBodyBytes, &body, "request_too_large", msgRequestTooLarge) {
 		return
 	}
 	if body.FindingID == "" {

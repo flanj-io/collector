@@ -23,6 +23,7 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { ApiError, apiPost } from './api';
 import {
   BIND_ANYWAY,
+  CONTRACT_TOO_LARGE,
   UPLOAD_FORMATS,
   UPLOAD_NO_URL_FETCH,
   UPLOAD_PROMPT,
@@ -30,6 +31,7 @@ import {
   UPLOAD_TAKES_EFFECT,
   bindingChecks,
   bindingTiming,
+  contractFileTooLarge,
   endpointCount,
   hasBindingWarning,
   noTrafficYet
@@ -138,6 +140,26 @@ async function readFile(file: File | null | undefined) {
   if (!file) return;
   error.value = '';
   preview.value = null;
+  // Size is settled here, before the file is read and before anything is sent.
+  //
+  // The relay does enforce the cap, but its 413 is not reliably deliverable:
+  // `http.MaxBytesReader` half-closes and waits about half a second, so a
+  // browser still streaming a large body sees a connection reset instead of the
+  // response. `apiPost` then rejects with a network error rather than an
+  // ApiError and `runPreview` falls back to "Couldn’t read that document." — a
+  // parse verdict for a size problem, which is exactly the wrong diagnosis the
+  // 413 was added to stop. Answering locally, in the server's own words, is the
+  // only way the operator reads the truth every time.
+  //
+  // The file is NOT kept: there is nothing to resume, and a stale `doc` would
+  // let a later host entry re-run the preview with the document just refused.
+  if (contractFileTooLarge(file.size)) {
+    doc.value = '';
+    filename.value = '';
+    awaitingHost.value = false;
+    error.value = CONTRACT_TOO_LARGE;
+    return;
+  }
   filename.value = file.name;
   try {
     doc.value = await file.text();

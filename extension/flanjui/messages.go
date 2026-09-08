@@ -49,10 +49,16 @@ const (
 	msgContractStoreFailed         = "Couldn't save the contract to the local store."
 	msgContractIntegrationRequired = "integration is required."
 	msgContractNotRemovable        = "This contract comes from the collector's config file, not an upload — remove it there."
-	msgContractNotLoaded           = "No contract is loaded for that integration."
-	msgNotFlaggable                = "This finding is a local notice — stale-client calls stay on this collector and can't be flagged to the provider."
-	msgNotAckable                  = "Only non-breaking informational findings can be acknowledged — breaking findings need a fix or a thread."
-	msgFindingNotFound             = "That finding is no longer in the local store."
+	// An observed MCP snapshot is not a file anywhere: the server delivered it
+	// as its own tools/list and the next one replaces it. Answering the config
+	// sentence sent the operator looking for a mounted file that does not
+	// exist. App.vue hides Remove on an mcp row, but the route is reachable by
+	// a hand-crafted request and the refusal has to be true on its own.
+	msgContractNotRemovableObserved = "This is an observed MCP snapshot, not an upload — it refreshes from the server's tools/list."
+	msgContractNotLoaded            = "No contract is loaded for that integration."
+	msgNotFlaggable                 = "This finding is a local notice — stale-client calls stay on this collector and can't be flagged to the provider."
+	msgNotAckable                   = "Only non-breaking informational findings can be acknowledged — breaking findings need a fix or a thread."
+	msgFindingNotFound              = "That finding is no longer in the local store."
 	// The parenthetical used to read "(spec-version findings are informational)"
 	// — which contradicted the finding it refused: a version-diff is emitted at
 	// severity `breaking` (CONTRACTS §4, oasdiff Level=ERR), and the UI renders

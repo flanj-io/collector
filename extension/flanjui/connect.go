@@ -2,7 +2,6 @@ package flanjui
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/mail"
 	"net/netip"
@@ -409,8 +408,7 @@ func (e *uiExtension) handleConnectPost(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var body connectRequestBody
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid_json", msgInvalidJSON)
+	if !readJSONBody(w, r, maxSmallBodyBytes, &body, "request_too_large", msgRequestTooLarge) {
 		return
 	}
 	body.ConsumerDisplayName = strings.TrimSpace(body.ConsumerDisplayName)

@@ -3,7 +3,6 @@ package flanjui
 import (
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -244,13 +243,15 @@ type ackRequestBody struct {
 
 // decodeAckBody reads the optional ack body. An absent or empty body is normal
 // (the shipped UI sends `{}`), so only malformed JSON is an error.
-func decodeAckBody(r *http.Request) (ackRequestBody, bool) {
+//
+// It writes its own refusal, which is why it takes the writer: the body used to
+// be read through io.LimitReader, which TRUNCATES at the limit and says
+// nothing, so an oversized note arrived at the decoder cut off mid-string and
+// came back as "The request body is not valid JSON." — the same silent-truncation
+// trap the contract upload path was fixed for.
+func decodeAckBody(w http.ResponseWriter, r *http.Request) (ackRequestBody, bool) {
 	var b ackRequestBody
-	if r.Body == nil {
-		return b, true
-	}
-	err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&b)
-	if err != nil && !errors.Is(err, io.EOF) {
+	if !readOptionalJSONBody(w, r, maxSmallBodyBytes, &b, "request_too_large", msgRequestTooLarge) {
 		return b, false
 	}
 	b.Reason = strings.TrimSpace(b.Reason)
@@ -296,10 +297,9 @@ func (e *uiExtension) findingAck(w http.ResponseWriter, r *http.Request, ack boo
 	sig := findingSignature(finding)
 	out := map[string]any{"finding_id": finding.ID, "acked": ack}
 	if ack {
-		body, ok := decodeAckBody(r)
+		body, ok := decodeAckBody(w, r)
 		if !ok {
-			writeErr(w, http.StatusBadRequest, "invalid_json", msgInvalidJSON)
-			return
+			return // decodeAckBody wrote the refusal — 413 or 400.
 		}
 		now := time.Now().UTC().Format(time.RFC3339)
 		// The evidence version is derived from the finding, never supplied by

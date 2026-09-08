@@ -884,3 +884,143 @@ func TestAnnouncingWithNoStoreExtensionIsANoOp(t *testing.T) {
 		t.Fatalf("upload with no store extension = %d: %s", resp.StatusCode, raw)
 	}
 }
+
+// TestRemoveRefusesAnObservedMCPSnapshotInItsOwnWords is the #45 review's copy
+// defect. An observed MCP snapshot is not an upload, so Remove refuses it — but
+// it answered the CONFIG sentence, "This contract comes from the collector's
+// config file, not an upload — remove it there." There is no file to remove it
+// in: the server delivered the snapshot as its own tools/list, the next one
+// replaces it, and the operator was sent hunting for a mount that does not
+// exist.
+//
+// App.vue hides Remove on an mcp row, which is why nobody met this through the
+// UI; the route is reachable by a hand-crafted request all the same, and a
+// refusal has to be true on its own rather than because a button is hidden.
+func TestRemoveRefusesAnObservedMCPSnapshotInItsOwnWords(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	_ = r.st.PutSpecInfo(model.SpecInfo{
+		Integration: "acme-tools", Role: model.SpecRoleProvider, PeerHost: "mcp.acme.test",
+		Format: model.SpecFormatMCP, Source: model.SpecSourceObserved, LoadedAt: "t0",
+	}, []byte(`{"tools":[]}`))
+
+	resp, out, raw := r.do(t, http.MethodPost, "/api/contracts/remove", map[string]string{
+		"integration": "acme-tools",
+	})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409: %s", resp.StatusCode, raw)
+	}
+	// The CODE is the class of refusal and stays what every client already
+	// switches on; the SENTENCE is what changed.
+	if out["error"] != "not_removable" {
+		t.Errorf("error = %v, want not_removable", out["error"])
+	}
+	msg, _ := out["message"].(string)
+	if msg != msgContractNotRemovableObserved {
+		t.Errorf("message = %q, want the observed sentence %q", msg, msgContractNotRemovableObserved)
+	}
+	if msg == msgContractNotRemovable {
+		t.Error("an observed MCP snapshot was refused with the config-file sentence — there is no config file to remove it in")
+	}
+	if infos, _ := r.st.ListSpecInfos(); len(infos) != 1 {
+		t.Errorf("the snapshot was removed anyway: %+v", infos)
+	}
+}
+
+// TestUploadFilenameNoteCannotForgeALogLine: the filename is request-supplied
+// text on its way into a log stream. It used to be interpolated raw after a
+// TrimSpace, so a name containing a newline wrote a SECOND line into the log —
+// a forged entry with whatever severity, component and message the sender chose,
+// indistinguishable downstream from one this collector emitted.
+func TestUploadFilenameNoteCannotForgeALogLine(t *testing.T) {
+	forged := "ok.yaml\nERROR\tflanjui\tcontracts: contract accepted for evil.test"
+	note := uploadFilenameNote(forged)
+	if strings.ContainsAny(note, "\n\r\t\x1b") {
+		t.Errorf("uploadFilenameNote passed a control character through: %q", note)
+	}
+	// The name is still legible — escaped, not dropped.
+	if !strings.Contains(note, "ok.yaml") {
+		t.Errorf("the filename was lost instead of escaped: %q", note)
+	}
+	if !strings.Contains(note, `\n`) {
+		t.Errorf("the newline was not escaped into the string: %q", note)
+	}
+
+	// Every other control character, one at a time.
+	// \u2028 LINE SEPARATOR is a line break to plenty of log viewers even
+	// though it is not \n, so it belongs in this list.
+	for _, c := range []string{"\r", "\t", "\x00", "\x1b[2J", "\u2028"} {
+		if got := uploadFilenameNote("a" + c + "b"); strings.Contains(got, c) {
+			t.Errorf("uploadFilenameNote(%q) = %q — the control character survived", c, got)
+		}
+	}
+
+	// A request-supplied name cannot write an unbounded log line either.
+	long := uploadFilenameNote(strings.Repeat("x", 10_000))
+	if len([]rune(long)) > maxLoggedFilenameLen+8 {
+		t.Errorf("a 10,000-character filename produced a %d-rune note", len([]rune(long)))
+	}
+
+	// Absent stays absent — no empty quotes in the common case.
+	if got := uploadFilenameNote("   "); got != "" {
+		t.Errorf("uploadFilenameNote(blank) = %q, want empty", got)
+	}
+}
+
+// TestUploadRefusalLogsTheFilenameEscaped drives the same defect through the
+// real handler: the refusal log line the operator's document produces stays ONE
+// line whatever the filename claims to be.
+func TestUploadRefusalLogsTheFilenameEscaped(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+
+	resp, _, raw := r.do(t, http.MethodPost, "/api/contracts/upload", map[string]string{
+		"peer_host": "api.acme.test",
+		"document":  "this is not an OpenAPI document at all",
+		"filename":  "ok.yaml\nFATAL\tflanjui\tstore corrupted",
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", resp.StatusCode, raw)
+	}
+	logged := r.logs.FilterMessageSnippet("unparseable document").All()
+	if len(logged) != 1 {
+		t.Fatalf("logged %d refusals, want 1: %v", len(logged), logged)
+	}
+	if strings.Contains(logged[0].Message, "\n") {
+		t.Errorf("the log line carries a raw newline from the request's filename: %q", logged[0].Message)
+	}
+	if !strings.Contains(logged[0].Message, `\n`) {
+		t.Errorf("the filename's newline was not escaped: %q", logged[0].Message)
+	}
+}
+
+// TestContractTooLargeMirrorInSync makes the ui/src/contracts.ts mirror of
+// msgContractTooLarge a MECHANICAL guarantee, the same way threads.ts is
+// guarded.
+//
+// The uploader now refuses an oversized file LOCALLY, before it reads or sends
+// anything, because the relay's 413 is not reliably deliverable: MaxBytesReader
+// half-closes and waits about half a second, so a browser still streaming a
+// large body sees a connection reset instead of the response and the uploader
+// falls back to its generic parse message. The local refusal must be the
+// server's own sentence, byte for byte — the operator must not be able to tell
+// which end answered.
+func TestContractTooLargeMirrorInSync(t *testing.T) {
+	path := filepath.Join("..", "..", "ui", "src", "contracts.ts")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if !strings.Contains(string(raw), msgContractTooLarge) {
+		t.Fatalf("ui/src/contracts.ts no longer carries msgContractTooLarge verbatim.\n"+
+			"want the exact sentence: %q\n"+
+			"Update CONTRACT_TOO_LARGE in contracts.ts to match messages.go — the uploader "+
+			"answers an oversized file locally, so the two must agree byte-for-byte.",
+			msgContractTooLarge)
+	}
+	// The cap the local guard compares against is the server's cap.
+	if !strings.Contains(string(raw), "8 * 1024 * 1024") {
+		t.Errorf("ui/src/contracts.ts MAX_CONTRACT_BYTES no longer states 8 MiB; "+
+			"maxDocBytes here is %d bytes and the guard must match it exactly", maxDocBytes)
+	}
+}
