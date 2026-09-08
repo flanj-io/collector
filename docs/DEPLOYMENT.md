@@ -73,6 +73,13 @@ edge; repeats bump `occurrence_count`); `spec_info` → upsert by integration.
 - State: `/data` on a PVC (sqlite). `user` is `nonroot` (uid 65532) — pre-chown
   the volume or use an fsGroup.
 - UI: loopback only by design — `kubectl port-forward <pod> 5335:5335`.
+- The UI's one link out — the Connected pill's dashboard door — opens in
+  **your browser**, on the far side of that port-forward. It is minted from
+  `cp_public_url`, not from `cp_base_url`, which is where the *collector's*
+  requests go and may be an address only the cluster resolves. Set
+  `cp_public_url` whenever the two differ; left unset, the link falls back to
+  `cp_base_url` only when that host is not obviously non-public, and is
+  otherwise omitted (the pill stays a Settings button — never a dead link).
 - Kubernetes: a `StatefulSet` (replicas **1**) with a `volumeClaimTemplate` for
   `/data`, a `Service` on 4318 for the SDK, a `Secret` for `CP_DEPLOY_TOKEN`
   (`cp_deploy_token: ${env:CP_DEPLOY_TOKEN}`).
@@ -134,7 +141,7 @@ Unauthorized`. So after a tiered rollout, check a front's logs, not just that
 its pods are Ready.
 
 Mount your own `front.yaml`/`store.yaml` when you need your own
-`integration_id`, display names, `cp_base_url`, or window sizes — the baked
+`integration_id`, display names, `cp_base_url` / `cp_public_url`, or window sizes — the baked
 files are the annotated templates (`config/config.front.example.yaml`,
 `config/config.store.example.yaml`). **Provider contracts are not among those
 knobs**: they are uploaded in the UI (Contracts → Add contract), never
@@ -172,7 +179,10 @@ Flow specifics:
   postgres) next to the evidence — nothing to mount or copy, and a replaced pod
   is still Connected. `cp_deploy_token` is only used for that first
   registration.
-- UI: `kubectl port-forward sts/flanj-store 5335:5335`.
+- UI: `kubectl port-forward sts/flanj-store 5335:5335`. The Connected pill's
+  dashboard link is built from the store pod's `cp_public_url` (see "Single
+  pod"): a `cp_base_url` naming a Service or a VPC-private ingress is right for
+  the pod's own calls and unreachable from the laptop behind the port-forward.
 - Store pod `:4318` is intra-cluster ingest; keep it ClusterIP (optionally a
   NetworkPolicy allowing only the front pods).
 - Probes: `tcpSocket: 4318` on both roles.

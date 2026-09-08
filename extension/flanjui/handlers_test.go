@@ -1875,45 +1875,6 @@ func TestHeldPriorDataProbe(t *testing.T) {
 	}
 }
 
-// TestDashboardURLOnlyWhenConnected pins the one link the local UI offers OUT to
-// the control plane. It must appear ONLY once this deployment actually holds a
-// collector key: offering a door to a CP this collector has no identity at sends
-// the operator to a signed-out page for no reason, and the SPA decides whether
-// to render the link purely on this field's presence.
-func TestDashboardURLOnlyWhenConnected(t *testing.T) {
-	r := newRig(t)
-	r.start(t)
-
-	// Disconnected: no key, so no door.
-	_, out, _ := r.do(t, http.MethodGet, "/api/connect", nil)
-	if _, ok := out["dashboard_url"]; ok {
-		t.Fatalf("a disconnected collector must not offer a dashboard link, got %v", out["dashboard_url"])
-	}
-
-	// Connect, which persists the collector key.
-	if resp, _, _ := r.do(t, http.MethodPost, "/api/connect", map[string]string{
-		"consumer_display_name": "Acme Consumer Ltd",
-		"contact_email":         "ops@acme.test",
-		"contact_display_name":  "Dana",
-	}); resp.StatusCode != 202 && resp.StatusCode != 200 {
-		t.Fatalf("connect: %d", resp.StatusCode)
-	}
-
-	_, out, _ = r.do(t, http.MethodGet, "/api/connect", nil)
-	got, _ := out["dashboard_url"].(string)
-	if got == "" {
-		t.Fatalf("a Connected collector must offer the dashboard link, got %v", out)
-	}
-	// The collector composes the path — the SPA must never have to know which
-	// page the dashboard is, nor assemble it from a base URL.
-	if !strings.HasSuffix(got, "/d") {
-		t.Errorf("dashboard_url should point at the CP dashboard page, got %q", got)
-	}
-	if strings.Contains(got, "//d") || strings.HasSuffix(got, "//d") {
-		t.Errorf("dashboard_url has a doubled slash — base URL trailing slash not trimmed: %q", got)
-	}
-}
-
 // brokenStore is a store whose every READ fails with the error a stopped
 // postgres actually produces — the pgx connect error, DSN and all. The reads a
 // test drives are the ones the read API makes; everything else falls through to

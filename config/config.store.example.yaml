@@ -59,7 +59,14 @@ extensions:
     #                                     It does NOT name an edge: edge names come from the UI rename, the uploaded contract's title, or the
     #                                     directory (Overview → Edges → Rename). Nothing migrates into the store on boot — the config name
     #                                     tier went with spec_path/peer_host (CONTRACTS §8, 2026-08-31); this key needs no edge linkage at all.
-    cp_base_url: https://cp.flanj.test
+    cp_base_url: https://cp.flanj.test # where THIS COLLECTOR's requests go (register/me, flags, threads, syncs) — may be in-network
+    # cp_public_url: https://cp.flanj.test # OPTIONAL — the control-plane origin YOUR BROWSER can open. The Connected pill's
+    #                                     dashboard link is minted from it. Set it whenever cp_base_url is an in-network address
+    #                                     a laptop cannot resolve (a docker service name, a k8s Service, a VPC-private ingress).
+    #                                     Unset: the link falls back to cp_base_url only when that host is not obviously
+    #                                     non-public (loopback, private IP, single-label, .local/.internal/.svc/.test…); otherwise
+    #                                     the pill stays a Settings button rather than becoming a dead link. Validated at boot
+    #                                     (absolute http(s) URL, no credentials). Never logged.
     cp_deploy_token: ${env:CP_DEPLOY_TOKEN} # used once, for Connect (register); the per-deployment collector key it returns lives in the store
 
 receivers:
