@@ -143,3 +143,42 @@ describe('Connect panel: the first send says "Check your inbox" and nothing more
     expect(posts).toHaveLength(1);
   });
 });
+
+describe('"Sent again" is said of a delivery, not of a button', () => {
+  it('Retry after a failed send announces the FIRST mail that ever left, not "again"', async () => {
+    posts = [];
+    let call = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown, init?: RequestInit) => {
+        const path = String(input).split('?')[0];
+        const method = (init?.method ?? 'GET').toUpperCase();
+        if (path.endsWith('/api/connect') && method === 'POST') {
+          const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+          posts.push(body);
+          call += 1;
+          // first send: the relay could not deliver; the retry: delivered.
+          return json({ ...pendingReply(String(body.contact_email)), confirmation_mail: call === 1 ? 'failed' : 'sent' }, 202);
+        }
+        return json({}, 404);
+      })
+    );
+    const w = mount(ConnectPanel, { props: { state: { connect_status: 'disconnected' } as unknown as ConnectState } });
+    await submitForm(w, EMAIL);
+    expect(pendingText(w)).not.toContain('Sent again');
+    const retry = w.findAll('button').find((b) => /retry|resend/i.test(b.text()));
+    expect(retry, 'a retry control after a failed send').toBeTruthy();
+    await retry!.trigger('click');
+    await settle(w);
+    await adoptEmittedState(w);
+    expect(posts).toHaveLength(2);
+    const text = pendingText(w);
+    expect(text, 'one mail has ever left: this is the first, not "again"').not.toContain('Sent again');
+    // and a genuine resend after that delivery IS "again"
+    await retry!.trigger('click');
+    await settle(w);
+    await adoptEmittedState(w);
+    expect(pendingText(w)).toContain(`Sent again to ${EMAIL}.`);
+    w.unmount();
+  });
+});

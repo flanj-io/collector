@@ -35,6 +35,10 @@ const validation = ref('');
  * would otherwise wipe a "not sent" warning and restore "check your inbox".
  */
 const attempt = ref<MailAttempt | null>(null);
+/** The address a confirmation mail was actually DELIVERED to by this panel, so "Sent again" is
+ *  said of a delivery, not of a button: a Retry after a `failed` send is the FIRST mail that ever
+ *  left. Post-reload the panel cannot know, and the button stays the fallback. */
+const deliveredTo = ref<string | null>(null);
 /** Ticks only while a cooldown notice is on screen, so its countdown expires by itself. */
 const now = ref(Date.now());
 let ticker: ReturnType<typeof setInterval> | null = null;
@@ -144,13 +148,16 @@ async function submit(resend = false) {
     // on which button was pressed; `resend` decides only the wording of a success: "Sent again" is
     // true after Resend and false after the first Connect (or Change contact to a new address).
     now.value = Date.now();
+    const to = s.contact_email ?? email.value.trim();
     attempt.value = {
       outcome: s.confirmation_mail,
       retryAfterS: s.confirmation_mail_retry_after_s,
-      email: s.contact_email ?? email.value.trim(),
+      email: to,
       at: now.value,
-      resend
+      // "again" only when a mail has already reached THIS address from this panel.
+      resend: resend && deliveredTo.value === to
     };
+    if (s.confirmation_mail === 'sent') deliveredTo.value = to;
     touched.value = untouched(); // the server state is now the truth; future seeds may fill every field
     emit('update:state', s);
   } catch (e) {
