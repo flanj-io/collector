@@ -602,6 +602,11 @@ func (e *uiExtension) handleConnectPost(w http.ResponseWriter, r *http.Request) 
 
 	out := cs.view()
 	out["cp_configured"] = true
+	// Same field the GET carries, for the same reason — and it must be on BOTH:
+	// the SPA replaces its whole connect state from this response, so omitting it
+	// here would blank the disclosure the instant the operator pressed Connect,
+	// until the next background poll put it back.
+	out["edge_sync"] = e.cfg.EdgeSync
 	if cs.status() == "connected" {
 		writeJSON(w, http.StatusOK, out)
 		return

@@ -210,3 +210,29 @@ func TestEdgeSyncDefaultOn(t *testing.T) {
 		t.Error("edge_sync: false must not disable the findings sync or the directory pull")
 	}
 }
+
+// TestConnectCarriesEdgeSyncOnBothVerbs: the disclosure the Connect panel renders
+// is only honest if it reflects THIS deployment's switch, so `/api/connect` must
+// report it — and on BOTH verbs. The SPA replaces its whole connect state from
+// the POST response, so a GET-only field would blank the disclosure at the exact
+// moment the operator pressed Connect, until the next background poll put it back.
+func TestConnectCarriesEdgeSyncOnBothVerbs(t *testing.T) {
+	for _, on := range []bool{true, false} {
+		r := newRig(t)
+		r.start(t)
+		r.ext.cfg.EdgeSync = on
+
+		_, get, _ := r.do(t, "GET", "/api/connect", nil)
+		if got, ok := get["edge_sync"].(bool); !ok || got != on {
+			t.Errorf("GET /api/connect edge_sync = %v (present=%v), want %v", get["edge_sync"], ok, on)
+		}
+
+		_, post, _ := r.do(t, "POST", "/api/connect", map[string]any{
+			"consumer_display_name": "CustomerX",
+			"contact_email":         "ops@customerx.example",
+		})
+		if got, ok := post["edge_sync"].(bool); !ok || got != on {
+			t.Errorf("POST /api/connect edge_sync = %v (present=%v), want %v — the panel loses the disclosure on Connect", post["edge_sync"], ok, on)
+		}
+	}
+}
