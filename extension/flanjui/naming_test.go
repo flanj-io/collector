@@ -147,6 +147,13 @@ func relayMessages() []string {
 		msgCallEvicted, msgThreadNotFound, msgWrongOrigin, msgKeyMissing, msgNotAckable, contactUnconfirmedMessage("ops@example.test"),
 		msgEdgeHostRequired, msgEdgeNotFound, msgNameTooLong, msgNameEmpty, msgNameSavedSuggestFailed,
 		msgNameSuggestRefused("The name is too long."),
+		// The contract-upload deck. It was outside this scan, which is how a
+		// new refusal sentence could have carried denylisted language without
+		// anything noticing.
+		msgRequestTooLarge, msgContractHostRequired, msgContractHostInvalid, msgContractHostTooLong,
+		msgContractHostPunycode, msgContractHostBadPort, msgContractDocumentRequired, msgContractTooLarge,
+		msgContractUnparseable, msgContractStoreFailed, msgContractIntegrationRequired,
+		msgContractNotRemovable, msgContractNotRemovableObserved, msgContractNotLoaded,
 	}
 }
 

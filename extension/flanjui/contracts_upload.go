@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -42,8 +43,10 @@ const (
 	// real YAML at 7.8 MiB arrives as an envelope past 8 MiB. Twice the cap
 	// holds any document the ruling would accept, plus the host and filename.
 	maxEnvelopeBytes = 2*maxDocBytes + (1 << 16)
-	// maxSmallBodyBytes bounds the other envelopes on this path (remove), which
-	// carry an integration id and nothing else.
+	// maxSmallBodyBytes bounds every OTHER JSON envelope the localhost API
+	// accepts — contract remove, edge name, Connect, flag, finding ack. All of
+	// them carry a handful of short fields; 64 KiB is far past any of them and
+	// far under anything that would cost memory.
 	maxSmallBodyBytes = 1 << 16
 	// maxHostLen is the DNS name ceiling.
 	maxHostLen = 253
@@ -54,6 +57,15 @@ const (
 // message when the body is over the limit, 400 invalid_json when it is not
 // JSON.
 //
+// This is the ONE way a route in this package reads a JSON envelope. It was
+// written for the upload path and left the four small-envelope routes alone
+// (edge name, Connect, flag, finding ack) because 64 KiB is far past what any
+// of them carry — but "harmless at those sizes" is not the same as correct: a
+// pasted 70 KB flag message hit exactly the trap below and came back "The
+// request body is not valid JSON.", which is the wrong-diagnosis class the
+// upload fix existed to end. Adding a route means calling this, not writing a
+// fifth decoder.
+//
 // The limit is enforced by http.MaxBytesReader, which FAILS at the limit. It
 // used to be io.LimitReader, which stops at the limit and says nothing — the
 // decoder then saw a string cut off mid-way, reported an unexpected EOF, and
@@ -63,14 +75,38 @@ const (
 // (launch-week item 6). MaxBytesReader also tells the server to close the
 // connection after the reply instead of draining the rest of the upload.
 func readJSONBody(w http.ResponseWriter, r *http.Request, limit int64, dst any, tooLargeCode, tooLargeMsg string) bool {
+	return decodeJSONBody(w, r, limit, dst, tooLargeCode, tooLargeMsg, false)
+}
+
+// readOptionalJSONBody is readJSONBody for a route where an absent or empty
+// body is a normal request rather than a malformed one — the finding ack, whose
+// shipped UI sends `{}` and whose older builds send nothing at all. The size
+// refusal is identical; only EOF is tolerated.
+func readOptionalJSONBody(w http.ResponseWriter, r *http.Request, limit int64, dst any, tooLargeCode, tooLargeMsg string) bool {
+	return decodeJSONBody(w, r, limit, dst, tooLargeCode, tooLargeMsg, true)
+}
+
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, limit int64, dst any, tooLargeCode, tooLargeMsg string, emptyOK bool) bool {
+	if r.Body == nil {
+		if emptyOK {
+			return true
+		}
+		writeErr(w, http.StatusBadRequest, "invalid_json", msgInvalidJSON)
+		return false
+	}
 	err := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit)).Decode(dst)
 	if err == nil {
 		return true
 	}
+	// Size first: an oversized body can fail as anything once the reader cuts
+	// it off, and the size is the fact worth reporting.
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
 		writeErr(w, http.StatusRequestEntityTooLarge, tooLargeCode, tooLargeMsg)
 		return false
+	}
+	if emptyOK && errors.Is(err, io.EOF) {
+		return true
 	}
 	writeErr(w, http.StatusBadRequest, "invalid_json", msgInvalidJSON)
 	return false
@@ -207,12 +243,20 @@ func (e *uiExtension) handleContractRemove(w http.ResponseWriter, r *http.Reques
 		writeErr(w, http.StatusBadRequest, "integration_required", msgContractIntegrationRequired)
 		return
 	}
-	// Only uploaded contracts are removable here. The self contract comes from
-	// config, so deleting its row would just be undone at the next start —
-	// saying so beats a button that appears to work.
+	// Only uploaded contracts are removable here, and the refusal names the
+	// provenance it actually found. A config contract would be re-loaded at the
+	// next start, so the operator is sent to the file; an observed MCP snapshot
+	// has no file at all — the server delivers it and the next tools/list
+	// replaces it — so the config sentence sent them hunting for something that
+	// does not exist. One code, two sentences: the class of refusal is the
+	// same, the reason is not.
 	if existing, found, err := specInfoFor(st, integration); err == nil && found &&
 		existing.Source != model.SpecSourceUpload && existing.Source != "" {
-		writeErr(w, http.StatusConflict, "not_removable", msgContractNotRemovable)
+		msg := msgContractNotRemovable
+		if existing.Source == model.SpecSourceObserved {
+			msg = msgContractNotRemovableObserved
+		}
+		writeErr(w, http.StatusConflict, "not_removable", msg)
 		return
 	}
 	existed, err := st.DeleteSpecInfo(integration)
@@ -275,14 +319,32 @@ func (e *uiExtension) readContractUpload(w http.ResponseWriter, r *http.Request)
 	return req, summary, true
 }
 
-// uploadFilenameNote is the " (name)" a log line carries when the operator's
-// pick is known. The filename is what the request said it was — it is never
+// maxLoggedFilenameLen bounds, in runes, the request-supplied filename a log
+// line carries.
+const maxLoggedFilenameLen = 200
+
+// uploadFilenameNote is the quoted name a log line carries when the operator's
+// pick is known. The filename is what the REQUEST said it was — it is never
 // echoed back to the browser, only logged beside the parser's reason.
+//
+// Which makes it attacker-controlled text on its way into a log stream. It used
+// to be interpolated raw after a TrimSpace, so a filename containing a newline
+// wrote a second line into the log — a forged entry, with whatever severity,
+// component and message the sender chose, indistinguishable downstream from one
+// this collector emitted. strconv.Quote escapes every control character
+// (newline, carriage return, tab, the ANSI escape that repaints a terminal) and
+// the quotes themselves, so the whole name stays one field of one line. It is
+// truncated too: a megabyte filename is a megabyte log line.
 func uploadFilenameNote(filename string) string {
-	if name := strings.TrimSpace(filename); name != "" {
-		return " (" + name + ")"
+	name := strings.TrimSpace(filename)
+	if name == "" {
+		return ""
 	}
-	return ""
+	// By runes, so the cut never lands mid-character.
+	if r := []rune(name); len(r) > maxLoggedFilenameLen {
+		name = string(r[:maxLoggedFilenameLen]) + "…"
+	}
+	return " " + strconv.Quote(name)
 }
 
 // previewFor describes the binding an upload would produce.

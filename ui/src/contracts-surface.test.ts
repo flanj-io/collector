@@ -18,6 +18,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mount, type VueWrapper } from '@vue/test-utils';
 import App from './App.vue';
 import ContractUploader from './ContractUploader.vue';
+import { CONTRACT_TOO_LARGE, MAX_CONTRACT_BYTES } from './contracts';
 
 const HOST = 'api.acme.test';
 const INTEGRATION = 'api-acme-test';
@@ -309,7 +310,9 @@ describe('the uploader can be driven from the keyboard', () => {
     // document_too_large; the uploader has no copy of its own for that code —
     // it renders the relay's sentence — so this pins that the sentence reaches
     // the error line unchanged.
-    const TOO_LARGE = "That document is larger than 8 MB. Contracts this size are usually a bundle — upload the API's own document.";
+    // The deck's own constant, mirrored from messages.go — not a second copy of
+    // the sentence (TestContractTooLargeMirrorInSync guards the mirror itself).
+    const TOO_LARGE = CONTRACT_TOO_LARGE;
     vi.stubGlobal('fetch', vi.fn(async () => json({ error: 'document_too_large', message: TOO_LARGE }, 413)));
 
     const w = mount(ContractUploader, { props: { host: HOST }, attachTo: document.body });
@@ -332,5 +335,106 @@ describe('the uploader can be driven from the keyboard', () => {
     // — that reset is what stops a retry after a parse error looking dead.
     await input.trigger('change');
     expect((input.element as HTMLInputElement).value).toBe('');
+  });
+
+  /**
+   * An oversized file is refused HERE, before anything is read or sent.
+   *
+   * The relay does enforce the cap and answers 413 with this sentence, but that
+   * answer is not reliably deliverable: `http.MaxBytesReader` half-closes and
+   * gives the client about half a second before the connection goes, so a
+   * browser still streaming a 20 MB body sees a reset instead of the response.
+   * `apiPost` then rejects with a network error rather than an ApiError and
+   * `runPreview`'s catch falls through to "Couldn’t read that document." — a
+   * parse verdict for a size problem, which is the wrong-diagnosis class the
+   * 413 was added to end.
+   *
+   * The fake File carries only what readFile touches (name, size, text) because
+   * materialising 8 MiB per assertion buys nothing: the guard reads `size`, and
+   * the point of the test is that `text()` and `fetch` are never reached.
+   */
+  function fakeFile(name: string, size: number, text: () => Promise<string>) {
+    return { name, size, text } as unknown as File;
+  }
+
+  it('refuses a file past the 8 MiB cap locally, in the server’s own words', async () => {
+    const fetchSpy = vi.fn(async () => json({}, 200));
+    vi.stubGlobal('fetch', fetchSpy);
+    const read = vi.fn(async () => 'openapi: 3.0.0');
+
+    const w = mount(ContractUploader, { props: { host: HOST }, attachTo: document.body });
+    wrapper = w as unknown as VueWrapper;
+    const vm = w.vm as unknown as { readFile: (f: File) => Promise<void>; doc: string; filename: string };
+
+    await vm.readFile(fakeFile('bundle.yaml', MAX_CONTRACT_BYTES + 1, read));
+    await w.vm.$nextTick();
+
+    // The server's sentence, byte for byte — the operator cannot tell which end
+    // answered, which is the whole point of mirroring it.
+    expect(w.find('.uploader-error').text()).toBe(CONTRACT_TOO_LARGE);
+    // Nothing was read, and nothing was sent: no upload starts at all, so the
+    // connection can never reset out from under the 413.
+    expect(read).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    // No confirm step, and no document left behind for a later host entry to
+    // re-submit.
+    expect(w.find('.uploader-actions').exists()).toBe(false);
+    expect(vm.doc).toBe('');
+    expect(vm.filename).toBe('');
+  });
+
+  it('accepts a file exactly at the cap — the guard is > , not >=', async () => {
+    // maxDocBytes is inclusive on the server (`len(document) > maxDocBytes`
+    // refuses), so a document of exactly the cap must still upload. A >= here
+    // would refuse a file the documented limit admits.
+    const read = vi.fn(async () => 'openapi: 3.0.0');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json({
+          peer_host: HOST, integration: INTEGRATION, title: 'Acme', version: '1.0.0',
+          endpoints: 1, servers: [`https://${HOST}`], servers_match: true, has_traffic: true
+        })
+      )
+    );
+
+    const w = mount(ContractUploader, { props: { host: HOST }, attachTo: document.body });
+    wrapper = w as unknown as VueWrapper;
+    const vm = w.vm as unknown as { readFile: (f: File) => Promise<void>; doc: string };
+
+    await vm.readFile(fakeFile('at-cap.yaml', MAX_CONTRACT_BYTES, read));
+    await w.vm.$nextTick();
+
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(w.find('.uploader-error').exists()).toBe(false);
+    expect(w.find('.uploader-actions').exists()).toBe(true);
+  });
+
+  it('asks for the host before it refuses nothing — an oversized file never becomes a pending upload', async () => {
+    // The pre-traffic route keeps a file that arrives before the host is named
+    // and resumes when it lands. A refused file must NOT be kept that way:
+    // resuming would preview the document that was just refused.
+    const fetchSpy = vi.fn(async () => json({}, 200));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const w = mount(ContractUploader, { props: { host: '' }, attachTo: document.body });
+    wrapper = w as unknown as VueWrapper;
+    const vm = w.vm as unknown as {
+      readFile: (f: File) => Promise<void>;
+      onHostEntered: () => Promise<void>;
+      typedHost: string;
+      awaitingHost: boolean;
+    };
+
+    await vm.readFile(fakeFile('bundle.yaml', MAX_CONTRACT_BYTES + 1, async () => 'x'));
+    await w.vm.$nextTick();
+    expect(w.find('.uploader-error').text()).toBe(CONTRACT_TOO_LARGE);
+    expect(vm.awaitingHost).toBe(false);
+
+    // Naming the host now resumes nothing, because nothing is pending.
+    vm.typedHost = HOST;
+    await vm.onHostEntered();
+    await w.vm.$nextTick();
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

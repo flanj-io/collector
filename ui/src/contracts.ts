@@ -63,6 +63,36 @@ export const UPLOAD_TAKES_EFFECT = 'Validating from now on. Calls already captur
 export const BIND_ANYWAY = 'Bind anyway';
 
 /**
+ * The document cap, in bytes — `maxDocBytes` in
+ * `extension/flanjui/contracts_upload.go`, byte for byte.
+ *
+ * The uploader checks the picked file against this BEFORE it reads or sends
+ * anything, because the server's own refusal is not reliably deliverable. The
+ * relay answers 413 through `http.MaxBytesReader`, which half-closes and gives
+ * the client about half a second to notice; a browser still streaming a 20 MB
+ * body past that sees a connection reset instead, `apiPost` rejects with a
+ * network error rather than an `ApiError`, and the uploader falls back to
+ * "Couldn't read that document." — a parse verdict for a size problem, which is
+ * the wrong-diagnosis class the 413 existed to end.
+ */
+export const MAX_CONTRACT_BYTES = 8 * 1024 * 1024;
+
+/**
+ * The relay's own sentence for an oversized document
+ * (`extension/flanjui/messages.go` → `msgContractTooLarge`), mirrored so the
+ * local refusal above and the server's 413 read identically — the operator must
+ * not be able to tell which end answered. Keep the two byte-identical;
+ * `TestContractTooLargeMirrorInSync` fails if they drift.
+ */
+export const CONTRACT_TOO_LARGE =
+  "That document is larger than 8 MB. Contracts this size are usually a bundle — upload the API's own document.";
+
+/** True when a picked file is past the cap the server enforces. */
+export function contractFileTooLarge(size: number): boolean {
+  return size > MAX_CONTRACT_BYTES;
+}
+
+/**
  * Asked before one uploader is swapped for another.
  *
  * There is exactly one uploader open at a time, mounted on whichever row opened
