@@ -135,6 +135,38 @@ func TestSpecOverCapLogsTheStartNotEveryTick(t *testing.T) {
 	}
 }
 
+// TestSpecOverCapLineIsTheSameFromEitherRoute: the doc route and the listing
+// sweep write ONE line, with one field shape. They are two paths to the same
+// sentence, and a reader — or the e2e lane waiting on it — must not have to
+// know which one produced it.
+func TestSpecOverCapLineIsTheSameFromEitherRoute(t *testing.T) {
+	e, base, logs := startObservedStorePod(t)
+	doc := mcpSnapshotOfSize(t, specMaxDoc+4096)
+	seedContract(t, e, "acme-tools", "mcp.acme.test", model.SpecRoleProvider, model.SpecFormatMCP, doc)
+
+	// The DOC route first, so it is the one that raises.
+	if code, _ := get(t, base+"/internal/contracts/doc?integration=acme-tools", testSpecToken); code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("doc status = %d, want 413", code)
+	}
+	raised := logs.FilterMessage(msgSpecOverCap).All()
+	if len(raised) != 1 {
+		t.Fatalf("the doc route logged %d times, want 1", len(raised))
+	}
+	fields := raised[0].ContextMap()
+	if got, want := fields["bytes"], int64(len(doc)); got != want {
+		t.Errorf("bytes = %#v (%T), want %v as int64 — the two routes must agree on the field", got, got, want)
+	}
+	if fields["peer_host"] != "mcp.acme.test" {
+		t.Errorf("peer_host = %v, want mcp.acme.test", fields["peer_host"])
+	}
+
+	// And the sweep that follows finds the condition already standing.
+	listContracts(t, base)
+	if n := logs.FilterMessage(msgSpecOverCap).Len(); n != 1 {
+		t.Errorf("the listing sweep re-logged what the doc route reported (%d lines total)", n)
+	}
+}
+
 // TestSpecOverCapLogsWhenItClears: the end of a standing condition is the other
 // event. Without it an operator who shrinks the catalogue has no confirmation
 // from this pod that the channel is open again.
