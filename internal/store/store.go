@@ -29,6 +29,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
+	sqlite "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
+
 	"github.com/flanj-io/collector/internal/edge"
 	"github.com/flanj-io/collector/internal/model"
 )
@@ -187,6 +191,50 @@ func (b *base) PutSetting(key, value string) error {
 		return fmt.Errorf("put setting %q: %w", key, err)
 	}
 	return nil
+}
+
+// ErrRejected marks a write the store REFUSED for what the record IS — a
+// constraint the statement's ON CONFLICT does not absorb, or a value the
+// backend cannot encode — as opposed to a write that FAILED for where the
+// store is (connection gone, file locked, timeout). The same record would be
+// refused again on every attempt, so the store exporter turns it into a
+// permanent error (consumererror.NewPermanent) and drops the batch after ONE
+// attempt instead of holding a queue consumer for max_elapsed_time. Both
+// backends wrap it around InsertCall, InsertFinding and PutSpecInfo (the three
+// writes the exporter makes); every other error is returned as-is and stays
+// retryable.
+var ErrRejected = errors.New("store: record rejected")
+
+// classify wraps a deterministic driver rejection in ErrRejected and returns
+// every other error unchanged. The two drivers spell "the record, not the
+// store" differently:
+//   - sqlite: primary result code SQLITE_CONSTRAINT (19 — the extended code
+//     is masked off), SQLITE_TOOBIG (18) or SQLITE_MISMATCH (20);
+//   - postgres: SQLSTATE class 23 (integrity constraint violation) or 22 (data
+//     exception — e.g. 22021, a NUL byte in a text column).
+//
+// SQLITE_BUSY / SQLITE_LOCKED, class 08 (connection), 40 (transaction
+// rollback, incl. deadlock) and 57 (operator intervention) are all left alone:
+// those go away when the store does.
+func classify(err error) error {
+	if err == nil {
+		return nil
+	}
+	var se *sqlite.Error
+	if errors.As(err, &se) {
+		switch se.Code() & 0xff {
+		case sqlite3.SQLITE_CONSTRAINT, sqlite3.SQLITE_TOOBIG, sqlite3.SQLITE_MISMATCH:
+			return fmt.Errorf("%w: %w", ErrRejected, err)
+		}
+		return err
+	}
+	var pe *pgconn.PgError
+	if errors.As(err, &pe) {
+		if strings.HasPrefix(pe.Code, "23") || strings.HasPrefix(pe.Code, "22") {
+			return fmt.Errorf("%w: %w", ErrRejected, err)
+		}
+	}
+	return err
 }
 
 // execer is the subset of *sql.DB / *sql.Tx the shared write helpers need.

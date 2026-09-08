@@ -98,7 +98,8 @@ exporters:
     sending_queue:
       enabled: true
       sizer: bytes # the bound is memory, not a request count
-      queue_size: 67108864 # 64 MiB of accepted, not-yet-written batches — past it the receiver
+      queue_size: 67108864 # 64 MiB of accepted, not-yet-written batches, measured proto-encoded (resident
+      #                      memory is a multiple — budget several × this in the pod's limit) — past it the receiver
       #                      answers 503 and the SDK retries (the queue REJECTS when full; it never blocks)
       num_consumers: 4
     retry_on_failure:

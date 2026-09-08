@@ -146,8 +146,9 @@ Flow specifics:
 - Fronts forward with the core `otlphttp` exporter: in-memory queue + retries
   ride out a store-pod restart; a front crash loses only its queue.
 - The store pod's write is queued + retried the same way (`flanjstore`
-  exporter, on by default — 64 MiB in memory, 15 minutes of backoff, rejecting
-  when full so the front's queue takes over), and the store is idempotent on
+  exporter, on by default — 64 MiB of proto-encoded batches, so budget several
+  × that in the pod's memory limit; 15 minutes of backoff; rejecting when full
+  so the front's queue takes over), and the store is idempotent on
   call id and finding id: a database outage shorter than that loses nothing
   the store pod accepted, and a re-sent batch duplicates nothing. This holds on
   the single-pod and shared-postgres shapes too — there it is the SDK's own

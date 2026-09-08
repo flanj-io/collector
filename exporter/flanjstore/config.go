@@ -24,8 +24,10 @@ type Config struct {
 	// QueueConfig is the upstream `sending_queue`: a bounded IN-MEMORY buffer
 	// of received batches ahead of the store write. The receiver ACKs a batch
 	// once it is queued, and a consumer goroutine writes it; a failed write is
-	// retried per RetryConfig. Default: on, sized in BYTES (64 MiB), four
-	// consumers, and REJECTING when full — a full queue hands the batch back to
+	// retried per RetryConfig. Default: on, sized in BYTES (64 MiB of
+	// proto-encoded batches — the resident pdata is a multiple of that, so
+	// budget several × in the pod's memory limit), four consumers, and
+	// REJECTING when full — a full queue hands the batch back to
 	// the receiver as a retryable error (503), which keeps the SDK's / a
 	// front's own retry as the backstop instead of blocking the pipeline.
 	// `enabled: false` restores the synchronous write.
@@ -45,7 +47,9 @@ const (
 	// defaultQueueBytes bounds the in-memory queue: 64 MiB of undelivered
 	// batches — a quarter of the default on-disk window (256 MiB), and minutes
 	// of traffic at any rate a single store pod sees. Past it the receiver
-	// refuses, and the SDK / the front holds the batch instead.
+	// refuses, and the SDK / the front holds the batch instead. The `bytes`
+	// sizer measures the PROTO encoding (exporterhelper queuebatch LogsSize);
+	// the pdata resident for those batches is a multiple of it.
 	defaultQueueBytes = 64 << 20
 	// defaultNumConsumers matches a front's `otlphttp` (four). The sqlite
 	// backend serialises writers behind its mutex anyway; postgres resolves

@@ -24,8 +24,12 @@ this exporter routes those to `PutSpecInfo` like any spec_info; a raw
   `exporterhelper.NewLogs` with `WithStart`, `WithRetry` and `WithQueue`
   (see "Durability").
 - `exporter.go` — `start` resolves the store (`store.Provider`); `consumeLogs`
-  dispatches by `flanj.record.type`. `InsertFinding` pins the source call
-  (pin-on-finding).
+  dispatches by `flanj.record.type`, stamps `flanj.call.id` onto an unstamped
+  call record (`otlpattr.EnsureCallID`, BEFORE decoding — "Durability" below)
+  and classifies a failed write (`writeErr`: `store.ErrRejected` → permanent,
+  everything else retryable). `InsertFinding` pins the source call
+  (pin-on-finding). `consumerCaps` declares `MutatesData` for the stamp — this
+  is the terminal, sole consumer, so the fanout clones nothing.
 - `config.go` — `Config` carries ONLY upstream's two failure sections,
   `sending_queue` + `retry_on_failure` (the same keys as a front's `otlphttp`),
   both on by default with defaults tuned for the last hop before persistence.
@@ -33,7 +37,10 @@ this exporter routes those to `PutSpecInfo` like any spec_info; a raw
 - `exporter_test.go` — the launch-week-5 regressions over the REAL sqlite store
   behind a fail-on-command double: an outage and a mid-batch failure both land
   exactly once; a full queue refuses retryably; the default config keeps the
-  queue + retry on.
+  queue + retry on. Review of #46 (2026-09-08): an UNSTAMPED call (the golden
+  record as the SDK sends it) retried mid-batch lands as two rows, not three;
+  a poison batch (id-less finding + a store-rejected record) is dropped after
+  ONE attempt and logged, while a transient failure still retries and lands.
 
 ## Invariants
 
@@ -70,7 +77,10 @@ Now the sender chain is **queue → retry → write**, with the store idempotent
 on both record ids:
 
 - **`sending_queue`** — a bounded IN-MEMORY queue, sized in **bytes (64 MiB
-  default)**, four consumers, **rejecting when full**. The receiver ACKs on
+  of proto-encoded batches by default — the `bytes` sizer counts the OTLP
+  proto encoding, and the resident pdata is a multiple of it, so budget
+  several × that in the pod's memory limit)**, four consumers, **rejecting
+  when full**. The receiver ACKs on
   enqueue; a full queue hands the batch back as a retryable error (a 503), so
   the SDK's / a front's own retry stays the backstop instead of the pipeline
   blocking. No batching inside the queue: a received request is written whole,
@@ -78,10 +88,27 @@ on both record ids:
 - **`retry_on_failure`** — exponential backoff on a failed write, 1 s → 30 s,
   giving up after **15 minutes** (three times a front's 5, because this is the
   durable sink; `0` never gives up — memory is bounded by the queue either way).
-  Every error from the store is treated as transient; `consumeLogs` DROPS
-  malformed records itself (logged) so no batch can be permanently poisoned.
+  **What is dropped and what is retried** (review of #46, 2026-09-08):
+  `consumeLogs` drops — per record, logged, the rest of the batch going on — a
+  finding or `spec_info` that does not decode, and a finding with no `id` (the
+  occurrence ledger cannot track it, so a retry would count it again). A
+  record the STORE refuses (`store.ErrRejected`: sqlite `SQLITE_CONSTRAINT`,
+  postgres SQLSTATE class 23/22 — deterministic on the record, so every
+  attempt would fail the same way) is returned `consumererror.NewPermanent`:
+  the retry sender drops that batch after ONE attempt, logged with the record
+  id. What landed before it stays (idempotent); what came after it in the
+  batch is lost with it — a partial retry (`consumererror.NewLogs`) is a
+  follow-up. Everything else (connection, lock, timeout) is retried for the
+  full `max_elapsed_time`. Without the split, a poison batch pinned a queue
+  consumer for 15 minutes on every re-delivery.
 - **Idempotent writes** — `InsertCall` is `ON CONFLICT (id) DO NOTHING` (edge
-  `call_count` bumps only for a new row); `PutSpecInfo` is an upsert; and
+  `call_count` bumps only for a new row) — keyed on `flanj.call.id`, which
+  the SDK never emits and only the drift processor stamps, so a call reaching
+  a store pod's `:4318` with no front (pipeline `[flanjredaction]` only) has
+  none: `consumeLogs` stamps it onto the QUEUED record (`EnsureCallID`) before
+  decoding, so a retry re-uses it instead of minting a fresh id per attempt
+  (review of #46 — a 2-call batch retried mid-batch used to land as 3 rows,
+  `call_count` 3); `PutSpecInfo` is an upsert; and
   `InsertFinding` keeps an **occurrence ledger** keyed by the finding record's
   own id (`internal/store` `recordOccurrence`, 2026-09-07), so a re-delivered
   finding counts once — a repeat is a NEW detection with a NEW id. A retried
@@ -100,8 +127,9 @@ them behind its mutex; postgres resolves them per call id (advisory locks), as
 it already had to for N pods.
 
 **The trade-off, stated plainly.** The ACK point moves from "written" to
-"queued". What is in the queue when the PROCESS dies is lost — at most 64 MiB,
-the same at-most-once-across-a-crash a front's queue already has (`docs/STORE.md`).
+"queued". What is in the queue when the PROCESS dies is lost — at most 64 MiB
+of proto-encoded batches, the same at-most-once-across-a-crash a front's queue
+already has (`docs/STORE.md`).
 Before this change the same crash lost nothing queued, because nothing was:
 the SDK still held the batch. Against that: a store outage while the process
 lives no longer drops a single accepted batch for 15 minutes, on every shape.
@@ -118,8 +146,9 @@ something the write path cannot honour.
 
 ## Tests
 
-Store behaviour (ring buffer, pin, promote, the occurrence ledger) is tested in
-`internal/store`; this exporter's queue/retry/idempotency contract in
+Store behaviour (ring buffer, pin, promote, the occurrence ledger, and the
+`ErrRejected` classification on both backends — `rejected_test.go`) is tested
+in `internal/store`; this exporter's queue/retry/idempotency contract in
 `exporter_test.go` (above). The e2e postgres lane drives the real thing
 (`e2e/tests/store-durability.spec.ts`: DB stopped for longer than the SDK's own
 retry budget, a call and its finding driven meanwhile, both present exactly once

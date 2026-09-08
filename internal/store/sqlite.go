@@ -177,7 +177,8 @@ var specInfoAddedColumns = []string{
 // InsertCall stores a RedactedCall (idempotent on id), discovers/updates the edge
 // it belongs to, and then runs eviction. Edge discovery is keyed by
 // (peer_host, direction) — no target list is configured.
-func (s *sqliteStore) InsertCall(c model.RedactedCall) error {
+func (s *sqliteStore) InsertCall(c model.RedactedCall) (err error) {
+	defer func() { err = classify(err) }() // ErrRejected on a constraint the ON CONFLICT does not absorb
 	doc, err := json.Marshal(c)
 	if err != nil {
 		return fmt.Errorf("marshal call: %w", err)
@@ -254,7 +255,8 @@ func (s *sqliteStore) upsertEdgeLocked(peerHost, direction, class, at string) er
 // failed write, a front re-sending after a lost ACK — changes nothing the
 // second time. Every statement runs in one transaction, so a write that fails
 // half-way leaves no ledger row behind and the retry applies the finding in full.
-func (s *sqliteStore) InsertFinding(f model.Finding) error {
+func (s *sqliteStore) InsertFinding(f model.Finding) (err error) {
+	defer func() { err = classify(err) }() // ErrRejected on a constraint the ON CONFLICT does not absorb
 	if f.Signature == "" {
 		f.Signature = f.ComputeSignature()
 	}
@@ -453,14 +455,15 @@ func (s *sqliteStore) evictLocked(keepID string) error {
 // PutSpecInfo upserts the provider contract loaded by the drift processor,
 // keyed by integration. rawSpec is the spec document exactly as loaded; the UI
 // serves it verbatim so engineers can open the contract being validated.
-func (s *sqliteStore) PutSpecInfo(info model.SpecInfo, rawSpec []byte) error {
+func (s *sqliteStore) PutSpecInfo(info model.SpecInfo, rawSpec []byte) (err error) {
+	defer func() { err = classify(err) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	role := info.Role
 	if role == "" {
 		role = model.SpecRoleProvider
 	}
-	_, err := s.db.Exec(
+	_, err = s.db.Exec(
 		`INSERT INTO spec_infos (integration, role, peer_host, edge_class, format, title, version, docs_url, endpoints, loaded_at, doc)
 		   VALUES (?,?,?,?,?,?,?,?,?,?,?)
 		 ON CONFLICT(integration) DO UPDATE SET

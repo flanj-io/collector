@@ -198,7 +198,8 @@ ALTER TABLE calls ADD COLUMN IF NOT EXISTS drifted INTEGER NOT NULL DEFAULT 0;
 // edge it belongs to, and then runs best-effort eviction. The insert + edge
 // upsert share one transaction so call_count can never count a call that was
 // not stored.
-func (p *postgresStore) InsertCall(c model.RedactedCall) error {
+func (p *postgresStore) InsertCall(c model.RedactedCall) (err error) {
+	defer func() { err = classify(err) }() // ErrRejected on SQLSTATE class 23/22
 	doc, err := json.Marshal(c)
 	if err != nil {
 		return fmt.Errorf("marshal call: %w", err)
@@ -286,7 +287,8 @@ func (p *postgresStore) upsertEdgeTx(tx *sql.Tx, peerHost, direction, class, at 
 // ACK, the same batch landing on two pods — applies nothing the second time.
 // The ledger row commits with the finding or not at all, so a write that fails
 // half-way leaves nothing behind for the retry to trip over.
-func (p *postgresStore) InsertFinding(f model.Finding) error {
+func (p *postgresStore) InsertFinding(f model.Finding) (err error) {
+	defer func() { err = classify(err) }() // ErrRejected on SQLSTATE class 23/22
 	if f.Signature == "" {
 		f.Signature = f.ComputeSignature()
 	}
@@ -501,12 +503,13 @@ func (p *postgresStore) evict(keepID string) error {
 // PutSpecInfo upserts the provider contract loaded by the drift processor —
 // a single atomic upsert, safe for concurrent pod starts (last writer wins,
 // and every pod loads the same mounted spec).
-func (p *postgresStore) PutSpecInfo(info model.SpecInfo, rawSpec []byte) error {
+func (p *postgresStore) PutSpecInfo(info model.SpecInfo, rawSpec []byte) (err error) {
+	defer func() { err = classify(err) }()
 	role := info.Role
 	if role == "" {
 		role = model.SpecRoleProvider
 	}
-	_, err := p.db.Exec(p.rebind(
+	_, err = p.db.Exec(p.rebind(
 		`INSERT INTO spec_infos (integration, role, peer_host, edge_class, format, title, version, docs_url, endpoints, loaded_at, doc)
 		   VALUES (?,?,?,?,?,?,?,?,?,?,?)
 		 ON CONFLICT (integration) DO UPDATE SET

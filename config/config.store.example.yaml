@@ -83,7 +83,7 @@ exporters:
     sending_queue:
       enabled: true
       sizer: bytes
-      queue_size: 67108864 # 64 MiB
+      queue_size: 67108864 # 64 MiB, proto-encoded (resident memory is a multiple — budget several × this)
       num_consumers: 4
     retry_on_failure:
       enabled: true

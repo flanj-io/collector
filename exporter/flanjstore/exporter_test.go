@@ -3,8 +3,10 @@ package flanjstore
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -19,6 +21,8 @@ import (
 	noopmetric "go.opentelemetry.io/otel/metric/noop"
 	nooptrace "go.opentelemetry.io/otel/trace/noop"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/flanj-io/collector/internal/model"
 	"github.com/flanj-io/collector/internal/otlpattr"
@@ -42,6 +46,11 @@ type flakyStore struct {
 	failNth  int  // >0: fail exactly the nth write attempt, once (a mid-batch failure)
 	attempts int
 	failures int
+	// rejectCallID, when set, makes InsertCall of that id come back as the
+	// store's own deterministic refusal (store.ErrRejected — what both
+	// backends wrap a constraint/encoding violation in; proven real on both
+	// in internal/store rejected_test.go). Every attempt counts and fails.
+	rejectCallID string
 	// blockOn, when set, parks InsertCall until released — for the queue-full
 	// test. blocked is closed (once) when the first write parks.
 	blockOn   chan struct{}
@@ -77,7 +86,15 @@ func (f *flakyStore) stats() (attempts, failures int) {
 func (f *flakyStore) InsertCall(c model.RedactedCall) error {
 	f.mu.Lock()
 	park := f.blockOn
+	reject := f.rejectCallID != "" && c.ID == f.rejectCallID
+	if reject {
+		f.attempts++
+		f.failures++
+	}
 	f.mu.Unlock()
+	if reject {
+		return fmt.Errorf("insert call: %w: simulated UNIQUE violation", store.ErrRejected)
+	}
 	if park != nil {
 		f.blockOnce.Do(func() { close(f.blocked) })
 		<-park
@@ -108,12 +125,12 @@ type extHost struct {
 
 func (h extHost) GetExtensions() map[component.ID]component.Component { return h.exts }
 
-func testSettings() exporter.Settings {
+func testSettings(logger *zap.Logger) exporter.Settings {
 	set := exporter.Settings{
 		ID:        component.NewID(typeStr),
 		BuildInfo: component.NewDefaultBuildInfo(),
 	}
-	set.Logger = zap.NewNop()
+	set.Logger = logger
 	set.TracerProvider = nooptrace.NewTracerProvider()
 	set.MeterProvider = noopmetric.NewMeterProvider()
 	set.Resource = pcommon.NewResource()
@@ -138,6 +155,13 @@ func fastRetry(t *testing.T) *Config {
 // newExporter builds the exporter over a real sqlite store wrapped in flaky.
 func newExporter(t *testing.T, cfg *Config) (exporter.Logs, *flakyStore) {
 	t.Helper()
+	return newExporterLogging(t, cfg, zap.NewNop())
+}
+
+// newExporterLogging is newExporter with the exporter's (and exporterhelper's)
+// logger supplied, for the tests that assert what gets logged.
+func newExporterLogging(t *testing.T, cfg *Config, logger *zap.Logger) (exporter.Logs, *flakyStore) {
+	t.Helper()
 	real, err := store.OpenSQLite(filepath.Join(t.TempDir(), "flanj.db"), 0, 0)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -145,7 +169,7 @@ func newExporter(t *testing.T, cfg *Config) (exporter.Logs, *flakyStore) {
 	t.Cleanup(func() { _ = real.Close() })
 	flaky := &flakyStore{Store: real}
 
-	exp, err := createLogsExporter(context.Background(), testSettings(), cfg)
+	exp, err := createLogsExporter(context.Background(), testSettings(logger), cfg)
 	if err != nil {
 		t.Fatalf("create exporter: %v", err)
 	}
@@ -158,9 +182,10 @@ func newExporter(t *testing.T, cfg *Config) (exporter.Logs, *flakyStore) {
 	return exp, flaky
 }
 
-// goldenCall loads the SDK→collector golden call and gives it the id — the
-// front-stamped flanj.call.id that makes call inserts idempotent.
-func goldenCall(t *testing.T, id string) plog.LogRecord {
+// goldenCallUnstamped loads the SDK→collector golden call exactly as the SDK
+// sends it: with NO flanj.call.id (the SDK never emits one; only the drift
+// processor stamps it). Stripped defensively in case the fixture ever grows one.
+func goldenCallUnstamped(t *testing.T) plog.LogRecord {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join("..", "..", "contracts", "golden-otlp-call.json"))
 	if err != nil {
@@ -173,6 +198,15 @@ func goldenCall(t *testing.T, id string) plog.LogRecord {
 	src := ld.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0)
 	lr := plog.NewLogRecord()
 	src.CopyTo(lr)
+	lr.Attributes().Remove(otlpattr.AttrCallID)
+	return lr
+}
+
+// goldenCall is the golden call as a FRONT forwards it: with the id — the
+// drift-processor-stamped flanj.call.id that makes call inserts idempotent.
+func goldenCall(t *testing.T, id string) plog.LogRecord {
+	t.Helper()
+	lr := goldenCallUnstamped(t)
 	lr.Attributes().PutStr(otlpattr.AttrCallID, id)
 	return lr
 }
@@ -426,5 +460,150 @@ func TestDefaultConfig_QueueAndRetryOn(t *testing.T) {
 	}
 	if err := off.Validate(); err != nil {
 		t.Errorf("validate: %v", err)
+	}
+}
+
+// TestUnstampedCall_RetryDoesNotDuplicate (review of #46, 2026-09-08): a call
+// that reaches this exporter with NO flanj.call.id — the SDK never emits one,
+// and a store pod's :4318 with no front in front of it runs [flanjredaction]
+// only, so nothing upstream stamps it. Call idempotency rests on that id: when
+// CallFromRecord minted it per DECODE, every retry attempt got a new one, `ON
+// CONFLICT (id) DO NOTHING` never fired, and the reviewer's 2-call batch with
+// failNth=2 landed as 3 rows / call_count 3. The id must be stamped onto the
+// queued record itself, before decoding, so the retry re-uses it.
+func TestUnstampedCall_RetryDoesNotDuplicate(t *testing.T) {
+	exp, flaky := newExporter(t, fastRetry(t))
+	defer func() { _ = exp.Shutdown(context.Background()) }()
+
+	ld := plog.NewLogs()
+	recs := ld.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords()
+	for i := 0; i < 2; i++ {
+		goldenCallUnstamped(t).CopyTo(recs.AppendEmpty())
+	}
+	for i := 0; i < recs.Len(); i++ {
+		if _, ok := recs.At(i).Attributes().Get(otlpattr.AttrCallID); ok {
+			t.Fatalf("record %d must reach the exporter unstamped", i)
+		}
+	}
+	flaky.set(func(f *flakyStore) { f.failNth = 2 }) // the second write of the first attempt
+
+	if err := exp.ConsumeLogs(context.Background(), ld); err != nil {
+		t.Fatalf("ConsumeLogs: %v", err)
+	}
+	waitFor(t, "the retried batch to land", func() bool {
+		a, _ := flaky.stats()
+		return a >= 4 // 2 writes (1 ok, 1 failed) + 2 on the retry
+	})
+	attempts, failures := flaky.stats()
+	if failures != 1 || attempts != 4 {
+		t.Errorf("attempts/failures = %d/%d, want 4/1 (one failure, one full re-delivery)", attempts, failures)
+	}
+
+	calls, findings, err := flaky.Store.Counts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 || findings != 0 {
+		t.Fatalf("store holds %d calls / %d findings, want exactly 2 / 0 — the retry minted new ids", calls, findings)
+	}
+	edges, err := flaky.Store.ListEdges(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(edges) != 1 || edges[0].CallCount != 2 {
+		t.Fatalf("edges = %+v, want one edge with call_count 2", edges)
+	}
+	// The ids the store holds are the ones now stamped on the queued records.
+	for i := 0; i < recs.Len(); i++ {
+		v, ok := recs.At(i).Attributes().Get(otlpattr.AttrCallID)
+		if !ok || v.Str() == "" {
+			t.Fatalf("record %d was not stamped with %s on the way through", i, otlpattr.AttrCallID)
+		}
+		if _, ok, err := flaky.Store.GetCall(v.Str()); err != nil || !ok {
+			t.Errorf("stamped id %s of record %d is not the stored row (ok=%v err=%v)", v.Str(), i, ok, err)
+		}
+	}
+}
+
+// TestPoisonBatch_DroppedAfterOneAttempt (review of #46, 2026-09-08): a
+// deterministic failure must not be retried for max_elapsed_time — that pins a
+// queue consumer for 15 minutes on every re-delivery. Two shapes, one batch:
+//   - a finding with no id is dropped by consumeLogs itself (the occurrence
+//     ledger cannot make it idempotent) and the batch goes on;
+//   - a record the STORE refuses (store.ErrRejected) fails the batch as
+//     PERMANENT — one attempt, logged with the record id, no retry.
+//
+// A transient failure on the same exporter is still retried and lands.
+func TestPoisonBatch_DroppedAfterOneAttempt(t *testing.T) {
+	core, logs := observer.New(zapcore.WarnLevel)
+	exp, flaky := newExporterLogging(t, fastRetry(t), zap.New(core))
+	defer func() { _ = exp.Shutdown(context.Background()) }()
+
+	ok1, poison, after := "0191e8c4-0000-7000-8000-000000000031", "0191e8c4-0000-7000-8000-000000000032", "0191e8c4-0000-7000-8000-000000000033"
+	flaky.set(func(f *flakyStore) { f.rejectCallID = poison })
+
+	ld := plog.NewLogs()
+	recs := ld.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords()
+	goldenCall(t, ok1).CopyTo(recs.AppendEmpty())
+	if err := otlpattr.FindingToRecord(recs.AppendEmpty(), driftFinding("", ok1)); err != nil { // id-less
+		t.Fatal(err)
+	}
+	goldenCall(t, poison).CopyTo(recs.AppendEmpty())
+	goldenCall(t, after).CopyTo(recs.AppendEmpty())
+
+	if err := exp.ConsumeLogs(context.Background(), ld); err != nil {
+		t.Fatalf("ConsumeLogs must ACK (queue), got: %v", err)
+	}
+	waitFor(t, "the poison record to be attempted", func() bool {
+		_, failures := flaky.stats()
+		return failures >= 1
+	})
+	// Give the retry sender every chance to retry (it backs off 10 ms here):
+	// a second attempt on the rejected record would show up as attempts > 2.
+	time.Sleep(300 * time.Millisecond)
+	if attempts, failures := flaky.stats(); attempts != 2 || failures != 1 {
+		t.Fatalf("attempts/failures = %d/%d, want 2/1: ok1 written, poison refused ONCE, nothing retried", attempts, failures)
+	}
+	calls, findings, err := flaky.Store.Counts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 || findings != 0 {
+		t.Fatalf("store holds %d calls / %d findings, want 1 / 0 (ok1 landed; the id-less finding was dropped; poison and what followed it went with the batch)", calls, findings)
+	}
+	if _, ok, _ := flaky.Store.GetCall(ok1); !ok {
+		t.Errorf("ok1 must have landed before the batch was dropped")
+	}
+	var sawIDLess, sawRejected bool
+	for _, entry := range logs.All() {
+		switch {
+		case strings.Contains(entry.Message, "without id"):
+			sawIDLess = true
+		case strings.Contains(entry.Message, "store rejected record"):
+			sawRejected = true
+			if entry.ContextMap()["id"] != poison {
+				t.Errorf("the rejection log must name the record, got %v", entry.ContextMap())
+			}
+		}
+	}
+	if !sawIDLess || !sawRejected {
+		t.Errorf("dropped records must be logged: id-less=%v rejected=%v (%d entries)", sawIDLess, sawRejected, logs.Len())
+	}
+
+	// Contrast: a TRANSIENT failure on the very next batch is retried and lands.
+	flaky.set(func(f *flakyStore) {
+		f.rejectCallID = ""
+		f.failNth = f.attempts + 1 // the next write fails once
+	})
+	transient := "0191e8c4-0000-7000-8000-000000000034"
+	if err := exp.ConsumeLogs(context.Background(), batch(t, []string{transient}, nil)); err != nil {
+		t.Fatalf("ConsumeLogs (transient): %v", err)
+	}
+	waitFor(t, "the transiently failed write to be retried and land", func() bool {
+		_, ok, _ := flaky.Store.GetCall(transient)
+		return ok
+	})
+	if _, failures := flaky.stats(); failures != 2 {
+		t.Errorf("failures = %d, want 2 (the rejection + the one transient failure)", failures)
 	}
 }
