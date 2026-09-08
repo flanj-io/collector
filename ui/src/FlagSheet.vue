@@ -201,9 +201,9 @@ async function openThread() {
 // user was tabbing through the Overview behind the backdrop):
 //   1. `inert` on everything outside the sheet — pointer, focus and the
 //      accessibility tree at once. Every targeted browser honours it (the build
-//      targets Vite's baseline-widely-available set: Chrome 107 / Firefox 104 /
-//      Safari 16 and up, all past `inert`'s arrival), so there is no
-//      aria-hidden fallback to maintain.
+//      targets Vite 8's baseline-widely-available set: Chrome 111 / Edge 111 /
+//      Firefox 114 / Safari 16.4 and up — all past `inert`'s arrival, Firefox
+//      112 being the last), so there is no aria-hidden fallback to maintain.
 //   2. Tab / Shift+Tab wrap inside the sheet's own controls (first ↔ last).
 //   3. Focus returns to the control that opened the sheet when it closes.
 const FOCUSABLE =
@@ -251,12 +251,16 @@ function onKey(ev: KeyboardEvent) {
   }
   const first = items[0];
   const last = items[items.length - 1];
+  // Focus can rest INSIDE the sheet but on no control — the sheet div itself
+  // (tabindex="-1") after a click on its text. From there the browser's own
+  // previous/next focusable is outside and inert, so the trap must wrap.
+  const onControl = active instanceof HTMLElement && items.includes(active);
   if (ev.shiftKey) {
-    if (!inside || active === first) {
+    if (!inside || !onControl || active === first) {
       ev.preventDefault();
       last.focus();
     }
-  } else if (!inside || active === last) {
+  } else if (!inside || !onControl || active === last) {
     ev.preventDefault();
     first.focus();
   }

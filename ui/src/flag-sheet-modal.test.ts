@@ -195,4 +195,17 @@ describe('the flag sheet is the modal it claims to be', () => {
     wrapper = null;
     expect(document.activeElement).toBe(document.getElementById('view'));
   });
+
+  it('Tab and Shift+Tab from the sheet div itself (focus on no control) wrap into the controls', async () => {
+    page();
+    await open();
+    const sheet = dialog();
+    sheet.focus();
+    expect(document.activeElement).toBe(sheet);
+    press('Tab', true);
+    expect(document.activeElement).toBe(last());
+    sheet.focus();
+    press('Tab');
+    expect(document.activeElement).toBe(first());
+  });
 });
