@@ -300,8 +300,12 @@ func specInfoFor(doc *openapi3.T, role, integration, peerHost string) model.Spec
 		Integration: integration,
 		Role:        role,
 		PeerHost:    peerHost,
-		Format:      "openapi",
-		LoadedAt:    time.Now().UTC().Format(time.RFC3339),
+		Format:      model.SpecFormatOpenAPI,
+		// Explicit, not the store's column default: the default is also
+		// "config", which is exactly how an unset Source on the observed MCP
+		// path went unnoticed. Every writer names its own provenance.
+		Source:   model.SpecSourceConfig,
+		LoadedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 	if doc.Paths != nil {
 		info.Endpoints = doc.Paths.Len()
@@ -368,21 +372,36 @@ func (p *driftProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.Logs
 					continue
 				}
 				otlpattr.EnsureCallID(lr) // stamp the shared id before reconstruct
+				//
+				// EVERY branch below ends in a verdict stamp (otlpattr.StampValidated):
+				// what this processor did with the call, or the first gate that
+				// stopped it. The stamp is the fact the UI's contract chip reads
+				// — it used to INFER "checked" from the contract list (a document
+				// bound to the host, bound before the call), and that inference
+				// said CONFORMING over calls that went through here while the
+				// upload was still on its way to this cache: seconds on a single
+				// pod, ten on a tiered front, forever on a front whose
+				// store_pod_token is wrong. Only this process can say whether it
+				// validated a call, so it says so on every one.
+				//
 				// MCP tools/call records take the MCP detection path (validated
 				// against the observed snapshot), NEVER the OpenAPI one.
 				if otlpattr.Transport(lr) == otlpattr.TransportMCP {
-					if p.mcp != nil {
-						call := otlpattr.CallFromRecord(lr)
-						// No baseline for this edge: the call is captured, not
-						// judged. On a tiered front the store pod may well hold
-						// the tools/list a sibling front observed, so ask for
-						// an early refresh — the same first-sight kick the REST
-						// path gives an uncovered host. Never blocks; floored.
-						if !p.mcp.HasBaseline(call.PeerHost, call.Direction) {
-							p.kickRefresh()
-						}
-						findings = append(findings, p.mcp.DetectCall(call)...)
+					if p.mcp == nil {
+						otlpattr.StampValidated(lr, model.NotValidated(model.NotValidatedNoContract))
+						continue
 					}
+					call := otlpattr.CallFromRecord(lr)
+					// No baseline for this edge yet: on a tiered front the store pod
+					// may well hold the tools/list a sibling front observed, so ask
+					// for an early refresh — the same first-sight kick the REST path
+					// gives an uncovered host. Never blocks; floored.
+					if !p.mcp.HasBaseline(call.PeerHost, call.Direction) {
+						p.kickRefresh()
+					}
+					fs, verdict := p.mcp.JudgeCall(call)
+					findings = append(findings, fs...)
+					otlpattr.StampValidated(lr, verdict)
 					continue
 				}
 				// Nothing to validate against → pass-through (capture + edge
@@ -396,6 +415,7 @@ func (p *driftProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.Logs
 				// never blocks and the loop floors how often it may act.
 				if p.selfDoc == nil && p.specs.empty() {
 					p.kickRefresh()
+					otlpattr.StampValidated(lr, model.NotValidated(model.NotValidatedNoContract))
 					continue
 				}
 				call := otlpattr.CallFromRecord(lr)
@@ -404,14 +424,12 @@ func (p *driftProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.Logs
 					// INBOUND: we are the provider — validate OUR responses
 					// against OUR OWN published contract.
 					if p.selfDoc == nil {
+						otlpattr.StampValidated(lr, model.NotValidated(model.NotValidatedNoContract))
 						continue
 					}
-					fs, err := drift.DetectLiveVsSpec(p.selfDoc, call)
-					if err != nil {
-						if p.logger != nil {
-							p.logger.Debug("self live-vs-spec skipped", zap.String("route", call.Route), zap.Error(err))
-						}
-						continue
+					fs, verdict, jerr := drift.JudgeLiveVsSpec(p.selfDoc, call)
+					if verdict.Verdict == model.ValidatedNot && p.logger != nil {
+						p.logger.Debug("self live-vs-spec skipped", zap.String("route", call.Route), zap.String("reason", verdict.Reason), zap.NamedError("cause", jerr))
 					}
 					// Findings label with the call's integration (the org id) by
 					// default; relabel to the self contract's id so self and
@@ -422,6 +440,7 @@ func (p *driftProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.Logs
 						fs[i].Signature = fs[i].ComputeSignature()
 					}
 					findings = append(findings, fs...)
+					otlpattr.StampValidated(lr, verdict)
 					continue
 				}
 
@@ -431,23 +450,24 @@ func (p *driftProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.Logs
 				// Contracts are bound to exactly one host at upload, so the
 				// host IS the lookup. A call to a host with no contract is not
 				// an error and not a finding: it was captured, not validated,
-				// and the UI says exactly that. Ask for an early refresh in
-				// case the contract was uploaded moments ago.
+				// and the UI says exactly that — off the stamp. Ask for an early
+				// refresh in case the contract was uploaded moments ago.
 				doc, ok := p.specs.lookup(call.PeerHost)
 				if !ok {
 					p.kickRefresh()
+					otlpattr.StampValidated(lr, model.NotValidated(model.NotValidatedNoContract))
 					continue
 				}
-				fs, err := drift.DetectLiveVsSpec(doc, call)
-				if err != nil {
-					// A route miss or reconstruction error is logged, not fatal —
-					// v0's deterministic finding is the response-schema mismatch.
-					if p.logger != nil {
-						p.logger.Debug("live-vs-spec skipped", zap.String("route", call.Route), zap.Error(err))
-					}
-					continue
+				// A route miss, a response the document does not describe, or a
+				// body that will not decode is logged, not fatal — v0's
+				// deterministic finding is the response-schema mismatch — and
+				// the verdict names it, so the call never reads as clean.
+				fs, verdict, jerr := drift.JudgeLiveVsSpec(doc, call)
+				if verdict.Verdict == model.ValidatedNot && p.logger != nil {
+					p.logger.Debug("live-vs-spec skipped", zap.String("route", call.Route), zap.String("reason", verdict.Reason), zap.NamedError("cause", jerr))
 				}
 				findings = append(findings, fs...)
+				otlpattr.StampValidated(lr, verdict)
 			}
 		}
 	}

@@ -44,13 +44,23 @@ describe('provenance', () => {
   it('the word tracks the SOURCE, so which contract is live reads on sight', () => {
     expect(provenanceWord(uploaded('api.acme.test'))).toBe('uploaded');
     expect(provenanceWord({ integration: 'self', role: 'self', source: 'config' })).toBe('loaded');
-    expect(provenanceWord({ integration: 'mcp-acme', format: 'mcp' })).toBe('observed');
+    expect(provenanceWord({ integration: 'mcp-acme', format: 'mcp', source: 'observed' })).toBe('observed');
+  });
+
+  it('trusts the stored source ahead of the format', () => {
+    // The format branch used to run first, so this card said "observed" while
+    // the store — and every filter, client and conflict check reading it —
+    // held `config` for every snapshot (2026-09-07). The stored word wins, so
+    // a wrong one is visible on the one card that can show it.
+    expect(provenanceWord({ integration: 'mcp-acme', format: 'mcp', source: 'config' })).toBe('loaded');
   });
 
   it('falls back sensibly for rows written before provenance was recorded', () => {
-    // A provider contract can only have been uploaded; a self contract can only
-    // have come from config. Guessing wrong here would put the wrong word on a
-    // card, which is the one thing this line exists to get right.
+    // No source at all: an MCP snapshot can only have been observed, a
+    // provider contract can only have been uploaded, and a self contract can
+    // only have come from config. Guessing wrong here would put the wrong word
+    // on a card, which is the one thing this line exists to get right.
+    expect(provenanceWord({ integration: 'mcp-acme', format: 'mcp' })).toBe('observed');
     expect(provenanceWord({ integration: 'acme', role: 'provider' })).toBe('uploaded');
     expect(provenanceWord({ integration: 'self', role: 'self' })).toBe('loaded');
   });

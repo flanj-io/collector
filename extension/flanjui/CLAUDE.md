@@ -55,8 +55,15 @@ API + the flag action.
     confirms. `GET` → `{status: disconnected|pending|connected,
     consumer_display_name, contact_email, contact_display_name,
     confirmed_contact_email, collector_public_id, registered_at, confirmed_at,
-    local_ui_url}` refreshed from `me` (≤1 CP call / 10s per pod; the UI polls it
-    every 5s while pending).
+    local_ui_url, dashboard_url?}` refreshed from `me` (≤1 CP call / 10s per pod; the UI polls it
+    every 5s while pending). `dashboard_url` is the SPA's one door out (the
+    Connected pill): present only while Connected AND the collector holds an
+    address a BROWSER can open — `cp_public_url`, or a `cp_base_url` whose host
+    is not obviously non-public (`dashboardURL` / `obviouslyNonPublicHost`).
+    It is never minted from the promote client's base alone: that is where the
+    collector's requests go (docker DNS, a k8s Service), not where a laptop
+    can (launch-week item 8, 2026-09-07). Absent → the SPA keeps the pill a
+    Settings button.
   - `POST /api/flag {finding_id, message?, provider_display_name?}` — **Create
     thread**: `403 {error: not_flaggable}` for LOCAL-ONLY finding kinds
     (`model.Finding.Flaggable()` — `stale_client`, and only `stale_client`): the
@@ -132,7 +139,9 @@ collector is outbound-only; nothing serves off-host.
   at Docker build time (only the placeholder is tracked; `web/dist/assets/` is
   gitignored).
 - `config.go` — frozen keys `ui_endpoint`, `integration_id`,
-  `consumer_display_name`, `provider_display_name`, `cp_base_url`, `cp_deploy_token` (CONTRACTS §8).
+  `consumer_display_name`, `provider_display_name`, `cp_base_url`, `cp_public_url`
+  (optional, browser-facing — validated at boot: absolute http(s), no
+  credentials), `cp_deploy_token` (CONTRACTS §8).
   `provider_display_name` is the FLAG's fallback provider name only — it stopped
   naming edges when contracts moved into the UI (its edge linkage came from the
   config spec's `peer_host`).

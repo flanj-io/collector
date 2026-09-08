@@ -40,10 +40,15 @@ cache — so it validates immediately, no restart: the store extension ANNOUNCES
 the cache refreshes on the spot (`store.SpecPublisher`/`SpecSubscriber`). Announcements are in-process, so the
 two topologies the announcement cannot cross — a tiered front, and the other pods of a shared-postgres
 deployment — converge on the cache's own ticker instead, within ten seconds. A call to a host with no contract is captured, not
-validated, and the UI says exactly that. **MCP edges (v0.5) need no spec at all**: the SDK's observed `tools/list` arrives as a
+validated, and the UI says exactly that — off the **drift processor's own per-call verdict** (`flanj.validated` +
+`flanj.validated.reason`, CONTRACTS §2, 2026-09-07): every call the processor sees is stamped `clean` / `drifted` /
+`not-validated`, the stamp crosses the tiered hop with the record, the store keeps it (`calls.validated`), and the UI's
+contract chip READS it instead of inferring "checked" from the contract list — which said CONFORMING over calls that
+went through before the processor had loaded the upload (seconds on one pod, ten on a tiered front, forever on a front
+with the wrong `store_pod_token`). A call with no verdict is `not checked`, never conforming. **MCP edges (v0.5) need no spec at all**: the SDK's observed `tools/list` arrives as a
 `contract_snapshot` record — the self-delivering local spec — versioned by content hash in the drift processor
-(previous snapshot kept for diffing; persisted as a `spec_infos` row, format `"mcp"`, so the Contracts tab lists
-the server and restarts re-seed). MCP findings: `output_mismatch` + `definition_change` (flaggable at every class — DESCRIPTION included
+(previous snapshot kept for diffing; persisted as a `spec_infos` row, format `"mcp"` / source `"observed"`, so the
+Contracts tab lists the server and restarts re-seed). MCP findings: `output_mismatch` + `definition_change` (flaggable at every class — DESCRIPTION included
 since qfix2-2026-08-26; a human always presses the control) and the local-only `stale_client`; the flag relay REFUSES local-only kinds server-side
 (`403 not_flaggable` — CONTRACTS §4). A drift is **per endpoint** (HTTP: method+route; MCP: the tool name): findings
 dedup by `signature`, so one drift = one finding (with an `occurrence_count`) = one flag.
@@ -70,7 +75,7 @@ Dockerfile                         # multi-stage: ui (node) -> build (go+ocb) ->
 processor/flanjredaction/       # defense-in-depth redaction floor (Go; idempotent, add-only; also re-scans MCP contract snapshots)
 processor/flanjdrift/           # live-vs-spec (kin-openapi) + version-diff (oasdiff) + the v0.5 MCP path
                                    # (contract_snapshot loader → output_mismatch / definition_change / stale_client); emits Finding records
-exporter/flanjstore/            # writes call + finding records into the store
+exporter/flanjstore/            # writes call + finding records into the store (queued + retried, idempotent — its CLAUDE.md "Durability")
 extension/flanjstore/           # SINGLE store owner (sqlite default | postgres for multi-pod); shared via host.GetExtensions()
 extension/flanjui/              # localhost HTTP: embed.FS Vue SPA + read API + CP relay (connect / flag / threads)
 ui/                                # Vue/Vite SPA (Overview incl. MCP server health + local notices, Traffic live-tail incl.

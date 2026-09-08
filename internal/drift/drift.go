@@ -5,13 +5,19 @@ package drift
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"mime"
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/getkin/kin-openapi/openapi3filter"
+	"github.com/getkin/kin-openapi/routers"
 	"github.com/getkin/kin-openapi/routers/gorillamux"
 
 	contractopenapi "github.com/flanj-io/collector/contract/openapi"
@@ -34,13 +40,148 @@ func LoadSpecData(b []byte) (*openapi3.T, error) {
 	return contractopenapi.LoadData(b)
 }
 
+// RuleContentTypeMismatch is the live-vs-spec rule of a response whose media
+// type the contract declares under no name for that status — not verbatim,
+// not normalized, not by its RFC 6839 base. The provider answers in a shape the
+// contract never promised: drift evidence, one finding per endpoint.
+const RuleContentTypeMismatch = "content-type-mismatch"
+
 // DetectLiveVsSpec reconstructs the request from the stored call and validates
 // the recorded response against doc using ValidateResponse (MultiError: true).
-// Each schema violation becomes one Finding.
+// Each schema violation becomes one Finding; an undeclared response media type
+// on a status the contract DECLARES by exact code becomes one finding too. The
+// remaining ways a response evades judgement — an undeclared status, a range-
+// or default-only status answered with a foreign media type, a required
+// header the call does not carry, a body that will not decode, a response with
+// nothing to compare — yield no finding here; the per-call verdict
+// (JudgeLiveVsSpec) records those as NOT validated, so they must never read
+// clean downstream.
 func DetectLiveVsSpec(doc *openapi3.T, call model.RedactedCall) ([]model.Finding, error) {
+	fs, _, err := judgeLiveVsSpec(doc, call)
+	return fs, err
+}
+
+// JudgeLiveVsSpec is DetectLiveVsSpec plus the verdict the processor stamps on
+// the call (model.Validation): clean or drifted when the response was compared
+// to a schema, and otherwise the first gate that stopped it — not-routable, or
+// one of the refusals kin-openapi reports WITHOUT a SchemaError (an undeclared
+// status or media type, a body it cannot decode). Those refusals carry no
+// finding, and until 2026-09-07 "no finding" was read as clean: a
+// `problem+json` body under a contract that declares `application/json`
+// rendered CONFORMING. Nothing was compared to anything, and the verdict now
+// says so.
+//
+// The error is returned alongside the verdict so the caller can LOG it: a
+// document gorillamux cannot build a router from, or a request that cannot be
+// reconstructed, is not "not routable" — it is the validator failing, and the
+// operator needs the cause, not a tooltip about a route the document does describe.
+func JudgeLiveVsSpec(doc *openapi3.T, call model.RedactedCall) ([]model.Finding, model.Validation, error) {
+	fs, v, err := judgeLiveVsSpec(doc, call)
+	if err != nil {
+		if errors.Is(err, errRouteNotFound) {
+			return nil, model.NotValidated(model.NotValidatedNotRoutable), err
+		}
+		return nil, model.NotValidated(model.NotValidatedValidatorError), err
+	}
+	return fs, v, nil
+}
+
+// errRouteNotFound marks the one judgeLiveVsSpec error that IS "not routable":
+// the document routes nothing for this method + path.
+var errRouteNotFound = errors.New("not routable")
+
+// unjudgedReason classifies a ValidateResponse error that carries no
+// SchemaError — the validator stopped before comparing anything to a schema.
+//
+// Classified by SHAPE, never by kin-openapi's message text: a ResponseError
+// with an inner error is a body it could not read or decode; one without is a
+// refusal of the response itself, and the route's own declarations say whether
+// that was the status (undeclared) or, the status being declared, the media
+// type. The two are split because the operator's fix differs — declare the
+// status, versus declare (or map) the media type.
+//
+// How this composes with flanj-io/collector#44 (content-type-mismatch): #44
+// synthesizes a live-vs-spec finding for a status declared by EXACT code or
+// NXX range that is answered with an undeclared media type — in
+// judgeLiveVsSpec, before this classifier runs, so VerdictOf stamps drifted and
+// this function never sees that case. What DOES reach the media-type branch
+// here is a status declared only via `default` (responseDeclared counts it,
+// exactly as ValidateResponse does; #44's gate deliberately does not): a
+// gateway's `502 text/html` under a JSON `default` is not-validated, named —
+// a catch-all response is not evidence the provider breached anything, and it
+// must never raise a breaking finding. #44 also validates an RFC 6839 `+json`
+// body against the declared `application/json` schema, `default` included,
+// before kin-openapi refuses it, so a problem+json body never lands here.
+func unjudgedReason(err error, route *routers.Route, status int, respHeaders map[string]string) string {
+	var re *openapi3filter.ResponseError
+	if !errors.As(err, &re) {
+		return model.NotValidatedValidatorError
+	}
+	if re.Err != nil {
+		// "failed to read/decode response body".
+		return model.NotValidatedBodyNotDecodable
+	}
+	if !responseDeclared(route, status) {
+		// "status is not supported": the document has no response for it.
+		return model.NotValidatedStatusUndeclared
+	}
+	// kin-openapi validates declared response headers BEFORE the body and
+	// refuses a missing or invalid required one with the same shape as a
+	// media-type refusal (ResponseError, no inner error). Structurally first:
+	// a declared required header the captured call does not carry. Then the
+	// one textual tell for a header that is present but fails its schema —
+	// kin quotes the header NAME (`response header "X-Request-Id" …`) while its
+	// media-type refusal never does (`response header Content-Type has …`).
+	// Both pinned by TestUnjudgedReason_ClassifiesByShape through
+	// ValidateResponse itself, so a library upgrade that changes the wording
+	// fails a test instead of misclassifying a header as a media type.
+	if missingRequiredHeader(route, status, respHeaders) || strings.HasPrefix(re.Reason, `response header "`) {
+		return model.NotValidatedResponseHeaderMissing
+	}
+	// The status is declared, so the refusal is about the media type ("response
+	// Content-Type … invalid"). An unresolved response reference lands here too.
+	return model.NotValidatedMediaTypeUndeclared
+}
+
+// missingRequiredHeader reports whether the response the contract declares for
+// this status requires a header the captured call does not carry.
+func missingRequiredHeader(route *routers.Route, status int, respHeaders map[string]string) bool {
+	if route == nil || route.Operation == nil || route.Operation.Responses == nil {
+		return false
+	}
+	ref := route.Operation.Responses.Status(status)
+	if ref == nil {
+		ref = route.Operation.Responses.Default()
+	}
+	if ref == nil || ref.Value == nil {
+		return false
+	}
+	have := make(map[string]bool, len(respHeaders))
+	for k := range respHeaders {
+		have[strings.ToLower(k)] = true
+	}
+	for name, h := range ref.Value.Headers {
+		if h != nil && h.Value != nil && h.Value.Required && !have[strings.ToLower(name)] {
+			return true
+		}
+	}
+	return false
+}
+
+// responseDeclared mirrors ValidateResponse's own lookup: the operation
+// declares this status, or a default response.
+func responseDeclared(route *routers.Route, status int) bool {
+	if route == nil || route.Operation == nil || route.Operation.Responses == nil {
+		return false
+	}
+	rs := route.Operation.Responses
+	return rs.Status(status) != nil || rs.Default() != nil
+}
+
+func judgeLiveVsSpec(doc *openapi3.T, call model.RedactedCall) ([]model.Finding, model.Validation, error) {
 	router, err := gorillamux.NewRouter(doc)
 	if err != nil {
-		return nil, fmt.Errorf("build router: %w", err)
+		return nil, model.Validation{}, fmt.Errorf("build router: %w", err)
 	}
 
 	reqURL := call.URL
@@ -49,7 +190,7 @@ func DetectLiveVsSpec(doc *openapi3.T, call model.RedactedCall) ([]model.Finding
 	}
 	req, err := http.NewRequest(call.Method, reqURL, strings.NewReader(call.RequestBody))
 	if err != nil {
-		return nil, fmt.Errorf("reconstruct request: %w", err)
+		return nil, model.Validation{}, fmt.Errorf("reconstruct request: %w", err)
 	}
 	if call.RequestContentType != "" {
 		req.Header.Set("Content-Type", call.RequestContentType)
@@ -60,7 +201,7 @@ func DetectLiveVsSpec(doc *openapi3.T, call model.RedactedCall) ([]model.Finding
 		// No matching route in the spec is itself a drift signal, but v0's
 		// deterministic finding is the response-schema mismatch; surface the
 		// route miss as an error the caller can log.
-		return nil, fmt.Errorf("route not found in spec for %s %s: %w", call.Method, reqURL, err)
+		return nil, model.Validation{}, fmt.Errorf("%w: route not found in spec for %s %s: %v", errRouteNotFound, call.Method, reqURL, err)
 	}
 
 	reqInput := &openapi3filter.RequestValidationInput{
@@ -69,12 +210,60 @@ func DetectLiveVsSpec(doc *openapi3.T, call model.RedactedCall) ([]model.Finding
 		Route:      route,
 	}
 
-	respContentType := call.ResponseContentType
-	if respContentType == "" {
-		respContentType = "application/json"
+	endpoint := endpointLabel(call.Method, call.Route)
+	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00")
+
+	// An ABSENT header is not a header: the validator still assumes JSON (a
+	// header-less JSON body is common enough to keep judging), but the
+	// media-type gate below must never accuse the provider of sending
+	// `application/json` when it sent nothing at all.
+	wireContentType := call.ResponseContentType
+	wireAbsent := wireContentType == ""
+	if wireAbsent {
+		wireContentType = "application/json"
 	}
+
+	// The contract lookup, RFC 6839-aware. kin-openapi resolves a response's
+	// media type verbatim, then parameter-stripped, then `type/*`, then `*/*` —
+	// so application/problem+json (RFC 7807, the standard error payload) misses
+	// a contract that declares application/json, and used to leave the call
+	// unjudged and reading clean. The suffix says the payload IS JSON, so the
+	// lookup falls back to the base type — the LOOKUP only: the body is still
+	// decoded and validated as JSON against the schema the contract declares.
+	// A wire type the contract declares under none of those names is drift
+	// evidence, not noise: one finding, and the call reads drifted — but only
+	// on a status the provider declared by its EXACT code, and only when the
+	// wire actually carried a Content-Type. A status the contract covers by a
+	// `4XX`/`5XX` range or by `default` alone, or not at all, is not the
+	// provider breaching a promise it made about THAT status: a gateway's
+	// `502 text/html` error page on a `5XX: application/json` contract must
+	// not become a breaking finding on every intermediary hiccup. Those fall
+	// through to kin-openapi, whose refusal is the verdict stamp's to name
+	// (`media-type-undeclared` / `status-undeclared`).
+	lookupType := wireContentType
+	if !responseUnjudged(call.Method, call.StatusCode) {
+		if declared := declaredContent(route.Operation, call.StatusCode); len(declared) > 0 {
+			resolved, ok := resolveContentType(declared, wireContentType)
+			switch {
+			case ok:
+				lookupType = resolved
+			case !wireAbsent && statusDeclared(route.Operation, call.StatusCode):
+				// The provider's own published response shape departed: one
+				// finding, and the verdict follows the finding (drifted).
+				fs := []model.Finding{contentTypeMismatchFinding(call, endpoint, now, wireContentType, declared)}
+				return fs, model.VerdictOf(fs), nil
+			}
+		}
+	}
+
+	// Every captured response header, so a contract that REQUIRES one
+	// (X-Request-Id, rate-limit headers, Location on 201) is judged instead of
+	// refused; Content-Type last, as the lookup resolved it.
 	respHeader := http.Header{}
-	respHeader.Set("Content-Type", respContentType)
+	for k, v := range call.ResponseHeaders {
+		respHeader.Set(k, v)
+	}
+	respHeader.Set("Content-Type", lookupType)
 
 	respInput := &openapi3filter.ResponseValidationInput{
 		RequestValidationInput: reqInput,
@@ -87,18 +276,29 @@ func DetectLiveVsSpec(doc *openapi3.T, call model.RedactedCall) ([]model.Finding
 		},
 	}
 
-	endpoint := endpointLabel(call.Method, call.Route)
+	validatorMu.RLock()
 	verr := openapi3filter.ValidateResponse(context.Background(), respInput)
+	validatorMu.RUnlock()
 	if verr == nil {
-		return nil, nil
+		// nil from ValidateResponse is not "compared and found nothing": it also
+		// returns nil for HEAD and redirect statuses, an operation with no
+		// responses, a declared response with no body content, and a media type
+		// declared without a schema. Only a schema actually compared earns clean.
+		if nothingToCompare(route.Operation, call.Method, call.StatusCode, lookupType) {
+			return nil, model.NotValidated(model.NotValidatedNoSchema), nil
+		}
+		return nil, model.Validation{Verdict: model.ValidatedClean}, nil
 	}
 
 	schemaErrs := collectSchemaErrors(verr)
 	if len(schemaErrs) == 0 {
-		return nil, nil
+		// kin-openapi refused before any schema comparison — the response's
+		// status or media type is not in the document, or its body would not
+		// decode. No finding (the detector reports schema violations only), and
+		// NOT clean: nothing was compared.
+		return nil, model.NotValidated(unjudgedReason(verr, route, call.StatusCode, call.ResponseHeaders)), nil
 	}
 	findings := make([]model.Finding, 0, len(schemaErrs))
-	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00")
 	for _, se := range schemaErrs {
 		if redactedValue(se.Value) {
 			// Drift runs AFTER the redaction floor, so this constraint may have
@@ -125,7 +325,212 @@ func DetectLiveVsSpec(doc *openapi3.T, call model.RedactedCall) ([]model.Finding
 		}
 		findings = append(findings, liveVsSpecFinding(se, call, endpoint, now, actualFromValue(se.Value)))
 	}
-	return findings, nil
+	// Every schema error on a redacted, undecidable value: the comparison ran
+	// and nothing decidable failed — clean, exactly as before the verdict
+	// existed (redacted = unknown, never violated).
+	return findings, model.VerdictOf(findings), nil
+}
+
+// structuredSuffixBase maps an RFC 6839 structured-syntax suffix to the base
+// media type it denotes: `<type>/<subtype>+json` carries JSON, so it is looked
+// up as application/json when the contract does not spell the suffixed name
+// out. One entry, on purpose — the SDK's capture gate maps the same one — and
+// one line to extend (`"xml": "application/xml"`) if a contract ever declares
+// XML bodies this detector should judge.
+var structuredSuffixBase = map[string]string{
+	"json": "application/json",
+}
+
+// mediaTypeOf is `type/subtype` of a content-type header value: lowercased,
+// trimmed, parameters dropped. Malformed values fall back to a plain strip so
+// the caller still has something to name in a finding.
+func mediaTypeOf(contentType string) string {
+	if mt, _, err := mime.ParseMediaType(contentType); err == nil {
+		return mt
+	}
+	mt := contentType
+	if i := strings.IndexByte(mt, ';'); i >= 0 {
+		mt = mt[:i]
+	}
+	return strings.ToLower(strings.TrimSpace(mt))
+}
+
+// structuredBase is the base media type an RFC 6839 suffix denotes
+// (application/problem+json → application/json), or "" when the subtype carries
+// no suffix this detector maps. A subtype has at most one structured suffix,
+// always the last `+` segment (RFC 6838 §4.2.8).
+func structuredBase(contentType string) string {
+	mt := mediaTypeOf(contentType)
+	plus := strings.LastIndexByte(mt, '+')
+	if plus < 0 {
+		return ""
+	}
+	return structuredSuffixBase[mt[plus+1:]]
+}
+
+// responseUnjudged mirrors the exchanges kin-openapi's ValidateResponse never
+// looks at (a HEAD response, and the 301/304/307/308 bodies-less redirects):
+// their media type is not held against the contract either.
+func responseUnjudged(method string, status int) bool {
+	if strings.EqualFold(method, http.MethodHead) {
+		return true
+	}
+	switch status {
+	case http.StatusMovedPermanently, http.StatusNotModified, http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+		return true
+	}
+	return false
+}
+
+// resolveResponse is the contract's response object for a status — the exact
+// code, else its `4XX`-style range, else the `default` response — or nil when
+// the operation declares none of them (kin-openapi's own resolution order).
+func resolveResponse(op *openapi3.Operation, status int) *openapi3.Response {
+	if op == nil || op.Responses == nil || op.Responses.Len() == 0 {
+		return nil
+	}
+	ref := op.Responses.Status(status)
+	if ref == nil {
+		ref = op.Responses.Default()
+	}
+	if ref == nil {
+		return nil
+	}
+	return ref.Value
+}
+
+// statusDeclared reports whether the operation declares the status by its EXACT
+// code — as opposed to catching it with a `4XX`-style range, with `default`, or
+// not at all. Only an exactly declared status can carry a media-type finding: a
+// range is a promise about a family of statuses, most of which an intermediary
+// (gateway, WAF, CDN) can emit in the provider's name, so a foreign media type
+// there is not the provider's breach. The LOOKUP still resolves ranges and
+// `default` (resolveResponse), so bodies on them are judged when they can be.
+func statusDeclared(op *openapi3.Operation, status int) bool {
+	return op != nil && op.Responses != nil && op.Responses.Value(strconv.Itoa(status)) != nil
+}
+
+// declaredContent is the content map the contract declares for a status, or nil
+// when the status resolves to no response or that response declares no body.
+func declaredContent(op *openapi3.Operation, status int) openapi3.Content {
+	resp := resolveResponse(op, status)
+	if resp == nil || len(resp.Content) == 0 {
+		return nil
+	}
+	return resp.Content
+}
+
+// resolveContentType is the name the declared content map answers to for a wire
+// media type — the header verbatim (kin-openapi's own match, parameters and
+// wildcards included), else its parsed `type/subtype`, else the base type its
+// RFC 6839 suffix denotes. The name returned is what the validator is handed, so
+// a `+json` body decodes and validates as JSON against the base type's schema.
+func resolveContentType(declared openapi3.Content, wire string) (string, bool) {
+	if declared.Get(wire) != nil {
+		ensureJSONDecoder(wire)
+		return wire, true
+	}
+	if mt := mediaTypeOf(wire); mt != "" && declared.Get(mt) != nil {
+		ensureJSONDecoder(mt)
+		return mt, true
+	}
+	if base := structuredBase(wire); base != "" && declared.Get(base) != nil {
+		return base, true
+	}
+	// kin-openapi's Get strips parameters and case from the WIRE value only,
+	// never from the declared key — a contract that spells its key
+	// `application/json; charset=utf-8` (Swagger-2 converters do) answers to
+	// nothing above. Match the key's own media type against the wire's, and
+	// against the base its suffix denotes, and hand the validator the key
+	// verbatim so its own exact lookup succeeds.
+	wireMT, wireBase := mediaTypeOf(wire), structuredBase(wire)
+	keys := make([]string, 0, len(declared))
+	for k := range declared {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		kmt := mediaTypeOf(k)
+		if kmt == "" {
+			continue
+		}
+		if kmt == wireMT || (wireBase != "" && kmt == wireBase) {
+			ensureJSONDecoder(k)
+			return k, true
+		}
+	}
+	return "", false
+}
+
+// validatorMu guards kin-openapi's body-decoder registry, which the library
+// documents as NOT thread-safe: registration must never race a concurrent
+// ValidateResponse (its map read has no lock of its own). This package is the
+// binary's only openapi3filter user, so a read lock around every validation and
+// a write lock around the rare registration is the whole story.
+var validatorMu sync.RWMutex
+
+// ensureJSONDecoder teaches kin-openapi to decode a `+json` media type the
+// contract declares by name. It ships decoders for the common ones
+// (problem+json, hal+json, vnd.api+json, …) but not for a vendor name such as
+// application/vnd.acme.v2+json, which would otherwise fail as "unsupported
+// content type" AFTER its lookup succeeded. Idempotent.
+func ensureJSONDecoder(contentType string) {
+	mt := mediaTypeOf(contentType)
+	if structuredBase(mt) == "" {
+		return
+	}
+	validatorMu.RLock()
+	registered := openapi3filter.RegisteredBodyDecoder(mt) != nil
+	validatorMu.RUnlock()
+	if registered {
+		return
+	}
+	validatorMu.Lock()
+	defer validatorMu.Unlock()
+	if openapi3filter.RegisteredBodyDecoder(mt) == nil {
+		openapi3filter.RegisterBodyDecoder(mt, openapi3filter.JSONBodyDecoder)
+	}
+}
+
+// contentTypeMismatchFinding: the provider answered in a media type the contract
+// declares under no name for this status. Location is the header; Expected lists
+// the declared names so the flag shows the promise beside the answer.
+func contentTypeMismatchFinding(call model.RedactedCall, endpoint, now, wire string, declared openapi3.Content) model.Finding {
+	names := make([]string, 0, len(declared))
+	for name := range declared {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	sourceID := call.ID
+	f := model.Finding{
+		SchemaVersion:   model.SchemaVersion,
+		ID:              otlpattr.NewID(),
+		Kind:            model.KindLiveVsSpec,
+		Severity:        model.SeverityBreaking,
+		Integration:     call.Integration,
+		Endpoint:        endpoint,
+		FieldPath:       model.Ptr(""),
+		Location:        model.Ptr("$.response.headers.content-type"),
+		Expected:        "content-type=" + strings.Join(names, "|"),
+		Actual:          "content-type=" + wire,
+		Rule:            RuleContentTypeMismatch,
+		SourceCallID:    &sourceID,
+		DetectedAt:      now,
+		Detail:          fmt.Sprintf("Response content-type `%s` is not declared for %d; the contract declares %s.", mediaTypeOf(wire), call.StatusCode, joinNames(names)),
+		OccurrenceCount: 1,
+		FirstSeen:       now,
+		LastSeen:        now,
+	}
+	f.Signature = f.ComputeSignature()
+	return f
+}
+
+func joinNames(names []string) string {
+	quoted := make([]string, len(names))
+	for i, n := range names {
+		quoted[i] = "`" + n + "`"
+	}
+	return strings.Join(quoted, ", ")
 }
 
 // propsVerdict is the outcome of judging a redacted value's schema error against
@@ -328,6 +733,26 @@ func ruleFromSchemaField(field string) string {
 }
 
 // collectSchemaErrors flattens kin-openapi's error tree into SchemaErrors.
+// nothingToCompare reports the nil-returning paths of ValidateResponse on which
+// no schema was compared, so the verdict can say `no-schema` instead of clean.
+func nothingToCompare(op *openapi3.Operation, method string, status int, contentType string) bool {
+	if responseUnjudged(method, status) {
+		return true
+	}
+	if op == nil || op.Responses == nil || op.Responses.Len() == 0 {
+		return true
+	}
+	ref := op.Responses.Status(status)
+	if ref == nil {
+		ref = op.Responses.Default()
+	}
+	if ref == nil || ref.Value == nil || len(ref.Value.Content) == 0 {
+		return true
+	}
+	mt := ref.Value.Content.Get(contentType)
+	return mt == nil || mt.Schema == nil
+}
+
 func collectSchemaErrors(err error) []*openapi3.SchemaError {
 	var out []*openapi3.SchemaError
 	var walk func(error)

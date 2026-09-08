@@ -2,8 +2,8 @@ package flanjui
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -34,9 +34,47 @@ const (
 	// few megabytes; this matches the ceiling the front<-store channel enforces,
 	// so both ends agree on what fits.
 	maxDocBytes = 8 << 20 // 8 MiB
+	// maxEnvelopeBytes bounds the READ of an upload envelope; the ruling on
+	// size is the document check in readContractUpload, against maxDocBytes.
+	// The envelope is JSON, and JSON escaping grows a text document on the
+	// wire (every newline is two bytes, every quote too), so a bound of
+	// "document cap plus a little" refused documents that were under the cap:
+	// real YAML at 7.8 MiB arrives as an envelope past 8 MiB. Twice the cap
+	// holds any document the ruling would accept, plus the host and filename.
+	maxEnvelopeBytes = 2*maxDocBytes + (1 << 16)
+	// maxSmallBodyBytes bounds the other envelopes on this path (remove), which
+	// carry an integration id and nothing else.
+	maxSmallBodyBytes = 1 << 16
 	// maxHostLen is the DNS name ceiling.
 	maxHostLen = 253
 )
+
+// readJSONBody decodes a request envelope into dst, reading at most limit
+// bytes. Returns false after writing the refusal: 413 with the given code and
+// message when the body is over the limit, 400 invalid_json when it is not
+// JSON.
+//
+// The limit is enforced by http.MaxBytesReader, which FAILS at the limit. It
+// used to be io.LimitReader, which stops at the limit and says nothing — the
+// decoder then saw a string cut off mid-way, reported an unexpected EOF, and
+// every oversized upload came back as "not valid JSON". The 413 branch was
+// reachable only for envelopes inside the 64 KiB between the document cap and
+// the reader's: a 9 MB document reproduced it through the UI on 2026-09-07
+// (launch-week item 6). MaxBytesReader also tells the server to close the
+// connection after the reply instead of draining the rest of the upload.
+func readJSONBody(w http.ResponseWriter, r *http.Request, limit int64, dst any, tooLargeCode, tooLargeMsg string) bool {
+	err := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit)).Decode(dst)
+	if err == nil {
+		return true
+	}
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		writeErr(w, http.StatusRequestEntityTooLarge, tooLargeCode, tooLargeMsg)
+		return false
+	}
+	writeErr(w, http.StatusBadRequest, "invalid_json", msgInvalidJSON)
+	return false
+}
 
 type uploadRequest struct {
 	// PeerHost is the provider edge this contract validates. MANDATORY: a
@@ -161,8 +199,7 @@ func (e *uiExtension) handleContractRemove(w http.ResponseWriter, r *http.Reques
 	var body struct {
 		Integration string `json:"integration"`
 	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&body); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid_json", msgInvalidJSON)
+	if !readJSONBody(w, r, maxSmallBodyBytes, &body, "request_too_large", msgRequestTooLarge) {
 		return
 	}
 	integration := strings.TrimSpace(body.Integration)
@@ -200,8 +237,10 @@ func (e *uiExtension) readContractUpload(w http.ResponseWriter, r *http.Request)
 		req  uploadRequest
 		none drift.SpecSummary
 	)
-	if err := json.NewDecoder(io.LimitReader(r.Body, maxDocBytes+(1<<16))).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid_json", msgInvalidJSON)
+	// Over the envelope bound is a document too large by construction (the
+	// envelope is the document plus two short fields), so it gets the same
+	// refusal as the document check below rather than a generic one.
+	if !readJSONBody(w, r, maxEnvelopeBytes, &req, "document_too_large", msgContractTooLarge) {
 		return req, none, false
 	}
 
@@ -223,13 +262,27 @@ func (e *uiExtension) readContractUpload(w http.ResponseWriter, r *http.Request)
 
 	summary, err := drift.DescribeSpec([]byte(req.Document))
 	if err != nil {
-		// The consult's string, with the parser's own message appended — the
-		// operator needs to know WHICH line is wrong, not just that one is.
-		writeErr(w, http.StatusBadRequest, "unparseable_document",
-			"Couldn't read that as an OpenAPI document. "+err.Error())
+		// The parser's reason — which line, which key — goes to the log; the
+		// response carries the deck's sentence and nothing after it. It used to
+		// append the parser's own text ("failed to unmarshal data: json error:
+		// … yaml error: …"), which put Go's voice in the operator's UI (QA walk
+		// finding NB-2, 2026-09-07). Every error on this surface is one sentence.
+		e.telemetry.Logger.Info("contracts: refused an unparseable document for " + host +
+			uploadFilenameNote(req.Filename) + ": " + err.Error())
+		writeErr(w, http.StatusBadRequest, "unparseable_document", msgContractUnparseable)
 		return req, none, false
 	}
 	return req, summary, true
+}
+
+// uploadFilenameNote is the " (name)" a log line carries when the operator's
+// pick is known. The filename is what the request said it was — it is never
+// echoed back to the browser, only logged beside the parser's reason.
+func uploadFilenameNote(filename string) string {
+	if name := strings.TrimSpace(filename); name != "" {
+		return " (" + name + ")"
+	}
+	return ""
 }
 
 // previewFor describes the binding an upload would produce.

@@ -113,6 +113,19 @@ no custom protocol exists between the tiers.
   with replicas or an HPA. Their `otlphttp` sending queue (in-memory) rides out
   a store-pod restart; a front crash loses what was in its queue (at-most-once
   across a front crash, which is fine for a rolling evidence window).
+- **The store pod's own write is queued and retried too** (2026-09-07): the
+  `flanjstore` exporter carries the same `sending_queue` + `retry_on_failure`
+  sections, on by default — 64 MiB of proto-encoded batches (the resident
+  pdata is a multiple: budget several × that in the pod's memory limit),
+  rejecting when full, backoff up to 15 minutes. A front's 5-minute retry
+  therefore covers the hop, and the store pod covers the database: a batch it
+  has accepted survives postgres (or a locked sqlite file) being away for a
+  quarter of an hour, and a full queue hands the batch back to the front (503)
+  rather than blocking. Same
+  at-most-once across a store-pod crash as the fronts have. The writes are
+  idempotent on call id AND finding id (the store's occurrence ledger), so a
+  front re-sending a batch whose ACK it lost duplicates nothing — on either
+  backend, including a re-send that lands on another postgres pod.
 - **The store pod is one process** on `backend: sqlite` (one PVC, total). On
   `backend: postgres` the store tier may itself scale, since the postgres
   backend is multi-writer safe.

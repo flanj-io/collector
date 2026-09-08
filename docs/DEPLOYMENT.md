@@ -73,6 +73,13 @@ edge; repeats bump `occurrence_count`); `spec_info` → upsert by integration.
 - State: `/data` on a PVC (sqlite). `user` is `nonroot` (uid 65532) — pre-chown
   the volume or use an fsGroup.
 - UI: loopback only by design — `kubectl port-forward <pod> 5335:5335`.
+- The UI's one link out — the Connected pill's dashboard door — opens in
+  **your browser**, on the far side of that port-forward. It is minted from
+  `cp_public_url`, not from `cp_base_url`, which is where the *collector's*
+  requests go and may be an address only the cluster resolves. Set
+  `cp_public_url` whenever the two differ; left unset, the link falls back to
+  `cp_base_url` only when that host is not obviously non-public, and is
+  otherwise omitted (the pill stays a Settings button — never a dead link).
 - Kubernetes: a `StatefulSet` (replicas **1**) with a `volumeClaimTemplate` for
   `/data`, a `Service` on 4318 for the SDK, a `Secret` for `CP_DEPLOY_TOKEN`
   (`cp_deploy_token: ${env:CP_DEPLOY_TOKEN}`).
@@ -134,7 +141,7 @@ Unauthorized`. So after a tiered rollout, check a front's logs, not just that
 its pods are Ready.
 
 Mount your own `front.yaml`/`store.yaml` when you need your own
-`integration_id`, display names, `cp_base_url`, or window sizes — the baked
+`integration_id`, display names, `cp_base_url` / `cp_public_url`, or window sizes — the baked
 files are the annotated templates (`config/config.front.example.yaml`,
 `config/config.store.example.yaml`). **Provider contracts are not among those
 knobs**: they are uploaded in the UI (Contracts → Add contract), never
@@ -145,6 +152,15 @@ Flow specifics:
   redaction again (idempotent) and **never drift** (it would double-count).
 - Fronts forward with the core `otlphttp` exporter: in-memory queue + retries
   ride out a store-pod restart; a front crash loses only its queue.
+- The store pod's write is queued + retried the same way (`flanjstore`
+  exporter, on by default — 64 MiB of proto-encoded batches, so budget several
+  × that in the pod's memory limit; 15 minutes of backoff; rejecting when full
+  so the front's queue takes over), and the store is idempotent on
+  call id and finding id: a database outage shorter than that loses nothing
+  the store pod accepted, and a re-sent batch duplicates nothing. This holds on
+  the single-pod and shared-postgres shapes too — there it is the SDK's own
+  retry that the full queue hands back to. Tune or disable it under
+  `exporters.flanjstore` (`config/config.example.yaml`).
 - **Contracts flow store → front** — the reverse of every other record here.
   They are uploaded in the UI, which lives on the store pod, so the store pod
   is their source of truth; each front READS them back from the store pod's
@@ -171,11 +187,14 @@ Flow specifics:
   postgres) next to the evidence — nothing to mount or copy, and a replaced pod
   is still Connected. `cp_deploy_token` is only used for that first
   registration.
-- UI: `kubectl port-forward sts/flanj-store 5335:5335`.
+- UI: `kubectl port-forward sts/flanj-store 5335:5335`. The Connected pill's
+  dashboard link is built from the store pod's `cp_public_url` (see "Single
+  pod"): a `cp_base_url` naming a Service or a VPC-private ingress is right for
+  the pod's own calls and unreachable from the laptop behind the port-forward.
 - Store pod `:4318` is intra-cluster ingest; keep it ClusterIP (optionally a
   NetworkPolicy allowing only the front pods).
 - Probes: `tcpSocket: 4318` on both roles.
-- **Upgrades:** store pod first, then fronts.
+- **Upgrades:** store pod first, then fronts. Since 2026-09-07 this is load-bearing for the contract chip: a front stamps every call with its verdict (`flanj.validated`, CONTRACTS §2), and a store pod from before the stamp drops the attribute at decode — so an upgraded front behind an old store pod silently falls back to the old inferred coverage, on exactly the topology where the inference was wrong. A new store pod behind old fronts reads their calls as `unknown` → `not checked` until they are upgraded: safe, and transient.
 
 Sizing: fronts are CPU-bound (redaction + schema validation) and stateless —
 scale them; the store pod is IO-bound (one sqlite writer) — give it the PVC's

@@ -100,6 +100,7 @@ CREATE TABLE IF NOT EXISTS calls (
   byte_size    BIGINT NOT NULL,
   pinned       INTEGER NOT NULL DEFAULT 0,
   drifted      INTEGER NOT NULL DEFAULT 0,
+  validated    TEXT NOT NULL DEFAULT '',
   promoted_at  TEXT,
   doc          TEXT NOT NULL
 );
@@ -152,6 +153,13 @@ CREATE TABLE IF NOT EXISTS settings (
   value        TEXT NOT NULL,
   updated_at   TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS finding_occurrences (
+  id             TEXT PRIMARY KEY,
+  signature      TEXT NOT NULL,
+  source_call_id TEXT,
+  seen_at        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_finding_occurrences_call ON finding_occurrences(source_call_id);
 CREATE INDEX IF NOT EXISTS idx_calls_pinned_seq ON calls(pinned, seq);
 CREATE INDEX IF NOT EXISTS idx_findings_source ON findings(source_call_id);
 CREATE INDEX IF NOT EXISTS idx_calls_captured_edge ON calls(captured_at, peer_host, direction);
@@ -167,6 +175,16 @@ ALTER TABLE spec_infos ADD COLUMN IF NOT EXISTS prev_version TEXT;
 ALTER TABLE spec_infos ADD COLUMN IF NOT EXISTS prev_loaded_at TEXT;
 ALTER TABLE spec_infos ADD COLUMN IF NOT EXISTS edge_class TEXT;
 ALTER TABLE calls ADD COLUMN IF NOT EXISTS drifted INTEGER NOT NULL DEFAULT 0;
+-- calls.validated: the drift processor's per-call verdict. DEFAULT '' backfills
+-- every pre-existing row and nothing else ever writes '' (InsertCall always
+-- supplies the column) — see the sqlite backend's callsAddedColumns note.
+ALTER TABLE calls ADD COLUMN IF NOT EXISTS validated TEXT NOT NULL DEFAULT '';
+
+-- One-shot repair, idempotent: until 2026-09-07 PutSpecInfo never wrote
+-- source, so every observed MCP snapshot took the column default and was
+-- listed as a CONFIG-loaded contract. The rule is specSourceOf's — format
+-- "mcp" was observed on the wire. Same statement as the sqlite backend.
+UPDATE spec_infos SET source='observed' WHERE format='mcp' AND source='config';
 `
 	tx, err := p.db.Begin()
 	if err != nil {
@@ -191,7 +209,8 @@ ALTER TABLE calls ADD COLUMN IF NOT EXISTS drifted INTEGER NOT NULL DEFAULT 0;
 // edge it belongs to, and then runs best-effort eviction. The insert + edge
 // upsert share one transaction so call_count can never count a call that was
 // not stored.
-func (p *postgresStore) InsertCall(c model.RedactedCall) error {
+func (p *postgresStore) InsertCall(c model.RedactedCall) (err error) {
+	defer func() { err = classify(err) }() // ErrRejected on SQLSTATE class 23/22
 	doc, err := json.Marshal(c)
 	if err != nil {
 		return fmt.Errorf("marshal call: %w", err)
@@ -208,13 +227,13 @@ func (p *postgresStore) InsertCall(c model.RedactedCall) error {
 	}
 	res, err := tx.Exec(p.rebind(
 		`INSERT INTO calls
-		  (id, captured_at, integration, peer_host, direction, edge_class, method, route, status_code, request_id, idem_key, trace_id, byte_size, pinned, doc)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)
+		  (id, captured_at, integration, peer_host, direction, edge_class, method, route, status_code, request_id, idem_key, trace_id, byte_size, pinned, drifted, validated, doc)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?)
 		 ON CONFLICT (id) DO NOTHING`),
 		c.ID, c.CapturedAt, c.Integration, nullStr(c.PeerHost), nullStr(c.Direction), nullStr(c.EdgeClass),
 		c.Method, c.Route, c.StatusCode,
 		nullStr(c.Correlation.RequestID), nullStr(c.Correlation.IdempotencyKey), nullStr(c.Correlation.TraceID),
-		len(doc), string(doc),
+		len(doc), insertDrifted(c), c.Validated, string(doc),
 	)
 	if err != nil {
 		return fmt.Errorf("insert call: %w", err)
@@ -272,7 +291,15 @@ func (p *postgresStore) upsertEdgeTx(tx *sql.Tx, peerHost, direction, class, at 
 // Cross-pod correctness: a concurrent insert of a new signature blocks on the
 // unique index until the winner commits, so the loser's insert reports 0 rows
 // and its counter bump (a fresh statement snapshot) sees the committed row.
-func (p *postgresStore) InsertFinding(f model.Finding) error {
+//
+// Idempotent on the finding's OWN id (the occurrence ledger — recordOccurrence,
+// the first statement of the transaction): a re-delivered record — a batch the
+// store exporter retried after a failed write, a front re-sending after a lost
+// ACK, the same batch landing on two pods — applies nothing the second time.
+// The ledger row commits with the finding or not at all, so a write that fails
+// half-way leaves nothing behind for the retry to trip over.
+func (p *postgresStore) InsertFinding(f model.Finding) (err error) {
+	defer func() { err = classify(err) }() // ErrRejected on SQLSTATE class 23/22
 	if f.Signature == "" {
 		f.Signature = f.ComputeSignature()
 	}
@@ -298,6 +325,14 @@ func (p *postgresStore) InsertFinding(f model.Finding) error {
 		return fmt.Errorf("insert finding: begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	applied, err := recordOccurrence(tx, p.rebind, f, sourceCallID, seen)
+	if err != nil {
+		return err
+	}
+	if !applied {
+		return nil // a re-delivered record: already applied, nothing to do
+	}
 
 	res, err := tx.Exec(p.rebind(
 		`INSERT INTO findings
@@ -460,13 +495,10 @@ func (p *postgresStore) evict(keepID string) error {
 				batch = evictBatchMax
 			}
 		}
-		res, err := tx.Exec(
-			`DELETE FROM calls WHERE seq IN (SELECT seq FROM calls WHERE pinned=0 AND id<>$1 ORDER BY seq ASC LIMIT $2)`, keepID, batch,
-		)
+		n, err := evictOldest(tx, p.rebind, keepID, batch)
 		if err != nil {
-			return fmt.Errorf("evict: %w", err)
+			return err
 		}
-		n, _ := res.RowsAffected()
 		if n == 0 {
 			// Everything left is pinned (or is keepID); the window can
 			// legitimately exceed the caps to preserve evidence. Stop rather than spin.
@@ -489,21 +521,24 @@ func (p *postgresStore) evict(keepID string) error {
 // its own first-sighting stamp — restamping on each write flip-flopped the row
 // between two fronts' stamps forever. Same rule, same reasons, as the sqlite
 // backend; the upsert stays one statement, so N pods need no coordination.
-func (p *postgresStore) PutSpecInfo(info model.SpecInfo, rawSpec []byte) error {
+func (p *postgresStore) PutSpecInfo(info model.SpecInfo, rawSpec []byte) (err error) {
+	defer func() { err = classify(err) }()
 	role := info.Role
 	if role == "" {
 		role = model.SpecRoleProvider
 	}
-	_, err := p.db.Exec(p.rebind(
-		`INSERT INTO spec_infos (integration, role, peer_host, edge_class, format, title, version, docs_url, endpoints, loaded_at, doc)
-		   VALUES (?,?,?,?,?,?,?,?,?,?,?)
+	// `source` is written, and rewritten on conflict, so the row's provenance
+	// always describes the document in it — see the sqlite twin.
+	_, err = p.db.Exec(p.rebind(
+		`INSERT INTO spec_infos (integration, role, peer_host, edge_class, format, title, version, docs_url, endpoints, loaded_at, doc, source)
+		   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
 		 ON CONFLICT (integration) DO UPDATE SET
 		   role=excluded.role, peer_host=excluded.peer_host, edge_class=excluded.edge_class, format=excluded.format, title=excluded.title,
 		   version=excluded.version, docs_url=excluded.docs_url, endpoints=excluded.endpoints,
 		   loaded_at=CASE WHEN excluded.format=? AND spec_infos.doc=excluded.doc THEN spec_infos.loaded_at ELSE excluded.loaded_at END,
-		   doc=excluded.doc`),
+		   doc=excluded.doc, source=excluded.source`),
 		info.Integration, role, nullStr(info.PeerHost), nullStr(info.EdgeClass), info.Format, nullStr(info.Title),
-		nullStr(info.Version), nullStr(info.DocsURL), info.Endpoints, info.LoadedAt, string(rawSpec),
+		nullStr(info.Version), nullStr(info.DocsURL), info.Endpoints, info.LoadedAt, string(rawSpec), specSourceOf(info),
 		model.SpecFormatMCP,
 	)
 	if err != nil {

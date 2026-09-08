@@ -10,14 +10,13 @@ import {
   THREAD_STATE_UNKNOWN,
   cannotListThreads,
   chipLabel,
-  findingIdFromHash,
   needsCollectorAddress,
-  threadIdFromHash,
   timeAgo,
   type ConnectState,
   type ThreadListResponse,
   type ThreadRow
 } from './threads';
+import { hashForTab, hashForThread, routeFromHash, type Tab } from './route';
 import {
   ADD_CONTRACT,
   MCP_SELF_REPORTS,
@@ -73,6 +72,7 @@ import {
   isAcked,
   isBreakingFinding,
   isLocalNotice,
+  isMcpCall,
   isMcpFinding,
   localNoticesSubFor,
   mcpBadgeLabel,
@@ -163,8 +163,6 @@ interface SpecInfo {
   prev_version?: string;
 }
 
-type Tab = 'overview' | 'traffic' | 'contract' | 'threads' | 'settings';
-
 const health = ref<Health | null>(null);
 const findings = ref<Finding[]>([]);
 const calls = ref<RedactedCall[]>([]);
@@ -227,10 +225,12 @@ const connectPill = computed(() => {
       return 'Not connected';
   }
 });
-/** The CP dashboard link, emitted by /api/connect ONLY while Connected. When
- *  absent the pill stays a button into Settings — the door is never offered to
- *  a control plane this collector has no identity at. */
-const dashboardUrl = computed(() => (connect.value as { dashboard_url?: string } | null)?.dashboard_url || '');
+/** The CP dashboard link, emitted by /api/connect ONLY while Connected and
+ *  only when the collector holds an address a BROWSER can open. When absent the
+ *  pill stays a button into Settings — the door is never offered to a control
+ *  plane this collector has no identity at, nor to one this browser cannot
+ *  reach (the collector's own in-network address is not a link for us). */
+const dashboardUrl = computed(() => connect.value?.dashboard_url || '');
 
 const threadsByFinding = computed(() => {
   const m: Record<string, ThreadRow> = {};
@@ -340,15 +340,15 @@ function dismissAddressNudge() {
 
 // "Add address" from the Threads tab: jump to Settings with the address field focused.
 function addCollectorAddress() {
-  tab.value = 'settings';
+  setTab('settings');
   focusAddressTick.value++;
 }
 
 // The Threads tab's not-connected notice routes here, the same way the Contracts
-// banner does. `#settings` so a reload (or a back) lands on the same tab.
+// banner does. setTab writes `#settings`, so a reload lands on the same tab and
+// Back returns to Threads.
 function goToSettings() {
-  tab.value = 'settings';
-  if (window.location.hash !== '#settings') history.replaceState(null, '', '#settings');
+  setTab('settings');
 }
 
 // Provider name shown on the sheet and sent on the flag: the configured
@@ -389,28 +389,42 @@ async function openChipThread(threadId: string) {
   }
 }
 
-function goToThread(threadId: string) {
-  highlightThreadId.value = threadId;
-  tab.value = 'threads';
-  if (window.location.hash !== '#threads/' + threadId) history.replaceState(null, '', '#threads/' + encodeURIComponent(threadId));
+// Tab selection is the single source of truth in BOTH directions (route.ts):
+// every tab change goes through here and writes the hash the tab owns, and the
+// hash drives the tab (applyHash, below). Launch-week item 10: the tab buttons
+// used to write nothing while "Add address" and "Threads ›" did, so the URL
+// drifted from the screen — Threads → Add address (`#settings`) → Overview
+// (nothing) → reload landed on Settings, and Back moved the URL but not the tab.
+//
+// A change PUSHES a history entry, so Back returns to the previous tab: every
+// navigation in the app today is a user gesture. `replace` is for a redirect
+// the user did not ask for, so Back never lands on a state that redirects
+// again. `hash` carries a deep-link form (`#threads/<id>`) in place of the bare
+// tab hash. Nothing else in the app writes location.hash.
+function setTab(t: Tab, opts: { hash?: string; replace?: boolean } = {}) {
+  tab.value = t;
+  const want = opts.hash ?? hashForTab(t);
+  if (window.location.hash === want) return;
+  if (opts.replace) history.replaceState(null, '', want);
+  else history.pushState(null, '', want);
 }
 
+function goToThread(threadId: string) {
+  highlightThreadId.value = threadId;
+  setTab('threads', { hash: hashForThread(threadId) });
+}
+
+// The other direction: the hash → the tab, on load and on every hashchange
+// (Back / Forward between the entries setTab pushed fire it, and so does a
+// pasted deep link). An empty, unknown or token fragment (`#k=…`) is not a tab:
+// it shows the default and is left exactly as it is — never rewritten, never
+// pushed — so a stale copy of the CP's thread-link token can never be laundered
+// into this page's history.
 function applyHash() {
-  const id = threadIdFromHash(window.location.hash);
-  const findingId = findingIdFromHash(window.location.hash);
-  if (id) {
-    highlightThreadId.value = id;
-    tab.value = 'threads';
-  } else if (findingId) {
-    highlightFindingId.value = findingId;
-    tab.value = 'contract';
-  } else if (window.location.hash === '#threads') {
-    tab.value = 'threads';
-  } else if (window.location.hash === '#contracts') {
-    tab.value = 'contract';
-  } else if (window.location.hash === '#settings') {
-    tab.value = 'settings';
-  }
+  const r = routeFromHash(window.location.hash);
+  if (r.threadId) highlightThreadId.value = r.threadId;
+  if (r.findingId) highlightFindingId.value = r.findingId;
+  tab.value = r.tab;
 }
 
 // Scroll the deep-linked finding row into view once findings have loaded and
@@ -462,7 +476,7 @@ function dismissThemeFlipNotice() {
 }
 function openAppearance() {
   dismissThemeFlipNotice();
-  tab.value = 'settings';
+  setTab('settings');
 }
 
 // Live-tail stream state: polling always lands in `calls`, but while the user
@@ -526,7 +540,7 @@ function cardValidatedCalls(p: ContractCard): number {
     // captured BEFORE this contract was bound is not evidence for it, however
     // well the hosts match. Uploading a document used to flip six already
     // captured calls to validated with no new traffic at all.
-    if (coverageOf(c) !== 'checked') continue;
+    if (!isValidated(c)) continue;
     if (!isEvidenceFor(c, card)) continue;
     n++;
   }
@@ -556,6 +570,15 @@ function coverageOf(c: RedactedCall): Coverage {
   return coverageVerdictOf(c).coverage;
 }
 
+/** Did a contract actually check THIS call? The one per-call validated fact
+ *  every evidence count reads — the Overview headline, each MCP server's own
+ *  line, the contract cards' `validated N calls`. Today it is the coverage
+ *  mirror's `checked` verdict (ui/src/coverage.ts, residuals and all); when
+ *  the server-side stamp lands it replaces THIS body and nothing else. */
+function isValidated(c: RedactedCall): boolean {
+  return coverageOf(c) === 'checked';
+}
+
 /** The `not checked` tooltip for THIS row, named after the actual cause — a
  *  tool that declares no outputSchema is not a missing upload, and MCP
  *  contracts are never uploaded at all. */
@@ -582,9 +605,14 @@ function notCheckedTitleOf(c: RedactedCall): string {
  * It does now, so MCP reads the same per-call fact as REST and the tool-level
  * guess is gone: no more relabelling a tool's whole history from one mismatch,
  * and no more DRIFTED on an isError result the processor never judged.
+ *
+ * The processor's own stamp (`validated: 'drifted'`, 2026-09-07) is the same
+ * fact from the other end of the pipeline — the store sets `drifted` from it on
+ * insert — and is read here too, so the row cannot lag the verdict by the one
+ * finding record that follows the call in its batch.
  */
 function isDrifted(c: RedactedCall): boolean {
-  return c.drifted === true;
+  return c.drifted === true || c.validated === 'drifted';
 }
 
 const hasExpanded = computed(() => Object.values(expanded.value).some(Boolean));
@@ -859,7 +887,7 @@ function closeUploader() {
  * already knows the host, which is the whole ergonomic prize for routing here.
  */
 function goToContracts(host: string) {
-  tab.value = 'contract';
+  setTab('contract');
   if (contractByHost.value.has(host)) {
     highlightUncoveredHost.value = null;
     nextTick(() => document.getElementById('contract-' + host)?.scrollIntoView({ block: 'center' }));
@@ -992,7 +1020,8 @@ const mcpHosts = computed(() => {
 });
 
 // Per-server MCP health headline (deck §2): output mismatch → definition
-// change (breaking, no calls affected yet) → clean.
+// change (breaking, no calls affected yet) → nothing validated yet (neutral)
+// → clean. Three tones, like the REST line above it.
 const mcpOverview = computed(() =>
   mcpContracts.value.map((s) => ({
     key: s.integration,
@@ -1002,7 +1031,11 @@ const mcpOverview = computed(() =>
       // for two different servers again.
       { name: s.title || s.integration, version: s.version, origin: contractOrigin(s) },
       mcpFindings.value.filter((f) => f.integration === s.integration),
-      humanTime
+      humanTime,
+      // Evidence for THIS server only: its own validated tool calls. Zero is
+      // the neutral state — a snapshot that has judged nothing is not an
+      // all-clear, however complete the Contracts card beside it looks.
+      calls.value.filter((c) => isMcpCall(c) && c.integration === s.integration && isValidated(c)).length
     )
   }))
 );
@@ -1082,20 +1115,21 @@ const sheetCall = computed(() =>
   sheetFinding.value?.source_call_id ? callsById.value[sheetFinding.value.source_call_id] || null : null
 );
 
-/** Calls in the window that a contract was actually in a position to check —
- *  the evidence behind the headline, and the same `checked` verdict the Traffic
- *  chips and the contract cards read. */
-const validatedCallCount = computed(() => calls.value.filter((c) => coverageOf(c) === 'checked').length);
-
 // Headline counts LIVE drift only — spec-version diffs are informational and
 // intentionally excluded from the divergence status. The wording, the neutral
 // zero state and the reason it exists all live in ui/src/headline.ts, where
 // vitest can see them: this line used to assert `No drift detected` on an
 // install where nothing had ever been validated.
+//
+// It gets the window's calls, each with its per-call validated fact, NOT a
+// count: it counted every validated call in the window here, MCP tool calls
+// included, and spent an MCP server's evidence on the REST provider it names
+// beneath. Which calls are evidence for THIS line — the REST ones — is decided
+// in headline.ts, beside the tests that pin it.
 const headline = computed(() =>
   headlineFor({
     liveFindings: liveFindings.value,
-    validatedCalls: validatedCallCount.value,
+    calls: calls.value.map((c) => ({ transport: c.transport, integration: c.integration, validated: isValidated(c) })),
     integration: health.value?.integration
   })
 );
@@ -1323,8 +1357,6 @@ onUnmounted(() => {
 watch(tab, (t) => {
   if (t === 'threads' || t === 'contract') loadThreads();
   if (t === 'settings') loadConnect();
-  if (t !== 'threads' && threadIdFromHash(window.location.hash)) history.replaceState(null, '', window.location.pathname);
-  if (t !== 'contract' && findingIdFromHash(window.location.hash)) history.replaceState(null, '', window.location.pathname);
 });
 </script>
 
@@ -1359,7 +1391,7 @@ watch(tab, (t) => {
           class="pill pill-btn"
           :class="{ ok: connectStatus === 'connected', warn: connectStatus === 'pending' }"
           title="Connect settings"
-          @click="tab = 'settings'"
+          @click="setTab('settings')"
         >
           {{ connectPill }}
         </button>
@@ -1381,23 +1413,23 @@ watch(tab, (t) => {
     </div>
 
     <nav class="tabs" role="tablist">
-      <button role="tab" :class="{ active: tab === 'overview' }" @click="tab = 'overview'">
+      <button role="tab" :aria-selected="tab === 'overview'" :class="{ active: tab === 'overview' }" @click="setTab('overview')">
         Overview
       </button>
-      <button role="tab" :class="{ active: tab === 'traffic' }" @click="tab = 'traffic'">
+      <button role="tab" :aria-selected="tab === 'traffic'" :class="{ active: tab === 'traffic' }" @click="setTab('traffic')">
         Traffic
       </button>
-      <button role="tab" :class="{ active: tab === 'contract' }" @click="tab = 'contract'">
+      <button role="tab" :aria-selected="tab === 'contract'" :class="{ active: tab === 'contract' }" @click="setTab('contract')">
         Contracts
         <!-- red = act (breaking) · amber = review (informational, un-acked) -->
         <span v-if="contractBreakingCount" class="tab-count bad" :title="breakingCountTitle(contractBreakingCount)">{{ contractBreakingCount }}</span>
         <span v-if="contractInfoCount" class="tab-count warn" :title="informationalCountTitle(contractInfoCount)">{{ contractInfoCount }}</span>
       </button>
-      <button role="tab" :class="{ active: tab === 'threads' }" @click="tab = 'threads'">
+      <button role="tab" :aria-selected="tab === 'threads'" :class="{ active: tab === 'threads' }" @click="setTab('threads')">
         Threads
         <span v-if="threads.length" class="tab-count">{{ threads.length }}</span>
       </button>
-      <button role="tab" class="tab-right" :class="{ active: tab === 'settings' }" @click="tab = 'settings'">
+      <button role="tab" class="tab-right" :aria-selected="tab === 'settings'" :class="{ active: tab === 'settings' }" @click="setTab('settings')">
         Settings
         <span v-if="health?.cp_configured && connectStatus !== 'connected'" class="tab-dot" :class="connectStatus"></span>
       </button>
@@ -1413,17 +1445,21 @@ watch(tab, (t) => {
         <div class="hl-you">
           You: <strong>{{ headline.you }}</strong>
         </div>
-        <!-- Pre-traffic honesty: no integration observed yet → the fragment is
-             simply absent (no replacement copy). -->
+        <!-- Pre-traffic honesty: no integration observed on a REST edge yet →
+             the fragment is simply absent (no replacement copy). An MCP edge
+             alone does not count — the slug is a REST integration's name, and
+             the MCP server has its own line below (ui/src/headline.ts). -->
         <div v-if="headline.integration" class="hl-sub">on integration <code>{{ headline.integration }}</code></div>
       </section>
 
-      <!-- MCP servers (v0.5): one headline per observed server (deck §2). -->
+      <!-- MCP servers (v0.5): one headline per observed server (deck §2), on
+           the same three tones as the REST line: a server whose snapshot has
+           validated nothing yet is neutral, not green (ui/src/mcp.ts). -->
       <section
         v-for="m in mcpOverview"
         :key="'mcp-hl-' + m.key"
         class="headline mcp-headline"
-        :class="{ ok: m.headline.ok, drift: !m.headline.ok }"
+        :class="m.headline.tone"
       >
         <div class="hl-you">
           <span class="mcp-badge" :title="MCP_BADGE_TOOLTIP">MCP</span>
@@ -1597,7 +1633,7 @@ watch(tab, (t) => {
           thread links need a Connected collector. Viewing your own traffic and findings never does.
         </span>
         <span class="connect-banner-actions">
-          <button type="button" class="btn small" @click="tab = 'settings'">{{ connectStatus === 'pending' ? 'Check status' : 'Connect' }}</button>
+          <button type="button" class="btn small" @click="setTab('settings')">{{ connectStatus === 'pending' ? 'Check status' : 'Connect' }}</button>
           <button type="button" class="btn ghost small" aria-label="Dismiss" @click="dismissConnectBanner">Dismiss</button>
         </span>
       </div>

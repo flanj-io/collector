@@ -302,6 +302,28 @@ describe('the uploader can be driven from the keyboard', () => {
     expect((vm as { hostDirty: boolean }).hostDirty).toBe(false);
   });
 
+  it('shows the server\'s own sentence when the document is too large', async () => {
+    // Launch-week item 6 (2026-09-07): a 9 MB document came back from the relay
+    // as 400 invalid_json, so the uploader showed "The request body is not
+    // valid JSON." for a size problem. The relay now answers 413
+    // document_too_large; the uploader has no copy of its own for that code —
+    // it renders the relay's sentence — so this pins that the sentence reaches
+    // the error line unchanged.
+    const TOO_LARGE = "That document is larger than 8 MB. Contracts this size are usually a bundle — upload the API's own document.";
+    vi.stubGlobal('fetch', vi.fn(async () => json({ error: 'document_too_large', message: TOO_LARGE }, 413)));
+
+    const w = mount(ContractUploader, { props: { host: HOST }, attachTo: document.body });
+    wrapper = w as unknown as VueWrapper;
+    const vm = w.vm as unknown as Record<string, unknown>;
+    (vm as { doc: string }).doc = 'openapi: 3.0.0';
+    (vm as { filename: string }).filename = 'huge.yaml';
+    await (vm as { runPreview: () => Promise<void> }).runPreview();
+    await w.vm.$nextTick();
+
+    expect(w.find('.uploader-error').text()).toBe(TOO_LARGE);
+    expect(w.find('.uploader-actions button').exists()).toBe(false);
+  });
+
   it('keeps the reset that lets the same file be chosen twice', async () => {
     const w = mount(ContractUploader, { props: { host: HOST }, attachTo: document.body });
     wrapper = w as unknown as VueWrapper;

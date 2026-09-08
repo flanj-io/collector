@@ -25,7 +25,7 @@ func NewFactory() exporter.Factory {
 }
 
 func createDefaultConfig() component.Config {
-	return &Config{}
+	return newDefaultConfig()
 }
 
 func createLogsExporter(
@@ -33,11 +33,19 @@ func createLogsExporter(
 	set exporter.Settings,
 	cfg component.Config,
 ) (exporter.Logs, error) {
+	oCfg := cfg.(*Config)
 	e := &storeExporter{logger: set.Logger}
+	// Sender chain, outermost first: queue → retry → (timeout) → consumeLogs.
+	// The queue ACKs to the receiver and hands batches to consumers; retry
+	// wraps every failed write in backoff; the store is idempotent on call id
+	// and finding id, so a retried batch cannot duplicate rows (CLAUDE.md,
+	// "Durability").
 	return exporterhelper.NewLogs(
 		ctx, set, cfg,
 		e.consumeLogs,
 		exporterhelper.WithStart(e.start),
 		exporterhelper.WithCapabilities(consumerCaps()),
+		exporterhelper.WithRetry(oCfg.RetryConfig),
+		exporterhelper.WithQueue(oCfg.QueueConfig),
 	)
 }

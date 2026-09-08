@@ -29,6 +29,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
+	sqlite "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
+
 	"github.com/flanj-io/collector/internal/edge"
 	"github.com/flanj-io/collector/internal/model"
 )
@@ -50,6 +54,10 @@ type Store interface {
 	// the finding and pins its source call; repeats only increment
 	// occurrence_count/last_seen. The finding id stays the FIRST occurrence's id
 	// (the flag idempotency key depends on it).
+	//
+	// Idempotent on the record's own id: the SAME finding record delivered
+	// twice (a retried or re-sent batch) counts once — a repeat is a NEW
+	// detection carrying a NEW id (see recordOccurrence). Both backends.
 	//
 	// ONE exception to the frozen doc: a definition_change whose EVIDENCE has
 	// moved on — see refreshedFindingDoc.
@@ -185,44 +193,184 @@ func (b *base) PutSetting(key, value string) error {
 	return nil
 }
 
+// ErrRejected marks a write the store REFUSED for what the record IS — a
+// constraint the statement's ON CONFLICT does not absorb, or a value the
+// backend cannot encode — as opposed to a write that FAILED for where the
+// store is (connection gone, file locked, timeout). The same record would be
+// refused again on every attempt, so the store exporter turns it into a
+// permanent error (consumererror.NewPermanent) and drops the batch after ONE
+// attempt instead of holding a queue consumer for max_elapsed_time. Both
+// backends wrap it around InsertCall, InsertFinding and PutSpecInfo (the three
+// writes the exporter makes); every other error is returned as-is and stays
+// retryable.
+var ErrRejected = errors.New("store: record rejected")
+
+// classify wraps a deterministic driver rejection in ErrRejected and returns
+// every other error unchanged. The two drivers spell "the record, not the
+// store" differently:
+//   - sqlite: primary result code SQLITE_CONSTRAINT (19 — the extended code
+//     is masked off), SQLITE_TOOBIG (18) or SQLITE_MISMATCH (20);
+//   - postgres: SQLSTATE class 23 (integrity constraint violation) or 22 (data
+//     exception — e.g. 22021, a NUL byte in a text column).
+//
+// SQLITE_BUSY / SQLITE_LOCKED, class 08 (connection), 40 (transaction
+// rollback, incl. deadlock) and 57 (operator intervention) are all left alone:
+// those go away when the store does.
+func classify(err error) error {
+	if err == nil {
+		return nil
+	}
+	var se *sqlite.Error
+	if errors.As(err, &se) {
+		switch se.Code() & 0xff {
+		case sqlite3.SQLITE_CONSTRAINT, sqlite3.SQLITE_TOOBIG, sqlite3.SQLITE_MISMATCH:
+			return fmt.Errorf("%w: %w", ErrRejected, err)
+		}
+		return err
+	}
+	var pe *pgconn.PgError
+	if errors.As(err, &pe) {
+		if strings.HasPrefix(pe.Code, "23") || strings.HasPrefix(pe.Code, "22") {
+			return fmt.Errorf("%w: %w", ErrRejected, err)
+		}
+	}
+	return err
+}
+
 // execer is the subset of *sql.DB / *sql.Tx the shared write helpers need.
 type execer interface {
 	Exec(query string, args ...any) (sql.Result, error)
 }
 
+// queryExecer is execer plus reads — what both a *sql.DB and a *sql.Tx offer,
+// so a helper can run inside a backend's transaction or on its bare handle.
+type queryExecer interface {
+	execer
+	Query(query string, args ...any) (*sql.Rows, error)
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+// recordOccurrence is the finding OCCURRENCE LEDGER: one row per finding
+// record ever applied, keyed by the record's own id. It is what makes
+// InsertFinding idempotent on re-delivery.
+//
+// Why it exists: the store exporter retries a batch whose write failed (a
+// store outage mid-batch), and a front re-sends a batch whose ACK it never got.
+// Both hand the store the SAME finding record again. Calls survive that on
+// their own — `INSERT … ON CONFLICT (id) DO NOTHING` — but a finding's second
+// arrival used to look exactly like a repeat occurrence and bumped
+// occurrence_count, so one drifting call was counted twice, and a partially
+// applied batch re-counted everything before the record that failed. The
+// finding row itself cannot carry this: it keeps the FIRST occurrence's id
+// only, and forgets every repeat's.
+//
+// Keyed by the record id, not by (signature, source call): the drift processor
+// mints a fresh id per detection, so a genuine repeat — the same call
+// re-validated after a restart re-seeds from the stored snapshots — still
+// counts (TestDefinitionChangeRefreshesEvidence pins that), while the same
+// record twice does not. Reports false when the id was already applied; the
+// caller then applies nothing. A record with no id cannot be tracked and is
+// applied unconditionally, as before.
+//
+// Bounded: evictOldest drops the ledger rows of the calls it evicts, so the
+// ledger lives exactly as long as the evidence it dedups (call-less findings —
+// definition_change, version-diff — keep theirs; there is one per contract
+// change, not one per call).
+func recordOccurrence(ex execer, rebind func(string) string, f model.Finding, sourceCallID *string, seen string) (bool, error) {
+	if f.ID == "" {
+		return true, nil
+	}
+	res, err := ex.Exec(rebind(
+		`INSERT INTO finding_occurrences (id, signature, source_call_id, seen_at)
+		 VALUES (?,?,?,?)
+		 ON CONFLICT (id) DO NOTHING`),
+		f.ID, f.Signature, nullPtr(sourceCallID), seen,
+	)
+	if err != nil {
+		return false, fmt.Errorf("record finding occurrence: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// evictOldest deletes up to batch of the oldest unpinned calls (never keepID)
+// and, for the rows that actually went, prunes their occurrence-ledger entries
+// — the same statement sequence on both backends, inside the caller's
+// serialisation (the store mutex on sqlite, the eviction tx on postgres).
+// Returns how many calls were evicted. RETURNING makes the two deletes agree
+// on the exact row set, so a call that survives (pinned in between, on a
+// shared database) keeps its ledger rows.
+func evictOldest(q queryExecer, rebind func(string) string, keepID string, batch int) (int, error) {
+	rows, err := q.Query(rebind(
+		`DELETE FROM calls
+		  WHERE seq IN (SELECT seq FROM calls WHERE pinned=0 AND id<>? ORDER BY seq ASC LIMIT ?)
+		  RETURNING id`), keepID, batch)
+	if err != nil {
+		return 0, fmt.Errorf("evict: %w", err)
+	}
+	var evicted []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return 0, fmt.Errorf("evict: scan: %w", err)
+		}
+		evicted = append(evicted, id)
+	}
+	// Close BEFORE the next statement: the sqlite handle is a single connection.
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return 0, fmt.Errorf("evict: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, fmt.Errorf("evict: %w", err)
+	}
+	if len(evicted) == 0 {
+		return 0, nil
+	}
+	args := make([]any, len(evicted))
+	for i, id := range evicted {
+		args[i] = id
+	}
+	if _, err := q.Exec(rebind(
+		`DELETE FROM finding_occurrences WHERE source_call_id IN (`+placeholders(len(evicted))+`)`),
+		args...,
+	); err != nil {
+		return 0, fmt.Errorf("evict: prune finding occurrences: %w", err)
+	}
+	return len(evicted), nil
+}
+
 // marksSourceCallDrifted reports whether a finding of this kind means THE CALL
 // it names departed from the contract — the question `calls.drifted` answers.
-//
-// TWO kinds qualify, one per transport, and they are the same fact:
-//   - live-vs-spec  — a REST response violated the bound OpenAPI document
-//   - output_mismatch — an MCP result's structuredContent violated the tool's
-//     own declared outputSchema (internal/drift/mcp.go). It is per-call and
-//     carries a SourceCallID exactly like live-vs-spec; the only reason it was
-//     excluded is that the gate was written before MCP had a per-call kind, and
-//     the UI paid for it by asking "does this TOOL have a mismatch?" instead —
-//     the endpoint-level guess this column exists to retire.
-//
-// The kinds that must NOT qualify:
-//   - definition_change — the SNAPSHOT detector, comparing two tools/list
-//     observations. Call-less: no call produced it, so no call drifted.
-//   - stale_client — the CONSUMER's own arguments were stale. The call is
-//     evidence about this agent, not about the provider's contract, and
-//     marking it drifted would accuse the provider of our bug.
-//   - version-diff — a document-to-document comparison, not traffic.
-//
-// Every site that writes `calls.drifted` reads THIS slice: InsertFinding on
-// both backends (via marksSourceCallDrifted) and latePin's repair (which
-// expands it into the SQL `IN` list). They must never disagree — a kind marked
-// on one path and not the other makes drift depend on record ORDER.
-var perCallDriftKinds = []string{model.KindLiveVsSpec, model.KindOutputMismatch}
 
-func marksSourceCallDrifted(kind string) bool {
-	for _, k := range perCallDriftKinds {
-		if kind == k {
-			return true
-		}
+// perCallDriftKinds / marksSourceCallDrifted: the finding kinds that mean THE
+// CALL a finding names departed from its contract — the question `calls.drifted`
+// answers. model.PerCallDriftKinds owns the list and the reasoning (why
+// output_mismatch is in and stale_client is out), because the drift processor's
+// own per-call verdict (RedactedCall.Validated) is computed off the same list:
+// the store's mark and the processor's stamp must never disagree.
+//
+// Every site that writes `calls.drifted` reads THIS slice: InsertCall (from the
+// stamp, via insertDrifted), InsertFinding on both backends (via
+// marksSourceCallDrifted) and latePin's repair (which expands it into the SQL
+// `IN` list). A kind marked on one path and not the other makes drift depend on
+// record ORDER.
+var perCallDriftKinds = model.PerCallDriftKinds
+
+func marksSourceCallDrifted(kind string) bool { return model.MarksCallDrifted(kind) }
+
+// insertDrifted is the `drifted` a NEW call row starts with: 1 when the drift
+// processor's own stamp says the call drifted. Its finding record follows in the
+// same batch and InsertFinding marks the row again (idempotent), but reading the
+// stamp here closes the one-record window in which a stamped-drifted call could
+// still list as conforming — and keeps the two facts in agreement by
+// construction rather than by arrival order.
+func insertDrifted(c model.RedactedCall) int {
+	if c.Validated == model.ValidatedDrifted {
+		return 1
 	}
-	return false
+	return 0
 }
 
 // latePin closes the "finding before its call" gap. InsertFinding pins its
@@ -338,13 +486,17 @@ func (b *base) Close() error { return b.db.Close() }
 // GetCall returns the stored RedactedCall for id.
 func (b *base) GetCall(id string) (model.RedactedCall, bool, error) {
 	var (
-		doc     string
-		drifted bool
+		doc       string
+		drifted   bool
+		validated string
 	)
 	// `drifted` is store-owned (set when the call produced a finding, including
 	// repeat occurrences), so it lives in its column and reads patch it back in
-	// — the same shape as findings' occurrence_count/last_seen.
-	err := b.db.QueryRow(b.rebind(`SELECT doc, drifted FROM calls WHERE id=?`), id).Scan(&doc, &drifted)
+	// — the same shape as findings' occurrence_count/last_seen. `validated` is
+	// the drift processor's stamp, kept in its own column so it is queryable and
+	// so a row from before the column existed reads as EMPTY (the column's
+	// default) rather than whatever its frozen doc happens to say.
+	err := b.db.QueryRow(b.rebind(`SELECT doc, drifted, validated FROM calls WHERE id=?`), id).Scan(&doc, &drifted, &validated)
 	if err == sql.ErrNoRows {
 		return model.RedactedCall{}, false, nil
 	}
@@ -356,6 +508,7 @@ func (b *base) GetCall(id string) (model.RedactedCall, bool, error) {
 		return model.RedactedCall{}, false, err
 	}
 	c.Drifted = drifted
+	c.Validated = validated
 	return c, true, nil
 }
 
@@ -381,7 +534,7 @@ func (b *base) ListCalls(limit int) ([]model.RedactedCall, error) {
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := b.db.Query(b.rebind(`SELECT doc, drifted FROM calls ORDER BY seq DESC LIMIT ?`), limit)
+	rows, err := b.db.Query(b.rebind(`SELECT doc, drifted, validated FROM calls ORDER BY seq DESC LIMIT ?`), limit)
 	if err != nil {
 		return nil, err
 	}
@@ -389,10 +542,11 @@ func (b *base) ListCalls(limit int) ([]model.RedactedCall, error) {
 	out := make([]model.RedactedCall, 0, limit)
 	for rows.Next() {
 		var (
-			doc     string
-			drifted bool
+			doc       string
+			drifted   bool
+			validated string
 		)
-		if err := rows.Scan(&doc, &drifted); err != nil {
+		if err := rows.Scan(&doc, &drifted, &validated); err != nil {
 			return nil, err
 		}
 		var c model.RedactedCall
@@ -400,6 +554,8 @@ func (b *base) ListCalls(limit int) ([]model.RedactedCall, error) {
 			return nil, err
 		}
 		c.Drifted = drifted
+		// The processor's verdict, column-authoritative (see GetCall).
+		c.Validated = validated
 		out = append(out, c)
 	}
 	return out, rows.Err()
@@ -647,7 +803,29 @@ func (b *base) EdgeCallCountsSince(sinceISO string) (map[string]int, error) {
 	return out, rows.Err()
 }
 
+// specSourceOf is the provenance PutSpecInfo records when the writer left
+// Source empty. Both writers name their own (SpecSourceConfig for the self
+// contract, SpecSourceObserved for an MCP snapshot); this covers the record a
+// front on an image older than that sends across the tiered hop, so the store
+// pod never files an observed contract as a config one again. The rule is the
+// one the open-time repair applies to rows already stored that way: format
+// "mcp" means it was observed on the wire, anything else PutSpecInfo writes
+// came from config. Uploads never pass through here (PutUploadedSpec).
+func specSourceOf(info model.SpecInfo) string {
+	if info.Source != "" {
+		return info.Source
+	}
+	if info.Format == model.SpecFormatMCP {
+		return model.SpecSourceObserved
+	}
+	return model.SpecSourceConfig
+}
+
 // ListSpecInfos returns the loaded provider contracts (metadata only, no doc).
+// `source` is read as stored: the COALESCE is a migration default for a
+// database whose column predates the NOT NULL DEFAULT, never a classifier —
+// the value is the writer's (see specSourceOf and each backend's open-time
+// repair of pre-2026-09-07 mcp rows).
 func (b *base) ListSpecInfos() ([]model.SpecInfo, error) {
 	rows, err := b.db.Query(
 		`SELECT integration, role, COALESCE(peer_host,''), COALESCE(edge_class,''), format, COALESCE(title,''),

@@ -7,6 +7,7 @@ const attempt = (over: Partial<MailAttempt>): MailAttempt => ({
   retryAfterS: undefined,
   email: 'ops@acme.example',
   at: T0,
+  resend: false,
   ...over
 });
 
@@ -17,12 +18,32 @@ const attempt = (over: Partial<MailAttempt>): MailAttempt => ({
  * sentence is the whole bug.
  */
 describe('confirmation-mail notice: sent / not sent / refused by cooldown', () => {
-  it('sent — says so, offers no retry, and lets another send through', () => {
-    const n = mailNotice(attempt({ outcome: 'sent' }), T0);
+  it('sent on a RESEND — "Sent again", offers no retry, and lets another send through', () => {
+    const n = mailNotice(attempt({ outcome: 'sent', resend: true }), T0);
     expect(n.kind).toBe('sent');
     expect(n.text).toBe('Sent again to ops@acme.example.');
     expect(n.retryable).toBe(false);
     expect(n.canSend).toBe(true);
+  });
+
+  it('sent on the FIRST send — no extra line: "again" is a claim about a second mail (2026-09-07)', () => {
+    // The panel's standing line already reads "Check your inbox — we sent …". After the very first
+    // Connect (and after Change contact to a NEW address) the notice used to add "Sent again to …"
+    // on top of it — a resend that never happened; Mailpit held exactly one mail.
+    const n = mailNotice(attempt({ outcome: 'sent', resend: false }), T0);
+    expect(n.kind).toBe('sent');
+    expect(n.text).toBe('');
+    expect(n.text).not.toContain('again');
+    expect(n.retryable).toBe(false);
+    expect(n.canSend).toBe(true);
+  });
+
+  it('the button pressed changes only the wording of a success — never the failed / cooldown verdicts', () => {
+    // `resend` is about phrasing; what happened to the mail does not depend on which button asked.
+    expect(mailNotice(attempt({ outcome: 'failed', resend: true }), T0)).toEqual(mailNotice(attempt({ outcome: 'failed', resend: false }), T0));
+    expect(mailNotice(attempt({ outcome: 'cooldown', retryAfterS: 360, resend: true }), T0)).toEqual(
+      mailNotice(attempt({ outcome: 'cooldown', retryAfterS: 360, resend: false }), T0)
+    );
   });
 
   it('failed — states plainly that nothing arrived, names the address, and offers a WORKING retry', () => {
