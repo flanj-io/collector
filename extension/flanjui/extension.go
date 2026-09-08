@@ -31,6 +31,9 @@ type uiExtension struct {
 	// waited for — no goroutine leak) in Shutdown.
 	syncCancel context.CancelFunc
 	syncDone   chan struct{}
+
+	// The agent-facing MCP read surface (mcp.go), built on first request.
+	mcpState
 }
 
 // resolveStore finds the single-owner store extension lazily. Extensions can

@@ -21,7 +21,13 @@ collectors `[otlp → redaction → drift → otlphttp]` → ONE **store pod** `
 store + UI` (`config/config.front.example.yaml` / `config.store.example.yaml`, baked as `/etc/flanj/front.yaml`
 / `store.yaml`).
 The **UI extension** serves the embedded Vue SPA + a localhost read API
-(`/api/edges|calls|findings|health|contracts|contracts/spec`) and the **control-plane relay** (CONTRACTS §5, v0.1a):
+(`/api/edges|calls|findings|health|contracts|contracts/spec`), the **agent-facing drift read surface**
+(a READ-ONLY MCP server at `/mcp` on the same loopback listener, 2026-09-08 — `drift_summary`,
+`list_edges`, `list_findings`, `get_finding`: the same finding rows the SPA renders, built by the same
+`findingRows`/`edgeRows`, with NO body, header map or full URL on any tool and the redaction floor run
+once more over `expected`/`actual`/`detail` on the way out; every answer carries the per-call validation
+tally so an empty list can never read as an all-clear; no tool for anything behind the browser guard —
+suggest-and-approve is v4 and is NOT this) and the **control-plane relay** (CONTRACTS §5, v0.1a):
 **Connect** (`/api/connect` — registers the deployment once with `cp_deploy_token`, persists the per-deployment
 **collector key** in the store settings KV, never logs it; the contact confirms their email with one click),
 `POST /api/flag` (Create thread — requires a Connected collector with a confirmed contact, `412 not_connected |
@@ -78,6 +84,8 @@ processor/flanjdrift/           # live-vs-spec (kin-openapi) + version-diff (oas
 exporter/flanjstore/            # writes call + finding records into the store (queued + retried, idempotent — its CLAUDE.md "Durability")
 extension/flanjstore/           # SINGLE store owner (sqlite default | postgres for multi-pod); shared via host.GetExtensions()
 extension/flanjui/              # localhost HTTP: embed.FS Vue SPA + read API + CP relay (connect / flag / threads)
+                                   # + the AGENT-FACING read surface: a read-only MCP server at /mcp on the same
+                                   # loopback listener (mcp.go — drift_summary / list_edges / list_findings / get_finding)
 ui/                                # Vue/Vite SPA (Overview incl. MCP server health + local notices, Traffic live-tail incl.
                                    # MCP TOOL rows/facets, Contracts + Flag sheet — HTTP and MCP, Threads, Settings/Connect;
                                    # ui/src/mcp.ts = the v0.5 MCP deck copy, pure + vitest-covered)
@@ -107,6 +115,8 @@ contracts/                         # vendored contract: CONTRACTS.md + fixtures,
    `contracts/redaction-fixtures.json` — both language suites must produce those exact results).
 4. **Technical adherence only** in detection — types/shapes/enums; never business/economic correctness.
 5. **Outbound-only**, localhost UI only (the store pod's `:4318` is an intra-cluster ingest for fronts).
+   The agent MCP surface is a ROUTE on that same loopback listener, never a second listener, and it is
+   **read-only**: no MCP tool may write, and none may emit a raw body, a header map or a full URL.
 6. **Drift runs exactly once per call, on the front.** The store pod of the tiered topology never runs
    `flanjdrift` (it would double `occurrence_count`); fronts always run it (call-id stamping). The
    store is order-independent for call/finding pairs (late pin) — nothing upstream may rely on or

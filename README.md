@@ -99,6 +99,37 @@ Restarting the collector orphans the sidecar (it borrows the collector's
 network namespace) — recreate it rather than `docker start` it. Tear the whole
 thing down with `docker rm -f flanj flanj-ui`.
 
+## Point an agent at it (MCP)
+
+The collector serves a small **read-only MCP server** on the same loopback
+listener as the UI, at **`/mcp`**, so a coding agent running in this environment
+can ask *"what changed on the dependencies I call?"* and be answered by the
+collector already watching them.
+
+```json
+{
+  "mcpServers": {
+    "flanj": { "type": "http", "url": "http://localhost:5335/mcp" }
+  }
+}
+```
+
+Four tools, all read-only: `drift_summary` (start here), `list_edges`,
+`list_findings` (filter by `edge`, `kind`, `severity`) and `get_finding`.
+
+- **Same posture as the UI.** It is a route on the loopback listener, not a
+  second one. Nothing new binds and nothing is reachable off-host.
+- **Same truth as the UI.** Finding rows are the rows `GET /api/findings` serves
+  the browser, built by the same code — an agent and a person see one story.
+- **No raw body, ever.** No tool returns a body, a header map or a full URL, and
+  the free-value fields of a finding pass the redaction floor once more on the
+  way out.
+- **Read-only, deliberately.** There is no tool that flags, acknowledges or
+  uploads. Raising a thread with a provider is a person's act, in the UI.
+- **An empty answer is never an all-clear on its own.** Every answer carries how
+  many calls were actually validated against a contract, and says so in prose
+  when the answer is "nothing has been checked yet".
+
 ## Renamed: Vinifera → Flanj (BREAKING)
 
 This project was renamed from **Vinifera** to **Flanj** before launch. Every brand-carrying

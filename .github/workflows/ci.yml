@@ -74,6 +74,18 @@ jobs:
         run: go test ./... -count=1
       - name: Store suite with the race detector (both backends + multi-pod concurrency)
         run: go test ./internal/store/... -count=1 -race
+      - name: Unit + contract tests (the component modules — each its own Go module)
+        # `go test ./...` above walks the ROOT module only. Every custom component
+        # is a separate Go module (builder-config.yaml binds them by path), so
+        # none of their suites ran here — including extension/flanjui's 2k-line
+        # relay walk and the agent MCP surface beside it. A test that never runs
+        # in CI is a green check that means nothing.
+        run: |
+          for m in extension/flanjui extension/flanjstore processor/flanjdrift processor/flanjredaction exporter/flanjstore; do
+            echo "::group::$m"
+            ( cd "$m" && go test ./... -count=1 )
+            echo "::endgroup::"
+          done
       - name: Net audit — the redaction floor must never link network-capable packages
         # internal/redact runs on every captured body and must be pure: no HTTP, no
         # subprocesses, no TLS dialing anywhere in its dependency graph. phonenumbers
