@@ -57,6 +57,13 @@ jobs:
           docker manifest inspect "$repo:$tag" >/dev/null \
             || { echo "::error::$repo:$tag is not in the registry — publish the image first (see the launch plan's publish step), or fix the chart's appVersion"; exit 1; }
 
+      # Before the push, not after: a publish cannot be undone, and this is the
+      # only copy of exactly what went out.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: chart
+          path: dist/*.tgz
+
       - name: Push to OCI
         if: github.event_name == 'push' || inputs.dry_run == false
         env:
@@ -64,12 +71,9 @@ jobs:
           TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
           TGZ: ${{ steps.pkg.outputs.tgz }}
         run: |
-          [ -n "$TOKEN" ] || { echo "::error::DOCKERHUB_TOKEN is not set"; exit 1; }
+          # registry-1.docker.io, NOT docker.io — Docker Hub's OCI endpoint is
+          # the former and helm does not rewrite it.
+          [ -n "$TOKEN" ] || { echo "::error::DOCKERHUB_TOKEN is not set — add DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (a Docker Hub PAT with read/write) to this repo's Actions secrets"; exit 1; }
           echo "$TOKEN" | helm registry login registry-1.docker.io -u "$USER" --password-stdin
           helm push "$TGZ" oci://registry-1.docker.io/flanj
           helm registry logout registry-1.docker.io
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: chart
-          path: dist/*.tgz
