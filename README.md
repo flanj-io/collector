@@ -23,10 +23,8 @@ Open-source SDK (Apache-2.0) and source-available collector (ELv2); hosted netwo
 
 ## Run it on a laptop
 
-No registry image yet (pre-release) — build it, then run it:
-
 ```bash
-docker build -t flanj-collector .
+docker pull flanj/collector:v0.1.0
 ```
 
 ```bash
@@ -35,8 +33,12 @@ docker run -d --name flanj \
   --user "$(id -u):$(id -g)" \
   -v "$PWD/flanj-data:/data" \
   -p 4318:4318 -p 5335:5336 \
-  flanj-collector
+  flanj/collector:v0.1.0
 ```
+
+The image is `linux/amd64` and `linux/arm64`. `:latest` tracks the newest
+release; pin the version tag for anything you deploy. To build it yourself
+instead — `docker build -t flanj-collector .`, then substitute that name below.
 
 `:4318` is the OTLP ingest your app points at. `/data` holds the embedded SQLite
 store — bind-mount it and run as yourself, or the store cannot open its file
@@ -93,6 +95,24 @@ node -r @flanj/sdk/register app.js
 Also read: `OTEL_SERVICE_NAME`, `FLANJ_BODY_CAP_BYTES` (default 16384),
 `FLANJ_IGNORE_URLS` (comma-separated; the SDK always ignores its own OTLP host).
 Make some calls, then watch **Traffic** fill.
+
+**Before you press Connect, replace the baked-in config.** The image ships
+`config/config.example.yaml` at `/etc/flanj/config.yaml`, and it is an *example*
+— `consumer_display_name: Acme Consumer Ltd`, `integration_id: acme-payments`,
+and a `cp_base_url` of `https://cp.flanj.test`, which does not resolve. Traffic
+capture, drift detection and the UI all work as shipped; **Connect** is the one
+thing that does not, and it fails with `Couldn't reach the control plane —
+nothing was sent.` Copy the example, set those three keys, and mount it over the
+baked path:
+
+```bash
+docker run -d --name flanj \
+  --user "$(id -u):$(id -g)" \
+  -v "$PWD/flanj-data:/data" \
+  -v "$PWD/config.yaml:/etc/flanj/config.yaml:ro" \
+  -p 4318:4318 -p 5335:5336 \
+  flanj/collector:v0.1.0
+```
 
 **What leaves your network: nothing, until you Connect.** Unconnected, the
 collector makes no outbound calls at all — the sync loop returns early with no

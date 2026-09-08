@@ -152,33 +152,33 @@ watch(
 </template>
 
 <style scoped>
-.th-readonly { color: var(--muted); font-size: 0.85rem; margin: -0.25rem 0 0.75rem; }
-.th-table { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--panel); }
+.th-readonly { color: var(--ink-soft); font-size: 0.85rem; margin: -0.25rem 0 0.75rem; }
+.th-table { border: 1px solid var(--rule); border-radius: var(--radius); overflow: hidden; background: var(--surface); }
 .th-head, .th-main { display: grid; grid-template-columns: 1.05fr 1.55fr 0.5fr 1.45fr 0.95fr 0.85fr 0.45fr; gap: 0.6rem; align-items: center; padding: 0.55rem 0.9rem; }
-.th-head { color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--line); background: var(--panel2); }
-.th-row { border-top: 1px solid var(--line); padding-bottom: 0.6rem; }
+.th-head { color: var(--ink-soft); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--rule); background: var(--surface-sunk); }
+.th-row { border-top: 1px solid var(--rule); padding-bottom: 0.6rem; }
 .th-row:first-of-type { border-top: 0; }
-.th-row.highlight { box-shadow: inset 3px 0 0 var(--accent); background: var(--panel2); }
-.th-row.closed .th-main { color: var(--muted); }
+.th-row.highlight { box-shadow: inset 3px 0 0 var(--accent); background: var(--surface-sunk); }
+.th-row.closed .th-main { color: var(--ink-soft); }
 .th-main { font-size: 0.9rem; padding-bottom: 0.25rem; }
 .th-provider { font-weight: 600; }
 .th-endpoint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.th-status.attention { color: var(--warn-text); font-weight: 600; }
-.th-activity, .th-last { color: var(--muted); font-size: 0.85rem; white-space: nowrap; }
+.th-status.attention { color: var(--sev-warning-ink); font-weight: 600; }
+.th-activity, .th-last { color: var(--ink-soft); font-size: 0.85rem; white-space: nowrap; }
 .th-opens { font-variant-numeric: tabular-nums; }
 /* Line 2: link facts beside the one action, full row width. */
 .th-linkline { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; padding: 0 0.9rem; }
 .th-linkfacts { display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap; min-width: 0; }
-.th-link { font-size: 0.82rem; color: var(--muted); white-space: nowrap; }
-.th-link.attention { color: var(--warn-text); }
-.th-knock { font-size: 0.82rem; color: var(--muted); }
+.th-link { font-size: 0.82rem; color: var(--ink-soft); white-space: nowrap; }
+.th-link.attention { color: var(--sev-warning-ink); }
+.th-knock { font-size: 0.82rem; color: var(--ink-soft); }
 .th-actions { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-left: auto; }
-.th-truncated { color: var(--muted); font-size: 0.85rem; margin: 0.5rem 0 0; }
-.error { color: var(--danger); margin: 0.4rem 0.9rem 0; font-size: 0.85rem; }
-.th-note { color: var(--warn-text); margin: 0.4rem 0.9rem 0; font-size: 0.85rem; }
-.th-note a { color: var(--accent); }
-.empty { color: var(--muted); display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
-.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.th-truncated { color: var(--ink-soft); font-size: 0.85rem; margin: 0.5rem 0 0; }
+.error { color: var(--sev-breaking); margin: 0.4rem 0.9rem 0; font-size: 0.85rem; }
+.th-note { color: var(--sev-warning-ink); margin: 0.4rem 0.9rem 0; font-size: 0.85rem; }
+.th-note a { color: var(--accent-ink); }
+.empty { color: var(--ink-soft); display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.mono { font-family: var(--font-mono); }
 @media (max-width: 800px) {
   .th-head { display: none; }
   .th-main { grid-template-columns: 1fr 1fr; }
