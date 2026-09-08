@@ -1,0 +1,49 @@
+/* NOT CANONICAL — the one colour family docs/design/tokens.css does not define.
+
+   The Flanj token set ships neutrals, one accent, and the product-fixed severity
+   triad (breaking / warning / info). It has NO positive family, and the designed
+   reference surface (the drift dataset page) does not need one: it renders
+   "was -> now" as sev-breaking-ink -> ink, and has no verdict meaning "this is
+   healthy".
+
+   The collector does. `All conforming` is a REACHED verdict and must stay
+   visually distinct from `nothing validated yet`, which the App.vue comment on
+   .headline.neutral calls out explicitly ("the two coloured tones are verdicts,
+   and this state has not reached one"). Collapsing the two onto neutral ink
+   would delete that distinction. So the existing green is quarantined here,
+   lift-and-shift — VALUES UNCHANGED from the pre-token palette, nothing
+   re-picked, no new hue invented.
+
+   This file exists to be deleted. Open fork for the project chat, recorded in
+   docs/sessions/2026-09-08-code-design-tokens.md: does the Flanj system get a
+   canonical positive/verified family? Two product surfaces need one (this and
+   the CP peek page's trust strip / verified chip). When it lands in
+   docs/design/tokens.css, re-vendor tokens.css and delete this file.
+
+   Contrast, carried over from ux-design §6.1 (unchanged, still holds):
+   --verified is the FILL, --verified-ink the TEXT/BORDER role. On light,
+   #157f5f is only 4.38:1 on --surface-sunk, so the ink darkens to #116b50
+   (5.7:1) while the fill keeps the palette value. */
+
+:root {
+  --verified: #157f5f;
+  --verified-ink: #116b50;
+  --verified-contrast: #ffffff;
+}
+
+[data-theme='dark'] {
+  --verified: #46d19e;
+  --verified-ink: #46d19e;
+  --verified-contrast: #04231a;
+}
+
+/* Mirrors [data-theme="dark"] exactly, for surfaces that let the OS decide.
+   The collector never reaches this (index.html stamps data-theme="light"), but
+   the file must not become the reason a future surface loses its dark values. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --verified: #46d19e;
+    --verified-ink: #46d19e;
+    --verified-contrast: #04231a;
+  }
+}
