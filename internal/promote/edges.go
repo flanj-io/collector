@@ -89,9 +89,17 @@ type EdgesResponse struct {
 // Defensive normalization for rows written by older collectors: an empty
 // first_seen falls back to last_seen and vice versa; an edge with neither, or
 // with a host the public-suffix list reduces to nothing, is dropped rather than
-// registered as a blank domain. At most EdgesSyncMaxItems rows are returned —
-// the earliest-seen relationships first, so a deployment over the cap registers
-// a STABLE subset rather than a different one each tick.
+// registered as a blank domain.
+//
+// At most EdgesSyncMaxItems rows are returned, in the order the caller's rows
+// arrived. That order is the store's — ListEdges sorts `direction ASC, last_seen
+// DESC` — so a deployment over the cap registers its MOST RECENTLY ACTIVE edges,
+// which is the right subset to keep: a relationship nothing has touched in the
+// window is the one that can wait for the next tick. This function is
+// deterministic for a given input; it inherits its stability from that ordering
+// rather than imposing one, and does not re-sort (a second sort here would
+// silently disagree with the store's and make the truncation point harder to
+// reason about, not easier).
 func BuildEdgeRegistrations(edges []model.Edge) []EdgeRegistration {
 	byKey := make(map[string]*EdgeRegistration, len(edges))
 	order := make([]string, 0, len(edges))

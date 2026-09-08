@@ -169,8 +169,10 @@ func TestBuildEdgeRegistrationsNormalizesAndDrops(t *testing.T) {
 	}
 }
 
-// The cap is the CP's, and it takes a STABLE subset: the same rows every tick,
-// not a different slice each time.
+// The cap is the CP's, and the truncation is DETERMINISTIC for a given input:
+// the same rows in the same order, never a different slice each call. (Which
+// rows survive is the store's ordering to decide — most-recently-active first;
+// this pins that nothing here reshuffles them.)
 func TestBuildEdgeRegistrationsCapsAtMaxItems(t *testing.T) {
 	edges := make([]model.Edge, 0, EdgesSyncMaxItems+20)
 	for i := 0; i < EdgesSyncMaxItems+20; i++ {
