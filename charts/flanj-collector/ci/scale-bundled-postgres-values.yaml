@@ -1,0 +1,21 @@
+# Tier: scale — postgres, no PVC, autoscaled fronts, bundled evaluation database.
+specToken:
+  value: ci-scale-token-not-a-real-secret
+integration:
+  id: acme-payments
+collector:
+  replicas: 2
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+store:
+  backend: postgres
+  replicas: 2
+  persistence:
+    enabled: false
+postgres:
+  enabled: true
+  password: ci-postgres-password-not-a-real-secret

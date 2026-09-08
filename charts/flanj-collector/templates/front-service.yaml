@@ -1,0 +1,29 @@
+{{/*
+The SDK's target (FLANJ_OTLP_ENDPOINT=http://<this>:4318/v1/logs). ClusterIP:
+the collector is outbound-only and nothing it serves belongs on the internet.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "flanj-collector.front.fullname" . }}
+  labels:
+    {{- include "flanj-collector.labels" . | nindent 4 }}
+    app.kubernetes.io/component: front
+  {{- if or .Values.service.front.annotations .Values.commonAnnotations }}
+  annotations:
+    {{- with .Values.commonAnnotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.service.front.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.front.type }}
+  ports:
+    - name: otlp-http
+      port: {{ int .Values.service.front.port }}
+      targetPort: otlp-http
+      protocol: TCP
+  selector:
+    {{- include "flanj-collector.front.selectorLabels" . | nindent 4 }}

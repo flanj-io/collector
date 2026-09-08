@@ -17,17 +17,42 @@
 
 Companion to [STORE.md](STORE.md) (backends, window, migration, topology
 invariants). This page is the *operator's* view: which shape to run, what flows
-through it, and the Kubernetes objects each shape needs. A Helm chart that
-renders exactly these objects is the next step (tracked in the workspace TODO);
-until then this is the reference.
+through it, and the Kubernetes objects each shape needs.
 
 One image, three shapes, role chosen by `--config`:
 
-| Shape | Run when | Pods | State |
-|---|---|---|---|
-| **Single pod** | evaluation, small production | 1 | sqlite on one PVC (default) or postgres |
-| **N pods + shared postgres** | you already run postgres; BYO-DB | N identical | postgres, no PVC |
-| **Tiered: N fronts → 1 store pod** | many collectors, zero-ops store | N fronts (stateless) + 1 store | store pod: sqlite on one PVC (or postgres) |
+| Shape | Run when | Pods | State | Installed by |
+|---|---|---|---|---|
+| **Single pod** | evaluation, small production | 1 | sqlite on one PVC (default) or postgres | the objects below |
+| **N pods + shared postgres** | you already run postgres; BYO-DB | N identical | postgres, no PVC | the objects below |
+| **Tiered: N fronts → 1 store pod** | many collectors, zero-ops store | N fronts (stateless) + 1 store | store pod: sqlite on one PVC (or postgres) | **the Helm chart** |
+
+## Installing: the chart, or these objects
+
+The tiered shape has a chart —
+[`charts/flanj-collector`](../charts/flanj-collector/README.md), published to
+the same registry as the image:
+
+```bash
+helm install flanj oci://registry-1.docker.io/flanj/flanj-collector \
+  --namespace flanj --create-namespace \
+  --set specToken.value="$(openssl rand -hex 32)" \
+  --set integration.id=acme-payments
+```
+
+It renders both role configs from your values, gives **both roles the same
+`FLANJ_SPEC_TOKEN` from one Secret key**, and refuses — in its values schema,
+before anything is created — an install that would come up broken rather than
+broken-looking: no spec token, `store.replicas > 1` on sqlite, a PVC on the
+postgres tier. Its three tiers are `store.persistence.enabled=false` (eval),
+the defaults (sqlite on a PVC), and `store.backend=postgres` (scale).
+
+**The rest of this page stays the reference, and not only as background.** The
+chart covers the tiered shape only: the single-pod and shared-postgres shapes
+are one object each and are described below in full, the chart's own objects are
+the ones described below, and anything the values do not reach — a hand-written
+config, a different scheduler story, an operator who does not run Helm — is
+still built from here.
 
 ## The flow
 
@@ -105,7 +130,15 @@ edge; repeats bump `occurrence_count`); `spec_info` → upsert by integration.
 
 ## Tiered: N fronts → 1 store pod
 
-Role configs are baked into the image — no ConfigMap needed for a first run:
+[The Helm chart](../charts/flanj-collector/README.md) installs this shape, and
+every object in the table below is one it renders. What follows is what it
+renders and why — read it whether or not you use the chart, because the two
+failure modes in this section are the ones that look healthy.
+
+Role configs are baked into the image — no ConfigMap needed for a first run
+(the chart renders its own from your values instead, mounted at
+`/etc/flanj/chart/`, because the baked ones carry example identity and the
+example Service names):
 
 | Role | Args | Env | Objects |
 |---|---|---|---|
@@ -146,6 +179,12 @@ starts it, and the contract endpoint answers `401`, which surfaces once per
 refresh tick as `contract refresh failed … store pod returned 401
 Unauthorized`. So after a tiered rollout, check a front's logs, not just that
 its pods are Ready.
+
+The chart takes the "identical value on both roles" half of this out of your
+hands — both roles read one Secret key — and refuses to render at all without a
+token, rather than installing a store pod that exits at startup. It cannot take
+the *other* half out of your hands: with `specToken.existingSecret`, a value
+that changes underneath a running deployment produces exactly the 401 above.
 
 Mount your own `front.yaml`/`store.yaml` when you need your own
 `integration_id`, display names, `cp_base_url` / `cp_public_url`, or window sizes — the baked
@@ -243,7 +282,10 @@ At the point a single store writer is the limit, switch the store role to
 
 This table is the complete contract: every `FLANJ_*` variable the shipped
 `config/*.example.yaml` files reference appears here, and CI fails the build if
-one is missing (`scripts/check-env-documented.sh`).
+one is missing (`scripts/check-env-documented.sh`). The Helm chart renders its
+own role configs rather than using the baked ones, which makes it a second way a
+variable can enter the operator contract — so `charts/*/templates` is scanned by
+the same guard, against this same table.
 
 | Variable | Used by | Required? | Meaning |
 |---|---|---|---|
@@ -257,6 +299,22 @@ Any key in the YAML can use `${env:NAME}` / `${env:NAME:-default}` (OpenTelemetr
 collector confmap). An **unset** variable expands to the empty string rather
 than failing — which is why `FLANJ_SPEC_TOKEN` is validated explicitly rather
 than trusted to a default.
+
+## Proven by the kind smoke
+
+The chart is not trusted to `helm lint`: linting proves it renders, not that
+what it renders boots, and both of this shape's bad outcomes render perfectly.
+`scripts/helm-smoke.sh` installs the tiered lane into a kind cluster on every
+pull request (`.github/workflows/ci.yml`), on **both** store backends, and
+asserts behaviour — the UI answers through a port-forward to the store pod's
+loopback bind, `serves_fronts` is true (so `spec_endpoint` really is bound), a
+call POSTed to the *front* Service arrives in the *store's* window, and no front
+is logging a contract-refresh `401`. It also asserts the refusals: an install
+with no spec token, a sqlite store with `replicas > 1`, and a PVC on the
+postgres tier all have to fail.
+
+Run it against a locally built image with
+`bash scripts/helm-smoke.sh flanj-collector:<tag>`.
 
 ## Proven by the e2e harness
 

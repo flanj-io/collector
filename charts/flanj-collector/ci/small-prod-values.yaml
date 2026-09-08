@@ -1,0 +1,21 @@
+# Tier: small prod — sqlite on a PVC, one store pod, a Connected control plane.
+specToken:
+  value: ci-small-prod-token-not-a-real-secret
+integration:
+  id: acme-payments
+  consumerDisplayName: Acme Consumer Ltd
+  providerDisplayName: Acme Payments
+controlPlane:
+  baseUrl: http://cp-api.flanj:3001
+  publicUrl: https://app.flanj.io
+  deployToken:
+    value: ci-deploy-token-not-a-real-secret
+collector:
+  replicas: 3
+store:
+  backend: sqlite
+  persistence:
+    enabled: true
+    size: 20Gi
+networkPolicy:
+  enabled: true

@@ -1,0 +1,505 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "flanj-collector values",
+  "description": "Helm validates values against this BEFORE rendering anything, which is where the tiered shape's two invisible failures have to be caught: a store pod with no contract token exits at startup, and a front with the wrong one runs Ready forever while detecting nothing.",
+  "type": "object",
+  "required": [
+    "image",
+    "specToken",
+    "collector",
+    "store"
+  ],
+  "properties": {
+    "nameOverride": {
+      "type": "string"
+    },
+    "fullnameOverride": {
+      "type": "string"
+    },
+    "commonLabels": {
+      "type": "object"
+    },
+    "commonAnnotations": {
+      "type": "object"
+    },
+    "podSecurityContext": {
+      "type": "object"
+    },
+    "securityContext": {
+      "type": "object"
+    },
+    "image": {
+      "type": "object",
+      "required": [
+        "repository"
+      ],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tag": {
+          "type": "string"
+        },
+        "pullPolicy": {
+          "type": "string",
+          "enum": [
+            "Always",
+            "IfNotPresent",
+            "Never"
+          ]
+        },
+        "pullSecrets": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "serviceAccount": {
+      "type": "object",
+      "properties": {
+        "create": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "annotations": {
+          "type": "object"
+        }
+      }
+    },
+    "specToken": {
+      "type": "object",
+      "description": "REQUIRED. The shared bearer token on the store pod's contract endpoint. The store pod refuses to start without one; a front without one gets 401 on every contract read and silently detects no REST drift. Set value (the chart makes the Secret) or existingSecret (you did).",
+      "properties": {
+        "value": {
+          "type": "string"
+        },
+        "existingSecret": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "if": {
+        "properties": {
+          "existingSecret": {
+            "const": ""
+          }
+        },
+        "required": [
+          "existingSecret"
+        ]
+      },
+      "then": {
+        "required": [
+          "value"
+        ],
+        "properties": {
+          "value": {
+            "minLength": 1,
+            "description": "set specToken.value, or specToken.existingSecret \u2014 the tiered shape does not boot without a contract token"
+          }
+        }
+      }
+    },
+    "integration": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "consumerDisplayName": {
+          "type": "string"
+        },
+        "providerDisplayName": {
+          "type": "string"
+        }
+      }
+    },
+    "controlPlane": {
+      "type": "object",
+      "properties": {
+        "baseUrl": {
+          "type": "string"
+        },
+        "publicUrl": {
+          "type": "string"
+        },
+        "findingSync": {
+          "type": "boolean"
+        },
+        "directorySync": {
+          "type": "boolean"
+        },
+        "deployToken": {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": "string"
+            },
+            "existingSecret": {
+              "type": "string"
+            },
+            "key": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "collector": {
+      "type": "object",
+      "properties": {
+        "replicas": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "autoscaling": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "minReplicas": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "maxReplicas": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "targetCPUUtilizationPercentage": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "targetMemoryUtilizationPercentage": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "behavior": {
+              "type": "object"
+            }
+          }
+        },
+        "resources": {
+          "type": "object"
+        },
+        "podAnnotations": {
+          "type": "object"
+        },
+        "podLabels": {
+          "type": "object"
+        },
+        "nodeSelector": {
+          "type": "object"
+        },
+        "tolerations": {
+          "type": "array"
+        },
+        "affinity": {
+          "type": "object"
+        },
+        "topologySpreadConstraints": {
+          "type": "array"
+        },
+        "priorityClassName": {
+          "type": "string"
+        },
+        "extraEnv": {
+          "type": "array"
+        },
+        "extraVolumes": {
+          "type": "array"
+        },
+        "extraVolumeMounts": {
+          "type": "array"
+        },
+        "selfSpecPath": {
+          "type": "string"
+        },
+        "selfIntegrationId": {
+          "type": "string"
+        },
+        "config": {
+          "type": "string"
+        }
+      }
+    },
+    "store": {
+      "type": "object",
+      "required": [
+        "backend"
+      ],
+      "properties": {
+        "backend": {
+          "type": "string",
+          "enum": [
+            "sqlite",
+            "postgres"
+          ]
+        },
+        "replicas": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "persistence": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "size": {
+              "type": "string"
+            },
+            "storageClass": {
+              "type": "string"
+            },
+            "accessModes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "existingClaim": {
+              "type": "string"
+            }
+          }
+        },
+        "window": {
+          "type": "object",
+          "properties": {
+            "maxRows": {
+              "type": "integer"
+            },
+            "maxBytes": {
+              "type": "integer"
+            }
+          }
+        },
+        "dsn": {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": "string"
+            },
+            "existingSecret": {
+              "type": "string"
+            },
+            "key": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "sqliteImportPath": {
+          "type": "string"
+        },
+        "resources": {
+          "type": "object"
+        },
+        "podAnnotations": {
+          "type": "object"
+        },
+        "podLabels": {
+          "type": "object"
+        },
+        "nodeSelector": {
+          "type": "object"
+        },
+        "tolerations": {
+          "type": "array"
+        },
+        "affinity": {
+          "type": "object"
+        },
+        "priorityClassName": {
+          "type": "string"
+        },
+        "extraEnv": {
+          "type": "array"
+        },
+        "extraVolumes": {
+          "type": "array"
+        },
+        "extraVolumeMounts": {
+          "type": "array"
+        },
+        "config": {
+          "type": "string"
+        }
+      },
+      "allOf": [
+        {
+          "comment": "sqlite: exactly one pod may own the db file. Two pods on one file is a corrupted store, not a degraded deployment.",
+          "if": {
+            "properties": {
+              "backend": {
+                "const": "sqlite"
+              }
+            },
+            "required": [
+              "backend"
+            ]
+          },
+          "then": {
+            "properties": {
+              "replicas": {
+                "maximum": 1,
+                "description": "store.replicas must be 1 with backend=sqlite \u2014 scale the fronts, or move the store to backend=postgres"
+              }
+            }
+          }
+        },
+        {
+          "comment": "postgres: the evidence is in the database. A PVC here is an empty volume that looks like durability.",
+          "if": {
+            "properties": {
+              "backend": {
+                "const": "postgres"
+              }
+            },
+            "required": [
+              "backend"
+            ]
+          },
+          "then": {
+            "properties": {
+              "persistence": {
+                "properties": {
+                  "enabled": {
+                    "const": false,
+                    "description": "store.persistence.enabled must be false with backend=postgres"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "postgres": {
+      "type": "object",
+      "description": "Bundled EVALUATION database: one replica, no backups, no HA. Production points store.dsn at a database you operate.",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "image": {
+          "type": "string",
+          "minLength": 1
+        },
+        "imagePullPolicy": {
+          "type": "string",
+          "enum": [
+            "Always",
+            "IfNotPresent",
+            "Never"
+          ]
+        },
+        "database": {
+          "type": "string",
+          "minLength": 1
+        },
+        "username": {
+          "type": "string",
+          "minLength": 1
+        },
+        "password": {
+          "type": "string"
+        },
+        "persistence": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "size": {
+              "type": "string"
+            },
+            "storageClass": {
+              "type": "string"
+            }
+          }
+        },
+        "resources": {
+          "type": "object"
+        }
+      },
+      "if": {
+        "properties": {
+          "enabled": {
+            "const": true
+          }
+        },
+        "required": [
+          "enabled"
+        ]
+      },
+      "then": {
+        "required": [
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "minLength": 1,
+            "description": "postgres.password is required when the bundled database is enabled \u2014 it is not generated, because a password regenerated on the next upgrade locks the store out of its own database"
+          }
+        }
+      }
+    },
+    "service": {
+      "type": "object",
+      "properties": {
+        "front": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "ClusterIP",
+                "NodePort",
+                "LoadBalancer"
+              ]
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "annotations": {
+              "type": "object"
+            }
+          }
+        },
+        "store": {
+          "type": "object",
+          "properties": {
+            "annotations": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "extraStorePeers": {
+          "type": "array"
+        }
+      }
+    }
+  }
+}

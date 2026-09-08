@@ -1,0 +1,45 @@
+{{- include "flanj-collector.validate" . -}}
+{{- if eq .Values.store.backend "sqlite" }}
+{{/*
+sqlite: a StatefulSet with replicas fixed at 1. Exactly one pod may own a
+sqlite file — the schema and the render-time guard both refuse anything else,
+because two pods on one file is not a degraded deployment, it is a corrupted
+store.
+*/}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "flanj-collector.store.fullname" . }}
+  labels:
+    {{- include "flanj-collector.labels" . | nindent 4 }}
+    app.kubernetes.io/component: store
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: 1
+  serviceName: {{ include "flanj-collector.store.headlessName" . }}
+  selector:
+    matchLabels:
+      {{- include "flanj-collector.store.selectorLabels" . | nindent 6 }}
+  template:
+    {{- $claimTemplate := and .Values.store.persistence.enabled (not .Values.store.persistence.existingClaim) }}
+    {{- include "flanj-collector.store.podTemplate" (dict "ctx" . "claimTemplate" $claimTemplate) | nindent 4 }}
+  {{- if $claimTemplate }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "flanj-collector.store.selectorLabels" . | nindent 10 }}
+      spec:
+        accessModes:
+          {{- toYaml .Values.store.persistence.accessModes | nindent 10 }}
+        resources:
+          requests:
+            storage: {{ .Values.store.persistence.size | quote }}
+        {{- if .Values.store.persistence.storageClass }}
+        storageClassName: {{ .Values.store.persistence.storageClass | quote }}
+        {{- end }}
+  {{- end }}
+{{- end }}

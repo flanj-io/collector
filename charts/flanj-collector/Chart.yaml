@@ -1,0 +1,27 @@
+apiVersion: v2
+name: flanj-collector
+description: >-
+  The Flanj Collector in its tiered shape — N stateless front collectors
+  forwarding to one store pod that owns the window and serves the local UI.
+type: application
+
+# Chart version. Bump on every chart change (SemVer).
+version: 0.1.0
+
+# The collector image tag this chart is written against; `image.tag` defaults to
+# it. Keep it equal to the published Docker Hub tag — the chart renders configs
+# whose keys are frozen in contracts/CONTRACTS.md §8, so a chart ahead of the
+# image can render a config the image refuses to load.
+appVersion: "v0.6.0"
+
+home: https://github.com/flanj-io/collector
+sources:
+  - https://github.com/flanj-io/collector
+keywords:
+  - opentelemetry
+  - api
+  - contract-drift
+  - observability
+annotations:
+  # ELv2, like the collector itself.
+  licenses: Elastic-2.0

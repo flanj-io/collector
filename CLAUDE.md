@@ -88,7 +88,14 @@ contract/                          # PUBLIC transport-neutral Contract model + M
                                    # v0.5 Step A; deliberately NOT internal/ — imported by mcp-drift-watch (one classifier, ever)
 internal/                          # redact | drift | store | edge | promote | model | otlpattr — the unit-tested logic (internal/CLAUDE.md)
 config/config.example.yaml         # annotated example config (every key frozen in CONTRACTS §8)
-docs/                              # CONCEPTS.md + STORE.md (backends/topologies) + DEPLOYMENT.md (shapes, flows, k8s sketches)
+charts/flanj-collector/            # the Helm chart — the TIERED shape only (N fronts + 1 store pod), published to the
+                                   # same OCI registry as the image. It renders both role configs from values (mounted at
+                                   # /etc/flanj/chart/, NOT the baked /etc/flanj/*.yaml), hands both roles ONE Secret key
+                                   # for FLANJ_SPEC_TOKEN, and REFUSES in values.schema.json the installs that come up
+                                   # broken-looking rather than broken: no spec token, sqlite with replicas>1, a PVC on
+                                   # postgres. Proven by scripts/helm-smoke.sh (kind, both backends, in CI) — `helm lint`
+                                   # cannot see either of this shape's silent failures
+docs/                              # CONCEPTS.md + STORE.md (backends/topologies) + DEPLOYMENT.md (shapes, flows, k8s sketches, the chart)
 contracts/                         # vendored contract: CONTRACTS.md + fixtures, specs, vectors, schemas — see contracts/README.md
 ```
 

@@ -1,0 +1,11 @@
+# Tier: scale — postgres you operate, DSN from a Secret you created.
+specToken:
+  existingSecret: flanj-spec-token
+store:
+  backend: postgres
+  replicas: 2
+  persistence:
+    enabled: false
+  dsn:
+    existingSecret: flanj-pg
+    key: dsn
