@@ -1,0 +1,203 @@
+/* vendored from docs/design/tokens.css — do not edit here.
+   Canonical source lives in the docs vault (flanj-io/docs, docs/design/tokens.css),
+   generated from docs/design/tokens.json. Same discipline as CONTRACTS.md: change
+   the vault copy, then re-vendor. Bundled by Vite into the single stylesheet the
+   collector serves through go:embed, so the local UI stays self-contained.
+
+   Webfonts are deliberately not imported here, and the collector loads NONE: it is
+   a local-first tool served from a laptop, and a Google Fonts link would be an
+   outbound request from a page that otherwise makes none. Every stack below is
+   therefore exercised in its no-webfont form — a hard constraint, not a fallback.
+
+   The `prefers-color-scheme` block below never fires here: index.html stamps
+   data-theme="light" on <html>, and the collector's theme ruling (ux-design-v2 §3,
+   light default, dark opt-in, no System state) governs. See src/theme.ts. */
+
+/* Flanj design tokens — CANONICAL SOURCE.
+   Generated from tokens.json; exported from the Flanj Design System project in
+   Claude Design (project 185ce19f-45dd-4ed0-a18e-78972c4ee077, styles.css +
+   tokens/*.css) on 2026-08-31.
+
+   New surfaces consume this file VERBATIM rather than redefining values.
+   Surfaces that vendor a copy must carry a "vendored from docs/design/tokens.css
+   — do not edit here" header, the same discipline as CONTRACTS.md.
+
+   Webfonts are deliberately NOT imported here. IBM Plex is loaded per surface as
+   a single stylesheet link; every stack in this file must render acceptably with
+   no webfont loaded — a hard constraint from the drift page, which is emitted by
+   a Go template with no build step and may ship without font files. */
+
+/* ── Color ──────────────────────────────────────────────────────────────────
+   Light is the base scheme. Dark ships under [data-theme="dark"] (explicit
+   toggle, collector convention: storage key `flanj.theme`, light default) and
+   under prefers-color-scheme for pages whose toggle is optional or absent.
+   Rule: --accent is never semantic. Severity is its own triad and the red tier
+   is named `breaking`, never `error`. Severity never rides on hue alone. */
+:root {
+  --ground: #f7f8fa;
+  --surface: #ffffff;
+  --surface-sunk: #eef1f5;
+  --ink: #10151c;
+  --ink-soft: #48545f;
+  --ink-faint: #76828d;
+  --rule: #dde3ea;
+  --rule-soft: #eaeef3;
+  --accent: #9d6428;
+  --accent-ink: #7d4e1f;
+  --accent-wash: #f4e9dd;
+  --accent-contrast: #ffffff;
+  --sev-breaking: #b03a43;
+  --sev-breaking-ink: #8c2a32;
+  --sev-breaking-wash: #f8e6e8;
+  --sev-breaking-contrast: #ffffff;
+  --sev-warning: #8a6f0a;
+  --sev-warning-ink: #6f5807;
+  --sev-warning-edge: #d1ac1f;
+  --sev-warning-wash: #faf3d9;
+  --sev-warning-contrast: #ffffff;
+  --sev-info: #5c6873;
+  --sev-info-ink: #48545f;
+  --sev-info-wash: #eef1f5;
+  --sev-info-contrast: #ffffff;
+  color-scheme: light;
+}
+
+[data-theme="dark"] {
+  --ground: #0e1116;
+  --surface: #151a21;
+  --surface-sunk: #1b222b;
+  --ink: #e7ecf1;
+  --ink-soft: #a3aeba;
+  --ink-faint: #78838f;
+  --rule: #262f3a;
+  --rule-soft: #1f2731;
+  --accent: #d49c5e;
+  --accent-ink: #e6bc8a;
+  --accent-wash: #2e2214;
+  --accent-contrast: #2a1809;
+  --sev-breaking: #e06e7a;
+  --sev-breaking-ink: #efa0a8;
+  --sev-breaking-wash: #341d20;
+  --sev-breaking-contrast: #2b0d12;
+  --sev-warning: #e0bd3f;
+  --sev-warning-ink: #edd27a;
+  --sev-warning-edge: #9c8419;
+  --sev-warning-wash: #2f2810;
+  --sev-warning-contrast: #291f04;
+  --sev-info: #8d99a5;
+  --sev-info-ink: #a3aeba;
+  --sev-info-wash: #1b222b;
+  --sev-info-contrast: #10151c;
+  color-scheme: dark;
+}
+
+/* Auto-dark. Values mirror [data-theme="dark"] above exactly — keep in sync.
+   A stamped data-theme="light" still wins, so a surface may layer an explicit
+   toggle on top of this without the two fighting. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #0e1116;
+    --surface: #151a21;
+    --surface-sunk: #1b222b;
+    --ink: #e7ecf1;
+    --ink-soft: #a3aeba;
+    --ink-faint: #78838f;
+    --rule: #262f3a;
+    --rule-soft: #1f2731;
+    --accent: #d49c5e;
+    --accent-ink: #e6bc8a;
+    --accent-wash: #2e2214;
+    --accent-contrast: #2a1809;
+    --sev-breaking: #e06e7a;
+    --sev-breaking-ink: #efa0a8;
+    --sev-breaking-wash: #341d20;
+    --sev-breaking-contrast: #2b0d12;
+    --sev-warning: #e0bd3f;
+    --sev-warning-ink: #edd27a;
+    --sev-warning-edge: #9c8419;
+    --sev-warning-wash: #2f2810;
+    --sev-warning-contrast: #291f04;
+    --sev-info: #8d99a5;
+    --sev-info-ink: #a3aeba;
+    --sev-info-wash: #1b222b;
+    --sev-info-contrast: #10151c;
+    color-scheme: dark;
+  }
+}
+
+/* ── Type ───────────────────────────────────────────────────────────────────
+   Serif = display headings only; Sans = body; Mono = data, meta, labels, code.
+   Stacks must render acceptably with no webfont loaded. --f-* are the aliases
+   already shipped in production templates; keep both spellings. */
+:root {
+  --font-display: "IBM Plex Serif", Georgia, "Times New Roman", serif;
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --f-serif: var(--font-display);
+  --f-sans: var(--font-sans);
+  --f-mono: var(--font-mono);
+  --text-xs: 11px;
+  --text-sm: 12.5px;
+  --text-md: 14px;
+  --text-base: 16px;
+  --text-lg: 18px;
+  --text-xl: 22px;
+  --text-2xl: 28px;
+  --text-3xl: 34px;
+  --text-display: clamp(32px, 5vw, 46px);
+  --leading-tight: 1.1;
+  --leading-snug: 1.3;
+  --leading-normal: 1.55;
+  --leading-loose: 1.75;
+  --tracking-display: -0.015em;
+  --tracking-heading: -0.01em;
+  --tracking-num: -0.02em;
+  --tracking-caps: 0.1em;
+  --tracking-eyebrow: 0.14em;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+}
+
+/* ── Spacing + layout ───────────────────────────────────────────────────────
+   4px base scale; section rhythm is generous (48px) while content stays dense. */
+:root {
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 40px;
+  --space-9: 48px;
+  --space-10: 64px;
+  --space-11: 96px;
+  --wrap-max: 1120px;
+  --pad-page: 28px;
+  --gap-section: 48px;
+  --measure: 68ch;
+}
+
+/* ── Shape + depth ──────────────────────────────────────────────────────────
+   Corners are square — radius 0 is a brand decision, not an omission. Depth
+   comes from 1px rules and surface steps (ground -> surface -> surface-sunk);
+   the single overlay shadow exists for sheets/dialogs only. Severity stripes
+   are 3px left borders. */
+:root {
+  --border-w: 1px;
+  --border-w-stripe: 3px;
+  --radius: 0px;
+  --focus-ring: 2px solid var(--accent);
+  --focus-offset: 1px;
+  --shadow-overlay: 0 16px 48px -12px rgba(16, 21, 28, 0.35);
+}
+
+/* ── Motion ─────────────────────────────────────────────────────────────────
+   Essentially none: color/border fades only, ease-out, nothing moves, nothing
+   bounces. Respect prefers-reduced-motion by default. */
+:root {
+  --dur-fast: 120ms;
+  --dur: 200ms;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+}
