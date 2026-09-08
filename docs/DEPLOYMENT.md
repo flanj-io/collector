@@ -194,15 +194,29 @@ Flow specifics:
   the parser for a size problem and quietly detect nothing on that edge. An
   UPLOADED contract can never be this: the uploader refuses one over the cap
   before it is stored. An observed MCP `tools/list` can, since nothing caps a
-  server's catalogue on its way in. It surfaces once per refresh tick, in a
-  front's log, as `contract refresh failed … the store pod served the contract
-  document for "x" larger than the 8 MiB cap`, with the matching line on the
-  store pod naming the integration and its byte count. The fix is on the MCP
-  server — a smaller catalogue, or split across servers; the front keeps
-  validating that edge against whatever baseline it already had. Note the shape
-  this cannot help: a front reading from a store pod older than 2026-09-08 gets
-  the old silent truncation, and a prefix of exactly 8 MiB is indistinguishable
-  from a document that fits. Roll the store pod first.
+  server's catalogue on its way in.
+
+  **Where you see it.** On the store pod's **Contracts tab**: the row stays
+  listed — withholding it would make an unreadable edge look like an edge with
+  no contract — and carries a `too large to serve` state naming the size and the
+  overage. That state renders only where the cap applies: this pod serves fronts
+  (`spec_endpoint` is set). A single pod reads the same document in-process,
+  crosses no boundary, applies no cap, and validates against it normally, so
+  nothing is said there. In the **logs** it is a transition, not a heartbeat:
+  each pod names the refusal when it starts and again when it clears, once —
+  `contract refresh: the store pod holds a document past the cap …` on a front,
+  `contract endpoint: a stored document is past the cap …` on the store pod,
+  both carrying the integration and the byte count. It is NOT repeated on every
+  ten-second refresh; a log with one line has not stopped noticing.
+
+  **What to do.** The fix is on the MCP server — a smaller catalogue, or split
+  across servers. Meanwhile each front keeps validating that edge against
+  whatever baseline it already had; a front that has none validates nothing
+  there, and every call on it is stamped `not-validated` / `no-contract`, which
+  is what the card is telling you. Note the shape this cannot help: a front
+  reading from a store pod older than 2026-09-08 gets the old silent truncation,
+  and a prefix of exactly 8 MiB is indistinguishable from a document that fits.
+  Roll the store pod first.
 - The flag action runs on the store pod (it holds the evidence); its outbound
   calls to the control plane (Connect, flag, thread state) are the only
   off-cluster egress. **Connect** is per deployment, not per pod: the collector
