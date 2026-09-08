@@ -122,6 +122,11 @@ func (e *uiExtension) handleHealth(w http.ResponseWriter, r *http.Request) {
 		// consumer_display_name names the INSTALLER, not a discovery — it may
 		// render pre-traffic (the pre-traffic honesty rule exempts it).
 		"consumer_display_name": e.cfg.ConsumerDisplayName,
+		// Does this pod serve its contracts to FRONT collectors? The Contracts
+		// card needs it to say anything about the 8 MiB document cap, which
+		// applies to that hop and to no other: on a single pod the same
+		// oversized document is read in-process, bound, and validating.
+		"serves_fronts": e.servesFronts(),
 	}
 	// Pre-traffic honesty (v1 phase 1): `integration` and
 	// `provider_display_name` describe a DISCOVERY, so they emit only once at

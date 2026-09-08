@@ -40,6 +40,11 @@ type fakeSource struct {
 	fetches  map[string]int
 	listErr  error
 	docErrOn string
+	// enforcesCap makes this source behave like the TIERED channel, which
+	// refuses a document past model.MaxContractDocBytes at both ends. The
+	// co-located store crosses no boundary and enforces nothing, and that is
+	// the default here — an over-cap document keeps validating on a single pod.
+	enforcesCap bool
 }
 
 func newFakeSource() *fakeSource {
@@ -51,6 +56,13 @@ func (f *fakeSource) listSpecs() ([]model.SpecInfo, error) {
 		return nil, f.listErr
 	}
 	return f.infos, nil
+}
+
+func (f *fakeSource) overCap(si model.SpecInfo) *overCapError {
+	if !f.enforcesCap || si.DocBytes <= maxSpecBytes {
+		return nil
+	}
+	return &overCapError{integration: si.Integration, peerHost: si.PeerHost, bytes: si.DocBytes}
 }
 
 func (f *fakeSource) specDoc(integration string) ([]byte, error) {
@@ -69,6 +81,7 @@ func (f *fakeSource) put(integration, host, loadedAt string, doc []byte) {
 		Format:      model.SpecFormatOpenAPI,
 		PeerHost:    host,
 		LoadedAt:    loadedAt,
+		DocBytes:    len(doc),
 	})
 	f.docs[integration] = doc
 }

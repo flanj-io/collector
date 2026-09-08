@@ -70,7 +70,7 @@ func OpenPostgres(dsn string, maxRows int, maxBytes int64) (Store, error) {
 		return nil, fmt.Errorf("ping postgres: %w", err)
 	}
 	p := &postgresStore{
-		base:     base{db: db, rebind: rebindDollar},
+		base:     base{db: db, rebind: rebindDollar, octetLength: pgOctetLength},
 		maxRows:  maxRows,
 		maxBytes: maxBytes,
 	}

@@ -19,7 +19,11 @@ Vue 3 + Vite single-page app, served **embedded** by the `flanjui` extension
 - **Contracts** — the loaded provider specs. MCP servers list here spec-free (the observed
   `tools/list` IS the contract): per-tool rows (`input + output contract` / `input contract
   only` with the honest no-output-contract note), definition-change rows with the
-  BREAKING / NON-BREAKING / DESCRIPTION badge and both snapshot columns.
+  BREAKING / NON-BREAKING / DESCRIPTION badge and both snapshot columns. A row whose stored
+  document is past the 8 MB contract-channel cap carries a `too large to serve` chip and a
+  line naming the overage — rendered only when `/api/health.serves_fronts` says this pod is
+  the store pod of a tiered deployment, since a single pod reads the same document in-process
+  with no cap and validates against it fine (`contractOverCap` in `src/contracts.ts`).
 - **Flag this** (on a Contracts finding) — the Flag sheet: evidence line, "what leaves this
   collector", an editable optional message, **Create thread** → the success state shows the
   **thread link** (auto-selected, auto-copied where the clipboard allows) with **Copy thread link**,
@@ -51,6 +55,9 @@ write carries `X-Flanj-UI: 1` + JSON (`src/api.ts`). Findings link to their sour
   `src/ConnectPanel.vue` — Connect. `src/ThreadsTab.vue` — the Threads list.
 - `src/threads.ts` — pure helpers (turn/link labels, chip, paste text, prefilled message) with
   `src/threads.test.ts` (vitest: `npm test`). `src/api.ts`, `src/clipboard.ts`, `src/types.ts`.
+- `src/contracts.ts` — the contract-coverage copy deck and pure helpers (roll call, provenance +
+  recency, binding checks, finding→card attribution, the document-cap row state) with
+  `src/contracts.test.ts` + `src/contract-over-cap.test.ts`.
 - `src/mcp.ts` — the v0.5 MCP pure helpers (verbatim deck copy: badges, headlines, local notices,
   tool rows, traffic facets, flag-sheet lines; `snapshotTimes` parses the definition_change detail
   tail — its regex is pinned by a collector Go test, `internal/drift`) with `src/mcp.test.ts`.

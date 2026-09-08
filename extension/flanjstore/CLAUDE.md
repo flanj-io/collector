@@ -41,8 +41,21 @@ Two backends (`docs/STORE.md` is the user-facing guide):
   and over it is a **`413`, never a truncation**: a document cut at the cap
   goes out as a 200 the front cannot tell from a whole one, parses as garbage,
   and costs that edge its detection under a PARSE error. The oversized row
-  stays LISTED — a front's repeated refusal is the only symptom either end
-  gets.
+  stays LISTED, and since 2026-09-08 it is listed WITH ITS SIZE
+  (`SpecInfo.DocBytes`, measured by `ListSpecInfos`): a front skips it from the
+  listing instead of re-requesting a document it will be refused every ten
+  seconds, the doc route refuses from the metadata before reading the document
+  into this pod's heap, and the Contracts card can finally say why an edge with
+  a contract present validates nothing. The refusal is logged **on transition**
+  (`condition.Standing`, shared by the list sweep and the doc route) —
+  `msgSpecOverCap` when it starts, `msgSpecOverCapCleared` when the document
+  comes back under the cap — instead of once per request, per front, forever.
+- `ServesContracts()` (`store.ContractServer`) answers whether `spec_endpoint`
+  is configured. The UI reads it through `/api/health.serves_fronts`, because
+  the document cap belongs to THIS hop and to no other: a single pod's drift
+  processor reads the same rows in-process with no cap, so an oversized
+  document there is bound and validating, and a card calling it "too large to
+  serve" would warn about something that works.
 
 ## Invariants
 

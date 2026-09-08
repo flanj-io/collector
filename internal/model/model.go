@@ -512,6 +512,23 @@ type SpecInfo struct {
 	// unset and the column default filed every MCP snapshot as config.
 	Source string `json:"source,omitempty"`
 
+	// DocBytes is the stored document's size in bytes, measured by the store at
+	// LIST time — it is derived from the row, never a stored column, and no
+	// writer sets it.
+	//
+	// It exists so an over-cap row can be RECOGNISED without transferring it.
+	// MaxContractDocBytes is refused at both ends of the tiered contract
+	// channel (collector#50), and until this field the only way either end
+	// could learn a row was past the cap was to attempt the transfer and read
+	// the refusal — so a front re-requested a document it would be refused
+	// every refresh tick, and the store pod's UI listed the row with no state
+	// at all while every call on that edge was stamped not-validated.
+	//
+	// Zero means "not measured": a listing from a store pod on an image older
+	// than this field, which is why the transfer-time refusals stay in place
+	// as the fallback rather than being replaced by this check.
+	DocBytes int `json:"doc_bytes,omitempty"`
+
 	// PrevVersion / PrevLoadedAt describe the document this one REPLACED, kept
 	// at N=2 (one previous, no archive — nobody wants a spec museum in a
 	// localhost debugging tool). They are what lets the card read

@@ -32,6 +32,9 @@ export interface ContractSpec {
   source?: string;
   /** The version this one replaced, when it replaced one. */
   prev_version?: string;
+  /** The stored document's size in bytes, measured by the store at list time.
+   *  Absent (or 0) on a collector that predates the field. */
+  doc_bytes?: number;
 }
 
 /** The minimum an edge row needs to be placed on the roll call. */
@@ -90,6 +93,85 @@ export const CONTRACT_TOO_LARGE =
 /** True when a picked file is past the cap the server enforces. */
 export function contractFileTooLarge(size: number): boolean {
   return size > MAX_CONTRACT_BYTES;
+}
+
+/* ── A document the contract channel refuses to serve ──────────────────── */
+
+/**
+ * The row state for a stored contract past the 8 MB cap.
+ *
+ * Why the card needs a state at all. `MAX_CONTRACT_BYTES` is refused at BOTH
+ * ends of the tiered contract channel — the store pod answers 413 and a front
+ * refuses to read a prefix, because a document cut at the cap still parses, as
+ * garbage, and would make the front report a PARSE error for a SIZE problem.
+ * Neither refusal reaches this card. So the row was listed like any other:
+ * heading, format badge, version, tool rows, a full-looking contract — while
+ * every call on that edge was stamped `not-validated` with reason `no-contract`
+ * on a front that had never managed to read it. Honest per call, and flatly
+ * contradicted one panel over.
+ *
+ * Reachable by exactly one writer: an OBSERVED MCP `tools/list`, which nothing
+ * caps on its way in. An upload is refused over the cap before it is stored,
+ * and the self contract never crosses this hop.
+ *
+ * This is NOT a claim about the provider, so none of the banned vocabulary at
+ * the top of this file applies to it and none is used: it is a fact about a
+ * document sitting in the operator's own store, and about a limit the operator
+ * can act on by splitting the server or trimming the catalogue.
+ */
+
+/** The chip, in the card's existing row-state vocabulary. */
+export const CONTRACT_OVER_CAP_TAG = 'too large to serve';
+
+/** True when this row's stored document is past the cap. Absent size (an older
+ *  collector, which does not measure) reads as "not measured", never as over —
+ *  the transfer-time refusals still answer for that case, and inventing a
+ *  warning from a missing number is the wrong direction to guess in. */
+export function contractOverCap(spec: ContractSpec): boolean {
+  return (spec.doc_bytes ?? 0) > MAX_CONTRACT_BYTES;
+}
+
+/** `9.4 MB` / `812 KB` — sizes an operator compares at a glance. */
+export function contractSizeLabel(bytes: number): string {
+  if (bytes >= MAX_CONTRACT_BYTES / 8) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+/**
+ * How far past the cap, as a phrase. Under a tenth of a megabyte rounds to
+ * "0.0 MB over", which reads like a rounding artifact rather than a limit, so
+ * that band says it in words instead.
+ */
+export function contractOverCapBy(bytes: number): string {
+  const over = bytes - MAX_CONTRACT_BYTES;
+  if (over <= 0) return '';
+  if (over < 1024 * 1024 / 10) return 'just over the 8 MB cap';
+  return `${(over / (1024 * 1024)).toFixed(1)} MB over the 8 MB cap`;
+}
+
+/**
+ * The line under the heading: what the document is, and what it costs.
+ *
+ * The second sentence states BOTH branches, because this surface genuinely
+ * cannot know which one is live. Each front keeps its own baseline in memory,
+ * and whether a given front has one depends on when it started relative to when
+ * the catalogue outgrew the cap — a fact that lives in a different process and
+ * differs between fronts of the same deployment. Naming one branch would be a
+ * guess rendered as a statement; naming both is the whole truth and is still
+ * one sentence long.
+ *
+ * The closing clause is deliberately word-for-word the shape of
+ * `NO_CONTRACT_ROW`, because on a front with no baseline that is exactly the
+ * state the calls are in.
+ */
+export function contractOverCapLine(spec: ContractSpec): string {
+  const bytes = spec.doc_bytes ?? 0;
+  const what = spec.format === 'mcp' ? 'This tools/list snapshot' : 'This document';
+  return (
+    `${what} is ${contractSizeLabel(bytes)} — ${contractOverCapBy(bytes)}. ` +
+    'Front collectors can’t read it, so each keeps whatever baseline it already had — ' +
+    'on a front that has none, calls to this provider are captured, and nothing validates them.'
+  );
 }
 
 /**

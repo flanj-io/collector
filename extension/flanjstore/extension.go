@@ -19,6 +19,7 @@ import (
 	"go.opentelemetry.io/collector/extension"
 	"go.uber.org/zap"
 
+	"github.com/flanj-io/collector/internal/condition"
 	"github.com/flanj-io/collector/internal/store"
 )
 
@@ -63,6 +64,13 @@ type storeExtension struct {
 	specSrv *http.Server
 	specLn  net.Listener
 
+	// overCap remembers which stored contract rows are past
+	// model.MaxContractDocBytes, so the refusal is logged when it starts and
+	// when it clears rather than on every listing and every document request —
+	// a front refreshes every ten seconds and there is no number of fronts at
+	// which that should become the log rate (specserver.go).
+	overCap condition.Standing
+
 	// specWatchMu guards specWatchers, and is deliberately NOT e.mu: a
 	// subscriber's callback must never be able to reach the store handle's lock.
 	specWatchMu sync.Mutex
@@ -99,6 +107,21 @@ func (e *storeExtension) NotifySpecsChanged() {
 		fn()
 	}
 }
+
+// ServesContracts reports whether this pod hands its stored contracts to FRONT
+// collectors (store.ContractServer) — that is, whether `spec_endpoint` is
+// configured.
+//
+// The UI asks so its Contracts card can be honest about the document cap, which
+// is a property of THAT HOP and of no other. A co-located drift processor reads
+// the same rows in-process and applies no cap, so an over-cap document is bound
+// and validating on a single pod; calling it "too large to serve" there would
+// warn about something that works.
+//
+// Config, not liveness: the listener is bound in Start and a bind failure fails
+// Start, so a configured endpoint that is not listening is not a state this
+// process runs in.
+func (e *storeExtension) ServesContracts() bool { return e.cfg != nil && e.cfg.SpecEndpoint != "" }
 
 // Store exposes the shared store (store.Provider). Nil until Start has opened
 // the backend — a true nil interface, never a typed-nil pointer.
@@ -207,4 +230,5 @@ var (
 	_ store.Provider       = (*storeExtension)(nil)
 	_ store.SpecPublisher  = (*storeExtension)(nil)
 	_ store.SpecSubscriber = (*storeExtension)(nil)
+	_ store.ContractServer = (*storeExtension)(nil)
 )

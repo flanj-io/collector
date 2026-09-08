@@ -165,6 +165,22 @@ store dedups on it — the first call creates the finding, later calls increment
   already cached or seeded. Reachable only via an observed MCP `tools/list`
   (the upload path refuses a larger document before it is stored, and the self
   contract never crosses this hop), which nothing caps on its way in.
+
+  **The refusal is recognised from the LISTING and logged on TRANSITION**
+  (2026-09-08). `SpecInfo.DocBytes` carries each stored document's size, so
+  `remoteSpecSource.overCap` skips an over-cap row with no request at all —
+  before this, both reconcilers re-asked for a document they would be refused on
+  every ten-second tick, and each attempt wrote a Warn line on this pod AND on
+  the store pod, forever. `overCap` is on the SOURCE and not on the row because
+  the cap belongs to the HOP: `storeSpecSource` always answers nil, so on a
+  single pod (and on every pod of a shared-postgres deployment) an oversized
+  document is read in-process, bound, and validating exactly as before. The
+  condition is a typed `*overCapError`, which is what lets `refreshSpecs` split
+  it out of the two error lists and hand it to `condition.Standing` — logged
+  when it starts (`msgSpecOverCap`) and when it clears
+  (`msgSpecOverCapCleared`), while every transient failure beside it still
+  reports on every tick. The store pod's 413 is still honoured, as the fallback
+  for a store pod on an image that predates `doc_bytes`.
 - `processor.go` — per-batch live-vs-spec detection + the refresh loop +
   rate-limited spec_info emission; appends finding + spec_info records under a
   fresh trailing ResourceLogs/ScopeLogs (calls stay ahead).

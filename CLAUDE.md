@@ -124,7 +124,13 @@ contracts/                         # vendored contract: CONTRACTS.md + fixtures,
    (`model.MaxContractDocBytes` — the same constant the upload path enforces), and **neither end
    truncates to it**: the store pod answers `413`, the front refuses to read a prefix. A document cut
    at the cap still parses — as garbage — so the front would report a PARSE error for a SIZE problem
-   and silently stop detecting on that edge.
+   and silently stop detecting on that edge. Since 2026-09-08 the row is also **measured at list
+   time** (`SpecInfo.DocBytes`), which is what makes the refusal legible instead of merely correct:
+   a front skips the row from the LISTING (no request, no 413), the Contracts card gives it an
+   explicit `too large to serve` state naming the overage — gated on `/api/health.serves_fronts`,
+   because the cap belongs to the front hop and a single pod validates the same document fine —
+   and both pods log the refusal **on transition** (`internal/condition`) instead of once per
+   ten-second tick, per edge, per front, forever.
 
 ## Contract
 
