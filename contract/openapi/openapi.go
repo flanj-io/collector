@@ -234,7 +234,11 @@ func jsonContent(content openapi3.Content) *openapi3.MediaType {
 		if i := strings.IndexByte(mediaType, ';'); i >= 0 {
 			mediaType = mediaType[:i]
 		}
-		if strings.HasSuffix(strings.ToLower(strings.TrimSpace(mediaType)), "+json") {
+		mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+		// A key spelled with parameters (`application/json; charset=utf-8`) is
+		// still application/json once stripped — kin's Get above never strips
+		// the KEY, so it is found here or not at all.
+		if mediaType == "application/json" || strings.HasSuffix(mediaType, "+json") {
 			return content[name]
 		}
 	}

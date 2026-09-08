@@ -9,6 +9,7 @@ import (
 	"mime"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -86,8 +87,13 @@ func DetectLiveVsSpec(doc *openapi3.T, call model.RedactedCall) ([]model.Finding
 	endpoint := endpointLabel(call.Method, call.Route)
 	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00")
 
+	// An ABSENT header is not a header: the validator still assumes JSON (a
+	// header-less JSON body is common enough to keep judging), but the
+	// media-type gate below must never accuse the provider of sending
+	// `application/json` when it sent nothing at all.
 	wireContentType := call.ResponseContentType
-	if wireContentType == "" {
+	wireAbsent := wireContentType == ""
+	if wireAbsent {
 		wireContentType = "application/json"
 	}
 
@@ -100,12 +106,14 @@ func DetectLiveVsSpec(doc *openapi3.T, call model.RedactedCall) ([]model.Finding
 	// decoded and validated as JSON against the schema the contract declares.
 	// A wire type the contract declares under none of those names is drift
 	// evidence, not noise: one finding, and the call reads drifted — but only
-	// on a status the provider explicitly declared (the code or its NXX
-	// range). A status the contract covers by `default` alone, or not at all,
-	// is not the provider breaching a promise: a gateway's `502 text/html`
-	// error page must not become a breaking finding on every intermediary
-	// hiccup. Those fall through to kin-openapi, whose refusal is the verdict
-	// stamp's to name.
+	// on a status the provider declared by its EXACT code, and only when the
+	// wire actually carried a Content-Type. A status the contract covers by a
+	// `4XX`/`5XX` range or by `default` alone, or not at all, is not the
+	// provider breaching a promise it made about THAT status: a gateway's
+	// `502 text/html` error page on a `5XX: application/json` contract must
+	// not become a breaking finding on every intermediary hiccup. Those fall
+	// through to kin-openapi, whose refusal is the verdict stamp's to name
+	// (`media-type-undeclared` / `status-undeclared`).
 	lookupType := wireContentType
 	if !responseUnjudged(call.Method, call.StatusCode) {
 		if declared := declaredContent(route.Operation, call.StatusCode); len(declared) > 0 {
@@ -113,7 +121,7 @@ func DetectLiveVsSpec(doc *openapi3.T, call model.RedactedCall) ([]model.Finding
 			switch {
 			case ok:
 				lookupType = resolved
-			case statusDeclared(route.Operation, call.StatusCode):
+			case !wireAbsent && statusDeclared(route.Operation, call.StatusCode):
 				return []model.Finding{contentTypeMismatchFinding(call, endpoint, now, wireContentType, declared)}, nil
 			}
 		}
@@ -245,11 +253,15 @@ func resolveResponse(op *openapi3.Operation, status int) *openapi3.Response {
 	return ref.Value
 }
 
-// statusDeclared reports whether the operation declares the status itself — the
-// exact code or its `4XX`-style range — as opposed to catching it with `default`
-// or not at all. Only a declared status can carry a media-type finding.
+// statusDeclared reports whether the operation declares the status by its EXACT
+// code — as opposed to catching it with a `4XX`-style range, with `default`, or
+// not at all. Only an exactly declared status can carry a media-type finding: a
+// range is a promise about a family of statuses, most of which an intermediary
+// (gateway, WAF, CDN) can emit in the provider's name, so a foreign media type
+// there is not the provider's breach. The LOOKUP still resolves ranges and
+// `default` (resolveResponse), so bodies on them are judged when they can be.
 func statusDeclared(op *openapi3.Operation, status int) bool {
-	return op != nil && op.Responses != nil && op.Responses.Status(status) != nil
+	return op != nil && op.Responses != nil && op.Responses.Value(strconv.Itoa(status)) != nil
 }
 
 // declaredContent is the content map the contract declares for a status, or nil
@@ -278,6 +290,28 @@ func resolveContentType(declared openapi3.Content, wire string) (string, bool) {
 	}
 	if base := structuredBase(wire); base != "" && declared.Get(base) != nil {
 		return base, true
+	}
+	// kin-openapi's Get strips parameters and case from the WIRE value only,
+	// never from the declared key — a contract that spells its key
+	// `application/json; charset=utf-8` (Swagger-2 converters do) answers to
+	// nothing above. Match the key's own media type against the wire's, and
+	// against the base its suffix denotes, and hand the validator the key
+	// verbatim so its own exact lookup succeeds.
+	wireMT, wireBase := mediaTypeOf(wire), structuredBase(wire)
+	keys := make([]string, 0, len(declared))
+	for k := range declared {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		kmt := mediaTypeOf(k)
+		if kmt == "" {
+			continue
+		}
+		if kmt == wireMT || (wireBase != "" && kmt == wireBase) {
+			ensureJSONDecoder(k)
+			return k, true
+		}
 	}
 	return "", false
 }

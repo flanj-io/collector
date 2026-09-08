@@ -48,6 +48,25 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Problem" }
+  /v1/exports:
+    post:
+      responses:
+        "200":
+          description: a CSV download
+          content:
+            text/csv:
+              schema: { type: string }
+  /v1/charset:
+    post:
+      responses:
+        "200":
+          description: a Swagger-2-converted contract spells its key with a charset
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: object
+                properties:
+                  amount: { type: integer }
   /v1/refunds:
     post:
       responses:
@@ -332,5 +351,42 @@ func TestStructuredBase(t *testing.T) {
 		if got := structuredBase(in); got != want {
 			t.Errorf("structuredBase(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestLiveVsSpec_AnAbsentContentTypeManufacturesNoFinding(t *testing.T) {
+	// The provider sent NO Content-Type. The validator still assumes JSON, but
+	// the media-type gate must not accuse the provider of sending
+	// `application/json` against a text/csv promise — it sent nothing.
+	findings, err := detectContentType(t, contentTypeCall("/v1/exports", 200, "", "a,b\n1,2\n"))
+	if err != nil || len(findings) != 0 {
+		t.Fatalf("absent header manufactured a finding: findings=%+v err=%v", findings, err)
+	}
+}
+
+func TestLiveVsSpec_ARangeDeclaredStatusCarriesNoMediaTypeFinding(t *testing.T) {
+	// /v1/refunds declares its errors as a `4XX` RANGE. A 422 text/html page is
+	// as likely a WAF's as the provider's; a range is not a promise about 422
+	// itself, so it is not a finding — kin-openapi refuses it and the verdict
+	// stamp names that. The lookup still serves the range for JSON bodies
+	// (TestLiveVsSpec_RangeStatusKeyResolvesTheSuffixToo).
+	findings, err := detectContentType(t, contentTypeCall("/v1/refunds", 422, "text/html", "<html>blocked</html>"))
+	if err != nil || len(findings) != 0 {
+		t.Fatalf("range-declared 422 text/html: findings=%+v err=%v", findings, err)
+	}
+}
+
+func TestLiveVsSpec_AParameterizedDeclaredKeyIsStillItsMediaType(t *testing.T) {
+	// The contract's KEY is `application/json; charset=utf-8`; the wire says
+	// `application/json`. kin-openapi never strips the key, so this used to be
+	// an undeclared media type — a breaking finding on every conforming call.
+	// It is the same media type: the body is judged against the schema.
+	f := onlyFinding(t, contentTypeCall("/v1/charset", 200, "application/json", `{"amount":"1200"}`))
+	if f.Rule != "type-mismatch" {
+		t.Fatalf("parameterized key not matched, got %+v", f)
+	}
+	findings, err := detectContentType(t, contentTypeCall("/v1/charset", 200, "application/json", `{"amount":1200}`))
+	if err != nil || len(findings) != 0 {
+		t.Fatalf("conforming body under a parameterized key: findings=%+v err=%v", findings, err)
 	}
 }
