@@ -145,6 +145,65 @@ API + the flag action.
   - `GET /api/health` also carries `connect_status` (from the store only) and
     the configured display names.
 
+- **Agent-facing drift read surface (`mcp.go`) — a read-only MCP server at
+  `/mcp` on THIS listener.** Streamable HTTP (`github.com/modelcontextprotocol/go-sdk`),
+  stateless, JSON responses; four tools, every one annotated read-only:
+  `drift_summary` · `list_edges` · `list_findings` (filters: `edge`, `kind`,
+  `severity`, `include_acknowledged`, `limit`) · `get_finding`. Named in
+  `launch-plan.md`'s one-line description of what launches; the prerequisite for
+  the AI-reliability directory submissions.
+  - **It is a route, not a listener.** The whole security story is that
+    `ui_endpoint` is already validated loopback (`Config.Validate`), so the agent
+    surface inherits the outbound-only posture with nothing new bound. On top of
+    that it carries `http.CrossOriginProtection` (a page in the operator's own
+    browser must not be able to drive it) and the SDK's own localhost
+    DNS-rebinding check. Non-browser clients send neither `Sec-Fetch-Site` nor
+    `Origin` and pass untouched.
+  - **Read-only, and that is structural.** There is no tool for any route behind
+    `guardMutating` / `guardLocalMutating` — no flag, no acknowledge, no
+    connect, no contract upload. An agent does not satisfy the browser guard and
+    is not meant to; suggest-and-approve is a later slice (v4 in
+    `mvp-roadmap.md`), and this is NOT that.
+  - **One builder for the rows.** `handlers.go` exposes `findingRows` and
+    `edgeRows`; both `/api/findings` / `/api/edges` and the MCP tools read
+    through them, so "the agent and the human see the same truth" is structural
+    rather than two call sites promising to stay in step.
+    `TestMCPFindingRowsAreTheUIRows` asserts the agent's rows are byte-identical
+    to the live REST route's — against the route, not a fixture, because a
+    fixture would freeze today's shape and let the surfaces drift under it.
+  - **NO RAW BODY CROSSES, by construction.** No tool returns a body, a header
+    map, or the full URL — `get_finding`'s evidence summary (`mcpSourceCall`) is
+    an explicit ALLOWLIST of scalars, so a new field on `model.RedactedCall`
+    cannot ride out to an agent just because a struct was passed through whole.
+    The URL is excluded on purpose: a query string is the one place a credential
+    rides outside a body, and `route` answers every question about which
+    endpoint drifted. `TestMCPNeverEmitsARawBody` plants a canary in every body,
+    both header maps and the URL query, drives every tool with every widening
+    argument, and scans every byte of every answer.
+  - **The floor runs once more on the way out** (`redactFindingValues`), over
+    `expected` / `actual` / `detail` and nothing else — the only fields carrying
+    observed content (`internal/drift` `actualFromValue` can quote a scalar).
+    The agent's next hop may be a model provider outside this environment, which
+    the browser's next hop is not. The floor is idempotent and add-only, so a
+    clean value is returned byte for byte and the parity above holds; structural
+    fields (ids, hashes, timestamps, kind, rule, endpoint, field_path) are never
+    run through it — a redactor over an identifier could only corrupt it.
+  - **An empty answer is never an all-clear on its own.** Every answer carries
+    `evidence`: the per-call validation tally read STRAIGHT off
+    `model.RedactedCall.Validated`, never re-derived from facts about the edge
+    (that mirror is what reported CONFORMING over calls nothing had validated).
+    A collector with no traffic says so; a collector with traffic and no
+    contract says so and names the reason; an `edge` argument naming a host this
+    collector has never observed is answered as an unknown edge with the known
+    ones listed, never as "no findings". None of these is an error.
+  - **Protocol.** The Go SDK speaks 2026-07-28 and negotiates down through
+    2025-11-25 — what `@modelcontextprotocol/sdk` 1.30.0 speaks, the version the
+    e2e `org-app` and `mock-mcp` harnesses pin — to 2024-11-05, so no pin of our
+    own is needed and there is no mismatch to work around.
+  - **No new config key.** The surface is on by default and has no switch: the
+    read API beside it has no auth either, so gating one and not the other would
+    be theatre. CONTRACTS §8 is unchanged.
+
 **Loopback only.** `ui_endpoint` is validated to a loopback address — the
 collector is outbound-only; nothing serves off-host.
 
@@ -162,6 +221,8 @@ collector is outbound-only; nothing serves off-host.
   `/api/connect` handlers. `threads.go` — the per-finding thread records + the
   `/api/threads…` handlers. `guard.go` — the mutating-route guard + CP error
   mapping. `messages.go` — every user-facing relay string (deck copy).
+- `mcp.go` — the agent-facing MCP server: tool definitions, the evidence
+  tally, the outbound redaction pass and the `/mcp` handler.
 - `embed.go` — `//go:embed all:web/dist`.
 - `web/dist/index.html` — committed **placeholder**; the real SPA overwrites it
   at Docker build time (only the placeholder is tracked; `web/dist/assets/` is
@@ -186,7 +247,10 @@ collector is outbound-only; nothing serves off-host.
 
 ## Invariants
 
-- **Loopback bind enforced** in `Config.Validate`.
+- **Loopback bind enforced** in `Config.Validate` — it is what the agent MCP
+  surface's posture rests on too.
+- **The agent surface is read-only and body-free.** No MCP tool may write, and
+  no MCP tool may return a call body, a header map or a full URL.
 - **Only the redacted call promotes.** The flag body carries the stored
   `RedactedCall` — raw bodies never existed past redaction-at-source.
 - Flag idempotency key = `flag_<finding.id>` (re-flag returns the existing
@@ -204,6 +268,12 @@ collector is outbound-only; nothing serves off-host.
 
 The flag-body contract conformance + POST headers are tested in
 `internal/promote` against `cp-flag-request.schema.json` and a stub server.
+`mcp_test.go` drives the agent surface with a REAL MCP client over streamable
+HTTP (never a hand-rolled JSON-RPC POST): tool listing and the read-only
+boundary, the byte-for-byte parity with `GET /api/findings`, per-edge queries
+including a call-less `definition_change` reaching its edge through its contract
+binding, the three honest-empty answers, the canary scan, the outbound redaction
+pass and its idempotence, the cross-site refusal, and the store-failure answer.
 `handlers_test.go` drives the relay end to end against a stub CP + an in-memory
 store (`fakestore_test.go`): guards on every mutating route, the Connect →
 pending → confirm → flag → threads → open → close/reopen → replace-link walk,

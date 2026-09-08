@@ -31,6 +31,23 @@ evidence — the redacted call that proves it.
   from that UI. See `STORE.md` for backends, sizing, and migration, and `DEPLOYMENT.md` for the
   deployment shapes (single pod · N pods + shared postgres · N front collectors → one store pod).
 
+## The agent-facing read surface
+
+The collector serves a small **read-only MCP server** at `/mcp`, on the same loopback listener as the
+UI. A coding agent running in the operator's environment can ask "what changed on the dependencies I
+call?" and be answered by the collector already watching them — `drift_summary`, `list_edges`,
+`list_findings`, `get_finding`, nothing else. It is the same data the UI shows, built by the same code,
+so a person and an agent read one story.
+
+Three properties make it safe to hand to a model:
+
+- **Read-only.** No tool writes anything. Flagging a drift to a provider stays a person's act in the UI.
+- **No raw body, ever.** No tool returns a body, a header map or a full URL, and the free-value fields of
+  a finding pass the redaction floor once more on the way out.
+- **An empty answer is not an all-clear.** Every answer carries how many calls were actually validated
+  against a contract, so "no findings" cannot be read as "nothing is wrong" when the truth is "nothing
+  was checked".
+
 ## Non-negotiables (why the code is shaped the way it is)
 
 1. **Redaction at source, before store or transmit.** A redaction floor — composed, hardened validators
@@ -40,7 +57,9 @@ evidence — the redacted call that proves it.
    in Go (`internal/redact`), idempotently, and a shared fixture suite keeps the two byte-for-byte in parity.
 2. **Raw calls never leave the local environment.** Only a *referenced* (redacted) call is promoted to the
    control plane, and only when a human flags it.
-3. **Outbound-only collector.** No inbound surface; the collector only pushes to the control plane.
+3. **Outbound-only collector.** No inbound surface; the collector only pushes to the control plane. The
+   localhost UI and the agent MCP surface share one loopback listener — the second is a route on the
+   first, never a listener of its own.
 4. **Technical adherence only.** Drift detection validates fields/types/shapes/enums — never business or
    economic correctness (prices, fees, FX), which are legitimately variable.
 

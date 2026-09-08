@@ -120,6 +120,12 @@ edge; repeats bump `occurrence_count`); `spec_info` → upsert by integration.
   (`cp_deploy_token: ${env:CP_DEPLOY_TOKEN}`).
 - Probes: the UI is loopback-bound, so kubelet cannot `httpGet` it; use
   `tcpSocket: 4318` for readiness/liveness (the OTLP receiver).
+- **Agent MCP surface**: the same loopback port serves a read-only MCP server at
+  `/mcp` (`http://localhost:5335/mcp` behind the port-forward above). It is a
+  route on the UI listener, not a second one — there is no key to configure, no
+  port to open, and nothing to relax. Point a local agent at it to query drift
+  findings; it can read and it cannot write. See the collector README, "Point an
+  agent at it (MCP)".
 
 ## N pods + shared postgres
 

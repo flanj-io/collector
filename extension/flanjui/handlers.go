@@ -52,6 +52,11 @@ func (e *uiExtension) routes() http.Handler {
 	mux.HandleFunc("/api/threads/{id}/close", e.handleThreadClose)
 	mux.HandleFunc("/api/threads/{id}/reopen", e.handleThreadReopen)
 	mux.HandleFunc("/api/threads/{id}/replace-link", e.handleThreadReplaceLink)
+	// The agent-facing drift read surface (mcp.go): an MCP server on the SAME
+	// loopback listener, under the same posture, exposing the same finding rows
+	// the SPA above renders. Read-only — no mutating route has an MCP tool.
+	mux.Handle(mcpPath, e.mcpHandler())
+	mux.Handle(mcpPath+"/", e.mcpHandler())
 	mux.Handle("/", e.spaHandler())
 	return mux
 }
@@ -188,6 +193,31 @@ func decorateEdge(ed model.Edge, rpm float64, names nameResolver) edgeWithRPM {
 	return er
 }
 
+// edgeRows builds the decorated external-edge rows GET /api/edges returns, in
+// store order. It is the ONE builder for that shape: the agent MCP surface
+// (mcp.go) reads edges through this function too, so "the agent and the human
+// see the same truth" is structural rather than a promise two call sites make
+// separately. The failing store op is named for storeErr.
+func (e *uiExtension) edgeRows(st store.Store) ([]edgeWithRPM, string, error) {
+	edges, err := st.ListEdges(true) // externalOnly
+	if err != nil {
+		return nil, "list edges", err
+	}
+	since := time.Now().UTC().Add(-time.Minute).Format("2006-01-02T15:04:05Z")
+	counts, err := st.EdgeCallCountsSince(since)
+	if err != nil {
+		return nil, "edge call counts", err
+	}
+	// One resolution context per REQUEST — never a lookup per edge, and never
+	// a CP call from here (the directory tier reads only the KV + baked seed).
+	names := e.newNameResolver(st)
+	all := make([]edgeWithRPM, 0, len(edges))
+	for _, ed := range edges {
+		all = append(all, decorateEdge(ed, float64(counts[ed.PeerHost+"|"+ed.Direction]), names))
+	}
+	return all, "", nil
+}
+
 // handleEdges returns the discovered EXTERNAL edges (inbound + outbound), each
 // carrying an observed RPM over the trailing minute. Internal same-team edges
 // are classified out of surfacing and never returned here.
@@ -196,27 +226,15 @@ func (e *uiExtension) handleEdges(w http.ResponseWriter, r *http.Request) {
 	if st == nil {
 		return
 	}
-	edges, err := st.ListEdges(true) // externalOnly
+	all, op, err := e.edgeRows(st)
 	if err != nil {
-		e.storeErr(w, "list edges", err)
+		e.storeErr(w, op, err)
 		return
 	}
-	since := time.Now().UTC().Add(-time.Minute).Format("2006-01-02T15:04:05Z")
-	counts, err := st.EdgeCallCountsSince(since)
-	if err != nil {
-		e.storeErr(w, "edge call counts", err)
-		return
-	}
-	// One resolution context per REQUEST — never a lookup per edge, and never
-	// a CP call from here (the directory tier reads only the KV + baked seed).
-	names := e.newNameResolver(st)
-	all := make([]edgeWithRPM, 0, len(edges))
 	outbound := make([]edgeWithRPM, 0)
 	inbound := make([]edgeWithRPM, 0)
-	for _, ed := range edges {
-		er := decorateEdge(ed, float64(counts[ed.PeerHost+"|"+ed.Direction]), names)
-		all = append(all, er)
-		if ed.Direction == "server" {
+	for _, er := range all {
+		if er.Direction == "server" {
 			inbound = append(inbound, er)
 		} else {
 			outbound = append(outbound, er)
@@ -462,25 +480,23 @@ func findingPeerHosts(st store.Store, findings []model.Finding) (map[string]stri
 	return st.CallPeerHosts(ids)
 }
 
-func (e *uiExtension) handleFindings(w http.ResponseWriter, r *http.Request) {
-	st := e.storeOrError(w)
-	if st == nil {
-		return
-	}
+// findingRows builds the decorated finding rows GET /api/findings returns.
+// Like edgeRows it is the ONE builder for that shape — the agent MCP surface
+// reads findings through it, so a change to the ack join or the peer-host join
+// cannot land on the human surface and miss the agent one. The failing store op
+// is named for storeErr.
+func (e *uiExtension) findingRows(st store.Store) ([]findingView, string, error) {
 	findings, err := st.ListFindings(200)
 	if err != nil {
-		e.storeErr(w, "list findings", err)
-		return
+		return nil, "list findings", err
 	}
 	acks, err := loadAckSet(st)
 	if err != nil {
-		e.storeErr(w, "load acknowledgements", err)
-		return
+		return nil, "load acknowledgements", err
 	}
 	hosts, err := findingPeerHosts(st, findings)
 	if err != nil {
-		e.storeErr(w, "resolve finding hosts", err)
-		return
+		return nil, "resolve finding hosts", err
 	}
 	views := make([]findingView, len(findings))
 	for i, f := range findings {
@@ -496,6 +512,19 @@ func (e *uiExtension) handleFindings(w http.ResponseWriter, r *http.Request) {
 			views[i].AckedAt = rec.AckedAt
 			views[i].AckedEvidenceVersion = rec.EvidenceVersion
 		}
+	}
+	return views, "", nil
+}
+
+func (e *uiExtension) handleFindings(w http.ResponseWriter, r *http.Request) {
+	st := e.storeOrError(w)
+	if st == nil {
+		return
+	}
+	views, op, err := e.findingRows(st)
+	if err != nil {
+		e.storeErr(w, op, err)
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"findings": views})
 }
