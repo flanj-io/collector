@@ -125,6 +125,29 @@ A front no longer announces PROVIDER contracts upward — the direction reversed
 Uploads land on the store pod, so it is already their source of truth, and the
 front reads them from it.
 
+## The per-call verdict (2026-09-07)
+
+**Every call record that passes through this processor leaves with a stamp**
+(`otlpattr.StampValidated` → `flanj.validated` + `flanj.validated.reason`,
+CONTRACTS §2): `clean` / `drifted` when the call was compared to a contract,
+`not-validated` + the first gate that stopped it otherwise — on EVERY branch of
+the per-call path, the pass-through ones included. `no-contract` is the one that
+matters: nothing in the cache for the edge *at that moment*, which is what an
+upload the store already lists looks like from here until the refresh lands
+(one `specRefreshFloor` on a single pod, one ticker on a tiered front, forever
+on a front whose `store_pod_token` is wrong). The UI used to infer "checked"
+from the store's contract list over exactly those calls and render CONFORMING;
+it reads the stamp now (`ui/src/coverage.ts`), and the store keeps it
+(`calls.validated`) and sets `drifted` from it on insert. `drifted` iff a
+per-call finding kind (`model.PerCallDriftKinds` — one list for the stamp AND
+the store's mark). REST verdicts come from `drift.JudgeLiveVsSpec`, MCP from
+`MCPDetector.JudgeCall`; the `Detect*` names stay as finding-only wrappers.
+Never stamp `clean` for a call nothing compared: kin-openapi's refusals that
+carry no SchemaError (an undeclared status or media type, an undecodable body)
+are `not-validated` / `status-undeclared` / `media-type-undeclared` / `body-not-decodable`, not
+"no findings". Tests: `validated_stamp_test.go` (every branch), and
+`internal/drift`'s `verdict_test.go` / `mcp_verdict_test.go` (every gate).
+
 ## Detection lives in `internal/drift`
 
 - `DetectLiveVsSpec` — `openapi3filter.ValidateResponse` with `MultiError:true`,
@@ -133,18 +156,20 @@ front reads them from it.
   base its `+json` suffix denotes (`application/problem+json` → the contract's
   `application/json` entry; the body still decodes and validates as JSON). A
   media type the contract declares under none of those names, on a status the
-  contract DECLARES (code or NXX range — not `default`, not absent), is a
+  contract DECLARES by its EXACT code (not a `4XX`/`5XX` range, not `default`, not absent), is a
   `content-type-mismatch` finding (one per endpoint); a gateway's `502
   text/html` on an undeclared status is not the provider's breach. Anything
   else kin-openapi refuses to judge — undeclared status, empty/truncated/
   non-JSON body — yields no finding; the per-call verdict stamp
   (`feat/per-call-validated-stamp`) records those as NOT validated, and it must
-  never let them read clean.
+  never let them read clean. `JudgeLiveVsSpec` is `DetectLiveVsSpec` plus the
+  per-call verdict (above); the processor stamps off that.
 - `MCPDetector` (`mcp.go`) — `LoadSnapshot` (contract_snapshot →
   `contract.FromToolsList`, versioned by content hash, previous kept, diff via
   `contract/diff`) + `DetectCall` (the three MCP findings; SAME kin-openapi
   validator, SAME token-aware + captured-props rules, SAME signature/dedup
-  convention — endpoint = the tool name).
+  convention — endpoint = the tool name) + `JudgeCall` (the same plus the
+  verdict, naming the gate in `DetectCall`'s own order).
 - `DetectVersionDiff` — oasdiff `CheckBackwardCompatibility`; `Level=ERR →
   severity=breaking`, change-id → `rule`.
   - **Severity override (contract-driven):** oasdiff ships

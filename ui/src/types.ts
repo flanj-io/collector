@@ -39,10 +39,19 @@ export interface RedactedCall {
   mcp_server_version?: string;
   mcp_protocol_version?: string;
   mcp_session_id?: string;
-  /** Store-owned: THIS call produced a live-vs-spec finding, set on every
-   *  occurrence. Never infer drift from the endpoint — one drifting call would
-   *  relabel every conforming call on it. */
+  /** Store-owned: THIS call produced a per-call finding (live-vs-spec on REST,
+   *  output_mismatch on MCP), set on every occurrence. Never infer drift from
+   *  the endpoint — one drifting call would relabel every conforming call on it. */
   drifted?: boolean;
+  /** The drift processor's OWN verdict on THIS call, stamped where validation
+   *  runs (CONTRACTS §2 `flanj.validated`, §3): `clean` | `drifted` — it
+   *  validated the call; `not-validated` — it explicitly could not, and
+   *  `validated_reason` names the gate; `unknown` — the record reached the
+   *  store with no verdict (an older front, or a pipeline running no drift
+   *  processor). ABSENT on a row stored before verdicts were recorded. The
+   *  contract chip reads THIS, never the contract list — see coverage.ts. */
+  validated?: 'clean' | 'drifted' | 'not-validated' | 'unknown' | string;
+  validated_reason?: string;
 }
 
 export type FindingKind =

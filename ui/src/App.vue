@@ -582,9 +582,14 @@ function notCheckedTitleOf(c: RedactedCall): string {
  * It does now, so MCP reads the same per-call fact as REST and the tool-level
  * guess is gone: no more relabelling a tool's whole history from one mismatch,
  * and no more DRIFTED on an isError result the processor never judged.
+ *
+ * The processor's own stamp (`validated: 'drifted'`, 2026-09-07) is the same
+ * fact from the other end of the pipeline — the store sets `drifted` from it on
+ * insert — and is read here too, so the row cannot lag the verdict by the one
+ * finding record that follows the call in its batch.
  */
 function isDrifted(c: RedactedCall): boolean {
-  return c.drifted === true;
+  return c.drifted === true || c.validated === 'drifted';
 }
 
 const hasExpanded = computed(() => Object.values(expanded.value).some(Boolean));
