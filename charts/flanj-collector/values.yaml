@@ -80,6 +80,10 @@ controlPlane:
   findingSync: true
   # Periodic display-name refresh (sends nothing about your edges).
   directorySync: true
+  # Periodic edge registration: the registrable DOMAIN of each external edge,
+  # its direction and first/last seen — never calls, bodies or payloads, and
+  # never an internal edge. Requires Connect.
+  edgeSync: true
 
 # -- Front collectors (stateless; this is the tier you scale) ----------------
 collector:

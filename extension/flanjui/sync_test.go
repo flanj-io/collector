@@ -187,11 +187,11 @@ func TestFindingSyncConfigOff(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
 	connectKeyOnly(t, r)
-	r.ext.cfg.FindingSync, r.ext.cfg.DirectorySync = false, false
+	r.ext.cfg.FindingSync, r.ext.cfg.DirectorySync, r.ext.cfg.EdgeSync = false, false, false
 
 	r.ext.startFindingSync()
 	if r.ext.syncCancel != nil || r.ext.syncDone != nil {
-		t.Fatal("both switches off must not start the ticker")
+		t.Fatal("every switch off must not start the ticker")
 	}
 	time.Sleep(30 * time.Millisecond)
 	if r.cp.findingsCallCount() != 0 {
@@ -279,69 +279,88 @@ func TestFindingSyncDefaultOn(t *testing.T) {
 // independently: an egress (findings POST) and a pure fetch (directory GET)
 // with two different privacy stories must not share a switch.
 
-// runSyncLoop starts the REAL ticker with the two switches as given, lets it
-// settle, stops it, and reports what actually reached the stub control plane —
-// the wire, not internal state. `started` says whether a ticker was created at
-// all.
-func runSyncLoop(t *testing.T, findingSync, displayNameSync bool) (findings, directory int, started bool) {
+// syncLegCounts is what actually reached the stub control plane on one run of
+// the REAL ticker — the wire, not internal state.
+type syncLegCounts struct {
+	findings  int
+	directory int
+	edges     int
+	started   bool
+}
+
+// runSyncLoop starts the REAL ticker with the three switches as given, lets it
+// settle, stops it, and reports what reached the stub CP. `started` says
+// whether a ticker was created at all.
+func runSyncLoop(t *testing.T, findingSync, displayNameSync, edgeSync bool) syncLegCounts {
 	t.Helper()
 	r := newRig(t)
 	r.start(t) // seeds one finding, so the findings leg has something to post
 	connectKeyOnly(t, r)
+	seedGraph(r) // ...and one external edge, so the registration leg does too
 	r.cp.mu.Lock()
 	r.cp.directoryEntries, r.cp.directoryETag = `{"zzguava.dev":{"name":"Guava Billing","tier":"curated"}}`, `"v1"`
 	r.cp.mu.Unlock()
-	r.ext.cfg.FindingSync, r.ext.cfg.DirectorySync = findingSync, displayNameSync
+	r.ext.cfg.FindingSync, r.ext.cfg.DirectorySync, r.ext.cfg.EdgeSync = findingSync, displayNameSync, edgeSync
 
 	r.ext.startFindingSync()
-	started = r.ext.syncDone != nil
+	started := r.ext.syncDone != nil
 	if started {
 		// Wait for every ENABLED leg to reach the wire (bounded, no sleeps as
 		// synchronisation).
 		deadline := time.Now().Add(2 * time.Second)
-		for (findingSync && r.cp.findingsCallCount() == 0) || (displayNameSync && r.cp.directoryCallCount() == 0) {
+		for (findingSync && r.cp.findingsCallCount() == 0) ||
+			(displayNameSync && r.cp.directoryCallCount() == 0) ||
+			(edgeSync && r.cp.edgesCallCount() == 0) {
 			if time.Now().After(deadline) {
-				t.Fatalf("enabled leg never reached the wire (finding_sync=%v directory_sync=%v; findings=%d directory=%d)",
-					findingSync, displayNameSync, r.cp.findingsCallCount(), r.cp.directoryCallCount())
+				t.Fatalf("enabled leg never reached the wire (finding_sync=%v directory_sync=%v edge_sync=%v; findings=%d directory=%d edges=%d)",
+					findingSync, displayNameSync, edgeSync,
+					r.cp.findingsCallCount(), r.cp.directoryCallCount(), r.cp.edgesCallCount())
 			}
 			time.Sleep(2 * time.Millisecond)
 		}
 	}
 	// Settle: give a DISABLED leg every chance to betray itself before we read
-	// the counters (the first pass runs both legs back to back).
+	// the counters (the first pass runs every leg back to back).
 	time.Sleep(50 * time.Millisecond)
 	if started {
 		r.ext.stopFindingSync()
 	}
 	r.assertNeverLogged(t, r.cp.collectorKey)
-	return r.cp.findingsCallCount(), r.cp.directoryCallCount(), started
+	return syncLegCounts{r.cp.findingsCallCount(), r.cp.directoryCallCount(), r.cp.edgesCallCount(), started}
 }
 
-// TestSyncSwitchesGateLegsIndependently pins all four combinations at the wire:
-// each switch turns its own leg on/off and NEITHER touches the other.
+// TestSyncSwitchesGateLegsIndependently pins every combination at the wire:
+// each switch turns its own leg on/off and NONE touches another. The
+// `edge_sync: false` row is the acceptance criterion in miniature — findings
+// still sync while registration sends nothing.
 func TestSyncSwitchesGateLegsIndependently(t *testing.T) {
 	cases := []struct {
-		name                        string
-		findingSync, displayName    bool
-		wantFindings, wantDirectory bool
-		wantTicker                  bool
+		name                                   string
+		findingSync, displayName, edgeSync     bool
+		wantFindings, wantDirectory, wantEdges bool
+		wantTicker                             bool
 	}{
-		{"both on — both legs fire", true, true, true, true, true},
-		{"finding_sync off — the directory pull still refreshes names, no findings POST", false, true, false, true, true},
-		{"directory_sync off — findings still post, no directory GET", true, false, true, false, true},
-		{"both off — no ticker, no wire traffic at all", false, false, false, false, false},
+		{"all on — every leg fires", true, true, true, true, true, true, true},
+		{"finding_sync off — the directory pull and registration still run, no findings POST", false, true, true, false, true, true, true},
+		{"directory_sync off — findings and registration still run, no directory GET", true, false, true, true, false, true, true},
+		{"edge_sync off — findings STILL sync, no edges POST at all", true, true, false, true, true, false, true},
+		{"only edge_sync on — registration alone reaches the wire", false, false, true, false, false, true, true},
+		{"all off — no ticker, no wire traffic at all", false, false, false, false, false, false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			findings, directory, started := runSyncLoop(t, tc.findingSync, tc.displayName)
-			if started != tc.wantTicker {
-				t.Errorf("ticker started = %v, want %v", started, tc.wantTicker)
+			got := runSyncLoop(t, tc.findingSync, tc.displayName, tc.edgeSync)
+			if got.started != tc.wantTicker {
+				t.Errorf("ticker started = %v, want %v", got.started, tc.wantTicker)
 			}
-			if got := findings > 0; got != tc.wantFindings {
-				t.Errorf("POST /api/v1/findings reached the wire %d time(s); want any=%v", findings, tc.wantFindings)
+			if any := got.findings > 0; any != tc.wantFindings {
+				t.Errorf("POST /api/v1/findings reached the wire %d time(s); want any=%v", got.findings, tc.wantFindings)
 			}
-			if got := directory > 0; got != tc.wantDirectory {
-				t.Errorf("GET /api/v1/directory reached the wire %d time(s); want any=%v", directory, tc.wantDirectory)
+			if any := got.directory > 0; any != tc.wantDirectory {
+				t.Errorf("GET /api/v1/directory reached the wire %d time(s); want any=%v", got.directory, tc.wantDirectory)
+			}
+			if any := got.edges > 0; any != tc.wantEdges {
+				t.Errorf("POST /api/v1/edges/sync reached the wire %d time(s); want any=%v", got.edges, tc.wantEdges)
 			}
 		})
 	}

@@ -8,6 +8,7 @@ import { ApiError, apiPost } from './api';
 import { needsCollectorAddress, type ConnectState } from './threads';
 import { applySeed, seededValues, untouched, type ConnectFormTouched } from './connect-form';
 import { mailNotice, type MailAttempt } from './connect-mail';
+import { edgeDisclosure } from './connect-disclosure';
 
 const props = defineProps<{
   state: ConnectState | null;
@@ -43,6 +44,9 @@ const deliveredTo = ref<string | null>(null);
 const now = ref(Date.now());
 let ticker: ReturnType<typeof setInterval> | null = null;
 const notice = computed(() => mailNotice(attempt.value, now.value));
+
+/** v1 phase 2 — what Connecting causes, stated before the operator Connects. */
+const disclosure = computed(() => edgeDisclosure(props.state?.edge_sync));
 
 watch(
   () => notice.value.kind === 'cooldown',
@@ -190,6 +194,13 @@ function cancelEdit() {
       <p class="connect-sub">We turn a detection into something you can act on with your vendor. Required to create thread links. Viewing your own traffic and findings never needs it.</p>
     </template>
 
+    <!-- Edge-registration disclosure (v1 phase 2): what Connecting causes, said
+         BEFORE Connecting and in every state — and said honestly when the
+         `edge_sync` switch has turned it off. -->
+    <p v-if="disclosure" class="connect-disclosure" :class="disclosure.state">
+      {{ disclosure.text }}
+    </p>
+
     <!-- connected -->
     <div v-if="status === 'connected' && !editing" class="connect-state ok">
       <p class="connect-line">
@@ -280,6 +291,11 @@ function cancelEdit() {
 .connect-note.muted { color: var(--ink-soft); }
 .connect-nudge { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin: 0.6rem 0 0; padding-top: 0.6rem; border-top: 1px dashed var(--rule); color: var(--ink-soft); font-size: 0.88rem; }
 .connect-nudge-actions { display: flex; gap: 0.5rem; }
+/* The edge-registration disclosure sits between the intro and the state block —
+   read before Connecting, not hidden behind it. Muted, never alarming: it
+   describes a designed, disclosed flow. `off` reads the same weight; the switch
+   being off is a configuration fact, not a warning. */
+.connect-disclosure { margin: 0 0 0.7rem; padding-left: 0.6rem; border-left: 2px solid var(--rule); color: var(--ink-soft); font-size: 0.85rem; line-height: 1.45; }
 .connect-form { display: flex; flex-direction: column; gap: 0.7rem; background: var(--surface-sunk); border: 1px solid var(--rule); border-radius: var(--radius); padding: 0.9rem 1rem; }
 .connect.inline .connect-form { background: transparent; border: 0; padding: 0; }
 .field { display: flex; flex-direction: column; gap: 0.2rem; }

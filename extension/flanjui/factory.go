@@ -44,6 +44,11 @@ func createDefaultConfig() component.Config {
 		// false (CONTRACTS §8) — its own switch since the 2026-08-31 ruling, so
 		// an omitted key still means on and behaviour is unchanged.
 		DirectorySync: true,
+		// Edge registration is on unless edge_sync: false (CONTRACTS §8,
+		// v1 phase 2). On-by-default stands because registration becomes
+		// load-bearing when schema-push rides it; the switch and the Connect
+		// disclosure are what make that defensible in the meantime.
+		EdgeSync: true,
 	}
 }
 

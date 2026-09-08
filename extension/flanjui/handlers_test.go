@@ -63,6 +63,11 @@ type stubCP struct {
 	// order, plus the call count — sync_test.go asserts on the BYTES.
 	findingsCalls  int
 	findingsBodies [][]byte
+	// Edge registration (POST /api/v1/edges/sync — v1 phase 2): the call count
+	// plus every raw body in order, so a test can assert on the WIRE BYTES that
+	// an internal edge never left.
+	edgesCalls  int
+	edgesBodies [][]byte
 	// Directory pull (GET /api/v1/directory): the served ENTRIES object + ETag,
 	// the If-None-Match header of every call, and the call count. Fixtures set
 	// the bare `{"<domain>": {"name","tier"}}` map; the stub ALWAYS wraps it in
@@ -247,6 +252,24 @@ func newStubCP(t *testing.T) *stubCP {
 		}
 		_ = json.Unmarshal(raw, &b)
 		jsonOut(w, 200, map[string]any{"received": len(b.Findings), "stored": len(b.Findings)})
+	})
+	// CONTRACTS §5: edge registration — collector key required; the stub
+	// records the raw body so tests can assert on the wire bytes that no
+	// internal edge, and no peer host, ever left.
+	mux.HandleFunc("POST /api/v1/edges/sync", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if !keyed(w, r) {
+			return
+		}
+		raw, _ := io.ReadAll(r.Body)
+		s.edgesCalls++
+		s.edgesBodies = append(s.edgesBodies, append([]byte(nil), raw...))
+		var b struct {
+			Edges []json.RawMessage `json:"edges"`
+		}
+		_ = json.Unmarshal(raw, &b)
+		jsonOut(w, 200, map[string]any{"received": len(b.Edges), "stored": len(b.Edges)})
 	})
 	// v1p1: the directory full-table pull — collector key required, ETag
 	// conditional (If-None-Match match → 304, no body).

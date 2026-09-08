@@ -62,6 +62,21 @@ type Config struct {
 	// there is no per-miss lookup. With it off, the baked directory seed still
 	// resolves names offline.
 	DirectorySync bool `mapstructure:"directory_sync"`
+	// EdgeSync enables the periodic edge REGISTRATION to the control plane
+	// (POST /api/v1/edges/sync — CONTRACTS §5/§8, v1 phase 2). ON by default
+	// (the factory default is true, so an omitted key means on); `edge_sync:
+	// false` disables the POST entirely. It rides the same ticker as
+	// FindingSync and DirectorySync and is gated independently, for the same
+	// reason those two are: three different egresses with three different
+	// privacy stories do not share one switch.
+	//
+	// What it sends, per EXTERNAL edge: registrable domain, direction,
+	// first/last seen. Internal edges never leave — the ledger invariant
+	// extends across the wire (promote.BuildEdgeRegistrations, pinned by a
+	// wire-bytes test) — and no peer host, call count or drift count goes with
+	// them. The registration runs only once a collector key exists (after
+	// Connect), and the Connect panel discloses it before you Connect.
+	EdgeSync bool `mapstructure:"edge_sync"`
 
 	// prevent unkeyed literal initialization
 	_ struct{}

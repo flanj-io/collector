@@ -62,6 +62,7 @@ extensions:
     cp_deploy_token: ${env:CP_DEPLOY_TOKEN} # used once, for Connect (register); the per-deployment collector key it returns lives in the store
     finding_sync: true # default true — periodic shape-only findings sync to the control plane (id/signature/kind/severity/endpoint/rule/counts/timestamps; expected/actual/detail never leave this collector); false disables that sync only — the display-name refresh below has its own switch
     directory_sync: true # default true — periodic display-name refresh on the same tick: a keyed, ETag-conditional fetch of the directory name table, so discovered edges show human names. Your edges are not sent — nothing about what this collector talks to leaves in this request, and a name is never looked up per miss. false disables the refresh only; the names baked into the image still resolve offline, as does any table already pulled (turning it off stops future fetches, it does not clear one fetched earlier)
+    edge_sync: true # default true — periodic EDGE REGISTRATION to the control plane on the same tick: for each EXTERNAL edge this collector has discovered, its registrable domain (eTLD+1, computed here), the direction (outbound/inbound) and first/last seen. Nothing else — no calls, no bodies, no payloads, no call counts. INTERNAL edges never leave. Requires Connect (nothing is sent before it); false disables the registration only, findings and the name refresh are unaffected. The Connect panel states this before you Connect
 
 receivers:
   otlp:
