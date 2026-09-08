@@ -20,6 +20,13 @@ export interface MailAttempt {
   /** The address the attempt was for, and when it happened (`Date.now()`). */
   email: string;
   at: number;
+  /**
+   * True only for the pending panel's Resend / Retry button. A FIRST send — the Connect button, or
+   * Change contact saving a new address — is announced by the panel's standing "Check your inbox —
+   * we sent …" line alone. "Sent again" is a claim about a second mail, and is only true after one:
+   * printing it after the very first click claimed a resend that never happened (2026-09-07).
+   */
+  resend: boolean;
 }
 
 /** The three distinct things the pending panel can be showing, plus `unknown` (say nothing). */
@@ -27,7 +34,8 @@ export type MailNoticeKind = ConfirmationMail | 'unknown';
 
 export interface MailNotice {
   kind: MailNoticeKind;
-  /** One sentence, already resolved against the address. Empty for `unknown`. */
+  /** One sentence, already resolved against the address. Empty for `unknown`, and for a first
+   *  send that went out — the standing line already says so, and there is no "again" to add. */
   text: string;
   /** Offer the action as a Retry (a send that failed is worth immediately re-trying). */
   retryable: boolean;
@@ -61,7 +69,9 @@ export function mailNotice(attempt: MailAttempt | null, nowMs: number): MailNoti
   if (!attempt) return NOTHING;
   switch (attempt.outcome) {
     case 'sent':
-      return { kind: 'sent', text: `Sent again to ${attempt.email}.`, retryable: false, canSend: true };
+      // The outcome is the mail's; the WORDING depends on which button asked for it. Only a Resend
+      // has an "again" to report — the first send is already told by "Check your inbox — we sent …".
+      return { kind: 'sent', text: attempt.resend ? `Sent again to ${attempt.email}.` : '', retryable: false, canSend: true };
     case 'failed':
       // Deliberately blames the mail server and nothing else: the collector cannot tell a bad
       // address from a dead relay, and guessing would send the operator down the wrong path.

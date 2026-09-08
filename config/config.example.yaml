@@ -51,7 +51,14 @@ extensions:
     #                                     It does NOT name an edge: edge names come from the UI rename, the uploaded contract's title, or the
     #                                     directory (Overview → Edges → Rename). Nothing migrates into the store on boot — the config name
     #                                     tier went with spec_path/peer_host (CONTRACTS §8, 2026-08-31); this key needs no edge linkage at all.
-    cp_base_url: https://cp.flanj.test
+    cp_base_url: https://cp.flanj.test # where THIS COLLECTOR's requests go (register/me, flags, threads, syncs) — may be in-network
+    # cp_public_url: https://cp.flanj.test # OPTIONAL — the control-plane origin YOUR BROWSER can open. The Connected pill's
+    #                                     dashboard link is minted from it. Set it whenever cp_base_url is an in-network address
+    #                                     a laptop cannot resolve (a docker service name, a k8s Service, a VPC-private ingress).
+    #                                     Unset: the link falls back to cp_base_url only when that host is not obviously
+    #                                     non-public (loopback, private IP, single-label, .local/.internal/.svc/.test…); otherwise
+    #                                     the pill stays a Settings button rather than becoming a dead link. Validated at boot
+    #                                     (absolute http(s) URL, no credentials). Never logged.
     cp_deploy_token: ${env:CP_DEPLOY_TOKEN} # used once, for Connect (register); the per-deployment collector key it returns lives in the store
     finding_sync: true # default true — periodic shape-only findings sync to the control plane (id/signature/kind/severity/endpoint/rule/counts/timestamps; expected/actual/detail never leave this collector); false disables that sync only — the display-name refresh below has its own switch
     directory_sync: true # default true — periodic display-name refresh on the same tick: a keyed, ETag-conditional fetch of the directory name table, so discovered edges show human names. Your edges are not sent — nothing about what this collector talks to leaves in this request, and a name is never looked up per miss. false disables the refresh only; the names baked into the image still resolve offline, as does any table already pulled (turning it off stops future fetches, it does not clear one fetched earlier)
@@ -87,8 +94,26 @@ processors:
     # self_integration_id: self # optional — labels self findings (default "self"; must differ from integration_id)
 
 exporters:
-  # Discovers the flanjstore extension via the collector host; nothing to tune.
-  flanjstore: {}
+  # Discovers the flanjstore extension via the collector host — nothing here
+  # says WHERE to write. What it says is what happens when a store write FAILS
+  # (postgres away mid-write, a locked sqlite file): the two upstream sections
+  # every OpenTelemetry exporter has, both ON by default with these values, so
+  # `flanjstore: {}` is the same thing. An accepted batch survives a store
+  # outage of up to 15 minutes; the store is idempotent on call id and finding
+  # id, so a retried batch never duplicates a row.
+  flanjstore:
+    sending_queue:
+      enabled: true
+      sizer: bytes # the bound is memory, not a request count
+      queue_size: 67108864 # 64 MiB of accepted, not-yet-written batches, measured proto-encoded (resident
+      #                      memory is a multiple — budget several × this in the pod's limit) — past it the receiver
+      #                      answers 503 and the SDK retries (the queue REJECTS when full; it never blocks)
+      num_consumers: 4
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 30s
+      max_elapsed_time: 900s # then the batch is dropped (logged); 0 = never give up
 
 service:
   extensions: [flanjstore, flanjui]

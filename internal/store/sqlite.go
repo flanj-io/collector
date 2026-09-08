@@ -122,6 +122,13 @@ CREATE TABLE IF NOT EXISTS settings (
   value        TEXT NOT NULL,
   updated_at   TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS finding_occurrences (
+  id             TEXT PRIMARY KEY,
+  signature      TEXT NOT NULL,
+  source_call_id TEXT,
+  seen_at        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_finding_occurrences_call ON finding_occurrences(source_call_id);
 CREATE INDEX IF NOT EXISTS idx_calls_pinned_seq ON calls(pinned, seq);
 CREATE INDEX IF NOT EXISTS idx_findings_source ON findings(source_call_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_findings_signature ON findings(signature);
@@ -185,7 +192,8 @@ var specInfoAddedColumns = []string{
 // InsertCall stores a RedactedCall (idempotent on id), discovers/updates the edge
 // it belongs to, and then runs eviction. Edge discovery is keyed by
 // (peer_host, direction) — no target list is configured.
-func (s *sqliteStore) InsertCall(c model.RedactedCall) error {
+func (s *sqliteStore) InsertCall(c model.RedactedCall) (err error) {
+	defer func() { err = classify(err) }() // ErrRejected on a constraint the ON CONFLICT does not absorb
 	doc, err := json.Marshal(c)
 	if err != nil {
 		return fmt.Errorf("marshal call: %w", err)
@@ -256,7 +264,14 @@ func (s *sqliteStore) upsertEdgeLocked(peerHost, direction, class, at string) er
 // subsequent matching call increments occurrence_count + last_seen and creates NO
 // duplicate row. The stored finding id (and thus the flag idempotency key) stays
 // stable across the drift's lifetime.
-func (s *sqliteStore) InsertFinding(f model.Finding) error {
+//
+// Idempotent on the finding's OWN id (the occurrence ledger — recordOccurrence):
+// the same record delivered twice — a batch the store exporter retried after a
+// failed write, a front re-sending after a lost ACK — changes nothing the
+// second time. Every statement runs in one transaction, so a write that fails
+// half-way leaves no ledger row behind and the retry applies the finding in full.
+func (s *sqliteStore) InsertFinding(f model.Finding) (err error) {
+	defer func() { err = classify(err) }() // ErrRejected on a constraint the ON CONFLICT does not absorb
 	if f.Signature == "" {
 		f.Signature = f.ComputeSignature()
 	}
@@ -280,11 +295,25 @@ func (s *sqliteStore) InsertFinding(f model.Finding) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("insert finding: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	applied, err := recordOccurrence(tx, s.rebind, f, sourceCallID, seen)
+	if err != nil {
+		return err
+	}
+	if !applied {
+		return nil // a re-delivered record: already applied, nothing to do
+	}
+
 	// First occurrence wins the insert; a known signature conflicts and falls
 	// through to the counter bump. The doc is stored once and never rewritten —
 	// occurrence_count/last_seen are authoritative in their columns (reads patch
 	// them back in), which keeps dedup a pair of atomic statements.
-	res, err := s.db.Exec(
+	res, err := tx.Exec(
 		`INSERT INTO findings
 		  (id, signature, kind, severity, integration, endpoint, rule, source_call_id, occurrence_count, first_seen, last_seen, detected_at, doc)
 		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
@@ -309,20 +338,23 @@ func (s *sqliteStore) InsertFinding(f model.Finding) error {
 	// integration and tool, which relabelled every historic call of the tool and
 	// accused the provider over results nothing had judged.
 	if sourceCallID != nil && marksSourceCallDrifted(f.Kind) {
-		if _, err := s.db.Exec(`UPDATE calls SET drifted=1 WHERE id=?`, *sourceCallID); err != nil {
+		if _, err := tx.Exec(`UPDATE calls SET drifted=1 WHERE id=?`, *sourceCallID); err != nil {
 			return fmt.Errorf("mark call drifted: %w", err)
 		}
 	}
 	if n, _ := res.RowsAffected(); n > 0 {
 		if sourceCallID != nil {
 			// pin-on-finding: the representative call stays reproducible.
-			if _, err := s.db.Exec(`UPDATE calls SET pinned=1 WHERE id=?`, *sourceCallID); err != nil {
+			if _, err := tx.Exec(`UPDATE calls SET pinned=1 WHERE id=?`, *sourceCallID); err != nil {
 				return fmt.Errorf("pin source call: %w", err)
 			}
 			// Attribute the drift to the source call's edge (one per signature).
-			if err := s.bumpEdgeDriftLocked(*sourceCallID); err != nil {
+			if err := s.bumpEdgeDrift(tx, *sourceCallID); err != nil {
 				return err
 			}
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("insert finding: commit: %w", err)
 		}
 		return nil
 	}
@@ -335,40 +367,46 @@ func (s *sqliteStore) InsertFinding(f model.Finding) error {
 	// that one kind). Same statement, so the counter and the evidence can never
 	// disagree; the id, signature and first_seen are carried over.
 	var storedDoc string
-	if err := s.db.QueryRow(`SELECT doc FROM findings WHERE signature=?`, f.Signature).Scan(&storedDoc); err != nil && err != sql.ErrNoRows {
+	if err := tx.QueryRow(`SELECT doc FROM findings WHERE signature=?`, f.Signature).Scan(&storedDoc); err != nil && err != sql.ErrNoRows {
 		return fmt.Errorf("read finding doc: %w", err)
 	}
 	if next, ok := refreshedFindingDoc(storedDoc, f); ok {
-		if _, err := s.db.Exec(
+		if _, err := tx.Exec(
 			`UPDATE findings SET occurrence_count = occurrence_count + 1, last_seen = MAX(last_seen, ?),
 			   severity=?, detected_at=?, doc=? WHERE signature=?`,
 			seen, f.Severity, f.DetectedAt, next, f.Signature,
 		); err != nil {
 			return fmt.Errorf("refresh finding evidence: %w", err)
 		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("refresh finding evidence: commit: %w", err)
+		}
 		return nil
 	}
-	if _, err := s.db.Exec(
+	if _, err := tx.Exec(
 		`UPDATE findings SET occurrence_count = occurrence_count + 1, last_seen = MAX(last_seen, ?) WHERE signature=?`,
 		seen, f.Signature,
 	); err != nil {
 		return fmt.Errorf("increment finding occurrence: %w", err)
 	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("increment finding occurrence: commit: %w", err)
+	}
 	return nil
 }
 
-// bumpEdgeDriftLocked increments drift_count on the edge that owns the given
-// source call. Caller must hold s.mu.
-func (s *sqliteStore) bumpEdgeDriftLocked(sourceCallID string) error {
+// bumpEdgeDrift increments drift_count on the edge that owns the given source
+// call, inside the caller's transaction. Caller must hold s.mu.
+func (s *sqliteStore) bumpEdgeDrift(q queryExecer, sourceCallID string) error {
 	var peerHost, direction sql.NullString
-	err := s.db.QueryRow(`SELECT peer_host, direction FROM calls WHERE id=?`, sourceCallID).Scan(&peerHost, &direction)
+	err := q.QueryRow(`SELECT peer_host, direction FROM calls WHERE id=?`, sourceCallID).Scan(&peerHost, &direction)
 	if err == sql.ErrNoRows || (err == nil && (!peerHost.Valid || peerHost.String == "")) {
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("lookup source call edge: %w", err)
 	}
-	if _, err := s.db.Exec(
+	if _, err := q.Exec(
 		`UPDATE edges SET drift_count = drift_count + 1 WHERE peer_host=? AND direction=?`,
 		peerHost.String, direction.String,
 	); err != nil {
@@ -417,13 +455,10 @@ func (s *sqliteStore) evictLocked(keepID string) error {
 				batch = evictBatchMax
 			}
 		}
-		res, err := s.db.Exec(
-			`DELETE FROM calls WHERE seq IN (SELECT seq FROM calls WHERE pinned=0 AND id<>? ORDER BY seq ASC LIMIT ?)`, keepID, batch,
-		)
+		n, err := evictOldest(s.db, s.rebind, keepID, batch)
 		if err != nil {
-			return fmt.Errorf("evict: %w", err)
+			return err
 		}
-		n, _ := res.RowsAffected()
 		if n == 0 {
 			// Everything left is pinned (or is keepID); the window can
 			// legitimately exceed the caps to preserve evidence. Stop rather than spin.
@@ -435,7 +470,8 @@ func (s *sqliteStore) evictLocked(keepID string) error {
 // PutSpecInfo upserts the provider contract loaded by the drift processor,
 // keyed by integration. rawSpec is the spec document exactly as loaded; the UI
 // serves it verbatim so engineers can open the contract being validated.
-func (s *sqliteStore) PutSpecInfo(info model.SpecInfo, rawSpec []byte) error {
+func (s *sqliteStore) PutSpecInfo(info model.SpecInfo, rawSpec []byte) (err error) {
+	defer func() { err = classify(err) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	role := info.Role
@@ -446,7 +482,7 @@ func (s *sqliteStore) PutSpecInfo(info model.SpecInfo, rawSpec []byte) error {
 	// always describes the document in it. Left out of the statement (as it
 	// was until 2026-09-07) the column default filed every observed MCP
 	// snapshot as config.
-	_, err := s.db.Exec(
+	_, err = s.db.Exec(
 		`INSERT INTO spec_infos (integration, role, peer_host, edge_class, format, title, version, docs_url, endpoints, loaded_at, doc, source)
 		   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
 		 ON CONFLICT(integration) DO UPDATE SET

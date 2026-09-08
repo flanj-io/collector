@@ -11,6 +11,7 @@ import (
 
 	"go.opentelemetry.io/collector/component"
 
+	"github.com/flanj-io/collector/internal/drift"
 	"github.com/flanj-io/collector/internal/model"
 )
 
@@ -96,13 +97,20 @@ func TestUploadNeverReachesTheControlPlane(t *testing.T) {
 // requirement. The drift refresh parses whatever is in the store, so a bad
 // document reaching a row costs that host detection at a point the operator can
 // no longer see the error.
+//
+// The response is the deck's sentence and nothing after it. It used to carry
+// the parser's own text appended ("failed to unmarshal data: json error: …
+// yaml error: …"), which is Go's voice in the operator's UI (QA walk finding
+// NB-2, 2026-09-07); the reason still matters, so it goes to the log.
 func TestUploadRefusesAnUnparseableDocumentAndPersistsNothing(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
 
+	const doc = "this is not an OpenAPI document at all"
 	resp, out, raw := r.do(t, http.MethodPost, "/api/contracts/upload", map[string]string{
 		"peer_host": "api.acme.test",
-		"document":  "this is not an OpenAPI document at all",
+		"document":  doc,
+		"filename":  "notes.txt",
 	})
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400: %s", resp.StatusCode, raw)
@@ -110,12 +118,23 @@ func TestUploadRefusesAnUnparseableDocumentAndPersistsNothing(t *testing.T) {
 	if out["error"] != "unparseable_document" {
 		t.Errorf("error = %v, want unparseable_document", out["error"])
 	}
-	msg, _ := out["message"].(string)
-	if !strings.HasPrefix(msg, "Couldn't read that as an OpenAPI document.") {
-		t.Errorf("message = %q, want the deck's string", msg)
+	if msg, _ := out["message"].(string); msg != msgContractUnparseable {
+		t.Errorf("message = %q, want exactly the deck's sentence %q", msg, msgContractUnparseable)
 	}
-	if len(msg) <= len("Couldn't read that as an OpenAPI document. ") {
-		t.Error("the parser's own reason was dropped — the operator needs to know WHICH line is wrong")
+
+	// The parser's reason is logged, with the binding it was refused for.
+	_, perr := drift.DescribeSpec([]byte(doc))
+	if perr == nil {
+		t.Fatal("the fixture parsed — the test needs an unparseable document")
+	}
+	logged := r.logs.FilterMessageSnippet("unparseable document").All()
+	if len(logged) != 1 {
+		t.Fatalf("logged %d refusals, want 1: %v", len(logged), logged)
+	}
+	for _, want := range []string{"api.acme.test", "notes.txt", perr.Error()} {
+		if !strings.Contains(logged[0].Message, want) {
+			t.Errorf("log line %q lacks %q", logged[0].Message, want)
+		}
 	}
 
 	if infos, _ := r.st.ListSpecInfos(); len(infos) != 0 {
@@ -443,25 +462,106 @@ func TestContractRoutesAreGuarded(t *testing.T) {
 	}
 }
 
+// paddedDoc returns a parseable document of exactly n bytes, in the shape a
+// real document takes: the fixture followed by short comment lines. The line
+// breaks matter — JSON escaping turns each one into two bytes on the wire, so
+// the envelope grows past the document the way a real upload's does.
+func paddedDoc(t *testing.T, n int) string {
+	t.Helper()
+	const line = "\n# padding, padding, padding, padding" // a comment line
+	base := specV1Doc(t)
+	if n < len(base)+len(line) {
+		t.Fatalf("paddedDoc(%d): the fixture alone is %d bytes", n, len(base))
+	}
+	var b strings.Builder
+	b.Grow(n)
+	b.WriteString(base)
+	for b.Len()+len(line) <= n {
+		b.WriteString(line)
+	}
+	for b.Len() < n {
+		b.WriteByte('#') // extends the last comment line
+	}
+	return b.String()
+}
+
 // TestUploadCapsDocumentSize: an 8 MiB ceiling, matching what the front<-store
 // channel will carry, so a document that uploads is a document that reaches the
-// fronts.
+// fronts. The ceiling is on the DOCUMENT, and it is exact: at the cap uploads,
+// one byte over is refused — as 413 document_too_large, whatever the size.
+//
+// Launch-week item 6 (reproduced through the UI, 2026-09-07): the envelope
+// used to be read through io.LimitReader, which truncates silently, so a 9 MB
+// document decoded as JSON cut off mid-string and came back 400 invalid_json
+// ("The request body is not valid JSON."). The 413 was reachable only for
+// envelopes in the 64 KiB just past the cap — which is where the previous
+// version of this test happened to sit.
 func TestUploadCapsDocumentSize(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
 
-	huge := specV1Doc(t) + "\n#" + strings.Repeat("x", maxDocBytes)
-	resp, out, _ := r.do(t, http.MethodPost, "/api/contracts/upload", map[string]string{
-		"peer_host": "api.acme.test", "document": huge,
+	// Exactly at the cap uploads — and in real-document shape, whose escaped
+	// envelope is well past 8 MiB + 64 KiB, so the envelope bound must be sized
+	// for the document that is allowed, not for the document plus a little.
+	resp, _, raw := r.do(t, http.MethodPost, "/api/contracts/upload", map[string]string{
+		"peer_host": "api.acme.test", "document": paddedDoc(t, maxDocBytes), "filename": "at-cap.yaml",
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("a document exactly at the cap = %d, want 200: %.200s", resp.StatusCode, raw)
+	}
+	if infos, _ := r.st.ListSpecInfos(); len(infos) != 1 || infos[0].Endpoints == 0 {
+		t.Fatalf("the at-cap document was not stored as a contract: %+v", infos)
+	}
+	if _, err := r.st.DeleteSpecInfo("api-acme-test"); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		doc  string
+	}{
+		{"one byte over the cap", paddedDoc(t, maxDocBytes+1)},
+		{"the 9 MB document that reproduced it", paddedDoc(t, 9_000_000)},
+		// Past the envelope bound itself — the refusal now comes from the
+		// reader, not the document check, and must read the same.
+		{"past the envelope bound", specV1Doc(t) + "\n#" + strings.Repeat("x", maxEnvelopeBytes)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, out, raw := r.do(t, http.MethodPost, "/api/contracts/upload", map[string]string{
+				"peer_host": "api.acme.test", "document": tc.doc, "filename": "huge.yaml",
+			})
+			if resp.StatusCode != http.StatusRequestEntityTooLarge {
+				t.Fatalf("status = %d, want 413: %.200s", resp.StatusCode, raw)
+			}
+			if out["error"] != "document_too_large" {
+				t.Errorf("error = %v, want document_too_large", out["error"])
+			}
+			if out["message"] != msgContractTooLarge {
+				t.Errorf("message = %v, want the deck's sentence", out["message"])
+			}
+			if infos, _ := r.st.ListSpecInfos(); len(infos) != 0 {
+				t.Errorf("an oversized document was persisted: %+v", infos)
+			}
+		})
+	}
+}
+
+// TestRemoveCapsItsBody: the remove envelope carries an integration id and
+// nothing else, so its 64 KiB bound is the same silent-truncation trap on a
+// smaller scale — a body over it must be refused as too large, not as JSON
+// that failed to parse.
+func TestRemoveCapsItsBody(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+
+	resp, out, raw := r.do(t, http.MethodPost, "/api/contracts/remove", map[string]string{
+		"integration": strings.Repeat("x", maxSmallBodyBytes),
 	})
 	if resp.StatusCode != http.StatusRequestEntityTooLarge {
-		t.Fatalf("status = %d, want 413", resp.StatusCode)
+		t.Fatalf("status = %d, want 413: %.200s", resp.StatusCode, raw)
 	}
-	if out["error"] != "document_too_large" {
-		t.Errorf("error = %v, want document_too_large", out["error"])
-	}
-	if infos, _ := r.st.ListSpecInfos(); len(infos) != 0 {
-		t.Errorf("an oversized document was persisted: %+v", infos)
+	if out["error"] != "request_too_large" || out["message"] != msgRequestTooLarge {
+		t.Errorf("body = %v, want request_too_large with the deck's sentence", out)
 	}
 }
 

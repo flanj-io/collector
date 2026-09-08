@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/mail"
+	"net/netip"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -319,17 +321,74 @@ func (e *uiExtension) handleConnectGet(w http.ResponseWriter, r *http.Request) {
 	// rather than handing over a base URL: which page is the dashboard is
 	// contract knowledge, not something the SPA should assemble.
 	if e.cp != nil && cs.CollectorKey != "" {
-		// Read the base URL off the CLIENT, not the config: the client is what
-		// requests actually go to, so a deployment that set it any other way
-		// still gets a working door, and the two can never disagree.
-		if base := strings.TrimRight(e.cp.BaseURL, "/"); base != "" {
-			out["dashboard_url"] = base + "/d"
+		// The door is for the OPERATOR'S BROWSER, so it is minted from the
+		// browser-facing address, never assumed from where this collector's
+		// own requests go: on any split network the two differ, and the
+		// client's base is a dead link off-host (dashboardURL).
+		if link := dashboardURL(e.cfg.CPPublicURL, e.cp.BaseURL); link != "" {
+			out["dashboard_url"] = link
 		}
 	}
 	if cpErr != "" {
 		out["error"] = cpErr
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// dashboardURL mints the browser-facing link to the CP dashboard, or "" when
+// there is no address this collector can honestly hand to a browser.
+//
+// cp_public_url wins outright. It exists because the address the collector's
+// REQUESTS go to (cp_base_url — the promote client's base) and the address the
+// OPERATOR'S BROWSER can open are different things on any split network: on
+// the e2e stack cp_base_url is `http://cp-api:3001` (docker DNS), in a cluster
+// it is as likely a Service name or a VPC-private ingress, and a laptop
+// resolves none of them. Without the public key, cp_base_url is used only when
+// its host is not obviously non-public — a dead link is worse than no link,
+// and the SPA already keeps the pill a Settings button while the field is
+// absent. A path prefix is kept; userinfo, query and fragment never are.
+func dashboardURL(publicURL, baseURL string) string {
+	origin := strings.TrimSpace(publicURL)
+	if origin == "" {
+		origin = strings.TrimSpace(baseURL)
+		if u, err := url.Parse(origin); err != nil || obviouslyNonPublicHost(u.Hostname()) {
+			return ""
+		}
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host + strings.TrimRight(u.Path, "/") + "/d"
+}
+
+// obviouslyNonPublicHost reports whether a URL host (port already stripped) is
+// one a browser outside the collector's network cannot resolve or reach: a
+// loopback / private / link-local / unspecified IP literal, a single-label
+// name (docker DNS `cp-api`, a bare k8s Service, `localhost`), or a name under
+// a reserved or site-local suffix (`.local`, `.internal`, `.svc`,
+// `.cluster.local`, `.test`, `.example`, …). It is a deny list on purpose:
+// whatever it does not recognise falls back to cp_base_url, and cp_public_url
+// is the operator's override for the cases it gets wrong in either direction.
+func obviouslyNonPublicHost(host string) bool {
+	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	if host == "" {
+		return true
+	}
+	if ip, err := netip.ParseAddr(host); err == nil {
+		ip = ip.Unmap() // ::ffff:10.0.0.1 is 10.0.0.1
+		return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() || ip.IsMulticast()
+	}
+	labels := strings.Split(host, ".")
+	if len(labels) < 2 {
+		return true
+	}
+	switch labels[len(labels)-1] {
+	case "localhost", "local", "localdomain", "internal", "intranet", "lan", "home", "corp",
+		"svc", "cluster", "test", "example", "invalid", "arpa":
+		return true
+	}
+	return false
 }
 
 // connectRequestBody is POST /api/connect.

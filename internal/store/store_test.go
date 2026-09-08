@@ -74,7 +74,7 @@ func resetPG(t *testing.T, dsn string) {
 	if _, err := db.Exec(`DO $$ DECLARE t text; BEGIN
 		FOR t IN SELECT table_name FROM information_schema.tables
 		          WHERE table_schema = 'public'
-		            AND table_name IN ('calls','findings','edges','spec_infos','settings') LOOP
+		            AND table_name IN ('calls','findings','edges','spec_infos','settings','finding_occurrences') LOOP
 			EXECUTE format('TRUNCATE %I RESTART IDENTITY', t);
 		END LOOP;
 	END $$;`); err != nil {

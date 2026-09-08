@@ -549,7 +549,8 @@ is deliberately unaffected: one document per deployment, not one per vendor.
 | `consumer_display_name` *(optional)* | human name of this consumer org, e.g. `Acme Consumer Ltd`; sent on the flag. |
 | `self_spec_path` *(optional)* | the OpenAPI spec THIS org publishes as a provider; validates INBOUND (server-direction) responses against the org's own contract |
 | `self_integration_id` *(optional)* | labels self-spec findings (default `self`); must differ from `integration_id` |
-| `cp_base_url` | control-plane base URL for the flag POST |
+| `cp_base_url` | control-plane base URL the COLLECTOR's own requests go to (register/me, flags, thread routes, the syncs). May be in-network — a docker service name, a k8s Service, a VPC-private ingress — because only the collector has to reach it; see `cp_public_url` for the browser's side |
+| `cp_public_url` *(optional, flanjui — 2026-09-07)* | the control-plane origin the OPERATOR'S BROWSER can open: the base of the local UI's one link out, `dashboard_url` on the collector's `GET /api/connect` (emitted only while Connected; the collector composes the `/d` path). A link built from an in-network `cp_base_url` is dead off-host — the launch-week defect. Unset: the link falls back to `cp_base_url` only when its host is not obviously non-public (loopback / private IP / single-label / `.local` `.internal` `.svc` `.cluster.local` `.test` `.example`-style suffixes), otherwise `dashboard_url` is omitted and the UI keeps the pill a Settings button. Validated at boot: absolute `http(s)` URL, no credentials. Never logged. The `/api/connect` shape is unchanged — `dashboard_url` was already optional; only its presence rule narrowed |
 | `cp_deploy_token` | static Bearer token (the only outbound auth) |
 | `body_cap_bytes` | capture cap, default `16384` |
 | `backend` | store backend: `sqlite` (default — embedded, one pod per db file) or `postgres` (shared external DB; multiple collector pods may write to one database) |
@@ -569,3 +570,10 @@ is deliberately unaffected: one document per deployment, not one per vendor.
 flanj keys: a front's forwarding is the core OpenTelemetry `otlphttp` exporter (upstream's keys —
 `endpoint` = the store pod's base URL, e.g. `http://flanj-store:4318`), and the store pod runs the
 same `flanjstore` / `flanjui` keys above. Role is chosen by which config file runs.*
+
+*The `flanjstore` EXPORTER (2026-09-07) likewise adds no flanj keys: it accepts upstream's
+`sending_queue` and `retry_on_failure` sections (the exporterhelper keys `otlphttp` has), both ON by
+default — a bounded in-memory queue (64 MiB, rejecting when full) and backoff retry (1s→30s, 15 min)
+on a failed store write — so `flanjstore: {}` keeps every default. The store is idempotent on
+`flanj.call.id` and on the finding id, so a retried batch never duplicates a row or an
+`occurrence_count`.*
