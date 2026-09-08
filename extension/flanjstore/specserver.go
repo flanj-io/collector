@@ -30,9 +30,10 @@ import (
 const (
 	specReadTimeout  = 10 * time.Second
 	specWriteTimeout = 30 * time.Second
-	// specMaxDoc caps a single document, matching the ceiling the upload path
-	// enforces so both ends of the channel agree.
-	specMaxDoc = 8 << 20 // 8 MiB
+	// specMaxDoc caps a single document: the ONE cap, shared with the upload
+	// path and the front that reads this endpoint (model.MaxContractDocBytes),
+	// so the ends of the channel agree by construction rather than by comment.
+	specMaxDoc = model.MaxContractDocBytes
 )
 
 // startSpecServer binds the contract endpoint when one is configured. A front
@@ -184,7 +185,33 @@ func (e *storeExtension) handleSpecDoc(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(raw) > specMaxDoc {
-		raw = raw[:specMaxDoc]
+		// REFUSE — never truncate. A document cut off at the cap goes out as a
+		// 200 the front cannot tell from a whole one: it parses as garbage,
+		// the front reports a PARSE error for a SIZE problem, and detection on
+		// that edge silently stops. Cutting it here also blinded the front's
+		// own guard, which can only see an overflow if one is transmitted.
+		//
+		// This is reachable, and by exactly one writer. The upload path
+		// refuses a larger document before it is ever stored, and the self
+		// contract never crosses this hop (servableContract). An OBSERVED MCP
+		// tools/list has no cap anywhere on its way in — the SDK sends the
+		// server's whole tool array verbatim, the drift processor persists
+		// whatever parses, and the only bound is the OTLP receiver's 20 MiB
+		// request body — so a large enough catalogue lands in a row that has
+		// to cross this channel.
+		//
+		// The row stays LISTED. A front that keeps asking gets this same named
+		// refusal every tick, which is the only symptom either end gets; and
+		// the operator who can act on it — shrink the catalogue, or split the
+		// server — reads this pod's log.
+		if e.logger != nil {
+			e.logger.Warn("contract endpoint: a stored document is past the cap and will not be served",
+				zap.String("integration", integration),
+				zap.Int("bytes", len(raw)),
+				zap.Int("cap_bytes", specMaxDoc))
+		}
+		http.Error(w, "contract document larger than the cap", http.StatusRequestEntityTooLarge)
+		return
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
 	_, _ = w.Write(raw)

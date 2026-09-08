@@ -49,7 +49,7 @@ func newRemoteSpecSource(endpoint, token string) *remoteSpecSource {
 // listSpecs fetches contract metadata — no documents, so a steady-state refresh
 // on a fifty-provider front is one small request a minute.
 func (r *remoteSpecSource) listSpecs() ([]model.SpecInfo, error) {
-	body, err := r.get(r.base + "/internal/contracts")
+	body, err := r.get(r.base+"/internal/contracts", "the contract list")
 	if err != nil {
 		return nil, err
 	}
@@ -64,10 +64,13 @@ func (r *remoteSpecSource) listSpecs() ([]model.SpecInfo, error) {
 
 // specDoc fetches one raw contract document.
 func (r *remoteSpecSource) specDoc(integration string) ([]byte, error) {
-	return r.get(r.base + "/internal/contracts/doc?integration=" + url.QueryEscape(integration))
+	return r.get(r.base+"/internal/contracts/doc?integration="+url.QueryEscape(integration),
+		fmt.Sprintf("the contract document for %q", integration))
 }
 
-func (r *remoteSpecSource) get(u string) ([]byte, error) {
+// get fetches u. `what` names the thing being fetched, so a refusal reads as a
+// sentence about a contract rather than about a URL.
+func (r *remoteSpecSource) get(u, what string) ([]byte, error) {
 	req, err := http.NewRequest(http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
@@ -83,17 +86,49 @@ func (r *remoteSpecSource) get(u string) ([]byte, error) {
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, nil // the contract went away between list and fetch
 	}
+	if resp.StatusCode == http.StatusRequestEntityTooLarge {
+		// The store pod's own refusal for a document past the cap
+		// (extension/flanjstore/specserver.go). Translated here rather than
+		// left as a bare status, so a front's log names the cause without
+		// anyone having to go read the store pod's — the fix is on neither
+		// pod anyway, it is the catalogue that is too big.
+		return nil, fmt.Errorf("the store pod holds %s larger than the %d MiB cap",
+			what, maxSpecBytes>>20)
+	}
 	if resp.StatusCode != http.StatusOK {
 		// Never echo the body: it is a peer's response, and the token is in
 		// this request. The status is what an operator needs.
 		return nil, fmt.Errorf("store pod returned %s", resp.Status)
 	}
 	// Capped so a misconfigured endpoint (pointed at something that is not a
-	// store pod) cannot read an unbounded body into a front's memory.
-	return io.ReadAll(io.LimitReader(resp.Body, maxSpecBytes))
+	// store pod) cannot read an unbounded body into a front's memory — and
+	// DETECTED, not truncated. One byte past the cap is read on purpose: a
+	// buffer that fills it is a body the cap refuses.
+	//
+	// io.LimitReader alone stops at the cap and says nothing, so an oversized
+	// document arrived cut off mid-content, kin-openapi (or ParseToolsList)
+	// refused it, and the front logged a PARSE failure for what is a SIZE
+	// problem — then silently detected no drift on that edge for as long as
+	// the document stayed big. Same wrong-diagnosis class as the upload path's
+	// own LimitReader (#40) and the localhost API's request bodies (#48); this
+	// was the last one, on the outbound side.
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxSpecBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("store pod: reading %s failed: %w", what, err)
+	}
+	if len(raw) > maxSpecBytes {
+		// Nothing partial is returned: a truncated document must never reach a
+		// parser, which is the whole point of noticing here. The caller
+		// (speccache.reconcile / mcpSeeds.reconcile) reports this and skips the
+		// row, so whatever it already holds for that edge keeps validating.
+		return nil, fmt.Errorf("the store pod served %s larger than the %d MiB cap",
+			what, maxSpecBytes>>20)
+	}
+	return raw, nil
 }
 
-// maxSpecBytes caps a single contract document. Real OpenAPI documents run to a
-// few megabytes; this is the ceiling the upload path enforces too, so the two
-// ends of the channel agree.
-const maxSpecBytes = 8 << 20 // 8 MiB
+// maxSpecBytes caps a single contract document, and is the ONE cap
+// (model.MaxContractDocBytes): the same number the UI upload refuses to accept
+// and the store pod's contract endpoint refuses to serve, so the ends of this
+// channel agree by construction rather than by comment.
+const maxSpecBytes = model.MaxContractDocBytes

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -789,4 +790,68 @@ func TestTwoFrontsObservingTheSameListNeverMoveTheRow(t *testing.T) {
 			t.Fatalf("front-%s judged %+v, want one stale_client", name, fs)
 		}
 	}
+}
+
+// TestMCPBaselineRefusesAnOversizedSnapshot: an MCP row the channel cannot
+// carry is refused BY SIZE, and the front seeds nothing from it.
+//
+// This is the reachable oversize case and the reason the cap needed defending
+// at all. An uploaded OpenAPI contract cannot be this row — the upload path
+// refuses one over the cap before it is stored — but an observed tools/list has
+// no cap anywhere on its way in: the SDK serializes the server's whole tool
+// array verbatim, this processor persists whatever parses, and the only bound
+// is the OTLP receiver's 20 MiB request body. A catalogue between the two is
+// stored whole and then has to cross the channel.
+//
+// Truncating it produced an error here too — from ParseToolsList, over a
+// fragment — so a front reported a MALFORMED tools/list for a server whose
+// list is merely large, and went on judging that edge against whatever it had
+// personally witnessed (nothing, on a fresh front) with no line naming the
+// size. The refusal has to name the contract and the cap, because the operator
+// fix is on the MCP server, not on the collector.
+func TestMCPBaselineRefusesAnOversizedSnapshot(t *testing.T) {
+	oversized := paddedMCPSnapshot(maxSpecBytes + 1)
+	rows := []model.SpecInfo{
+		{Integration: "acme-huge", Role: model.SpecRoleProvider, Format: model.SpecFormatMCP, PeerHost: "mcp.huge.test",
+			EdgeClass: model.EdgeClassExternal, Source: model.SpecSourceObserved, LoadedAt: "2026-09-08T10:00:00.000Z"},
+		{Integration: "acme-payments", Role: model.SpecRoleProvider, Format: model.SpecFormatMCP, PeerHost: "mcp.acme.test",
+			EdgeClass: model.EdgeClassExternal, Source: model.SpecSourceObserved, LoadedAt: "2026-09-08T10:00:00.000Z"},
+	}
+	docs := map[string][]byte{"acme-huge": oversized, "acme-payments": []byte(mcpSnapshotJSON)}
+
+	pod := newMCPStorePod(t, rows, docs)
+	det := drift.NewMCPDetector()
+	var seeds mcpSeeds
+	adopted, _, errs := seeds.reconcile(rows, newRemoteSpecSource(pod.URL, ""), det)
+
+	if len(errs) != 1 {
+		t.Fatalf("errs = %v, want exactly the oversized row's", errs)
+	}
+	if !strings.Contains(errs[0].Error(), "larger than") {
+		t.Errorf("the front blames something other than the size: %v", errs[0])
+	}
+	if !strings.Contains(errs[0].Error(), "acme-huge") {
+		t.Errorf("the error does not name the contract: %v", errs[0])
+	}
+	if det.HasBaseline("mcp.huge.test", "client") {
+		t.Error("a document the channel refused became a baseline")
+	}
+
+	// One oversized row does not blind the rest — the same rule every other
+	// per-row failure on this path follows.
+	if len(adopted) != 1 || adopted[0].integration != "acme-payments" {
+		t.Fatalf("adopted = %+v, want the row that fits", adopted)
+	}
+	if !det.HasBaseline("mcp.acme.test", "client") {
+		t.Error("a neighbouring row lost its baseline to the oversized one")
+	}
+}
+
+// paddedMCPSnapshot builds a well-formed tools/list document of exactly n
+// bytes. Well-formed on purpose: these tests are about the SIZE ruling, so the
+// content must never be what decides them.
+func paddedMCPSnapshot(n int) []byte {
+	const head = `{"tools":[{"name":"pad","description":"`
+	const tail = `"}]}`
+	return []byte(head + strings.Repeat("x", n-len(head)-len(tail)) + tail)
 }

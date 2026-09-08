@@ -187,6 +187,22 @@ Flow specifics:
   — whichever front sees what, and a restarted front resumes from the store
   rather than from the next list it happens to observe. On each front the newer
   observation wins, silently; the front that observed a change reports it.
+- **One contract document is capped at 8 MiB on that channel**, at both ends:
+  the store pod answers `413` rather than serving a larger one, and a front
+  refuses to read one rather than reading a prefix. Neither end truncates — a
+  document cut off at the cap still parses, as garbage, so the front would blame
+  the parser for a size problem and quietly detect nothing on that edge. An
+  UPLOADED contract can never be this: the uploader refuses one over the cap
+  before it is stored. An observed MCP `tools/list` can, since nothing caps a
+  server's catalogue on its way in. It surfaces once per refresh tick, in a
+  front's log, as `contract refresh failed … the store pod served the contract
+  document for "x" larger than the 8 MiB cap`, with the matching line on the
+  store pod naming the integration and its byte count. The fix is on the MCP
+  server — a smaller catalogue, or split across servers; the front keeps
+  validating that edge against whatever baseline it already had. Note the shape
+  this cannot help: a front reading from a store pod older than 2026-09-08 gets
+  the old silent truncation, and a prefix of exactly 8 MiB is indistinguishable
+  from a document that fits. Roll the store pod first.
 - The flag action runs on the store pod (it holds the evidence); its outbound
   calls to the control plane (Connect, flag, thread state) are the only
   off-cluster egress. **Connect** is per deployment, not per pod: the collector

@@ -35,7 +35,14 @@ Two backends (`docs/STORE.md` is the user-facing guide):
   OpenAPI documents and, since 2026-09-07, observed MCP `tools/list` snapshots
   (the org-wide MCP baseline a front seeds from). `servableContract` is the ONE
   admission rule, applied to the list and the doc route alike; the self
-  contract and unbound rows never cross.
+  contract and unbound rows never cross. One document is capped at
+  `model.MaxContractDocBytes` (8 MiB — the SAME constant the upload path and
+  the front's reader use, so the ends of the channel agree by construction),
+  and over it is a **`413`, never a truncation**: a document cut at the cap
+  goes out as a 200 the front cannot tell from a whole one, parses as garbage,
+  and costs that edge its detection under a PARSE error. The oversized row
+  stays LISTED — a front's repeated refusal is the only symptom either end
+  gets.
 
 ## Invariants
 

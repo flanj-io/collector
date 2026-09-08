@@ -154,7 +154,17 @@ store dedups on it — the first call creates the finding, later calls increment
   re-downloaded until a row moves. Logs `mcp baseline seeded from the store`
   on adoption — the tiered e2e lane waits on that line, since a front has no
   other observable surface.
-- `remotesource.go` — the tiered topology's front-side client.
+- `remotesource.go` — the tiered topology's front-side client. Its reader
+  DETECTS the 8 MiB cap (`model.MaxContractDocBytes`) instead of truncating to
+  it: it reads one byte past and refuses a body that fills it, naming the
+  contract and the cap. `io.LimitReader` alone stopped at the cap silently, so
+  an oversized document reached the parser as a fragment and the front logged a
+  PARSE failure for a SIZE problem — then detected nothing on that edge for as
+  long as the document stayed big. Both reconcilers treat that like every other
+  per-document failure: report it, skip the row, keep validating against what is
+  already cached or seeded. Reachable only via an observed MCP `tools/list`
+  (the upload path refuses a larger document before it is stored, and the self
+  contract never crosses this hop), which nothing caps on its way in.
 - `processor.go` — per-batch live-vs-spec detection + the refresh loop +
   rate-limited spec_info emission; appends finding + spec_info records under a
   fresh trailing ResourceLogs/ScopeLogs (calls stay ahead).
