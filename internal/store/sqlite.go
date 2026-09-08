@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS calls (
   byte_size    INTEGER NOT NULL,
   pinned       INTEGER NOT NULL DEFAULT 0,
   drifted      INTEGER NOT NULL DEFAULT 0,
+  validated    TEXT NOT NULL DEFAULT '',
   promoted_at  TEXT,
   doc          TEXT NOT NULL
 );
@@ -147,7 +148,7 @@ CREATE INDEX IF NOT EXISTS idx_calls_captured_edge ON calls(captured_at, peer_ho
 			return fmt.Errorf("migrate spec_infos: add %s: %w", col, err)
 		}
 	}
-	// calls.drifted — same additive widening (see callsAddedColumns).
+	// calls.drifted / calls.validated — same additive widening (callsAddedColumns).
 	for _, col := range callsAddedColumns {
 		if _, err := s.db.Exec(`ALTER TABLE calls ADD COLUMN ` + col); err != nil &&
 			!strings.Contains(err.Error(), "duplicate column name") {
@@ -161,9 +162,15 @@ CREATE INDEX IF NOT EXISTS idx_calls_captured_edge ON calls(captured_at, peer_ho
 // shipped — contract provenance, and the one previous document kept on replace.
 // Additive only: widening is the whole reason this list can be applied blind.
 // callsAddedColumns are the calls columns introduced after the table shipped.
-// `drifted` records that THIS call produced a finding — see model.RedactedCall.
+// `drifted` records that THIS call produced a finding; `validated` is the drift
+// processor's own per-call verdict — see model.RedactedCall. Its default is the
+// EMPTY string on purpose: every row that exists when the column arrives gets
+// it, and nothing written afterwards ever does (InsertCall always supplies the
+// column), so "" is unambiguously "stored before verdicts were recorded" — the
+// one case the UI may still fall back to its edge-based guess for.
 var callsAddedColumns = []string{
 	`drifted INTEGER NOT NULL DEFAULT 0`,
+	`validated TEXT NOT NULL DEFAULT ''`,
 }
 
 var specInfoAddedColumns = []string{
@@ -187,13 +194,13 @@ func (s *sqliteStore) InsertCall(c model.RedactedCall) (err error) {
 	defer s.mu.Unlock()
 	res, err := s.db.Exec(
 		`INSERT INTO calls
-		  (id, captured_at, integration, peer_host, direction, edge_class, method, route, status_code, request_id, idem_key, trace_id, byte_size, pinned, doc)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)
+		  (id, captured_at, integration, peer_host, direction, edge_class, method, route, status_code, request_id, idem_key, trace_id, byte_size, pinned, drifted, validated, doc)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?)
 		 ON CONFLICT(id) DO NOTHING`,
 		c.ID, c.CapturedAt, c.Integration, nullStr(c.PeerHost), nullStr(c.Direction), nullStr(c.EdgeClass),
 		c.Method, c.Route, c.StatusCode,
 		nullStr(c.Correlation.RequestID), nullStr(c.Correlation.IdempotencyKey), nullStr(c.Correlation.TraceID),
-		len(doc), string(doc),
+		len(doc), insertDrifted(c), c.Validated, string(doc),
 	)
 	if err != nil {
 		return fmt.Errorf("insert call: %w", err)

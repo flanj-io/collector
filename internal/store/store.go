@@ -343,37 +343,34 @@ func evictOldest(q queryExecer, rebind func(string) string, keepID string, batch
 
 // marksSourceCallDrifted reports whether a finding of this kind means THE CALL
 // it names departed from the contract — the question `calls.drifted` answers.
-//
-// TWO kinds qualify, one per transport, and they are the same fact:
-//   - live-vs-spec  — a REST response violated the bound OpenAPI document
-//   - output_mismatch — an MCP result's structuredContent violated the tool's
-//     own declared outputSchema (internal/drift/mcp.go). It is per-call and
-//     carries a SourceCallID exactly like live-vs-spec; the only reason it was
-//     excluded is that the gate was written before MCP had a per-call kind, and
-//     the UI paid for it by asking "does this TOOL have a mismatch?" instead —
-//     the endpoint-level guess this column exists to retire.
-//
-// The kinds that must NOT qualify:
-//   - definition_change — the SNAPSHOT detector, comparing two tools/list
-//     observations. Call-less: no call produced it, so no call drifted.
-//   - stale_client — the CONSUMER's own arguments were stale. The call is
-//     evidence about this agent, not about the provider's contract, and
-//     marking it drifted would accuse the provider of our bug.
-//   - version-diff — a document-to-document comparison, not traffic.
-//
-// Every site that writes `calls.drifted` reads THIS slice: InsertFinding on
-// both backends (via marksSourceCallDrifted) and latePin's repair (which
-// expands it into the SQL `IN` list). They must never disagree — a kind marked
-// on one path and not the other makes drift depend on record ORDER.
-var perCallDriftKinds = []string{model.KindLiveVsSpec, model.KindOutputMismatch}
 
-func marksSourceCallDrifted(kind string) bool {
-	for _, k := range perCallDriftKinds {
-		if kind == k {
-			return true
-		}
+// perCallDriftKinds / marksSourceCallDrifted: the finding kinds that mean THE
+// CALL a finding names departed from its contract — the question `calls.drifted`
+// answers. model.PerCallDriftKinds owns the list and the reasoning (why
+// output_mismatch is in and stale_client is out), because the drift processor's
+// own per-call verdict (RedactedCall.Validated) is computed off the same list:
+// the store's mark and the processor's stamp must never disagree.
+//
+// Every site that writes `calls.drifted` reads THIS slice: InsertCall (from the
+// stamp, via insertDrifted), InsertFinding on both backends (via
+// marksSourceCallDrifted) and latePin's repair (which expands it into the SQL
+// `IN` list). A kind marked on one path and not the other makes drift depend on
+// record ORDER.
+var perCallDriftKinds = model.PerCallDriftKinds
+
+func marksSourceCallDrifted(kind string) bool { return model.MarksCallDrifted(kind) }
+
+// insertDrifted is the `drifted` a NEW call row starts with: 1 when the drift
+// processor's own stamp says the call drifted. Its finding record follows in the
+// same batch and InsertFinding marks the row again (idempotent), but reading the
+// stamp here closes the one-record window in which a stamped-drifted call could
+// still list as conforming — and keeps the two facts in agreement by
+// construction rather than by arrival order.
+func insertDrifted(c model.RedactedCall) int {
+	if c.Validated == model.ValidatedDrifted {
+		return 1
 	}
-	return false
+	return 0
 }
 
 // latePin closes the "finding before its call" gap. InsertFinding pins its
@@ -489,13 +486,17 @@ func (b *base) Close() error { return b.db.Close() }
 // GetCall returns the stored RedactedCall for id.
 func (b *base) GetCall(id string) (model.RedactedCall, bool, error) {
 	var (
-		doc     string
-		drifted bool
+		doc       string
+		drifted   bool
+		validated string
 	)
 	// `drifted` is store-owned (set when the call produced a finding, including
 	// repeat occurrences), so it lives in its column and reads patch it back in
-	// — the same shape as findings' occurrence_count/last_seen.
-	err := b.db.QueryRow(b.rebind(`SELECT doc, drifted FROM calls WHERE id=?`), id).Scan(&doc, &drifted)
+	// — the same shape as findings' occurrence_count/last_seen. `validated` is
+	// the drift processor's stamp, kept in its own column so it is queryable and
+	// so a row from before the column existed reads as EMPTY (the column's
+	// default) rather than whatever its frozen doc happens to say.
+	err := b.db.QueryRow(b.rebind(`SELECT doc, drifted, validated FROM calls WHERE id=?`), id).Scan(&doc, &drifted, &validated)
 	if err == sql.ErrNoRows {
 		return model.RedactedCall{}, false, nil
 	}
@@ -507,6 +508,7 @@ func (b *base) GetCall(id string) (model.RedactedCall, bool, error) {
 		return model.RedactedCall{}, false, err
 	}
 	c.Drifted = drifted
+	c.Validated = validated
 	return c, true, nil
 }
 
@@ -532,7 +534,7 @@ func (b *base) ListCalls(limit int) ([]model.RedactedCall, error) {
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := b.db.Query(b.rebind(`SELECT doc, drifted FROM calls ORDER BY seq DESC LIMIT ?`), limit)
+	rows, err := b.db.Query(b.rebind(`SELECT doc, drifted, validated FROM calls ORDER BY seq DESC LIMIT ?`), limit)
 	if err != nil {
 		return nil, err
 	}
@@ -540,10 +542,11 @@ func (b *base) ListCalls(limit int) ([]model.RedactedCall, error) {
 	out := make([]model.RedactedCall, 0, limit)
 	for rows.Next() {
 		var (
-			doc     string
-			drifted bool
+			doc       string
+			drifted   bool
+			validated string
 		)
-		if err := rows.Scan(&doc, &drifted); err != nil {
+		if err := rows.Scan(&doc, &drifted, &validated); err != nil {
 			return nil, err
 		}
 		var c model.RedactedCall
@@ -551,6 +554,8 @@ func (b *base) ListCalls(limit int) ([]model.RedactedCall, error) {
 			return nil, err
 		}
 		c.Drifted = drifted
+		// The processor's verdict, column-authoritative (see GetCall).
+		c.Validated = validated
 		out = append(out, c)
 	}
 	return out, rows.Err()

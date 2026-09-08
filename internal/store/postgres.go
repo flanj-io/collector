@@ -100,6 +100,7 @@ CREATE TABLE IF NOT EXISTS calls (
   byte_size    BIGINT NOT NULL,
   pinned       INTEGER NOT NULL DEFAULT 0,
   drifted      INTEGER NOT NULL DEFAULT 0,
+  validated    TEXT NOT NULL DEFAULT '',
   promoted_at  TEXT,
   doc          TEXT NOT NULL
 );
@@ -174,6 +175,10 @@ ALTER TABLE spec_infos ADD COLUMN IF NOT EXISTS prev_version TEXT;
 ALTER TABLE spec_infos ADD COLUMN IF NOT EXISTS prev_loaded_at TEXT;
 ALTER TABLE spec_infos ADD COLUMN IF NOT EXISTS edge_class TEXT;
 ALTER TABLE calls ADD COLUMN IF NOT EXISTS drifted INTEGER NOT NULL DEFAULT 0;
+-- calls.validated: the drift processor's per-call verdict. DEFAULT '' backfills
+-- every pre-existing row and nothing else ever writes '' (InsertCall always
+-- supplies the column) — see the sqlite backend's callsAddedColumns note.
+ALTER TABLE calls ADD COLUMN IF NOT EXISTS validated TEXT NOT NULL DEFAULT '';
 `
 	tx, err := p.db.Begin()
 	if err != nil {
@@ -216,13 +221,13 @@ func (p *postgresStore) InsertCall(c model.RedactedCall) (err error) {
 	}
 	res, err := tx.Exec(p.rebind(
 		`INSERT INTO calls
-		  (id, captured_at, integration, peer_host, direction, edge_class, method, route, status_code, request_id, idem_key, trace_id, byte_size, pinned, doc)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)
+		  (id, captured_at, integration, peer_host, direction, edge_class, method, route, status_code, request_id, idem_key, trace_id, byte_size, pinned, drifted, validated, doc)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?)
 		 ON CONFLICT (id) DO NOTHING`),
 		c.ID, c.CapturedAt, c.Integration, nullStr(c.PeerHost), nullStr(c.Direction), nullStr(c.EdgeClass),
 		c.Method, c.Route, c.StatusCode,
 		nullStr(c.Correlation.RequestID), nullStr(c.Correlation.IdempotencyKey), nullStr(c.Correlation.TraceID),
-		len(doc), string(doc),
+		len(doc), insertDrifted(c), c.Validated, string(doc),
 	)
 	if err != nil {
 		return fmt.Errorf("insert call: %w", err)
