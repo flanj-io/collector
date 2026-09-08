@@ -112,9 +112,19 @@ func MigrateFromSQLite(dst Store, sqlitePath string) (MigrationSummary, error) {
 }
 
 func copyPinnedCalls(src *sql.DB, tx *sql.Tx) (int, error) {
+	// `validated` arrived after `drifted`, and the legacy file is opened
+	// read-only and never migrated — so ask before selecting it. A file from
+	// before verdicts existed carries '' for every row, which is exactly what
+	// the column's default would have given them.
+	validatedCol := "''"
+	if has, err := sqliteHasColumn(src, "calls", "validated"); err != nil {
+		return 0, fmt.Errorf("migrate-from-sqlite: inspect calls columns: %w", err)
+	} else if has {
+		validatedCol = "validated"
+	}
 	rows, err := src.Query(
 		`SELECT id, captured_at, integration, peer_host, direction, edge_class, method, route,
-		        status_code, request_id, idem_key, trace_id, byte_size, pinned, drifted, promoted_at, doc
+		        status_code, request_id, idem_key, trace_id, byte_size, pinned, drifted, ` + validatedCol + `, promoted_at, doc
 		   FROM calls WHERE pinned=1 ORDER BY seq ASC`)
 	if err != nil {
 		return 0, fmt.Errorf("migrate-from-sqlite: read pinned calls: %w", err)
@@ -124,22 +134,23 @@ func copyPinnedCalls(src *sql.DB, tx *sql.Tx) (int, error) {
 	for rows.Next() {
 		var (
 			id, capturedAt, integration, method, route, doc string
+			validated                                       string
 			peerHost, direction, edgeClass                  sql.NullString
 			requestID, idemKey, traceID, promotedAt         sql.NullString
 			statusCode, pinned, drifted                     int
 			byteSize                                        int64
 		)
 		if err := rows.Scan(&id, &capturedAt, &integration, &peerHost, &direction, &edgeClass, &method, &route,
-			&statusCode, &requestID, &idemKey, &traceID, &byteSize, &pinned, &drifted, &promotedAt, &doc); err != nil {
+			&statusCode, &requestID, &idemKey, &traceID, &byteSize, &pinned, &drifted, &validated, &promotedAt, &doc); err != nil {
 			return n, fmt.Errorf("migrate-from-sqlite: scan call: %w", err)
 		}
 		res, err := tx.Exec(
 			`INSERT INTO calls
-			  (id, captured_at, integration, peer_host, direction, edge_class, method, route, status_code, request_id, idem_key, trace_id, byte_size, pinned, drifted, promoted_at, doc)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+			  (id, captured_at, integration, peer_host, direction, edge_class, method, route, status_code, request_id, idem_key, trace_id, byte_size, pinned, drifted, validated, promoted_at, doc)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
 			 ON CONFLICT (id) DO NOTHING`,
 			id, capturedAt, integration, peerHost, direction, edgeClass, method, route,
-			statusCode, requestID, idemKey, traceID, byteSize, pinned, drifted, promotedAt, doc,
+			statusCode, requestID, idemKey, traceID, byteSize, pinned, drifted, validated, promotedAt, doc,
 		)
 		if err != nil {
 			return n, fmt.Errorf("migrate-from-sqlite: insert call %s: %w", id, err)
@@ -258,6 +269,17 @@ func copySettings(src *sql.DB, tx *sql.Tx) (int, error) {
 // isNoSuchTable reports sqlite's "no such table" error (older legacy files).
 func isNoSuchTable(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "no such table")
+}
+
+// sqliteHasColumn reports whether a legacy sqlite table carries a column — the
+// import reads the source as-is, so a column added after the file was written
+// cannot be assumed.
+func sqliteHasColumn(src *sql.DB, table, column string) (bool, error) {
+	var n int
+	if err := src.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?`, table, column).Scan(&n); err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
 
 // copySpecInfos carries the uploaded provider contracts — metadata AND the

@@ -167,7 +167,7 @@ Flow specifics:
 - Store pod `:4318` is intra-cluster ingest; keep it ClusterIP (optionally a
   NetworkPolicy allowing only the front pods).
 - Probes: `tcpSocket: 4318` on both roles.
-- **Upgrades:** store pod first, then fronts.
+- **Upgrades:** store pod first, then fronts. Since 2026-09-07 this is load-bearing for the contract chip: a front stamps every call with its verdict (`flanj.validated`, CONTRACTS §2), and a store pod from before the stamp drops the attribute at decode — so an upgraded front behind an old store pod silently falls back to the old inferred coverage, on exactly the topology where the inference was wrong. A new store pod behind old fronts reads their calls as `unknown` → `not checked` until they are upgraded: safe, and transient.
 
 Sizing: fronts are CPU-bound (redaction + schema validation) and stateless —
 scale them; the store pod is IO-bound (one sqlite writer) — give it the PVC's

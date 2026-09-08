@@ -10,14 +10,13 @@ import {
   THREAD_STATE_UNKNOWN,
   cannotListThreads,
   chipLabel,
-  findingIdFromHash,
   needsCollectorAddress,
-  threadIdFromHash,
   timeAgo,
   type ConnectState,
   type ThreadListResponse,
   type ThreadRow
 } from './threads';
+import { hashForTab, hashForThread, routeFromHash, type Tab } from './route';
 import {
   ADD_CONTRACT,
   MCP_SELF_REPORTS,
@@ -162,8 +161,6 @@ interface SpecInfo {
   /** The version this contract replaced, when it replaced one. */
   prev_version?: string;
 }
-
-type Tab = 'overview' | 'traffic' | 'contract' | 'threads' | 'settings';
 
 const health = ref<Health | null>(null);
 const findings = ref<Finding[]>([]);
@@ -340,15 +337,15 @@ function dismissAddressNudge() {
 
 // "Add address" from the Threads tab: jump to Settings with the address field focused.
 function addCollectorAddress() {
-  tab.value = 'settings';
+  setTab('settings');
   focusAddressTick.value++;
 }
 
 // The Threads tab's not-connected notice routes here, the same way the Contracts
-// banner does. `#settings` so a reload (or a back) lands on the same tab.
+// banner does. setTab writes `#settings`, so a reload lands on the same tab and
+// Back returns to Threads.
 function goToSettings() {
-  tab.value = 'settings';
-  if (window.location.hash !== '#settings') history.replaceState(null, '', '#settings');
+  setTab('settings');
 }
 
 // Provider name shown on the sheet and sent on the flag: the configured
@@ -389,28 +386,42 @@ async function openChipThread(threadId: string) {
   }
 }
 
-function goToThread(threadId: string) {
-  highlightThreadId.value = threadId;
-  tab.value = 'threads';
-  if (window.location.hash !== '#threads/' + threadId) history.replaceState(null, '', '#threads/' + encodeURIComponent(threadId));
+// Tab selection is the single source of truth in BOTH directions (route.ts):
+// every tab change goes through here and writes the hash the tab owns, and the
+// hash drives the tab (applyHash, below). Launch-week item 10: the tab buttons
+// used to write nothing while "Add address" and "Threads ›" did, so the URL
+// drifted from the screen — Threads → Add address (`#settings`) → Overview
+// (nothing) → reload landed on Settings, and Back moved the URL but not the tab.
+//
+// A change PUSHES a history entry, so Back returns to the previous tab: every
+// navigation in the app today is a user gesture. `replace` is for a redirect
+// the user did not ask for, so Back never lands on a state that redirects
+// again. `hash` carries a deep-link form (`#threads/<id>`) in place of the bare
+// tab hash. Nothing else in the app writes location.hash.
+function setTab(t: Tab, opts: { hash?: string; replace?: boolean } = {}) {
+  tab.value = t;
+  const want = opts.hash ?? hashForTab(t);
+  if (window.location.hash === want) return;
+  if (opts.replace) history.replaceState(null, '', want);
+  else history.pushState(null, '', want);
 }
 
+function goToThread(threadId: string) {
+  highlightThreadId.value = threadId;
+  setTab('threads', { hash: hashForThread(threadId) });
+}
+
+// The other direction: the hash → the tab, on load and on every hashchange
+// (Back / Forward between the entries setTab pushed fire it, and so does a
+// pasted deep link). An empty, unknown or token fragment (`#k=…`) is not a tab:
+// it shows the default and is left exactly as it is — never rewritten, never
+// pushed — so a stale copy of the CP's thread-link token can never be laundered
+// into this page's history.
 function applyHash() {
-  const id = threadIdFromHash(window.location.hash);
-  const findingId = findingIdFromHash(window.location.hash);
-  if (id) {
-    highlightThreadId.value = id;
-    tab.value = 'threads';
-  } else if (findingId) {
-    highlightFindingId.value = findingId;
-    tab.value = 'contract';
-  } else if (window.location.hash === '#threads') {
-    tab.value = 'threads';
-  } else if (window.location.hash === '#contracts') {
-    tab.value = 'contract';
-  } else if (window.location.hash === '#settings') {
-    tab.value = 'settings';
-  }
+  const r = routeFromHash(window.location.hash);
+  if (r.threadId) highlightThreadId.value = r.threadId;
+  if (r.findingId) highlightFindingId.value = r.findingId;
+  tab.value = r.tab;
 }
 
 // Scroll the deep-linked finding row into view once findings have loaded and
@@ -462,7 +473,7 @@ function dismissThemeFlipNotice() {
 }
 function openAppearance() {
   dismissThemeFlipNotice();
-  tab.value = 'settings';
+  setTab('settings');
 }
 
 // Live-tail stream state: polling always lands in `calls`, but while the user
@@ -582,9 +593,14 @@ function notCheckedTitleOf(c: RedactedCall): string {
  * It does now, so MCP reads the same per-call fact as REST and the tool-level
  * guess is gone: no more relabelling a tool's whole history from one mismatch,
  * and no more DRIFTED on an isError result the processor never judged.
+ *
+ * The processor's own stamp (`validated: 'drifted'`, 2026-09-07) is the same
+ * fact from the other end of the pipeline — the store sets `drifted` from it on
+ * insert — and is read here too, so the row cannot lag the verdict by the one
+ * finding record that follows the call in its batch.
  */
 function isDrifted(c: RedactedCall): boolean {
-  return c.drifted === true;
+  return c.drifted === true || c.validated === 'drifted';
 }
 
 const hasExpanded = computed(() => Object.values(expanded.value).some(Boolean));
@@ -859,7 +875,7 @@ function closeUploader() {
  * already knows the host, which is the whole ergonomic prize for routing here.
  */
 function goToContracts(host: string) {
-  tab.value = 'contract';
+  setTab('contract');
   if (contractByHost.value.has(host)) {
     highlightUncoveredHost.value = null;
     nextTick(() => document.getElementById('contract-' + host)?.scrollIntoView({ block: 'center' }));
@@ -1323,8 +1339,6 @@ onUnmounted(() => {
 watch(tab, (t) => {
   if (t === 'threads' || t === 'contract') loadThreads();
   if (t === 'settings') loadConnect();
-  if (t !== 'threads' && threadIdFromHash(window.location.hash)) history.replaceState(null, '', window.location.pathname);
-  if (t !== 'contract' && findingIdFromHash(window.location.hash)) history.replaceState(null, '', window.location.pathname);
 });
 </script>
 
@@ -1359,7 +1373,7 @@ watch(tab, (t) => {
           class="pill pill-btn"
           :class="{ ok: connectStatus === 'connected', warn: connectStatus === 'pending' }"
           title="Connect settings"
-          @click="tab = 'settings'"
+          @click="setTab('settings')"
         >
           {{ connectPill }}
         </button>
@@ -1381,23 +1395,23 @@ watch(tab, (t) => {
     </div>
 
     <nav class="tabs" role="tablist">
-      <button role="tab" :class="{ active: tab === 'overview' }" @click="tab = 'overview'">
+      <button role="tab" :aria-selected="tab === 'overview'" :class="{ active: tab === 'overview' }" @click="setTab('overview')">
         Overview
       </button>
-      <button role="tab" :class="{ active: tab === 'traffic' }" @click="tab = 'traffic'">
+      <button role="tab" :aria-selected="tab === 'traffic'" :class="{ active: tab === 'traffic' }" @click="setTab('traffic')">
         Traffic
       </button>
-      <button role="tab" :class="{ active: tab === 'contract' }" @click="tab = 'contract'">
+      <button role="tab" :aria-selected="tab === 'contract'" :class="{ active: tab === 'contract' }" @click="setTab('contract')">
         Contracts
         <!-- red = act (breaking) · amber = review (informational, un-acked) -->
         <span v-if="contractBreakingCount" class="tab-count bad" :title="breakingCountTitle(contractBreakingCount)">{{ contractBreakingCount }}</span>
         <span v-if="contractInfoCount" class="tab-count warn" :title="informationalCountTitle(contractInfoCount)">{{ contractInfoCount }}</span>
       </button>
-      <button role="tab" :class="{ active: tab === 'threads' }" @click="tab = 'threads'">
+      <button role="tab" :aria-selected="tab === 'threads'" :class="{ active: tab === 'threads' }" @click="setTab('threads')">
         Threads
         <span v-if="threads.length" class="tab-count">{{ threads.length }}</span>
       </button>
-      <button role="tab" class="tab-right" :class="{ active: tab === 'settings' }" @click="tab = 'settings'">
+      <button role="tab" class="tab-right" :aria-selected="tab === 'settings'" :class="{ active: tab === 'settings' }" @click="setTab('settings')">
         Settings
         <span v-if="health?.cp_configured && connectStatus !== 'connected'" class="tab-dot" :class="connectStatus"></span>
       </button>
@@ -1597,7 +1611,7 @@ watch(tab, (t) => {
           thread links need a Connected collector. Viewing your own traffic and findings never does.
         </span>
         <span class="connect-banner-actions">
-          <button type="button" class="btn small" @click="tab = 'settings'">{{ connectStatus === 'pending' ? 'Check status' : 'Connect' }}</button>
+          <button type="button" class="btn small" @click="setTab('settings')">{{ connectStatus === 'pending' ? 'Check status' : 'Connect' }}</button>
           <button type="button" class="btn ghost small" aria-label="Dismiss" @click="dismissConnectBanner">Dismiss</button>
         </span>
       </div>
