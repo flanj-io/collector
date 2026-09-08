@@ -33,7 +33,7 @@ func TestJudgeLiveVsSpec_Verdicts(t *testing.T) {
 	golden := loadGoldenCall(t)
 
 	t.Run("drifted: the golden call", func(t *testing.T) {
-		fs, v := JudgeLiveVsSpec(doc, golden)
+		fs, v, _ := JudgeLiveVsSpec(doc, golden)
 		if len(fs) != 1 || fs[0].Kind != model.KindLiveVsSpec {
 			t.Fatalf("findings = %+v, want the golden live-vs-spec finding", fs)
 		}
@@ -45,7 +45,7 @@ func TestJudgeLiveVsSpec_Verdicts(t *testing.T) {
 	t.Run("clean: the same call with a conforming body", func(t *testing.T) {
 		c := golden
 		c.ResponseBody = conformingCharge
-		fs, v := JudgeLiveVsSpec(doc, c)
+		fs, v, _ := JudgeLiveVsSpec(doc, c)
 		if len(fs) != 0 {
 			t.Fatalf("findings = %+v, want none", fs)
 		}
@@ -58,7 +58,7 @@ func TestJudgeLiveVsSpec_Verdicts(t *testing.T) {
 		c := golden
 		c.Route = "/v1/not-in-the-document"
 		c.URL = "https://api.acme.test/v1/not-in-the-document"
-		fs, v := JudgeLiveVsSpec(doc, c)
+		fs, v, _ := JudgeLiveVsSpec(doc, c)
 		if len(fs) != 0 || v.Verdict != model.ValidatedNot || v.Reason != model.NotValidatedNotRoutable {
 			t.Errorf("findings = %+v verdict = %+v, want not-validated / not-routable", fs, v)
 		}
@@ -75,7 +75,7 @@ func TestJudgeLiveVsSpec_Verdicts(t *testing.T) {
 		c := golden
 		c.ResponseContentType = "application/problem+json"
 		c.ResponseBody = `{"type":"about:blank","title":"Bad Gateway","status":502}`
-		fs, v := JudgeLiveVsSpec(doc, c)
+		fs, v, _ := JudgeLiveVsSpec(doc, c)
 		if len(fs) != 0 {
 			t.Fatalf("findings = %+v, want none (the detector reports schema violations only)", fs)
 		}
@@ -95,14 +95,14 @@ func TestJudgeLiveVsSpec_Verdicts(t *testing.T) {
 		c := golden
 		c.StatusCode = 502
 		c.ResponseBody = conformingCharge
-		_, v := JudgeLiveVsSpec(doc, c)
+		_, v, _ := JudgeLiveVsSpec(doc, c)
 		if v.Verdict != model.ValidatedNot || v.Reason != model.NotValidatedStatusUndeclared {
 			t.Errorf("verdict = %+v, want not-validated / status-undeclared (spec-v1 declares 200 only)", v)
 		}
 		// Undeclared status AND undeclared media type: the status is named,
 		// because that is the first thing the validator refuses.
 		c.ResponseContentType = "application/problem+json"
-		_, v = JudgeLiveVsSpec(doc, c)
+		_, v, _ = JudgeLiveVsSpec(doc, c)
 		if v.Reason != model.NotValidatedStatusUndeclared {
 			t.Errorf("verdict = %+v, want status-undeclared when both are undeclared", v)
 		}
@@ -111,7 +111,7 @@ func TestJudgeLiveVsSpec_Verdicts(t *testing.T) {
 	t.Run("a body that will not decode is NOT clean", func(t *testing.T) {
 		c := golden
 		c.ResponseBody = `<html>upstream error</html>`
-		_, v := JudgeLiveVsSpec(doc, c)
+		_, v, _ := JudgeLiveVsSpec(doc, c)
 		if v.Verdict != model.ValidatedNot || v.Reason != model.NotValidatedBodyNotDecodable {
 			t.Errorf("verdict = %+v, want not-validated / body-not-decodable", v)
 		}
@@ -135,7 +135,7 @@ func TestJudgeLiveVsSpec_DefaultOnlyStatus(t *testing.T) {
 	gateway.ResponseBody = "<html>Bad Gateway</html>"
 
 	// spec-v1 declares 200 only: the status itself is undeclared.
-	_, v := JudgeLiveVsSpec(specV1Doc(t), gateway)
+	_, v, _ := JudgeLiveVsSpec(specV1Doc(t), gateway)
 	if v.Verdict != model.ValidatedNot || v.Reason != model.NotValidatedStatusUndeclared {
 		t.Errorf("no default: verdict = %+v, want not-validated / status-undeclared", v)
 	}
@@ -148,7 +148,7 @@ func TestJudgeLiveVsSpec_DefaultOnlyStatus(t *testing.T) {
 		Description: &desc,
 		Content:     openapi3.NewContentWithJSONSchema(openapi3.NewObjectSchema()),
 	}})
-	fs, v := JudgeLiveVsSpec(withDefault, gateway)
+	fs, v, _ := JudgeLiveVsSpec(withDefault, gateway)
 	if len(fs) != 0 {
 		t.Fatalf("default-only 502 text/html produced findings: %+v — a catch-all is not evidence of a breach", fs)
 	}
@@ -163,7 +163,7 @@ func TestJudgeLiveVsSpec_DefaultOnlyStatus(t *testing.T) {
 	problem := gateway
 	problem.ResponseContentType = "application/problem+json"
 	problem.ResponseBody = `{"type":"about:blank","title":"Bad Gateway","status":502}`
-	_, v = JudgeLiveVsSpec(withDefault, problem)
+	_, v, _ = JudgeLiveVsSpec(withDefault, problem)
 	if v.Reason != model.NotValidatedMediaTypeUndeclared {
 		t.Errorf("default-only problem+json (pre-#44): verdict = %+v, want media-type-undeclared", v)
 	}
@@ -173,13 +173,13 @@ func TestJudgeLiveVsSpec_DefaultOnlyStatus(t *testing.T) {
 // refusal shapes to reasons, so a validator upgrade that changes a message
 // cannot silently move a case between them.
 func TestUnjudgedReason_ClassifiesByShape(t *testing.T) {
-	if got := unjudgedReason(errNoFindingShape{}, nil, 200); got != model.NotValidatedValidatorError {
+	if got := unjudgedReason(errNoFindingShape{}, nil, 200, nil); got != model.NotValidatedValidatorError {
 		t.Errorf("unknown error shape = %q, want validator-error", got)
 	}
-	if got := unjudgedReason(&openapi3filter.ResponseError{Reason: "x", Err: errNoFindingShape{}}, nil, 200); got != model.NotValidatedBodyNotDecodable {
+	if got := unjudgedReason(&openapi3filter.ResponseError{Reason: "x", Err: errNoFindingShape{}}, nil, 200, nil); got != model.NotValidatedBodyNotDecodable {
 		t.Errorf("ResponseError with an inner error = %q, want body-not-decodable", got)
 	}
-	if got := unjudgedReason(&openapi3filter.ResponseError{Reason: "status is not supported"}, nil, 200); got != model.NotValidatedStatusUndeclared {
+	if got := unjudgedReason(&openapi3filter.ResponseError{Reason: "status is not supported"}, nil, 200, nil); got != model.NotValidatedStatusUndeclared {
 		t.Errorf("ResponseError with no route declaring the status = %q, want status-undeclared", got)
 	}
 }
@@ -187,3 +187,107 @@ func TestUnjudgedReason_ClassifiesByShape(t *testing.T) {
 type errNoFindingShape struct{}
 
 func (errNoFindingShape) Error() string { return "something the collector does not classify" }
+
+const headerAndSchemaSpec = `
+openapi: 3.0.3
+info: { title: t, version: "1.0.0" }
+paths:
+  /v1/charges:
+    post:
+      responses:
+        "200":
+          description: ok
+          headers:
+            X-Request-Id:
+              required: true
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  amount: { type: integer }
+  /v1/schemaless:
+    post:
+      responses:
+        "200":
+          description: a media type declared with no schema
+          content:
+            application/json: {}
+  /v1/nobody:
+    post:
+      responses:
+        "204":
+          description: no content declared
+`
+
+func loadInlineDoc(t *testing.T, spec string) *openapi3.T {
+	t.Helper()
+	doc, err := openapi3.NewLoader().LoadFromData([]byte(spec))
+	if err != nil {
+		t.Fatalf("load inline spec: %v", err)
+	}
+	return doc
+}
+
+func inlineCall(route, method string, status int, ct, body string) model.RedactedCall {
+	return model.RedactedCall{
+		ID: "call_x", Integration: "acme-payments", PeerHost: "api.acme.test", Direction: "client",
+		Method: method, URL: "https://api.acme.test" + route, Route: route,
+		StatusCode: status, ResponseContentType: ct, ResponseBody: body,
+	}
+}
+
+func TestJudgeLiveVsSpec_RequiredResponseHeader(t *testing.T) {
+	doc := loadInlineDoc(t, headerAndSchemaSpec)
+
+	t.Run("missing required header is named, not blamed on the media type", func(t *testing.T) {
+		c := inlineCall("/v1/charges", "POST", 200, "application/json", `{"amount":"1200"}`)
+		fs, v, _ := JudgeLiveVsSpec(doc, c)
+		if len(fs) != 0 || v.Verdict != model.ValidatedNot || v.Reason != model.NotValidatedResponseHeaderMissing {
+			t.Fatalf("findings=%+v verdict=%+v, want not-validated / response-header-missing", fs, v)
+		}
+	})
+
+	t.Run("a captured required header lets the body be judged", func(t *testing.T) {
+		c := inlineCall("/v1/charges", "POST", 200, "application/json", `{"amount":"1200"}`)
+		c.ResponseHeaders = map[string]string{"x-request-id": "req_1"}
+		fs, v, _ := JudgeLiveVsSpec(doc, c)
+		if len(fs) != 1 || v.Verdict != model.ValidatedDrifted {
+			t.Fatalf("findings=%+v verdict=%+v, want the amount drift, drifted", fs, v)
+		}
+		c.ResponseBody = `{"amount":1200}`
+		fs, v, _ = JudgeLiveVsSpec(doc, c)
+		if len(fs) != 0 || v.Verdict != model.ValidatedClean {
+			t.Fatalf("findings=%+v verdict=%+v, want clean", fs, v)
+		}
+	})
+}
+
+func TestJudgeLiveVsSpec_NothingComparedIsNotClean(t *testing.T) {
+	doc := loadInlineDoc(t, headerAndSchemaSpec)
+	cases := map[string]model.RedactedCall{
+		"304 (validator skips redirects)": func() model.RedactedCall {
+			c := inlineCall("/v1/charges", "POST", 304, "text/html", "")
+			c.ResponseHeaders = map[string]string{"x-request-id": "req_1"}
+			return c
+		}(),
+		"media type declared without a schema": inlineCall("/v1/schemaless", "POST", 200, "application/json", `{"anything":"goes"}`),
+		"declared status with no content":      inlineCall("/v1/nobody", "POST", 204, "", ""),
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			fs, v, _ := JudgeLiveVsSpec(doc, c)
+			if len(fs) != 0 || v.Verdict != model.ValidatedNot || v.Reason != model.NotValidatedNoSchema {
+				t.Fatalf("findings=%+v verdict=%+v, want not-validated / no-schema", fs, v)
+			}
+		})
+	}
+	// HEAD on a route the document declares as POST only is not routable; a
+	// HEAD the document declares is skipped by the validator — pin the skip.
+	head := inlineCall("/v1/charges", "HEAD", 200, "application/json", "")
+	head.ResponseHeaders = map[string]string{"x-request-id": "req_1"}
+	if _, v, _ := JudgeLiveVsSpec(doc, head); v.Verdict == model.ValidatedClean {
+		t.Fatalf("HEAD stamped clean: %+v", v)
+	}
+}

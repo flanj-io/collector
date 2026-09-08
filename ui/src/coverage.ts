@@ -132,6 +132,11 @@ export type NotCheckedReason =
   | 'body-not-decodable'
   /** The validator refused the call for a reason the collector does not classify. */
   | 'validator-error'
+  /** REST: the document requires a response header the captured call does not carry. */
+  | 'response-header-missing'
+  /** REST: nothing to compare — a HEAD/redirect status the validator skips, a
+   *  response with no body content, or a media type declared without a schema. */
+  | 'no-schema'
   /** MCP: the current tools/list does not declare the called tool. */
   | 'tool-not-listed'
   /** MCP: resultType input_required — a mid-flight exchange. */
@@ -206,6 +211,10 @@ export function notCheckedTitle(reason: NotCheckedReason, call: CoverageCall = {
       return `The response body could not be decoded as ${call.response_content_type || 'its declared media type'}, so nothing was compared to the contract.`;
     case 'validator-error':
       return 'The validator could not judge this response, so nothing was compared to the contract — captured, not validated.';
+    case 'response-header-missing':
+      return `The bound contract${host} requires a response header this call does not carry, so the validator stopped before the body — nothing was compared to a schema.`;
+    case 'no-schema':
+      return `The bound contract${host} declares this response without a body schema (or it is a status the validator never judges), so there was nothing to compare — captured, not validated.`;
     case 'tool-not-listed':
       return `The server's current tools/list does not declare ${tool}, so its result could not be checked — see the stale_client notice.`;
     case 'input-required':
@@ -286,6 +295,8 @@ const PASSTHROUGH_REASONS: ReadonlySet<string> = new Set<NotCheckedReason>([
   'media-type-undeclared',
   'body-not-decodable',
   'validator-error',
+  'response-header-missing',
+  'no-schema',
   'tool-not-listed',
   'input-required',
   'no-output-contract',

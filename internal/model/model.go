@@ -216,6 +216,17 @@ const (
 	// NotValidatedValidatorError: the validator refused the call for a reason
 	// the collector does not classify; nothing was compared.
 	NotValidatedValidatorError = "validator-error"
+	// NotValidatedResponseHeaderMissing: REST — the document requires a response
+	// header the captured call does not carry (response headers reach the
+	// collector through the SDK's allowlist), so kin-openapi stopped before the
+	// body. Nothing was compared to a schema.
+	NotValidatedResponseHeaderMissing = "response-header-missing"
+	// NotValidatedNoSchema: REST — the validator had nothing to compare: a HEAD
+	// or redirect status it skips by design, an operation declaring no
+	// responses, a declared response with no body content, or a media type
+	// declared without a schema. kin-openapi returns nil for every one of these,
+	// and nil is not "clean" — a call earns clean only when a schema was compared.
+	NotValidatedNoSchema = "no-schema"
 	// NotValidatedToolNotListed: MCP — the CURRENT tools/list does not declare
 	// the called tool (a stale_client finding says so); there is nothing to
 	// judge the result against.

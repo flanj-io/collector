@@ -377,9 +377,9 @@ func (p *driftProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.Logs
 						otlpattr.StampValidated(lr, model.NotValidated(model.NotValidatedNoContract))
 						continue
 					}
-					fs, verdict := drift.JudgeLiveVsSpec(p.selfDoc, call)
+					fs, verdict, jerr := drift.JudgeLiveVsSpec(p.selfDoc, call)
 					if verdict.Verdict == model.ValidatedNot && p.logger != nil {
-						p.logger.Debug("self live-vs-spec skipped", zap.String("route", call.Route), zap.String("reason", verdict.Reason))
+						p.logger.Debug("self live-vs-spec skipped", zap.String("route", call.Route), zap.String("reason", verdict.Reason), zap.NamedError("cause", jerr))
 					}
 					// Findings label with the call's integration (the org id) by
 					// default; relabel to the self contract's id so self and
@@ -412,9 +412,9 @@ func (p *driftProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.Logs
 				// body that will not decode is logged, not fatal — v0's
 				// deterministic finding is the response-schema mismatch — and
 				// the verdict names it, so the call never reads as clean.
-				fs, verdict := drift.JudgeLiveVsSpec(doc, call)
+				fs, verdict, jerr := drift.JudgeLiveVsSpec(doc, call)
 				if verdict.Verdict == model.ValidatedNot && p.logger != nil {
-					p.logger.Debug("live-vs-spec skipped", zap.String("route", call.Route), zap.String("reason", verdict.Reason))
+					p.logger.Debug("live-vs-spec skipped", zap.String("route", call.Route), zap.String("reason", verdict.Reason), zap.NamedError("cause", jerr))
 				}
 				findings = append(findings, fs...)
 				otlpattr.StampValidated(lr, verdict)
