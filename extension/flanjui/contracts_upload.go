@@ -31,10 +31,10 @@ import (
 // document that reached a row would cost that host detection with no symptom at
 // the point the operator could still fix it.
 const (
-	// maxDocBytes caps an uploaded document. Real OpenAPI documents run to a
-	// few megabytes; this matches the ceiling the front<-store channel enforces,
-	// so both ends agree on what fits.
-	maxDocBytes = 8 << 20 // 8 MiB
+	// maxDocBytes caps an uploaded document: the ONE cap, shared with the
+	// store pod's contract endpoint and the front that reads it, so the three
+	// ends of the channel agree by construction rather than by comment.
+	maxDocBytes = model.MaxContractDocBytes
 	// maxEnvelopeBytes bounds the READ of an upload envelope; the ruling on
 	// size is the document check in readContractUpload, against maxDocBytes.
 	// The envelope is JSON, and JSON escaping grows a text document on the

@@ -1,7 +1,10 @@
 package flanjdrift
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -26,13 +29,19 @@ func fakeStorePod(t *testing.T, token string, docs map[string][]byte) *httptest.
 			return
 		}
 		infos := make([]model.SpecInfo, 0, len(docs))
-		for integration := range docs {
+		for integration, doc := range docs {
 			infos = append(infos, model.SpecInfo{
 				Integration: integration,
 				Role:        model.SpecRoleProvider,
 				Format:      model.SpecFormatOpenAPI,
 				PeerHost:    "api." + integration + ".test",
-				LoadedAt:    "2026-08-31T10:00:00Z",
+				// The channel's change token, and the real store pod moves it
+				// whenever the document does. Deriving it from the content
+				// here gives a test that serves a DIFFERENT document the
+				// re-download the real stamp would have produced — without it,
+				// a cache holding a contract skips the fetch entirely and the
+				// test proves nothing.
+				LoadedAt: fmt.Sprintf("%x", sha256.Sum256(doc)),
 			})
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -162,5 +171,137 @@ func TestRemoteSourceUnreachableKeepsServing(t *testing.T) {
 	}
 	if _, ok := c.lookup("api.acme.test"); !ok {
 		t.Error("a store pod restart dropped a working contract — detection must ride it out")
+	}
+}
+
+// TestRemoteSourceRefusesADocumentPastTheCap: a body over the cap is an ERROR
+// naming the size, never the first maxSpecBytes bytes of it.
+//
+// io.LimitReader truncates silently, so this used to return a fragment with a
+// nil error and the fragment went straight to the parser. What the front then
+// logged was a PARSE failure — for a document that parses perfectly well when
+// it is all there — and detection on that edge stopped for as long as the
+// document stayed big, with nothing anywhere naming the size. Same
+// wrong-diagnosis class as the upload path (#40) and the localhost API's
+// request bodies (#48); this was the last one, on the outbound side.
+func TestRemoteSourceRefusesADocumentPastTheCap(t *testing.T) {
+	oversized := bytes.Repeat([]byte("x"), maxSpecBytes+1)
+	srv := fakeStorePod(t, "", map[string][]byte{"acme": oversized})
+
+	raw, err := newRemoteSpecSource(srv.URL, "").specDoc("acme")
+	if err == nil {
+		t.Fatalf("an oversized document read clean as %d bytes — the front parses that fragment "+
+			"and reports a PARSE error for a SIZE problem", len(raw))
+	}
+	if raw != nil {
+		t.Errorf("raw = %d bytes, want none: a truncated document must never reach a parser", len(raw))
+	}
+	// The refusal has to say what an operator can act on: which contract, and
+	// that the fault is its size.
+	if !strings.Contains(err.Error(), "acme") {
+		t.Errorf("the error does not name the contract: %v", err)
+	}
+	if !strings.Contains(err.Error(), "larger than") || !strings.Contains(err.Error(), "8 MiB") {
+		t.Errorf("the error does not name the cap: %v", err)
+	}
+}
+
+// TestRemoteSourceAcceptsADocumentAtTheCap: the cap is inclusive. The check
+// above reads one byte past it precisely so a document of exactly maxSpecBytes
+// still crosses whole — an off-by-one here would cost a legitimate contract its
+// detection, which is the failure this whole change exists to stop.
+func TestRemoteSourceAcceptsADocumentAtTheCap(t *testing.T) {
+	atCap := bytes.Repeat([]byte("x"), maxSpecBytes)
+	srv := fakeStorePod(t, "", map[string][]byte{"acme": atCap})
+
+	raw, err := newRemoteSpecSource(srv.URL, "").specDoc("acme")
+	if err != nil {
+		t.Fatalf("a document exactly at the cap was refused: %v", err)
+	}
+	if len(raw) != maxSpecBytes {
+		t.Errorf("read %d bytes, want the whole %d-byte document", len(raw), maxSpecBytes)
+	}
+}
+
+// TestRemoteSourceOversizedKeepsThePreviousDocument pins the RULING, which is
+// the one reconcile already applies to every per-document failure: report it,
+// skip it, and keep validating against whatever is already cached for that
+// edge. A contract that outgrows the cap must cost the front the UPDATE, never
+// the detection it already had — the same reasoning as
+// TestRemoteSourceUnreachableKeepsServing.
+//
+// Two pods rather than one mutated map: the front re-downloads only when the
+// row's loaded_at moves, so the second pod's document has to arrive under its
+// own change token, exactly as a replaced document would.
+func TestRemoteSourceOversizedKeepsThePreviousDocument(t *testing.T) {
+	small := fakeStorePod(t, "", map[string][]byte{"acme": specV1(t)})
+	c := newSpecCache()
+	if _, errs := c.refresh(newRemoteSpecSource(small.URL, "")); len(errs) != 0 {
+		t.Fatalf("refresh: %v", errs)
+	}
+	if _, ok := c.lookup("api.acme.test"); !ok {
+		t.Fatal("the first refresh cached nothing")
+	}
+
+	// The provider's contract grows past the cap.
+	big := fakeStorePod(t, "", map[string][]byte{"acme": bytes.Repeat([]byte("x"), maxSpecBytes+1)})
+	_, errs := c.refresh(newRemoteSpecSource(big.URL, ""))
+	if len(errs) == 0 {
+		t.Fatal("an oversized document refreshed clean")
+	}
+	// And it is reported as a SIZE problem. Truncating produced an error here
+	// too — from the PARSER, over a fragment — which is how a store pod serving
+	// a document the channel cannot carry read as a malformed contract.
+	if !strings.Contains(errs[0].Error(), "larger than") {
+		t.Errorf("the refresh blames something other than the size: %v", errs[0])
+	}
+	if _, ok := c.lookup("api.acme.test"); !ok {
+		t.Error("an oversized document dropped the contract the front was already validating against")
+	}
+}
+
+// TestRemoteSourceRefusesAnOversizedList: the same reader serves the metadata
+// route, and a truncated JSON list fails as "unexpected end of JSON input" —
+// a parse verdict for a size problem, on the request a front makes every ten
+// seconds. One reader, one ruling.
+func TestRemoteSourceRefusesAnOversizedList(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(bytes.Repeat([]byte("x"), maxSpecBytes+1))
+	}))
+	t.Cleanup(srv.Close)
+
+	_, err := newRemoteSpecSource(srv.URL, "").listSpecs()
+	if err == nil {
+		t.Fatal("an oversized contract list read clean")
+	}
+	if !strings.Contains(err.Error(), "larger than") {
+		t.Errorf("the error does not name the size: %v", err)
+	}
+}
+
+// TestRemoteSourceReadsTheStorePodsOwnRefusal is the pairing that actually
+// ships: a current front against a current store pod. The pod refuses the
+// oversized document itself (413, extension/flanjstore), so no truncated body
+// is ever transmitted — and the front must still log the SIZE, not a bare
+// status the operator has to go decode against the other pod's logs.
+func TestRemoteSourceReadsTheStorePodsOwnRefusal(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "contract document larger than the cap", http.StatusRequestEntityTooLarge)
+	}))
+	t.Cleanup(srv.Close)
+
+	raw, err := newRemoteSpecSource(srv.URL, "").specDoc("acme-tools")
+	if err == nil {
+		t.Fatal("a 413 from the store pod was not an error")
+	}
+	if raw != nil {
+		t.Errorf("raw = %d bytes, want none", len(raw))
+	}
+	if !strings.Contains(err.Error(), "larger than") || !strings.Contains(err.Error(), "8 MiB") {
+		t.Errorf("the error does not name the cap: %v", err)
+	}
+	if !strings.Contains(err.Error(), "acme-tools") {
+		t.Errorf("the error does not name the contract: %v", err)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -375,5 +376,91 @@ func TestSpecDocServesOnlyWhatTheListAdmits(t *testing.T) {
 			t.Errorf("GET doc?integration=%s returned 200 — the list route deliberately "+
 				"withholds this contract, so the doc route must too (body %d bytes)", integration, len(body))
 		}
+	}
+}
+
+// mcpSnapshotOfSize builds a valid observed-MCP document of exactly n bytes.
+// Valid JSON on purpose: the point of these two tests is the SIZE ruling, so
+// nothing about the content may be what decides them.
+func mcpSnapshotOfSize(t *testing.T, n int) []byte {
+	t.Helper()
+	const head = `{"tools":[{"name":"pad","description":"`
+	const tail = `"}]}`
+	if n < len(head)+len(tail) {
+		t.Fatalf("n = %d, too small for a well-formed snapshot", n)
+	}
+	return []byte(head + strings.Repeat("x", n-len(head)-len(tail)) + tail)
+}
+
+// TestSpecEndpointRefusesADocumentPastTheCap: the store pod REFUSES an
+// oversized document rather than serving the first specMaxDoc bytes of it.
+//
+// It used to cut it (`raw = raw[:specMaxDoc]`) and answer 200. A front cannot
+// tell that from a whole document: it parses the fragment, the parse fails,
+// and the front logs a PARSE error for a SIZE problem — then detects no drift
+// on that edge for as long as the document stays big, with no line anywhere
+// naming the cause. Cutting here also blinded the front's own guard, which can
+// only notice an overflow that is actually transmitted.
+//
+// The oversized row is REACHABLE, by exactly one writer, which is why this test
+// seeds through PutSpecInfo and not through an upload:
+//
+//   - UPLOAD refuses a document over the cap before it is ever stored
+//     (extension/flanjui, `len(req.Document) > maxDocBytes`), so no uploaded
+//     OpenAPI contract can be this row.
+//   - The SELF contract is loaded from config with no cap at all, but it never
+//     crosses this hop — servableContract admits providers only.
+//   - An OBSERVED MCP tools/list has no cap anywhere on its way in. The SDK
+//     serializes the server's whole tool array verbatim (schemas are the
+//     server's own words, never trimmed), the drift processor persists
+//     whatever parses through this same PutSpecInfo, and the only bound on the
+//     path is the OTLP receiver's 20 MiB default request body. A catalogue
+//     between the two — a few thousand tools, or a few hundred carrying large
+//     JSON Schemas — is stored whole and then has to cross this channel.
+func TestSpecEndpointRefusesADocumentPastTheCap(t *testing.T) {
+	e, base := startStorePod(t, testSpecToken)
+	doc := mcpSnapshotOfSize(t, specMaxDoc+1)
+	seedContract(t, e, "acme-tools", "mcp.acme.test", model.SpecRoleProvider, model.SpecFormatMCP, doc)
+
+	code, body := get(t, base+"/internal/contracts/doc?integration=acme-tools", testSpecToken)
+	if code == http.StatusOK {
+		t.Fatalf("an oversized document was served as 200 carrying %d bytes — "+
+			"a truncated contract parses as garbage and the front blames the parser", len(body))
+	}
+	if code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("doc status = %d, want 413", code)
+	}
+
+	// The row stays LISTED. A front that keeps asking gets this same named
+	// refusal every tick, which is the only symptom either end has; withholding
+	// it from the index would make an undetected edge look like an edge with no
+	// contract, and the Contracts tab would stop showing the server at all.
+	_, listed := get(t, base+"/internal/contracts", testSpecToken)
+	var payload struct {
+		Contracts []model.SpecInfo `json:"contracts"`
+	}
+	if err := json.Unmarshal(listed, &payload); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(payload.Contracts) != 1 || payload.Contracts[0].Integration != "acme-tools" {
+		t.Errorf("contracts = %+v, want the oversized row still listed", payload.Contracts)
+	}
+}
+
+// TestSpecEndpointServesADocumentAtTheCap: the cap is inclusive, so a document
+// of exactly specMaxDoc bytes crosses whole. The refusal above must be an
+// overflow check and not an off-by-one that costs a legitimate contract its
+// detection.
+func TestSpecEndpointServesADocumentAtTheCap(t *testing.T) {
+	e, base := startStorePod(t, testSpecToken)
+	doc := mcpSnapshotOfSize(t, specMaxDoc)
+	seedContract(t, e, "acme-tools", "mcp.acme.test", model.SpecRoleProvider, model.SpecFormatMCP, doc)
+
+	code, body := get(t, base+"/internal/contracts/doc?integration=acme-tools", testSpecToken)
+	if code != http.StatusOK {
+		t.Fatalf("doc status = %d, want 200 for a document exactly at the cap", code)
+	}
+	if len(body) != len(doc) {
+		t.Errorf("served %d bytes, want the whole %d-byte document", len(body), len(doc))
 	}
 }

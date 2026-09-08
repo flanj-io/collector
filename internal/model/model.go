@@ -452,6 +452,24 @@ const (
 	EdgeClassLocalProcess = "local-process"
 )
 
+// MaxContractDocBytes caps ONE contract document, at every boundary a document
+// crosses: the UI upload refuses a larger one before it is stored
+// (extension/flanjui), the store pod's contract endpoint refuses to serve one
+// (extension/flanjstore), and a front refuses to read one
+// (processor/flanjdrift). Real OpenAPI documents run to a few megabytes.
+//
+// It lives here, in one place, because the three ends only ever CLAIMED to
+// agree — three literals with three comments saying they matched the others.
+// The cap is a property of the CHANNEL (what a front will hold in memory for
+// one edge), so agreeing on it cannot be a convention.
+//
+// Nothing on either side may TRUNCATE to it. A document cut off at the cap is
+// still a 200 and still parses — as garbage — so the front reports a PARSE
+// error for a SIZE problem and then silently stops detecting drift on that
+// edge, which is the wrong-diagnosis class collector#40 and #48 exist to end.
+// Over the cap is a refusal that says so, at both ends.
+const MaxContractDocBytes = 8 << 20 // 8 MiB
+
 // SpecInfo describes an API contract (spec) loaded by the drift processor,
 // surfaced on the local UI's Contracts tab. Local metadata only — not part of
 // the frozen contract surface.

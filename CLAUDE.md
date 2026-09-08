@@ -120,7 +120,11 @@ contracts/                         # vendored contract: CONTRACTS.md + fixtures,
    (`processor/flanjdrift/mcpbaseline.go`). That listener serves contracts and nothing else — no calls, no findings, no settings —
    and it is NOT the UI: the UI stays loopback (#5). Leave `store_pod_endpoint` unset on a tiered front
    and it detects no REST drift at all, whatever has been uploaded, and judges MCP calls only against
-   the lists it observed itself.
+   the lists it observed itself. **One document is capped at 8 MiB on that channel**
+   (`model.MaxContractDocBytes` — the same constant the upload path enforces), and **neither end
+   truncates to it**: the store pod answers `413`, the front refuses to read a prefix. A document cut
+   at the cap still parses — as garbage — so the front would report a PARSE error for a SIZE problem
+   and silently stop detecting on that edge.
 
 ## Contract
 
