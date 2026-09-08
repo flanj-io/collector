@@ -373,5 +373,44 @@ describe('the Overview headline spends evidence only on its own edge', () => {
     expect(mcp.classes()).toContain('neutral');
     expect(mcp.classes()).not.toContain('ok');
     expect(mcp.classes()).not.toContain('drift');
+/* ── 4. The processor's verdict, on the card ───────────────────────────── */
+  });
+});
+
+describe("the drift processor's stamp decides what counts as evidence", () => {
+  it('a call captured AFTER the upload but stamped not-validated is neither evidence nor conforming', async () => {
+    // THE 2026-09-07 bug: the upload had landed in the store (loaded_at is in
+    // the past) but the processor's cache had not loaded it when the call went
+    // through. The temporal gate alone rendered this CONFORMING.
+    OK_BODIES['/api/calls'] = {
+      calls: [{ ...call('late', '2026-09-02T12:05:00Z'), validated: 'not-validated', validated_reason: 'no-contract' }]
+    };
+    const w = await mountApp();
+    const card = w.find('.provider');
+    expect(card.find('.tag.ok').exists()).toBe(false);
+    expect(card.text()).toContain('validated 0 calls since upload');
+    expect(w.find('.headline').text()).toContain('Nothing validated yet');
+    OK_BODIES['/api/calls'] = { calls: CAPTURED_BEFORE.map((t, i) => call(`c${i}`, t)) };
+  });
+
+  it('a call stamped clean is evidence even when captured before the store says the contract loaded', async () => {
+    // A replaced document keeps only the CURRENT row's loaded_at; the processor
+    // validated this call against the one it replaced. The stamp knows better
+    // than the timestamp.
+    OK_BODIES['/api/calls'] = { calls: [{ ...call('early', CAPTURED_BEFORE[0]), validated: 'clean' }] };
+    const w = await mountApp();
+    const card = w.find('.provider');
+    expect(card.find('.tag.ok').text()).toBe('conforming');
+    expect(card.text()).toContain('validated 1 call since upload');
+    expect(w.find('.headline').text()).toContain('No drift detected');
+    OK_BODIES['/api/calls'] = { calls: CAPTURED_BEFORE.map((t, i) => call(`c${i}`, t)) };
+  });
+
+  it('a record with no verdict at all is not evidence', async () => {
+    OK_BODIES['/api/calls'] = { calls: [{ ...call('old-front', '2026-09-02T12:05:00Z'), validated: 'unknown' }] };
+    const w = await mountApp();
+    expect(w.find('.provider').text()).toContain('validated 0 calls since upload');
+    expect(w.find('.headline').text()).toContain('Nothing validated yet');
+    OK_BODIES['/api/calls'] = { calls: CAPTURED_BEFORE.map((t, i) => call(`c${i}`, t)) };
   });
 });

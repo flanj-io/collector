@@ -189,7 +189,13 @@ export function headlineFor(input: HeadlineInput): Headline {
     };
   }
 
-  if (!rest.some((c) => c.validated)) {
+  // The all-clear is earned on the edge the fragment NAMES. When the fragment
+  // renders, only that integration's validated REST calls are evidence — a
+  // second SDK instance under another FLANJ_INTEGRATION_ID exporting to this
+  // collector must not turn "on integration acme-payments" green while acme
+  // itself was never checked. Without a fragment, any REST edge's evidence counts.
+  const evidence = integration ? rest.filter((c) => c.integration === integration) : rest;
+  if (!evidence.some((c) => c.validated)) {
     return { you: NOTHING_VALIDATED_YET, tone: 'neutral', integration };
   }
 

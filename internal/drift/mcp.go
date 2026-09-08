@@ -227,16 +227,27 @@ func (d *MCPDetector) currentContract(peerHost, direction string) *contract.Cont
 // snapshot. With no snapshot observed yet it is a pass-through (capture + edge
 // discovery only — same posture as the HTTP path without a spec).
 func (d *MCPDetector) DetectCall(call model.RedactedCall) []model.Finding {
+	fs, _ := d.JudgeCall(call)
+	return fs
+}
+
+// JudgeCall is DetectCall plus the verdict the processor stamps on the call
+// (model.Validation): whether the RESULT was validated against the tool's
+// declared outputSchema and, when it was not, the first gate below that stopped
+// it — named in this function's own order, so the reason is the one that
+// applied. The stale_client checks on the ARGUMENTS run regardless and never
+// move the verdict: they are about the consumer, not the provider's response.
+func (d *MCPDetector) JudgeCall(call model.RedactedCall) ([]model.Finding, model.Validation) {
 	cur := d.currentContract(call.PeerHost, call.Direction)
 	if cur == nil {
-		return nil
+		return nil, model.NotValidated(model.NotValidatedNoContract)
 	}
 	toolName := call.MCPToolName
 	if toolName == "" {
 		toolName = strings.TrimPrefix(call.Route, "/")
 	}
 	if toolName == "" {
-		return nil
+		return nil, model.NotValidated(model.NotValidatedToolNotListed)
 	}
 	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00")
 
@@ -245,7 +256,8 @@ func (d *MCPDetector) DetectCall(call model.RedactedCall) []model.Finding {
 		// stale_client: the agent is calling a tool the CURRENT list no longer
 		// declares (renamed/removed server-side, or the client cached an old
 		// list). Consumer-side — LOCAL ONLY, never flaggable.
-		return []model.Finding{staleToolFinding(call, toolName, now)}
+		return []model.Finding{staleToolFinding(call, toolName, now)},
+			model.NotValidated(model.NotValidatedToolNotListed)
 	}
 
 	// MCP revision 2026-07-28, `resultType: "input_required"`. The server is
@@ -264,14 +276,15 @@ func (d *MCPDetector) DetectCall(call model.RedactedCall) []model.Finding {
 	// current catalog does not declare is a fact about the tool name, not the
 	// payload, and stays true whatever the result type.
 	if call.MCPResultType == model.MCPResultTypeInputRequired {
-		return nil
+		return nil, model.NotValidated(model.NotValidatedInputRequired)
 	}
 
 	var findings []model.Finding
 
 	// stale_client: arguments vs the CURRENT inputSchema (spec §4.C.3).
 	if op.InputSchema != nil && call.RequestBody != "" && !call.RequestBodyTruncated {
-		for _, v := range validateAgainstSchema(op.InputSchema, call.RequestBody, call, "request") {
+		violations, _ := validateAgainstSchema(op.InputSchema, call.RequestBody, call, "request")
+		for _, v := range violations {
 			findings = append(findings, mcpFinding(mcpFindingSpec{
 				kind:           model.KindStaleClient,
 				severity:       model.SeverityWarning,
@@ -293,22 +306,38 @@ func (d *MCPDetector) DetectCall(call model.RedactedCall) []model.Finding {
 	// of such a record; this second gate states the rule where the judgment is
 	// made, so a future capture change cannot quietly start validating a task
 	// envelope against the tool's outputSchema.
-	if op.OutputSchema != nil && !call.MCPIsError && call.MCPTaskID == "" &&
-		call.ResponseBody != "" && !call.ResponseBodyTruncated &&
-		isJSONContentType(call.ResponseContentType) {
-		for _, v := range validateAgainstSchema(op.OutputSchema, call.ResponseBody, call, "response") {
-			findings = append(findings, mcpFinding(mcpFindingSpec{
-				kind:           model.KindOutputMismatch,
-				severity:       model.SeverityBreaking,
-				locationPrefix: "$.response.structuredContent",
-				detailNoun:     "result field",
-				// The optional snapshot_observed_at (CONTRACTS §4): the CURRENT
-				// snapshot this call was validated against.
-				snapshotObservedAt: cur.Version.ObservedAt,
-			}, v, call, toolName, now))
-		}
+	//
+	// Each gate is its own case so the verdict can name the FIRST one that
+	// stopped the check — the same order the comment above lists them in.
+	switch {
+	case op.OutputSchema == nil:
+		return findings, model.NotValidated(model.NotValidatedNoOutputContract)
+	case call.MCPIsError:
+		return findings, model.NotValidated(model.NotValidatedErrorResult)
+	case call.MCPTaskID != "":
+		return findings, model.NotValidated(model.NotValidatedTaskHandle)
+	case call.ResponseBody == "" || call.ResponseBodyTruncated || !isJSONContentType(call.ResponseContentType):
+		return findings, model.NotValidated(model.NotValidatedResultNotJSON)
 	}
-	return findings
+	violations, judged := validateAgainstSchema(op.OutputSchema, call.ResponseBody, call, "response")
+	if !judged {
+		// application/json that did not parse: nothing was compared to the
+		// schema, and saying "clean" about it would be the lie this verdict
+		// exists to stop.
+		return findings, model.NotValidated(model.NotValidatedResultNotJSON)
+	}
+	for _, v := range violations {
+		findings = append(findings, mcpFinding(mcpFindingSpec{
+			kind:           model.KindOutputMismatch,
+			severity:       model.SeverityBreaking,
+			locationPrefix: "$.response.structuredContent",
+			detailNoun:     "result field",
+			// The optional snapshot_observed_at (CONTRACTS §4): the CURRENT
+			// snapshot this call was validated against.
+			snapshotObservedAt: cur.Version.ObservedAt,
+		}, v, call, toolName, now))
+	}
+	return findings, model.VerdictOf(findings)
 }
 
 func isJSONContentType(ct string) bool {
@@ -328,24 +357,26 @@ type schemaViolation struct {
 // a redacted scalar's error is skipped unless the call carries a matching
 // captured-props record (part = "request"|"response") that DECIDES the
 // constraint as violated.
-func validateAgainstSchema(schema contract.Schema, body string, call model.RedactedCall, part string) []schemaViolation {
+//
+// judged is false when NOTHING was compared — an undecodable schema, or a body
+// that is not JSON — which the caller must not read as "no violations".
+func validateAgainstSchema(schema contract.Schema, body string, call model.RedactedCall, part string) (out []schemaViolation, judged bool) {
 	raw, err := json.Marshal(schema)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	var s openapi3.Schema
 	if err := s.UnmarshalJSON(raw); err != nil {
-		return nil // an undecodable schema is the provider's problem, not evidence
+		return nil, false // an undecodable schema is the provider's problem, not evidence
 	}
 	var value any
 	if err := json.Unmarshal([]byte(body), &value); err != nil {
-		return nil // non-JSON / truncated body: nothing to judge
+		return nil, false // non-JSON / truncated body: nothing to judge
 	}
 	verr := s.VisitJSON(value, openapi3.MultiErrors())
 	if verr == nil {
-		return nil
+		return nil, true
 	}
-	var out []schemaViolation
 	for _, se := range collectSchemaErrors(verr) {
 		if redactedValue(se.Value) {
 			// Same one-directional skip as the HTTP path: redacted = unknown,
@@ -360,7 +391,7 @@ func validateAgainstSchema(schema contract.Schema, body string, call model.Redac
 		}
 		out = append(out, schemaViolation{se: se, actual: actualFromValue(se.Value)})
 	}
-	return out
+	return out, true
 }
 
 // mcpFindingSpec parametrizes the shared call-scoped finding builder over the

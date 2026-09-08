@@ -171,3 +171,19 @@ describe('the `on integration <slug>` fragment names only an integration seen on
     expect(NOTHING_VALIDATED_YET_CLAUSE).toBe('nothing validated yet.');
   });
 });
+
+it('the all-clear is scoped to the integration the fragment names', () => {
+  // acme captured but never validated; another SDK's integration validated in
+  // the same window. The fragment names acme, so acme's evidence decides: neutral.
+  const h = headlineFor({
+    liveFindings: [],
+    calls: [
+      { integration: 'acme-payments', validated: false },
+      { integration: 'other-svc', validated: true }
+    ],
+    integration: 'acme-payments'
+  } as never);
+  expect(h.tone).toBe('neutral');
+  expect(h.you).toBe(NOTHING_VALIDATED_YET);
+  expect(h.integration).toBe('acme-payments');
+});

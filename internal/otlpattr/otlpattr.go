@@ -117,6 +117,21 @@ const (
 	// share the same id (they each reconstruct the call independently).
 	AttrCallID = "flanj.call.id"
 
+	// Internal-only: the drift processor's per-call VERDICT, stamped on the call
+	// record where validation runs (CONTRACTS §2, "Collector-internal
+	// attributes on call records"). AttrValidated is model.ValidatedClean /
+	// ValidatedDrifted / ValidatedNot; AttrValidatedReason names the gate that
+	// stopped it when it is ValidatedNot. In the tiered topology it crosses the
+	// front→store hop with the record, so the store pod learns what the front
+	// did with the call instead of inferring it from the contract list.
+	//
+	// ABSENT on a record no drift processor saw — an older front, a pipeline
+	// without flanjdrift. CallFromRecord decodes absence as model.ValidatedUnknown
+	// so the store can tell "never judged" from a row that predates the stamp,
+	// and a reader never mistakes either for clean.
+	AttrValidated       = "flanj.validated"
+	AttrValidatedReason = "flanj.validated.reason"
+
 	RecordTypeCall     = "call"
 	RecordTypeFinding  = "finding"
 	RecordTypeSpecInfo = "spec_info"
@@ -222,6 +237,13 @@ func CallFromRecord(lr plog.LogRecord) model.RedactedCall {
 	if edgeClass == "" && peerHost != "" {
 		edgeClass = edge.Classify(peerHost)
 	}
+	// The verdict is ABSENT on a record no drift processor saw. That is a fact
+	// worth keeping distinct from "" — a row stored before verdicts existed — so
+	// absence decodes to the explicit unknown, and never, on any path, to clean.
+	validated := getStr(m, AttrValidated)
+	if validated == "" {
+		validated = model.ValidatedUnknown
+	}
 	return model.RedactedCall{
 		SchemaVersion:         model.SchemaVersion,
 		ID:                    id,
@@ -268,6 +290,25 @@ func CallFromRecord(lr plog.LogRecord) model.RedactedCall {
 		MCPSessionID:       getStr(m, AttrMCPSessionID),
 		MCPResultType:      getStr(m, AttrMCPResultType),
 		MCPTaskID:          getStr(m, AttrMCPTaskID),
+		Validated:          validated,
+		ValidatedReason:    getStr(m, AttrValidatedReason),
+	}
+}
+
+// StampValidated writes the drift processor's verdict onto a call record
+// (AttrValidated + AttrValidatedReason). The processor calls it exactly once per
+// call, on EVERY branch of its per-call path — the branches that validate
+// nothing included, which is the whole point: a call the processor could not
+// judge says so on the wire, instead of leaving the reader to infer it from the
+// edge. A reason from an earlier stamp is removed rather than left beside a
+// verdict it no longer describes.
+func StampValidated(lr plog.LogRecord, v model.Validation) {
+	m := lr.Attributes()
+	m.PutStr(AttrValidated, v.Verdict)
+	if v.Verdict == model.ValidatedNot && v.Reason != "" {
+		m.PutStr(AttrValidatedReason, v.Reason)
+	} else {
+		m.Remove(AttrValidatedReason)
 	}
 }
 
