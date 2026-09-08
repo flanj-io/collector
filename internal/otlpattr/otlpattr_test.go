@@ -199,6 +199,7 @@ func TestSpecInfoRecord_RoundTrip(t *testing.T) {
 		DocsURL:     "https://docs.acme.test",
 		Endpoints:   3,
 		LoadedAt:    "2026-08-23T10:00:00Z",
+		Source:      model.SpecSourceConfig,
 	}
 	raw := []byte("openapi: 3.0.3\ninfo:\n  title: Acme Payments\n")
 
@@ -233,6 +234,19 @@ func TestSpecInfoRecord_RoundTrip(t *testing.T) {
 	lr3.Attributes().PutStr(AttrRecordType, RecordTypeSpecInfo)
 	if _, _, err := SpecInfoFromRecord(lr3); err == nil {
 		t.Errorf("record without %s should be rejected", AttrSpecInfoJSON)
+	}
+
+	// An observed MCP snapshot's provenance crosses the hop too: this is the
+	// record that reaches the store pod's PutSpecInfo in the tiered topology,
+	// and until 2026-09-07 it carried no source at all.
+	mcp := model.SpecInfo{Integration: "acme-tools", Role: model.SpecRoleProvider, PeerHost: "mcp.acme.test",
+		Format: model.SpecFormatMCP, Source: model.SpecSourceObserved, Endpoints: 3, LoadedAt: "2026-09-07T10:00:00Z"}
+	lr4 := plog.NewLogs().ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
+	if err := SpecInfoToRecord(lr4, mcp, []byte(`{"tools":[]}`)); err != nil {
+		t.Fatalf("to record (mcp): %v", err)
+	}
+	if got, _, err := SpecInfoFromRecord(lr4); err != nil || got.Source != model.SpecSourceObserved {
+		t.Errorf("mcp source across the hop = %q err=%v, want %q", got.Source, err, model.SpecSourceObserved)
 	}
 }
 

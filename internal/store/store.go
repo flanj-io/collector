@@ -803,7 +803,29 @@ func (b *base) EdgeCallCountsSince(sinceISO string) (map[string]int, error) {
 	return out, rows.Err()
 }
 
+// specSourceOf is the provenance PutSpecInfo records when the writer left
+// Source empty. Both writers name their own (SpecSourceConfig for the self
+// contract, SpecSourceObserved for an MCP snapshot); this covers the record a
+// front on an image older than that sends across the tiered hop, so the store
+// pod never files an observed contract as a config one again. The rule is the
+// one the open-time repair applies to rows already stored that way: format
+// "mcp" means it was observed on the wire, anything else PutSpecInfo writes
+// came from config. Uploads never pass through here (PutUploadedSpec).
+func specSourceOf(info model.SpecInfo) string {
+	if info.Source != "" {
+		return info.Source
+	}
+	if info.Format == model.SpecFormatMCP {
+		return model.SpecSourceObserved
+	}
+	return model.SpecSourceConfig
+}
+
 // ListSpecInfos returns the loaded provider contracts (metadata only, no doc).
+// `source` is read as stored: the COALESCE is a migration default for a
+// database whose column predates the NOT NULL DEFAULT, never a classifier —
+// the value is the writer's (see specSourceOf and each backend's open-time
+// repair of pre-2026-09-07 mcp rows).
 func (b *base) ListSpecInfos() ([]model.SpecInfo, error) {
 	rows, err := b.db.Query(
 		`SELECT integration, role, COALESCE(peer_host,''), COALESCE(edge_class,''), format, COALESCE(title,''),

@@ -101,6 +101,11 @@ func (d *MCPDetector) LoadSnapshot(snap otlpattr.ContractSnapshot) ([]model.Find
 		Role:      model.SpecRoleProvider,
 		PeerHost:  snap.PeerHost,
 		Format:    model.SpecFormatMCP,
+		// A tools/list arrived on the wire; nobody configured or uploaded it.
+		// Left unset, the store's column default made every snapshot a
+		// CONFIG-loaded contract to every consumer of `source` but the one
+		// card whose format branch hid it (launch-week item 7, 2026-09-07).
+		Source:    model.SpecSourceObserved,
 		Title:     snap.ServerName,
 		Version:   snap.ServerVersion,
 		Endpoints: len(tools),

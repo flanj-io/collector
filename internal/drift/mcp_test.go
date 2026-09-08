@@ -143,6 +143,12 @@ func TestMCPGolden_OutputMismatch(t *testing.T) {
 		info.Title != "acme-payments-mcp" || info.Version != "3.2.0" || info.Endpoints != 3 {
 		t.Errorf("spec info = %+v", info)
 	}
+	// A tools/list arrived on the wire; nobody configured or uploaded it. Left
+	// unset, the store's column default filed every snapshot as a CONFIG
+	// contract to every consumer of `source` (2026-09-07).
+	if info.Source != model.SpecSourceObserved {
+		t.Errorf("spec info source = %q, want %q", info.Source, model.SpecSourceObserved)
+	}
 	if string(raw) != snap.SnapshotJSON {
 		t.Errorf("raw doc must be the snapshot verbatim")
 	}

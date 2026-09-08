@@ -47,8 +47,8 @@ contract chip READS it instead of inferring "checked" from the contract list —
 went through before the processor had loaded the upload (seconds on one pod, ten on a tiered front, forever on a front
 with the wrong `store_pod_token`). A call with no verdict is `not checked`, never conforming. **MCP edges (v0.5) need no spec at all**: the SDK's observed `tools/list` arrives as a
 `contract_snapshot` record — the self-delivering local spec — versioned by content hash in the drift processor
-(previous snapshot kept for diffing; persisted as a `spec_infos` row, format `"mcp"`, so the Contracts tab lists
-the server and restarts re-seed). MCP findings: `output_mismatch` + `definition_change` (flaggable at every class — DESCRIPTION included
+(previous snapshot kept for diffing; persisted as a `spec_infos` row, format `"mcp"` / source `"observed"`, so the
+Contracts tab lists the server and restarts re-seed). MCP findings: `output_mismatch` + `definition_change` (flaggable at every class — DESCRIPTION included
 since qfix2-2026-08-26; a human always presses the control) and the local-only `stale_client`; the flag relay REFUSES local-only kinds server-side
 (`403 not_flaggable` — CONTRACTS §4). A drift is **per endpoint** (HTTP: method+route; MCP: the tool name): findings
 dedup by `signature`, so one drift = one finding (with an `occurrence_count`) = one flag.

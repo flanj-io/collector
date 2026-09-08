@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/flanj-io/collector/internal/model"
@@ -681,6 +682,104 @@ func TestCallPeerHosts(t *testing.T) {
 	})
 }
 
+// rawExec runs one statement straight against the backend's database, outside
+// the store — for planting the rows an older collector left behind. The store
+// must be closed first.
+func (b *testBackend) rawExec(t *testing.T, stmt string) {
+	t.Helper()
+	driver, dsn := "sqlite", "file:"+b.path
+	if b.pgDSN != "" {
+		driver, dsn = "pgx", b.pgDSN
+	}
+	db, err := sql.Open(driver, dsn)
+	if err != nil {
+		t.Fatalf("open %s raw: %v", b.name, err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(stmt); err != nil {
+		t.Fatalf("raw exec on %s: %v", b.name, err)
+	}
+}
+
+// specSources lists integration → source as the store serves it.
+func specSources(t *testing.T, s Store) map[string]string {
+	t.Helper()
+	infos, err := s.ListSpecInfos()
+	if err != nil {
+		t.Fatalf("list spec infos: %v", err)
+	}
+	out := map[string]string{}
+	for _, si := range infos {
+		out[si.Integration] = si.Source
+	}
+	return out
+}
+
+// TestSpecInfo_SourceRoundTrip: the provenance PutSpecInfo is handed is the
+// provenance ListSpecInfos returns — on both backends, across a restart. Until
+// 2026-09-07 PutSpecInfo never wrote the column, so every observed MCP
+// snapshot was listed, filtered and conflict-checked as a CONFIG-loaded
+// contract (the card's format branch hid it; e2e saw `source: config` on both
+// acme-tools cards on all three lanes). Also the two repairs for what that
+// left behind: a record with no Source at all — what a front on an older image
+// sends over the tiered hop — is classified by its format, and rows already
+// stored as mcp/config are fixed once, at open.
+func TestSpecInfo_SourceRoundTrip(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, b *testBackend) {
+		s := b.open(t, 0, 0)
+		at := "2026-09-07T10:00:00Z"
+		observed := model.SpecInfo{
+			Integration: "acme-tools", Role: model.SpecRoleProvider, PeerHost: "mcp.acme.test",
+			EdgeClass: model.EdgeClassExternal, Format: model.SpecFormatMCP, Title: "acme-tools",
+			Version: "3.2.0", Endpoints: 3, LoadedAt: at, Source: model.SpecSourceObserved,
+		}
+		snapshot := []byte(`{"tools":[]}`)
+		for _, si := range []model.SpecInfo{
+			observed,
+			{Integration: "self", Role: model.SpecRoleSelf, Format: model.SpecFormatOpenAPI,
+				Title: "Org API", LoadedAt: at, Source: model.SpecSourceConfig},
+			// No Source at all: a stdio server's snapshot as a pre-fix front
+			// emits it. Its format says what it is.
+			{Integration: "acme-tools-stdio", Role: model.SpecRoleProvider, EdgeClass: model.EdgeClassLocalProcess,
+				Format: model.SpecFormatMCP, Title: "acme-tools", Endpoints: 3, LoadedAt: at},
+		} {
+			if err := s.PutSpecInfo(si, snapshot); err != nil {
+				t.Fatalf("put %s: %v", si.Integration, err)
+			}
+		}
+		// The common case is a re-observation — every SDK start re-sends
+		// tools/list — and the upsert must keep the row observed.
+		if err := s.PutSpecInfo(observed, snapshot); err != nil {
+			t.Fatalf("re-put: %v", err)
+		}
+		want := map[string]string{
+			"acme-tools":       model.SpecSourceObserved,
+			"self":             model.SpecSourceConfig,
+			"acme-tools-stdio": model.SpecSourceObserved,
+		}
+		if got := specSources(t, s); !reflect.DeepEqual(got, want) {
+			t.Errorf("sources after put = %v, want %v", got, want)
+		}
+
+		// A restart reads the column, not a default.
+		_ = s.Close()
+		s = b.reopen(t, 0, 0)
+		if got := specSources(t, s); !reflect.DeepEqual(got, want) {
+			t.Errorf("sources after reopen = %v, want %v", got, want)
+		}
+
+		// What a pre-fix collector left on disk: mcp rows filed as config. The
+		// open-time repair turns them observed and leaves the self contract
+		// alone.
+		_ = s.Close()
+		b.rawExec(t, `UPDATE spec_infos SET source='config' WHERE format='mcp'`)
+		s = b.reopen(t, 0, 0)
+		if got := specSources(t, s); !reflect.DeepEqual(got, want) {
+			t.Errorf("sources after the open-time repair = %v, want %v", got, want)
+		}
+	})
+}
+
 // TestSpecInfo_RoundTrip proves the provider-contract record the drift processor
 // writes at Start: upsert by integration, list metadata, fetch the raw doc.
 func TestSpecInfo_RoundTrip(t *testing.T) {
@@ -729,6 +828,12 @@ func TestSpecInfo_RoundTrip(t *testing.T) {
 		// Role defaults to provider when the writer omitted it.
 		if infos[1].Role != model.SpecRoleProvider {
 			t.Errorf("role default: got %q want provider", infos[1].Role)
+		}
+		// Source defaults to config for an unlabelled non-MCP document —
+		// PutSpecInfo's writers are config and observed, never upload
+		// (specSourceOf).
+		if infos[1].Source != model.SpecSourceConfig {
+			t.Errorf("source default: got %q want %q", infos[1].Source, model.SpecSourceConfig)
 		}
 
 		doc, format, ok, err := s.GetSpecDoc("acme-payments")

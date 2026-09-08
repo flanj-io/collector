@@ -262,8 +262,12 @@ func specInfoFor(doc *openapi3.T, role, integration, peerHost string) model.Spec
 		Integration: integration,
 		Role:        role,
 		PeerHost:    peerHost,
-		Format:      "openapi",
-		LoadedAt:    time.Now().UTC().Format(time.RFC3339),
+		Format:      model.SpecFormatOpenAPI,
+		// Explicit, not the store's column default: the default is also
+		// "config", which is exactly how an unset Source on the observed MCP
+		// path went unnoticed. Every writer names its own provenance.
+		Source:   model.SpecSourceConfig,
+		LoadedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 	if doc.Paths != nil {
 		info.Endpoints = doc.Paths.Len()

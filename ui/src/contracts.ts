@@ -112,13 +112,21 @@ export function serversLine(servers: readonly string[], host: string): string {
 
 /** The provenance word tracks the SOURCE, so which contract is live is legible
  *  on sight: an uploaded document reads "uploaded", a config-loaded one keeps
- *  "loaded", and an MCP snapshot was observed, not put there by anyone. */
+ *  "loaded", and an MCP snapshot was observed, not put there by anyone.
+ *
+ *  `source` is the store's word and it wins. The format and role branches are
+ *  FALLBACKS for rows with no recorded provenance, and they must stay behind
+ *  `source`: while the format branch ran first, every observed snapshot was
+ *  stored and served as `config` and this card — the one place that would
+ *  have shown it — said "observed" regardless (2026-09-07). */
 export function provenanceWord(spec: ContractSpec): string {
-  if (spec.format === 'mcp') return 'observed';
+  if (spec.source === 'observed') return 'observed';
   if (spec.source === 'config') return 'loaded';
   if (spec.source === 'upload') return 'uploaded';
-  // Rows written before provenance was recorded: a provider contract can only
-  // have been uploaded, and a self contract can only have come from config.
+  // Fallbacks, for rows written before provenance was recorded: an MCP
+  // snapshot can only have been observed, a provider contract can only have
+  // been uploaded, and a self contract can only have come from config.
+  if (spec.format === 'mcp') return 'observed';
   return spec.role === 'self' ? 'loaded' : 'uploaded';
 }
 
