@@ -67,13 +67,16 @@ jobs:
       - name: Push to OCI
         if: github.event_name == 'push' || inputs.dry_run == false
         env:
-          USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          # The namespace is hardcoded in the push URL below, so the account is
+          # not a secret — only the token is. Override it only if the chart is
+          # pushed by an account other than the one that owns the namespace.
+          USER: ${{ secrets.DOCKERHUB_USERNAME || 'flanj' }}
           TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
           TGZ: ${{ steps.pkg.outputs.tgz }}
         run: |
           # registry-1.docker.io, NOT docker.io — Docker Hub's OCI endpoint is
           # the former and helm does not rewrite it.
-          [ -n "$TOKEN" ] || { echo "::error::DOCKERHUB_TOKEN is not set — add DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (a Docker Hub PAT with read/write) to this repo's Actions secrets"; exit 1; }
+          [ -n "$TOKEN" ] || { echo "::error::DOCKERHUB_TOKEN is not set — add it to this repo's Actions secrets (a Docker Hub personal access token with Read & Write on the flanj account)"; exit 1; }
           echo "$TOKEN" | helm registry login registry-1.docker.io -u "$USER" --password-stdin
           helm push "$TGZ" oci://registry-1.docker.io/flanj
           helm registry logout registry-1.docker.io
