@@ -59,7 +59,12 @@ API + the flag action.
     every 5s while pending). `dashboard_url` is the SPA's one door out (the
     Connected pill): present only while Connected AND the collector holds an
     address a BROWSER can open — `cp_public_url`, or a `cp_base_url` whose host
-    is not obviously non-public (`dashboardURL` / `obviouslyNonPublicHost`).
+    is not obviously non-public (`dashboardURL` / `obviouslyNonPublicHost`:
+    private IP literals, single-label names, anything carrying an `svc` or
+    `cluster` label, reserved suffixes, and — since 2026-09-08 — any two-label
+    name whose last label is not a common public TLD, which is the k8s
+    `service.namespace` short form a Helm chart renders by default,
+    `http://cp-api.flanj:3001`).
     It is never minted from the promote client's base alone: that is where the
     collector's requests go (docker DNS, a k8s Service), not where a laptop
     can (launch-week item 8, 2026-09-07). Absent → the SPA keeps the pill a

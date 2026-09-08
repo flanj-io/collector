@@ -53,11 +53,28 @@ REST host. A re-observed IDENTICAL list reports the row with the FIRST
 observation's stamp, and the store keeps an MCP row's `loaded_at` for an
 unchanged document whichever front wrote it, so `loaded_at` — the UI's
 "since this snapshot" anchor and the channel's change token — moves only
-when the contract does. Over the store pod's channel (`mcpSeeds.remote`) a
-`local-process` (stdio) row is never offered: its `peer_host` is the
-server's `serverInfo.name`, not a host identity, so it names every tenant's
-build of a same-named stdio server at once and two builds would ping-pong
-`definition_change`; a pod's own co-located store still seeds its own.
+when the contract does.
+
+**A `local-process` (stdio) row seeds nobody, from either source**
+(2026-09-08 — `mcpbaseline.go`, "Local-process (stdio) rows seed nobody").
+Its `peer_host` is the server's `serverInfo.name`, not a host identity, so
+every pod running its own subprocess of a same-named stdio server shares ONE
+`spec_infos` row. #41 skipped such rows only over the store pod's channel
+(`mcpSeeds.remote`), on the theory that a pod's own store holds only its own:
+`storeSpecSource` reads the shared database, so on a shared-postgres
+deployment it does not, and two pods observing different lists under one name
+seeded each other in turn and ping-ponged `definition_change` forever over a
+difference that was never drift. Each pod now keeps its own in-process stdio
+baseline, which is all it can honestly judge — for stdio the observing
+process is always the judging process, so there is no sibling sighting to
+miss. The cost is one narrow gap: a restart no longer re-seeds a stdio
+baseline, so a list that changed while the collector was down is adopted with
+nothing to diff and the next client session re-establishes it. Closing it
+would need the row to name the observing pod (a `spec_infos` column, a wire
+field, a co-located filter) — deferred, because a missed diff across a
+restart is quieter than a standing stream of false ones. The row is still
+written and still listed: the Contracts tab shows the stdio server either
+way.
 
 **Technical adherence ONLY** — fields/types/shapes/enums. Never business/economic
 correctness (pricing, quantities, business rules) — that would be a false-positive storm.

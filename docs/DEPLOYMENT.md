@@ -80,6 +80,13 @@ edge; repeats bump `occurrence_count`); `spec_info` → upsert by integration.
   `cp_public_url` whenever the two differ; left unset, the link falls back to
   `cp_base_url` only when that host is not obviously non-public, and is
   otherwise omitted (the pill stays a Settings button — never a dead link).
+  In-cluster names are all recognised as non-public, including the **short
+  form a Helm chart renders by default** — `http://cp-api.flanj:3001`, Service
+  plus namespace, with no `.svc` and no cluster domain. So is any name carrying
+  an `svc` or `cluster` label, and any two-label name whose last label is not a
+  common public TLD. A public control plane on an unusual TLD may fall on the
+  wrong side of that last rule: set `cp_public_url` and the guess is bypassed
+  entirely.
 - Kubernetes: a `StatefulSet` (replicas **1**) with a `volumeClaimTemplate` for
   `/data`, a `Service` on 4318 for the SDK, a `Secret` for `CP_DEPLOY_TOKEN`
   (`cp_deploy_token: ${env:CP_DEPLOY_TOKEN}`).

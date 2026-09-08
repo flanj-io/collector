@@ -363,13 +363,37 @@ func dashboardURL(publicURL, baseURL string) string {
 }
 
 // obviouslyNonPublicHost reports whether a URL host (port already stripped) is
-// one a browser outside the collector's network cannot resolve or reach: a
-// loopback / private / link-local / unspecified IP literal, a single-label
-// name (docker DNS `cp-api`, a bare k8s Service, `localhost`), or a name under
-// a reserved or site-local suffix (`.local`, `.internal`, `.svc`,
-// `.cluster.local`, `.test`, `.example`, …). It is a deny list on purpose:
-// whatever it does not recognise falls back to cp_base_url, and cp_public_url
-// is the operator's override for the cases it gets wrong in either direction.
+// one a browser outside the collector's network cannot resolve or reach. The
+// rule, in order:
+//
+//   - a loopback / private / link-local / unspecified / multicast IP literal
+//     (IPv4-mapped forms unwrapped);
+//   - a single-label name — docker DNS `cp-api`, a bare k8s Service,
+//     `localhost`;
+//   - any name carrying an `svc` or `cluster` label, which every Kubernetes
+//     in-cluster DNS form does whatever `clusterDomain` is set to
+//     (`cp-api.flanj.svc`, `cp-api.flanj.svc.cluster.local`,
+//     `cp-api.flanj.svc.k8s.acme`);
+//   - a reserved or site-local last label (`.local`, `.internal`, `.test`,
+//     `.example`, …);
+//   - a last label that cannot be a delegated TLD at all — shorter than two
+//     characters, or not purely alphabetic (`plausibleTLD`);
+//   - a TWO-label name whose last label is not one of the common public TLDs
+//     in publicTLDs.
+//
+// That last clause is the Kubernetes `service.namespace` short form —
+// `cp-api.flanj`, exactly what a Helm-rendered config produces — which is
+// structurally indistinguishable from a public apex like `flanj.io`: only the
+// last label tells them apart, so only there is an allowlist worth its cost.
+// Three labels or more keep the original deny-list stance, because a deep name
+// is far likelier to be a real FQDN (`cp.flanj.io`, `dash.acme.co.uk`) than a
+// cluster-internal one, and the svc/cluster rule already catches the
+// Kubernetes shapes.
+//
+// A two-label CP on a public TLD this list omits therefore gets a Settings
+// button instead of its door, which is the deliberate direction to fail in: a
+// dead link in the operator's browser is worse than no link, and cp_public_url
+// is the override for every case this heuristic gets wrong either way.
 func obviouslyNonPublicHost(host string) bool {
 	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
 	if host == "" {
@@ -383,12 +407,64 @@ func obviouslyNonPublicHost(host string) bool {
 	if len(labels) < 2 {
 		return true
 	}
-	switch labels[len(labels)-1] {
+	// Kubernetes in-cluster DNS always carries one of these labels, at any
+	// depth, under any cluster domain — catching them here rather than as a
+	// suffix means a renamed clusterDomain cannot smuggle one past.
+	for _, l := range labels {
+		if l == "svc" || l == "cluster" {
+			return true
+		}
+	}
+	tld := labels[len(labels)-1]
+	switch tld {
 	case "localhost", "local", "localdomain", "internal", "intranet", "lan", "home", "corp",
-		"svc", "cluster", "test", "example", "invalid", "arpa":
+		"test", "example", "invalid", "arpa":
 		return true
 	}
-	return false
+	if !plausibleTLD(tld) {
+		return true
+	}
+	return len(labels) == 2 && !publicTLDs[tld]
+}
+
+// plausibleTLD reports whether a last label could be a delegated TLD at all:
+// at least two characters, and purely alphabetic or an IDN A-label (`xn--`).
+// No TLD in the root zone is one character or carries a digit, so a numeric
+// tail is a malformed address literal (`10.0.0.256`) or an internal name —
+// never a site a browser can open.
+func plausibleTLD(label string) bool {
+	if len(label) < 2 {
+		return false
+	}
+	if strings.HasPrefix(label, "xn--") {
+		return true
+	}
+	for i := 0; i < len(label); i++ {
+		if c := label[i]; c < 'a' || c > 'z' {
+			return false
+		}
+	}
+	return true
+}
+
+// publicTLDs is the short allowlist the two-label rule consults — the common
+// ones, not the root zone. It exists to tell `cp-api.flanj` (a k8s Service and
+// its namespace) from `flanj.io` (a public apex), and nothing else consults
+// it, so a missing entry costs an operator one `cp_public_url` line and never
+// a dead link. Embedding the full ICANN list to save that line would be a
+// standing maintenance debt for a heuristic that already has an override.
+var publicTLDs = map[string]bool{
+	// generic and sponsored
+	"com": true, "net": true, "org": true, "io": true, "co": true, "dev": true,
+	"app": true, "ai": true, "cloud": true, "xyz": true, "info": true, "biz": true,
+	"me": true, "sh": true, "tech": true, "online": true, "site": true, "systems": true,
+	"edu": true, "gov": true, "mil": true, "int": true, "eu": true,
+	// the country codes most often used as a company apex
+	"uk": true, "de": true, "fr": true, "nl": true, "se": true, "no": true, "fi": true,
+	"dk": true, "es": true, "it": true, "ch": true, "at": true, "be": true, "pl": true,
+	"cz": true, "ie": true, "pt": true, "ru": true, "jp": true, "cn": true, "in": true,
+	"au": true, "nz": true, "ca": true, "br": true, "mx": true, "il": true, "sg": true,
+	"hk": true, "kr": true, "za": true, "tr": true, "ae": true, "us": true,
 }
 
 // connectRequestBody is POST /api/connect.

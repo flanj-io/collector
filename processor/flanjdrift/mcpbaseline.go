@@ -35,6 +35,40 @@ import (
 // row moved. On a single pod the rows are this process's own, so the seed is
 // a no-op after the one read that establishes that; on a shared-postgres
 // deployment the same read is how one pod learns what another observed.
+//
+// # Local-process (stdio) rows seed nobody
+//
+// All of the above is about a server reached over a NETWORK, where peer_host
+// is a host identity and "the same host" means the same server. A stdio MCP
+// server has no host: the SDK records its serverInfo.name as the peer_host, so
+// two unrelated builds of a same-named server — two developers' checkouts of
+// `filesystem`, two pods each running their own subprocess — share one
+// integration id and therefore ONE spec_infos row.
+//
+// #41 skipped such rows only over the store pod's channel, on the theory that
+// a pod's own store holds only its own. It does not: `storeSpecSource` reads
+// the shared database, so on a shared-postgres deployment every pod's rows are
+// every other pod's rows. Two pods observing different lists under one name
+// then seed each other in turn, each adoption newer than the last, and the
+// pair ping-pong `definition_change` forever over a difference that is not
+// drift at all.
+//
+// So a local-process row is never offered, from any source. Each pod keeps its
+// own in-process stdio baseline — which is the whole of what it can honestly
+// judge, since the server it observed is its own subprocess and nobody else's.
+// That is enough because the observing process is also the judging process for
+// stdio by construction: unlike the tiered-front defect this file exists to
+// fix, there is no sibling that could have seen the list first.
+//
+// The cost is one narrow gap: a pod restart no longer re-seeds its own stdio
+// baseline from the store, so a list that changed while the collector was down
+// is adopted as the new baseline with nothing to diff, and the first client
+// session after the restart re-establishes it. Closing that would need the
+// row to name the pod that observed it (a spec_infos column, a wire field on
+// the spec_info record, and a filter for the co-located source) — deferred
+// until the gap is felt, because a missed diff across a restart is quieter
+// than a standing stream of false ones. The row itself is still written and
+// still listed, so the Contracts tab shows the stdio server either way.
 
 // mcpSeedLogMessage is the line a front logs when it adopts a baseline from
 // the store. The tiered e2e lane waits on it (a front has no other observable
@@ -47,16 +81,6 @@ const mcpSeedLogMessage = "mcp baseline seeded from the store"
 type mcpSeeds struct {
 	mu   sync.Mutex
 	seen map[string]string
-	// remote marks the rows as the store pod's contract channel — lists
-	// observed by OTHER processes, across the org — rather than this pod's own
-	// co-located store. Set at start, next to the source. It gates the one
-	// admission rule that differs by provenance: a `local-process` (stdio)
-	// row's peer_host is the server's serverInfo.name, not a host identity,
-	// so over the channel it names every tenant's build of a same-named
-	// stdio server at once — and two different builds would seed each other's
-	// fronts in turn, ping-ponging definition_change forever. A pod's own
-	// store holds only its own such rows, which it may keep seeding.
-	remote bool
 }
 
 // mcpSeed is one adopted baseline, for the log line.
@@ -95,9 +119,10 @@ func (s *mcpSeeds) reconcile(infos []model.SpecInfo, src specSource, det *drift.
 		if si.Format != model.SpecFormatMCP || si.Role != model.SpecRoleProvider || si.PeerHost == "" {
 			continue
 		}
-		// Over the channel a stdio server's row is not bound to an edge this
-		// front can identify (see the remote field): never seed from it.
-		if s.remote && si.EdgeClass == model.EdgeClassLocalProcess {
+		// A stdio row names a serverInfo.name, not a host: it is one row for
+		// every pod's own subprocess, so it seeds none of them (see the
+		// local-process note at the top of this file).
+		if si.EdgeClass == model.EdgeClassLocalProcess {
 			continue
 		}
 		listed[si.Integration] = struct{}{}

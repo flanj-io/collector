@@ -431,23 +431,24 @@ func (p *mcpStorePod) fetched(integration string) int {
 	return p.fetches[integration]
 }
 
-// TestMCPBaselineRemoteSkipsLocalProcessRows is review finding 5. A stdio
-// (local-process) server's row carries its serverInfo.name as peer_host — a
-// name, not a host identity — so over the store pod's channel it names every
-// tenant's build of a same-named stdio server at once: two different builds
-// would seed each other's fronts in turn and ping-pong definition_change
-// forever. A front started against the store pod never seeds from such a row
-// (and never downloads it); a pod's own co-located store still seeds its own.
-func TestMCPBaselineRemoteSkipsLocalProcessRows(t *testing.T) {
-	stdio := []byte(`{"tools":[{"name":"read_file","inputSchema":{"type":"object","properties":{"path":{"type":"string"}}}}],` +
-		`"serverInfo":{"name":"filesystem","version":"1.0.0"}}`)
+// TestMCPBaselineNeverSeedsLocalProcessRows: a stdio (local-process) row seeds
+// nobody, over either source.
+//
+// A stdio MCP server has no host on the wire, so the SDK records its
+// serverInfo.name as the peer_host — a name, not an identity. Every pod
+// running its own `filesystem` subprocess writes ONE spec_infos row under that
+// name, whatever each subprocess actually contains. #41 skipped such rows only
+// over the store pod's channel, on the theory that a pod's own store holds
+// only its own rows; a shared postgres is one database behind every pod, so it
+// does not (see TestTwoPodsSharingAStoreNeverPingPongStdioBaselines).
+func TestMCPBaselineNeverSeedsLocalProcessRows(t *testing.T) {
 	rows := []model.SpecInfo{
 		{Integration: "acme-payments", Role: model.SpecRoleProvider, Format: model.SpecFormatMCP, PeerHost: "mcp.acme.test",
 			EdgeClass: model.EdgeClassExternal, Source: model.SpecSourceObserved, LoadedAt: "2026-09-08T10:00:00.000Z"},
 		{Integration: "filesystem", Role: model.SpecRoleProvider, Format: model.SpecFormatMCP, PeerHost: "filesystem",
 			EdgeClass: model.EdgeClassLocalProcess, Source: model.SpecSourceObserved, LoadedAt: "2026-09-08T10:00:00.000Z"},
 	}
-	docs := map[string][]byte{"acme-payments": []byte(mcpSnapshotJSON), "filesystem": stdio}
+	docs := map[string][]byte{"acme-payments": []byte(mcpSnapshotJSON), "filesystem": []byte(stdioListRead)}
 
 	// A tiered FRONT: no store, the store pod's channel as its only source.
 	pod := newMCPStorePod(t, rows, docs)
@@ -462,9 +463,6 @@ func TestMCPBaselineRemoteSkipsLocalProcessRows(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 	t.Cleanup(func() { _ = front.shutdown(context.Background()) })
-	if !front.mcpSeeds.remote {
-		t.Fatal("a front reading the store pod's channel did not mark its rows remote")
-	}
 	if !front.mcp.HasBaseline("mcp.acme.test", "client") {
 		t.Fatal("the external row did not seed the front")
 	}
@@ -478,19 +476,181 @@ func TestMCPBaselineRemoteSkipsLocalProcessRows(t *testing.T) {
 		t.Errorf("the external row was downloaded %d times, want once", n)
 	}
 
-	// The same rows read from a pod's OWN store: its stdio servers are its
-	// own, and seed.
+	// The SAME rows read from a pod's own co-located store. #41 seeded here;
+	// on a shared postgres those rows are every sibling pod's too, so the
+	// stdio one is skipped on this path as well and only the external row
+	// seeds.
 	src := newFakeSource()
 	src.infos, src.docs = rows, docs
 	own := processorWith(t, nil)
 	own.src = src
-	adopted, _, errs := own.mcpSeeds.reconcile(rows, src, own.mcp)
-	if len(errs) != 0 || len(adopted) != 2 {
-		t.Fatalf("co-located store: adopted=%+v errs=%v, want both rows", adopted, errs)
+	adopted, findings, errs := own.mcpSeeds.reconcile(rows, src, own.mcp)
+	if len(errs) != 0 {
+		t.Fatalf("co-located store: %v", errs)
 	}
-	if !own.mcp.HasBaseline("filesystem", "client") {
-		t.Fatal("a co-located store's own stdio row did not seed")
+	if len(findings) != 0 {
+		t.Errorf("seeding reported %d findings from rows nothing observed here", len(findings))
 	}
+	if len(adopted) != 1 || adopted[0].integration != "acme-payments" {
+		t.Fatalf("co-located store adopted %+v, want the external row alone", adopted)
+	}
+	if own.mcp.HasBaseline("filesystem", "client") {
+		t.Fatal("a local-process row seeded a pod from its own store — on a shared postgres that row is every pod's")
+	}
+}
+
+// TestTwoPodsSharingAStoreNeverPingPongStdioBaselines is the defect #41 could
+// not fix from inside its own change: two detectors over ONE store.
+//
+// `storeSpecSource` reads the shared database, so on a shared-postgres
+// deployment a pod's "own" store serves every sibling pod's rows. Two pods
+// each running their own build of a stdio server called `filesystem` write one
+// row between them, and the row alternates as each re-observes. With the
+// co-located path seeding local-process rows, each pod then adopts the other's
+// list as a newer observation, diffs its own against it, and emits
+// definition_change — forever, in both directions, over two servers that never
+// drifted.
+//
+// Here pod-a runs a build exposing read_file and pod-b one exposing
+// read_text_file. Each must keep judging its own subprocess: its own tool is
+// declared, the sibling's is not, and no definition_change is ever reported.
+func TestTwoPodsSharingAStoreNeverPingPongStdioBaselines(t *testing.T) {
+	st, err := store.OpenSQLite(filepath.Join(t.TempDir(), "flanj.db"), 0, 0)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	src := &countingSource{specSource: storeSpecSource{st: st}, fetches: map[string]int{}}
+
+	newPod := func() *driftProcessor {
+		p := processorWith(t, nil)
+		p.src = src
+		p.st = st // every pod of a shared-postgres deployment holds a handle
+		return p
+	}
+	a, b := newPod(), newPod()
+
+	observe := func(p *driftProcessor, list, at string) {
+		t.Helper()
+		ld := plog.NewLogs()
+		mcpStdioSnapshotRecord(ld, "filesystem", list)
+		stamp(ld, at)
+		if _, err := p.processLogs(context.Background(), ld); err != nil {
+			t.Fatalf("processLogs: %v", err)
+		}
+	}
+	// judge drives one stdio tools/call through the pod and returns every
+	// finding the batch carries — the call's own, plus anything the refresh
+	// loop parked for it (holdFindings), which is where a seed's
+	// definition_change would surface.
+	judge := func(p *driftProcessor, tool string) []model.Finding {
+		t.Helper()
+		ld := plog.NewLogs()
+		mcpStdioCallRecord(ld, "filesystem", tool)
+		out, err := p.processLogs(context.Background(), ld)
+		if err != nil {
+			t.Fatalf("processLogs: %v", err)
+		}
+		return findingsIn(t, out)
+	}
+
+	// Round one: pod-a observes its build, pod-b observes its own a moment
+	// later, so the shared row now holds pod-b's list.
+	observe(a, stdioListRead, "2026-09-08T10:00:00.000Z")
+	observe(b, stdioListReadText, "2026-09-08T10:00:05.000Z")
+	a.refreshSpecs()
+	b.refreshSpecs()
+
+	if fs := judge(a, "read_file"); len(fs) != 0 {
+		t.Fatalf("pod-a judged its OWN subprocess's tool against pod-b's list: %+v", fs)
+	}
+	if fs := judge(a, "read_text_file"); len(fs) != 1 || fs[0].Kind != model.KindStaleClient {
+		t.Fatalf("pod-a should not know pod-b's tool: got %+v, want one stale_client", fs)
+	}
+
+	// Round two: pod-a re-observes, so the row swings back. This is the flip
+	// that made the old behaviour a permanent loop rather than a one-off.
+	observe(a, stdioListRead, "2026-09-08T10:01:00.000Z")
+	a.refreshSpecs()
+	b.refreshSpecs()
+
+	if fs := judge(b, "read_text_file"); len(fs) != 0 {
+		t.Fatalf("pod-b judged its OWN subprocess's tool against pod-a's list: %+v", fs)
+	}
+	if fs := judge(b, "read_file"); len(fs) != 1 || fs[0].Kind != model.KindStaleClient {
+		t.Fatalf("pod-b should not know pod-a's tool: got %+v, want one stale_client", fs)
+	}
+	if n := src.fetches["filesystem"]; n != 0 {
+		t.Errorf("a stdio row was downloaded %d times; it seeds nobody, so it should never be fetched", n)
+	}
+
+	// The row is still written and still listed — skipping the SEED must not
+	// take the stdio server off the Contracts tab.
+	infos, err := st.ListSpecInfos()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	var listed bool
+	for _, si := range infos {
+		if si.Integration == "filesystem" {
+			listed = true
+			if si.EdgeClass != model.EdgeClassLocalProcess {
+				t.Errorf("the stdio row lost its edge class: %q", si.EdgeClass)
+			}
+		}
+	}
+	if !listed {
+		t.Error("the stdio server is no longer listed in the store")
+	}
+}
+
+// Two builds of one stdio server, published under the same serverInfo.name —
+// the shape a shared spec_infos row cannot tell apart.
+const (
+	stdioListRead = `{"tools":[{"name":"read_file","description":"Read a file",` +
+		`"inputSchema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}],` +
+		`"serverInfo":{"name":"filesystem","version":"1.0.0"}}`
+	stdioListReadText = `{"tools":[{"name":"read_text_file","description":"Read a text file",` +
+		`"inputSchema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}],` +
+		`"serverInfo":{"name":"filesystem","version":"2.0.0"}}`
+)
+
+// mcpStdioSnapshotRecord is an observed tools/list from a STDIO server: there
+// is no host on the wire, so the SDK records serverInfo.name as the peer host
+// and classifies the edge local-process.
+func mcpStdioSnapshotRecord(ld plog.Logs, serverName, snapshotJSON string) {
+	lr := ld.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
+	a := lr.Attributes()
+	a.PutStr(otlpattr.AttrRecordType, otlpattr.RecordTypeContractSnapshot)
+	a.PutStr(otlpattr.AttrTransport, otlpattr.TransportMCP)
+	a.PutStr(otlpattr.AttrDirection, "client")
+	a.PutStr(otlpattr.AttrPeerHost, serverName)
+	a.PutStr(otlpattr.AttrEdgeClass, model.EdgeClassLocalProcess)
+	a.PutStr(otlpattr.AttrIntegration, serverName)
+	a.PutStr(otlpattr.AttrMCPContractSnapshot, snapshotJSON)
+	a.PutInt(otlpattr.AttrMCPToolCount, 1)
+	a.PutStr(otlpattr.AttrMCPServerName, serverName)
+	a.PutStr(otlpattr.AttrMCPServerVersion, "1.0.0")
+}
+
+// mcpStdioCallRecord is one tools/call on that same stdio edge.
+func mcpStdioCallRecord(ld plog.Logs, serverName, toolName string) {
+	lr := ld.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
+	a := lr.Attributes()
+	a.PutStr(otlpattr.AttrRecordType, otlpattr.RecordTypeCall)
+	a.PutStr(otlpattr.AttrTransport, otlpattr.TransportMCP)
+	a.PutStr(otlpattr.AttrDirection, "client")
+	a.PutStr(otlpattr.AttrPeerHost, serverName)
+	a.PutStr(otlpattr.AttrEdgeClass, model.EdgeClassLocalProcess)
+	a.PutStr(otlpattr.AttrIntegration, serverName)
+	a.PutStr(otlpattr.AttrMethod, "tools/call")
+	a.PutStr(otlpattr.AttrRoute, "/"+toolName)
+	a.PutStr(otlpattr.AttrMCPToolName, toolName)
+	a.PutStr(otlpattr.AttrReqBody, `{"path":"/etc/hosts"}`)
+	a.PutStr(otlpattr.AttrReqContentType, "application/json")
+	a.PutStr(otlpattr.AttrRespBody, `{"content":[{"type":"text","text":"ok"}]}`)
+	a.PutStr(otlpattr.AttrRespContent, "application/json")
+	a.PutInt(otlpattr.AttrStatusCode, 200)
 }
 
 // countingSource counts document downloads through any specSource.

@@ -50,6 +50,14 @@ func TestDashboardURLComposition(t *testing.T) {
 		{"link-local base is no door", "", "http://169.254.1.1", ""},
 		{"k8s Service FQDN base is no door", "", "http://cp-api.flanj.svc.cluster.local:3001", ""},
 		{"k8s Service short form base is no door", "", "http://cp-api.flanj.svc", ""},
+		{"k8s service.namespace short form is no door", "", "http://cp-api.flanj:3001", ""},
+		{"k8s service.namespace under a renamed cluster domain is no door", "", "http://cp-api.flanj.svc.k8s.acme", ""},
+		{"a two-label name on no known TLD is no door", "", "https://collector.platform", ""},
+		{"a one-character last label is no door", "", "https://cp.flanj.x", ""},
+		{"a numeric last label is no door (a malformed address literal)", "", "http://10.0.0.256", ""},
+		{"a public two-label apex still opens", "", "https://flanj.io", "https://flanj.io/d"},
+		{"a public three-label host still opens", "", "https://cp.flanj.io", "https://cp.flanj.io/d"},
+		{"a public co.uk host still opens", "", "https://dash.acme.co.uk", "https://dash.acme.co.uk/d"},
 		{".internal base is no door", "", "https://cp.flanj.internal", ""},
 		{".local base is no door", "", "https://cp.local", ""},
 		{".test placeholder (the example config) is no door", "", "https://cp.flanj.test", ""},
@@ -169,6 +177,64 @@ func TestDashboardURLFallsBackToPublicLookingBase(t *testing.T) {
 	}
 	if out["error"] != "cp_unreachable" {
 		t.Errorf("the failed `me` refresh should be reported as error=cp_unreachable, got %v", out["error"])
+	}
+}
+
+// TestKubernetesShortFormIsNotBrowserReachable is the #42 review finding, at
+// the rule itself. Kubernetes resolves a Service four ways, and a
+// Helm-rendered `cp_base_url` most often carries the SHORT one —
+// `http://cp-api.flanj:3001`, Service plus namespace. Two labels, and `flanj`
+// is not a TLD, so the first version's suffix switch never saw it: it fell
+// through as public and minted a door onto a name no laptop resolves. The
+// deeper forms carry `svc`, which was already recognised; the two-label form
+// is the one only a TLD can tell from a public apex.
+func TestKubernetesShortFormIsNotBrowserReachable(t *testing.T) {
+	nonPublic := []string{
+		"cp-api.flanj",                   // Service.namespace — the Helm default
+		"cp-api.flanj.svc",               // Service.namespace.svc
+		"cp-api.flanj.svc.cluster.local", // the fully qualified in-cluster name
+		"cp-api.flanj.svc.k8s.acme",      // ... under a renamed clusterDomain
+		"cp-api",                         // the bare Service (same namespace)
+		"cp-api.flanj.",                  // a trailing dot resolves the same way
+		"CP-API.FLANJ",                   // DNS is case-insensitive; so is this
+	}
+	for _, host := range nonPublic {
+		if !obviouslyNonPublicHost(host) {
+			t.Errorf("%q is an in-cluster name — a browser outside the cluster resolves nothing, so it must mint no door", host)
+		}
+	}
+	// The public shapes an operator actually browses to must be unaffected:
+	// a two-label apex on a known TLD, and anything deeper.
+	public := []string{"cp.flanj.io", "cp.example.com", "flanj.io", "dash.acme.co.uk", "cp.flanj.cloud"}
+	for _, host := range public {
+		if obviouslyNonPublicHost(host) {
+			t.Errorf("%q is a public host and must still mint the dashboard door", host)
+		}
+	}
+}
+
+// TestDashboardURLOmittedForAKubernetesServiceBase is the same finding through
+// the route: Connected, no cp_public_url, and the collector's own CP address
+// is the k8s short form. Before the fix this answered
+// `dashboard_url: http://cp-api.flanj:3001/d` — the dead pill #42 set out to
+// remove, surviving in the one shape Helm renders by default.
+func TestDashboardURLOmittedForAKubernetesServiceBase(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	connectRig(t, r)
+
+	r.ext.cp = &promote.Client{
+		BaseURL:     "http://cp-api.flanj:3001",
+		DeployToken: r.cp.deployToken,
+		HTTP:        &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) { return nil, errors.New("no network in this test") })},
+	}
+
+	_, out, raw := r.do(t, http.MethodGet, "/api/connect", nil)
+	if v, ok := out["dashboard_url"]; ok {
+		t.Fatalf("a k8s Service short form is not a browser address: want no door, got %v (%s)", v, raw)
+	}
+	if out["status"] != "connected" && out["status"] != "pending" {
+		t.Fatalf("precondition: the collector should hold a key, got %s", raw)
 	}
 }
 

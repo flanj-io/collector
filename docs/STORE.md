@@ -93,6 +93,7 @@ shape and the Kubernetes objects each needs — in [DEPLOYMENT.md](DEPLOYMENT.md
 | Pipeline | one collector: otlp → redaction → drift → store + UI | N identical collectors, each the full pipeline, `backend: postgres` | **fronts**: otlp → redaction → drift → `otlphttp`; **store pod**: otlp → redaction → store + UI |
 | Uploaded contracts | read from the co-located store, in-process | same — every pod holds a store handle onto the shared database | uploaded on the **store pod**; fronts read them back over `spec_endpoint` (set it, or drift never runs on a front) |
 | MCP baseline (observed `tools/list`) | the process's own, re-seeded from the store at restart | every pod seeds from the shared rows, so one pod's observation is every pod's baseline | each front forwards its snapshots up as `spec_info`; every front reads the store pod's back over `spec_endpoint`, so a rename observed through one front is judged on all of them |
+| … for a **stdio** MCP server (`local-process`) | the process's own, and NOT re-seeded at restart | the process's own — a shared row cannot tell two pods' subprocesses apart | the front's own; stdio rows never cross the channel |
 | Config | `/etc/flanj/config.yaml` | same, `backend: postgres` | `/etc/flanj/front.yaml` + `/etc/flanj/store.yaml` (`config/config.*.example.yaml`) |
 | State | sqlite on a PVC (or postgres) | postgres only | store pod: sqlite on ONE PVC (or postgres); fronts: none |
 | Scale | 1 | N writers (postgres) | N stateless fronts (HPA on cpu/memory); store = 1 on sqlite, may scale on postgres |
@@ -158,11 +159,21 @@ no custom protocol exists between the tiers.
   and the store keeps `loaded_at` for an unchanged MCP document, so the row —
   the "since this snapshot" anchor, the channel's change token — moves only
   when the list does, never between two fronts' stamps (2026-09-08). A
-  `local-process` (stdio) row never seeds a front over the channel: its
-  `peer_host` is the server's own name, not a host identity, so two tenants'
-  builds of a same-named stdio server would seed each other's fronts in turn;
-  a pod's own store still seeds its own. An MCP call to an edge a front has no
-  baseline for asks for an early refresh, like an uncovered host.
+  `local-process` (stdio) row seeds **nobody, from either source**
+  (2026-09-08). Its `peer_host` is the server's own `serverInfo.name`, not a
+  host identity, so every pod running its own subprocess of a same-named stdio
+  server shares one row: over the channel it would seed every front at once,
+  and on a shared postgres — where a pod's "own" store is the same database its
+  siblings write — the pods would seed each other in turn, ping-ponging
+  `definition_change` over a difference that is not drift. Each pod keeps its
+  own in-process stdio baseline instead, which is all it can honestly judge:
+  for stdio the observing process is always the judging process, so there is no
+  sibling whose sighting it is missing. The cost is that a pod restart no
+  longer re-seeds a stdio baseline — the first client session after the restart
+  re-establishes it, and a list that changed while the collector was down is
+  adopted with nothing to diff. The row is still written and still listed, so
+  the Contracts tab shows the stdio server either way. An MCP call to an edge a
+  front has no baseline for asks for an early refresh, like an uncovered host.
 
 ### Tiered: invariants
 
