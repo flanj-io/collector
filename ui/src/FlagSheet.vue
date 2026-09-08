@@ -6,6 +6,16 @@
 // compose (evidence line, "what leaves this collector", the optional message,
 // Create thread) and the success state (the link, Copy thread link, Copy link +
 // message, View thread). Nothing is emailed by Flanj on flag.
+//
+// v1 phase 4 — QUESTION MODE. With an `edge` and no `finding` this is the same
+// sheet minus the evidence block: "Start a thread" on an edge row. It is the
+// SAME component on purpose — the Connect prompt, the 412 handling, the
+// disclosure, the focus trap, the copy/share path and the success state are the
+// parts that must not diverge between the two doors, and a second component is
+// how they would. Only three things change, and each because the flag version
+// would otherwise assert evidence that is not there: no evidence line, a
+// REQUIRED message (it is the whole artifact), and a disclosure/share copy that
+// names the domain instead of a call.
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { ApiError, apiPost, openThreadInNewTab } from './api';
 import { copyText, selectInput } from './clipboard';
@@ -16,6 +26,15 @@ import {
   defaultFlagMessage,
   evidenceLine,
   pasteText,
+  CALL_LESS_DISCLOSURE_LEAD,
+  CALL_LESS_DISCLOSURE_TAIL,
+  QUESTION_DISCLOSURE_TAIL,
+  QUESTION_LEAD,
+  QUESTION_MESSAGE_LABEL,
+  QUESTION_MESSAGE_REQUIRED,
+  questionDisclosureLead,
+  questionPasteText,
+  questionShareWarning,
   requestIdsLine,
   shortDate,
   type ConnectState
@@ -33,10 +52,13 @@ import {
 import type { Correlation, Finding, FlagResult, RedactedCall } from './types';
 
 const props = defineProps<{
-  finding: Finding;
-  correlation: Correlation | null;
+  /** Absent in QUESTION mode — an edge is a domain, not a drift. */
+  finding?: Finding | null;
+  correlation?: Correlation | null;
   /** The finding's representative source call (MCP server identity rides on it). */
   call?: RedactedCall | null;
+  /** Present in QUESTION mode: the edge row "Start a thread" was pressed on. */
+  edge?: { host: string; domain: string } | null;
   provider: string;
   consumer: string;
   connect: ConnectState | null;
@@ -50,16 +72,31 @@ const emit = defineEmits<{
 
 const DISCLOSURE_KEY = 'flanj.flag.disclosure.seen';
 
+// QUESTION mode is decided by the ABSENCE of a finding, not by the presence of
+// an edge: the flag path must never take a question branch because a caller
+// passed both.
+const isQuestion = computed(() => !props.finding);
+const edgeDomain = computed(() => props.edge?.domain || props.edge?.host || '');
+/** In question mode the message IS the thread, so an empty one cannot be sent. */
+const messageMissing = computed(() => isQuestion.value && message.value.trim().length === 0);
+/** One id per open sheet: what makes a retry after a failed create replay onto
+ *  the SAME thread instead of opening a second one. Minted once, here. */
+const requestId = typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(36).slice(2);
+
 // v0.5: MCP findings carry the deck's MCP evidence / IDs / disclosure / prefill
 // copy; HTTP findings keep the v0.1a strings unchanged.
-const isMcp = computed(() => isMcpFinding(props.finding));
+const isMcp = computed(() => !!props.finding && isMcpFinding(props.finding));
 const mcpServer = computed(() => props.call?.mcp_server_name || props.provider);
-const mcpTool = computed(() => props.finding.endpoint);
+const mcpTool = computed(() => props.finding?.endpoint ?? '');
 
+// A question starts EMPTY: prefilling one would be putting words in the
+// operator's mouth on a thread where their words are the entire content.
 const message = ref(
-  isMcpFinding(props.finding)
-    ? mcpDefaultMessage(props.finding, shortDate)
-    : defaultFlagMessage(props.finding, props.correlation?.request_id, shortDate)
+  !props.finding
+    ? ''
+    : isMcpFinding(props.finding)
+      ? mcpDefaultMessage(props.finding, shortDate)
+      : defaultFlagMessage(props.finding, props.correlation?.request_id, shortDate)
 );
 const disclosureOpen = ref(localStorage.getItem(DISCLOSURE_KEY) !== '1');
 const busy = ref(false);
@@ -81,12 +118,12 @@ let copiedTimer: number | undefined;
 const connected = computed(() => canCreateThread(props.connect));
 const contactEmail = computed(() => props.connect?.confirmed_contact_email || props.connect?.contact_email || '');
 const evidence = computed(() =>
-  isMcp.value ? mcpEvidenceLine(props.finding, mcpServer.value, shortDate) : evidenceLine(props.finding)
+  !props.finding ? '' : isMcp.value ? mcpEvidenceLine(props.finding, mcpServer.value, shortDate) : evidenceLine(props.finding)
 );
 // The mute-risk guard renders on the DESCRIPTION class only (ux-design-v2
 // §2.7.4): this class is the one where the finding is a question, not a defect,
 // and saying so is what keeps a subjective flag from reading as an accusation.
-const descriptionGuard = computed(() => (isMcp.value && isDescriptionChange(props.finding) ? FLAG_DESCRIPTION_GUARD : ''));
+const descriptionGuard = computed(() => (isMcp.value && props.finding && isDescriptionChange(props.finding) ? FLAG_DESCRIPTION_GUARD : ''));
 // The IDs line: an MCP flag uses the deck's JSON-RPC line ONLY while the
 // client-generated id is the sole correlation key — mixed keys fall back to
 // the standard count line with an honest note for the client-generated one
@@ -95,22 +132,44 @@ const descriptionGuard = computed(() => (isMcp.value && isDescriptionChange(prop
 // captured on this call." would be answering a question nobody asked about a
 // thing that does not exist. The disclosure carries what leaves instead.
 const idsLine = computed(() => {
-  if (props.finding.kind === 'definition_change') return '';
+  // A question captured nothing, so there are no ids of theirs to promise. Nor
+  // does any OTHER call-less finding — since v1p4 a version diff reaches this
+  // sheet too, and "No request IDs were captured on this call" would be
+  // answering a question nobody asked about a call that does not exist.
+  if (!props.finding || props.finding.kind === 'definition_change' || !props.finding.source_call_id) return '';
   return isMcp.value
     ? mcpIdsLineFor(props.correlation, props.provider)
     : requestIdsLine(correlationCount(props.correlation));
 });
-const disclosureLead = computed(() =>
-  isMcp.value
-    ? mcpDisclosureLead(props.finding, mcpTool.value)
-    : 'This redacted request/response, the finding, the correlation keys, the endpoint, your message, and'
-);
-const disclosureTail = computed(() => (isMcp.value ? mcpDisclosureTail(props.finding) : 'Raw calls never leave.'));
-const since = computed(() => shortDate(props.finding.first_seen || props.finding.last_seen || ''));
-const paste = computed(() =>
-  result.value
-    ? pasteText({ endpoint: props.finding.endpoint, since: since.value, requestId: props.correlation?.request_id, link: result.value.thread_url })
-    : ''
+const disclosureLead = computed(() => {
+  if (!props.finding) return questionDisclosureLead(edgeDomain.value);
+  if (isMcp.value) return mcpDisclosureLead(props.finding, mcpTool.value);
+  if (!props.finding.source_call_id) return CALL_LESS_DISCLOSURE_LEAD;
+  return 'This redacted request/response, the finding, the correlation keys, the endpoint, your message, and';
+});
+const disclosureTail = computed(() => {
+  if (!props.finding) return QUESTION_DISCLOSURE_TAIL;
+  if (isMcp.value) return mcpDisclosureTail(props.finding);
+  if (!props.finding.source_call_id) return CALL_LESS_DISCLOSURE_TAIL;
+  return 'Raw calls never leave.';
+});
+const since = computed(() => shortDate(props.finding?.first_seen || props.finding?.last_seen || ''));
+const paste = computed(() => {
+  if (!result.value) return '';
+  if (!props.finding) return questionPasteText({ domain: edgeDomain.value, link: result.value.thread_url });
+  return pasteText({
+    endpoint: props.finding.endpoint,
+    since: since.value,
+    requestId: props.correlation?.request_id,
+    link: result.value.thread_url
+  });
+});
+/** The share warning. The flag line names "the redacted evidence" — which a
+ *  question thread does not carry. */
+const shareWarning = computed(() =>
+  !props.finding
+    ? questionShareWarning(props.provider)
+    : `Anyone with this link can read the redacted evidence and reply. Paste it where you already talk to ${props.provider}'s team. It lasts 30 days and extends with each reply.`
 );
 
 function toggleDisclosure() {
@@ -120,14 +179,23 @@ function toggleDisclosure() {
 }
 
 async function createThread() {
+  if (messageMissing.value) return;
   busy.value = true;
   errorMsg.value = '';
   try {
-    const r = await apiPost<FlagResult>('/api/flag', {
-      finding_id: props.finding.id,
-      message: message.value,
-      provider_display_name: props.provider
-    });
+    // Two routes, one flow. The question route sends the sheet's own request id
+    // so a retry after a failed create replays onto the same thread.
+    const r = props.finding
+      ? await apiPost<FlagResult>('/api/flag', {
+          finding_id: props.finding.id,
+          message: message.value,
+          provider_display_name: props.provider
+        })
+      : await apiPost<FlagResult>('/api/edges/thread', {
+          host: props.edge?.host ?? '',
+          message: message.value,
+          request_id: requestId
+        });
     result.value = r;
     localStorage.setItem(DISCLOSURE_KEY, '1');
     emit('created', r);
@@ -323,7 +391,11 @@ watch(result, (r) => {
       <!-- ─── Compose ─── -->
       <template v-else-if="!result">
         <h2 id="sheet-title" class="sheet-title">New thread with {{ provider }}</h2>
-        <p class="evidence"><span class="k">Evidence (1):</span> {{ evidence }}</p>
+        <!-- The evidence block, and its absence. A question thread renders NO
+             "Evidence (1)" line — an empty one would be worse than none — and
+             says plainly what it does carry instead. -->
+        <p v-if="!isQuestion" class="evidence"><span class="k">Evidence (1):</span> {{ evidence }}</p>
+        <p v-else class="ids">{{ QUESTION_LEAD }}</p>
         <p v-if="idsLine" class="ids">{{ idsLine }}</p>
 
         <button type="button" class="disclosure" :aria-expanded="disclosureOpen" @click="toggleDisclosure">
@@ -335,15 +407,16 @@ watch(result, (r) => {
         </p>
 
         <label class="field">
-          <span class="field-label">Message (optional)</span>
+          <span class="field-label">{{ isQuestion ? QUESTION_MESSAGE_LABEL : 'Message (optional)' }}</span>
           <textarea v-model="message" rows="4" :disabled="busy"></textarea>
         </label>
+        <p v-if="messageMissing" class="guard">{{ QUESTION_MESSAGE_REQUIRED }}</p>
 
         <p v-if="descriptionGuard" class="guard">{{ descriptionGuard }}</p>
 
         <p v-if="errorMsg" class="error">{{ errorMsg }}</p>
         <div class="sheet-actions">
-          <button type="button" class="btn primary" :disabled="busy" @click="createThread">
+          <button type="button" class="btn primary" :disabled="busy || messageMissing" @click="createThread">
             {{ busy ? 'Creating…' : errorMsg ? 'Retry' : 'Create thread' }}
           </button>
           <button type="button" class="btn ghost" :disabled="busy" @click="emit('close')">Cancel</button>
@@ -364,9 +437,7 @@ watch(result, (r) => {
         <p v-if="blockedOwnerUrl" class="hint-copy">
           Your browser blocked the new tab — <a :href="blockedOwnerUrl" target="_blank" rel="noopener">open the thread here</a> (this link works once, for 10 minutes).
         </p>
-        <p class="warning">
-          Anyone with this link can read the redacted evidence and reply. Paste it where you already talk to {{ provider }}'s team. It lasts 30 days and extends with each reply.
-        </p>
+        <p class="warning">{{ shareWarning }}</p>
         <details class="paste-preview">
           <summary>What "Copy link + message" pastes</summary>
           <p class="paste mono">{{ paste }}</p>

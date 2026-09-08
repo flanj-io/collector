@@ -33,7 +33,9 @@ jobs:
           # conflict. Without this, syncing a PR with main reds its own DCO
           # check, and the only way out is force-pushing an amended merge onto
           # a shared branch. The upstream DCO app skips merges for the same
-          # reason.
+          # reason. Residual, stated so it is not a surprise: an "evil merge"
+          # carrying content present in NEITHER parent now skips the check —
+          # narrow, and visible in review.
           missing=0
           for c in $(git rev-list --no-merges "$BASE_SHA..$HEAD_SHA"); do
             if ! git log -1 --format=%B "$c" | grep -qiE '^Signed-off-by: .+ <.+@.+>'; then

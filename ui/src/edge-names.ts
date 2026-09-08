@@ -26,6 +26,8 @@ export interface NamedEdgeRow {
 // typed it — and a chip in the name slot competes with the name for the eye.
 // The `Edit name` / `Remove name` controls on the row already say the name is
 // yours, and say it where you can act on it.
+/** v1 phase 4 — the edge row's one cross-org action: a message-only thread. */
+export const START_THREAD_LABEL = 'Start a thread';
 export const RENAME_LABEL = 'Rename';
 export const EDIT_NAME_LABEL = 'Edit name';
 export const SAVE_LABEL = 'Save';
