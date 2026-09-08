@@ -16,8 +16,10 @@
 #   5. installing without a spec token is REFUSED, not deployed
 #   6. on the PVC tier, the window survives losing the store pod
 #
-# ...on all three tiers the chart claims: sqlite on a PVC (the default), sqlite
-# on an emptyDir (eval), and postgres (scale).
+# ...on all three tiers the chart claims: sqlite on an emptyDir (eval),
+# postgres (scale), and sqlite on a PVC (the default). One tier at a time — a
+# two-core CI node does not fit all three at once, and a full node reads as a
+# timeout rather than as a failure.
 #
 # Runs in CI (.github/workflows/ci.yml) and locally:
 #
@@ -103,7 +105,15 @@ helm template smoke "$CHART" $CHART_FLAGS --set specToken.value=t --set store.ba
   && fail "chart accepted a PVC on the postgres tier"
 echo "  refused: no token (schema + render), sqlite replicas>1, postgres+PVC"
 
+# install_and_check <keep|drop> <release> [--set ...]
+#
+# The lanes are independent, so each one is UNINSTALLED when it passes. They
+# used to be left running, which fits a laptop and does not fit a two-core CI
+# runner: with all three tiers resident the next release's pods go Pending on
+# cpu and every later step reads as a timeout rather than as "the node is
+# full". Only the lane the durability and upgrade steps need is kept.
 install_and_check() {
+  local keep=$1; shift
   local release=$1; shift
   say "install $release: $*"
   helm upgrade --install "$release" "$CHART" $CHART_FLAGS -n "$NS" \
@@ -198,26 +208,32 @@ install_and_check() {
   echo "  fronts: contract refresh settled, no 401, store_pod_endpoint set"
 
   kill "$PF_PID" 2>/dev/null || true; PF_PID=""
+
+  if [ "$keep" = drop ]; then
+    helm uninstall "$release" -n "$NS" --wait >/dev/null
+    echo "  uninstalled $release (the node has to fit the next lane)"
+  fi
 }
 
-# --- the three tiers -------------------------------------------------------
-# small prod: the DEFAULTS — sqlite on a PVC. This is also the only lane where
-# the image's `nonroot` uid meets a freshly provisioned volume, which is the
-# thing podSecurityContext.fsGroup exists to survive.
-install_and_check sq --set collector.replicas=2 --set store.persistence.size=1Gi
-
+# --- the three tiers, one at a time ----------------------------------------
 # eval: sqlite on an emptyDir, one flag from the defaults.
-install_and_check ev --set store.persistence.enabled=false --set collector.replicas=1
+install_and_check drop ev --set store.persistence.enabled=false --set collector.replicas=1
 
 # scale: postgres with the bundled evaluation database, where the store tier
 # may have more than one pod.
-install_and_check pg \
+install_and_check drop pg \
   --set store.backend=postgres \
   --set store.persistence.enabled=false \
   --set store.replicas=2 \
   --set postgres.enabled=true \
   --set postgres.password=smoke-postgres-password \
   --set postgres.persistence.enabled=false
+
+# small prod: the DEFAULTS — sqlite on a PVC. Kept, because the two steps below
+# are about this tier. It is also the only lane where the image's `nonroot` uid
+# meets a freshly provisioned volume, which is what podSecurityContext.fsGroup
+# exists to survive.
+install_and_check keep sq --set collector.replicas=2 --set store.persistence.size=1Gi
 
 # --- 6. the PVC tier's whole promise ---------------------------------------
 # The window has to outlive the pod. On the eval tier it does not, and that is
