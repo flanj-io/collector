@@ -126,7 +126,12 @@ no custom protocol exists between the tiers.
   at-most-once across a store-pod crash as the fronts have. The writes are
   idempotent on call id AND finding id (the store's occurrence ledger), so a
   front re-sending a batch whose ACK it lost duplicates nothing — on either
-  backend, including a re-send that lands on another postgres pod.
+  backend, including a re-send that lands on another postgres pod. That ledger
+  keeps one row per finding record for an hour — the re-delivery horizon, the
+  store pod's 15 minutes plus a front's 5 — and prunes itself on the store's
+  own clock, independently of how fast the evidence window rolls. A retry is
+  also **partial**: a batch that fails on record N hands back only records N
+  onward, so an outage does not re-execute what already landed.
 - **The store pod is one process** on `backend: sqlite` (one PVC, total). On
   `backend: postgres` the store tier may itself scale, since the postgres
   backend is multi-writer safe.

@@ -16,10 +16,13 @@ import (
 // closed handle) does not, and stays retryable.
 //
 // The rejection driven here is a real one: a findings row whose occurrence-
-// ledger entry is gone (evictOldest prunes the ledger with the source call)
-// meets the same record id again under a NEW signature. The ledger lets it
-// through, `ON CONFLICT (signature)` does not apply, and `findings.id UNIQUE`
-// refuses it — sqlite SQLITE_CONSTRAINT, postgres 23505.
+// ledger entry is gone (pruneOccurrences drops it once the record is older
+// than occurrenceTTL, i.e. past the horizon in which any copy could still be
+// re-delivered) meets the same record id again under a NEW signature. The
+// ledger lets it through, `ON CONFLICT (signature)` does not apply, and
+// `findings.id UNIQUE` refuses it — sqlite SQLITE_CONSTRAINT, postgres 23505.
+// The DELETE below stands in for that prune; before 2026-09-08 the same state
+// was reached far sooner, by the source call simply leaving the window.
 func TestWriteError_RejectionIsErrRejected(t *testing.T) {
 	forEachBackend(t, func(t *testing.T, b *testBackend) {
 		s := b.open(t, 0, 0)

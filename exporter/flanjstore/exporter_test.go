@@ -51,11 +51,36 @@ type flakyStore struct {
 	// backends wrap a constraint/encoding violation in; proven real on both
 	// in internal/store rejected_test.go). Every attempt counts and fails.
 	rejectCallID string
+	// perRecord counts write attempts per RECORD id — the oracle for partial
+	// retry, which the batch-wide counters cannot see: a whole-batch
+	// re-delivery and a tail-only one can total the same.
+	perRecord map[string]int
 	// blockOn, when set, parks InsertCall until released — for the queue-full
 	// test. blocked is closed (once) when the first write parks.
 	blockOn   chan struct{}
 	blocked   chan struct{}
 	blockOnce sync.Once
+}
+
+// note records one write attempt against a record id.
+func (f *flakyStore) note(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.perRecord == nil {
+		f.perRecord = map[string]int{}
+	}
+	f.perRecord[id]++
+}
+
+// attemptsPerRecord snapshots the per-record counters.
+func (f *flakyStore) attemptsPerRecord() map[string]int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[string]int, len(f.perRecord))
+	for k, v := range f.perRecord {
+		out[k] = v
+	}
+	return out
 }
 
 var errOutage = errors.New("store: connection refused (simulated outage)")
@@ -84,6 +109,7 @@ func (f *flakyStore) stats() (attempts, failures int) {
 }
 
 func (f *flakyStore) InsertCall(c model.RedactedCall) error {
+	f.note(c.ID)
 	f.mu.Lock()
 	park := f.blockOn
 	reject := f.rejectCallID != "" && c.ID == f.rejectCallID
@@ -106,6 +132,7 @@ func (f *flakyStore) InsertCall(c model.RedactedCall) error {
 }
 
 func (f *flakyStore) InsertFinding(fd model.Finding) error {
+	f.note(fd.ID)
 	if err := f.gate(); err != nil {
 		return err
 	}
@@ -335,9 +362,11 @@ func TestStoreOutage_RetriedWithoutLossOrDuplicate(t *testing.T) {
 }
 
 // TestPartialBatch_RetryDoesNotDuplicate: the store dies half-way through a
-// batch (first call written, second fails). The retry re-delivers the WHOLE
-// batch — the already-written call is a no-op, the rest lands, and the finding
-// counts once. Without the store's idempotency this is where rows doubled.
+// batch (first call written, second fails). The retry re-delivers the
+// UNAPPLIED TAIL — the rest lands and the finding counts once. The store's
+// idempotency is still what makes this safe (a front's own re-send hands over
+// the whole batch again, as the second half of this test does); the tail is
+// what keeps the retry from re-executing work that already landed.
 func TestPartialBatch_RetryDoesNotDuplicate(t *testing.T) {
 	exp, flaky := newExporter(t, fastRetry(t))
 	defer func() { _ = exp.Shutdown(context.Background()) }()
@@ -354,8 +383,12 @@ func TestPartialBatch_RetryDoesNotDuplicate(t *testing.T) {
 		return calls == 2 && findings == 1
 	})
 	attempts, failures := flaky.stats()
-	if failures != 1 || attempts != 5 { // 2 writes (1 ok, 1 failed) + 3 on the retry
-		t.Errorf("attempts/failures = %d/%d, want 5/1 (one failure, one full re-delivery)", attempts, failures)
+	if failures != 1 || attempts != 4 { // 2 writes (1 ok, 1 failed) + 2 on the retried TAIL
+		t.Errorf("attempts/failures = %d/%d, want 4/1 (one failure, the tail re-delivered)", attempts, failures)
+	}
+	// The already-applied head was not sent again.
+	if n := flaky.attemptsPerRecord()[callIDs[0]]; n != 1 {
+		t.Errorf("call %s was attempted %d times, want 1 — it landed before the failure", callIDs[0], n)
 	}
 	assertExactlyOnce(t, flaky.Store, callIDs, finding.ID)
 
@@ -366,7 +399,7 @@ func TestPartialBatch_RetryDoesNotDuplicate(t *testing.T) {
 	}
 	waitFor(t, "the re-delivery to be consumed", func() bool {
 		a, _ := flaky.stats()
-		return a >= 8
+		return a >= 7 // 4 above + the 3 records of the full re-delivery
 	})
 	assertExactlyOnce(t, flaky.Store, callIDs, finding.ID)
 }
@@ -492,11 +525,11 @@ func TestUnstampedCall_RetryDoesNotDuplicate(t *testing.T) {
 	}
 	waitFor(t, "the retried batch to land", func() bool {
 		a, _ := flaky.stats()
-		return a >= 4 // 2 writes (1 ok, 1 failed) + 2 on the retry
+		return a >= 3 // 2 writes (1 ok, 1 failed) + 1 on the retried tail
 	})
 	attempts, failures := flaky.stats()
-	if failures != 1 || attempts != 4 {
-		t.Errorf("attempts/failures = %d/%d, want 4/1 (one failure, one full re-delivery)", attempts, failures)
+	if failures != 1 || attempts != 3 {
+		t.Errorf("attempts/failures = %d/%d, want 3/1 (one failure, the tail re-delivered)", attempts, failures)
 	}
 
 	calls, findings, err := flaky.Store.Counts()
@@ -525,13 +558,117 @@ func TestUnstampedCall_RetryDoesNotDuplicate(t *testing.T) {
 	}
 }
 
+// TestPartialRetry_OnlyTheUnappliedTail (accepted follow-up of #46,
+// 2026-09-08): consumeLogs used to return whole-batch errors, so the retry
+// sender re-delivered every record on every attempt — a 15-minute outage
+// re-executed the already-applied head up to fifty times. The store absorbed
+// them (idempotent on both ids), which is why nothing was ever WRONG; it was
+// pure work, and on the postgres backend every one of those no-ops is still a
+// transaction and an advisory lock.
+//
+// The oracle is per-RECORD, because the batch-wide counters cannot tell the
+// two shapes apart: a record that failed is attempted twice either way, and
+// only the head distinguishes a tail re-delivery from a whole-batch one.
+func TestPartialRetry_OnlyTheUnappliedTail(t *testing.T) {
+	exp, flaky := newExporter(t, fastRetry(t))
+	defer func() { _ = exp.Shutdown(context.Background()) }()
+
+	callIDs := []string{
+		"0191e8c4-0000-7000-8000-000000000041",
+		"0191e8c4-0000-7000-8000-000000000042",
+		"0191e8c4-0000-7000-8000-000000000043",
+	}
+	finding := driftFinding("f_tail", callIDs[0])
+	// The SECOND write of the first attempt fails: record 0 is applied, records
+	// 1..3 are not.
+	flaky.set(func(f *flakyStore) { f.failNth = 2 })
+
+	if err := exp.ConsumeLogs(context.Background(), batch(t, callIDs, []model.Finding{finding})); err != nil {
+		t.Fatalf("ConsumeLogs: %v", err)
+	}
+	waitFor(t, "the retried tail to land", func() bool {
+		calls, findings, _ := flaky.Store.Counts()
+		return calls == 3 && findings == 1
+	})
+
+	want := map[string]int{
+		callIDs[0]: 1, // applied before the failure — never sent again
+		callIDs[1]: 2, // the record that failed, and the retry's first record
+		callIDs[2]: 1, // behind the failure: delivered once, on the retry
+		finding.ID: 1,
+	}
+	got := flaky.attemptsPerRecord()
+	for id, n := range want {
+		if got[id] != n {
+			t.Errorf("record %s attempted %d times, want %d — a whole-batch retry attempts every record before the failure twice", id, got[id], n)
+		}
+	}
+	if attempts, failures := flaky.stats(); attempts != 5 || failures != 1 {
+		t.Errorf("attempts/failures = %d/%d, want 5/1 (2 + a 3-record tail)", attempts, failures)
+	}
+	assertExactlyOnce(t, flaky.Store, callIDs, finding.ID)
+}
+
+// TestPartialRetry_KeepsResourceGrouping: the tail handed back for retry is
+// the RECORDS that have not been applied, still in the resource/scope groups
+// they arrived in. A front batches per resource, so a flattened retry would no
+// longer be the request that was received — and the call-id stamp
+// consumeLogs writes onto an unstamped record must travel with it, or the
+// retry mints fresh ids and duplicates the row (the #46 review's own bug).
+func TestPartialRetry_KeepsResourceGrouping(t *testing.T) {
+	exp, flaky := newExporter(t, fastRetry(t))
+	defer func() { _ = exp.Shutdown(context.Background()) }()
+
+	// Two resource groups of two UNSTAMPED calls each; the failure lands in the
+	// first group, so the tail spans both.
+	ld := plog.NewLogs()
+	for g := 0; g < 2; g++ {
+		rl := ld.ResourceLogs().AppendEmpty()
+		rl.Resource().Attributes().PutStr("service.name", fmt.Sprintf("svc-%d", g))
+		recs := rl.ScopeLogs().AppendEmpty().LogRecords()
+		for i := 0; i < 2; i++ {
+			goldenCallUnstamped(t).CopyTo(recs.AppendEmpty())
+		}
+	}
+	flaky.set(func(f *flakyStore) { f.failNth = 2 })
+
+	if err := exp.ConsumeLogs(context.Background(), ld); err != nil {
+		t.Fatalf("ConsumeLogs: %v", err)
+	}
+	waitFor(t, "the retried tail to land", func() bool {
+		calls, _, _ := flaky.Store.Counts()
+		return calls == 4
+	})
+	// Four distinct calls, each written once except the one that failed: the
+	// stamped ids survived into the tail, so nothing was minted twice.
+	if attempts, failures := flaky.stats(); attempts != 5 || failures != 1 {
+		t.Fatalf("attempts/failures = %d/%d, want 5/1 (4 records, one re-attempted)", attempts, failures)
+	}
+	calls, _, err := flaky.Store.Counts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 4 {
+		t.Fatalf("store holds %d calls, want 4 — a retry that lost the stamp mints new ids", calls)
+	}
+	edges, err := flaky.Store.ListEdges(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(edges) != 1 || edges[0].CallCount != 4 {
+		t.Fatalf("edges = %+v, want one edge with call_count 4", edges)
+	}
+}
+
 // TestPoisonBatch_DroppedAfterOneAttempt (review of #46, 2026-09-08): a
 // deterministic failure must not be retried for max_elapsed_time — that pins a
 // queue consumer for 15 minutes on every re-delivery. Two shapes, one batch:
 //   - a finding with no id is dropped by consumeLogs itself (the occurrence
 //     ledger cannot make it idempotent) and the batch goes on;
-//   - a record the STORE refuses (store.ErrRejected) fails the batch as
-//     PERMANENT — one attempt, logged with the record id, no retry.
+//   - a record the STORE refuses (store.ErrRejected) is attempted ONCE, logged
+//     with the record id, and dropped — and since partial retry (2026-09-08)
+//     the records BEHIND it in the batch still get their write; the batch then
+//     ends permanent, so nothing is re-delivered.
 //
 // A transient failure on the same exporter is still retried and lands.
 func TestPoisonBatch_DroppedAfterOneAttempt(t *testing.T) {
@@ -561,18 +698,26 @@ func TestPoisonBatch_DroppedAfterOneAttempt(t *testing.T) {
 	// Give the retry sender every chance to retry (it backs off 10 ms here):
 	// a second attempt on the rejected record would show up as attempts > 2.
 	time.Sleep(300 * time.Millisecond)
-	if attempts, failures := flaky.stats(); attempts != 2 || failures != 1 {
-		t.Fatalf("attempts/failures = %d/%d, want 2/1: ok1 written, poison refused ONCE, nothing retried", attempts, failures)
+	if attempts, failures := flaky.stats(); attempts != 3 || failures != 1 {
+		t.Fatalf("attempts/failures = %d/%d, want 3/1: ok1 written, poison refused ONCE, `after` still written, nothing retried", attempts, failures)
 	}
 	calls, findings, err := flaky.Store.Counts()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if calls != 1 || findings != 0 {
-		t.Fatalf("store holds %d calls / %d findings, want 1 / 0 (ok1 landed; the id-less finding was dropped; poison and what followed it went with the batch)", calls, findings)
+	if calls != 2 || findings != 0 {
+		t.Fatalf("store holds %d calls / %d findings, want 2 / 0 (ok1 and `after` landed; the id-less finding was dropped; only poison went)", calls, findings)
 	}
-	if _, ok, _ := flaky.Store.GetCall(ok1); !ok {
-		t.Errorf("ok1 must have landed before the batch was dropped")
+	for _, id := range []string{ok1, after} {
+		if _, ok, _ := flaky.Store.GetCall(id); !ok {
+			t.Errorf("call %s must have landed: one poison record no longer takes its neighbours down", id)
+		}
+	}
+	if _, ok, _ := flaky.Store.GetCall(poison); ok {
+		t.Errorf("the rejected call must not be stored")
+	}
+	if n := flaky.attemptsPerRecord()[poison]; n != 1 {
+		t.Errorf("the poison record was attempted %d times, want exactly 1", n)
 	}
 	var sawIDLess, sawRejected bool
 	for _, entry := range logs.All() {

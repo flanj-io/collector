@@ -128,7 +128,12 @@ CREATE TABLE IF NOT EXISTS finding_occurrences (
   source_call_id TEXT,
   seen_at        TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_finding_occurrences_call ON finding_occurrences(source_call_id);
+CREATE INDEX IF NOT EXISTS idx_finding_occurrences_seen ON finding_occurrences(seen_at);
+-- The ledger is pruned by the store clock (occurrenceTTL), not by the call a
+-- finding names, so the source_call_id index has nothing left to serve. It is
+-- dropped rather than left to cost every ledger insert; the COLUMN stays, as
+-- the diagnostic trail from a ledger row back to its evidence.
+DROP INDEX IF EXISTS idx_finding_occurrences_call;
 CREATE INDEX IF NOT EXISTS idx_calls_pinned_seq ON calls(pinned, seq);
 CREATE INDEX IF NOT EXISTS idx_findings_source ON findings(source_call_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_findings_signature ON findings(signature);
@@ -301,12 +306,22 @@ func (s *sqliteStore) InsertFinding(f model.Finding) (err error) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	applied, err := recordOccurrence(tx, s.rebind, f, sourceCallID, seen)
+	// The ledger is stamped with the STORE's clock, not f.DetectedAt: a
+	// re-delivered record repeats its DetectedAt, so only the store's own
+	// reading says how long this copy can still be in flight (occurrenceTTL).
+	now := time.Now()
+	applied, err := recordOccurrence(tx, s.rebind, f, sourceCallID, isoTime(now))
 	if err != nil {
 		return err
 	}
 	if !applied {
 		return nil // a re-delivered record: already applied, nothing to do
+	}
+	// Bound the ledger from the path that grows it, so a deployment whose
+	// findings are all CALL-LESS (a flapping MCP snapshot) — which never
+	// reaches the eviction pass — stays bounded too.
+	if err := pruneOccurrences(tx, s.rebind, now); err != nil {
+		return err
 	}
 
 	// First occurrence wins the insert; a known signature conflicts and falls
@@ -349,7 +364,7 @@ func (s *sqliteStore) InsertFinding(f model.Finding) (err error) {
 				return fmt.Errorf("pin source call: %w", err)
 			}
 			// Attribute the drift to the source call's edge (one per signature).
-			if err := s.bumpEdgeDrift(tx, *sourceCallID); err != nil {
+			if err := bumpEdgeDrift(tx, s.rebind, *sourceCallID); err != nil {
 				return err
 			}
 		}
@@ -395,26 +410,6 @@ func (s *sqliteStore) InsertFinding(f model.Finding) (err error) {
 	return nil
 }
 
-// bumpEdgeDrift increments drift_count on the edge that owns the given source
-// call, inside the caller's transaction. Caller must hold s.mu.
-func (s *sqliteStore) bumpEdgeDrift(q queryExecer, sourceCallID string) error {
-	var peerHost, direction sql.NullString
-	err := q.QueryRow(`SELECT peer_host, direction FROM calls WHERE id=?`, sourceCallID).Scan(&peerHost, &direction)
-	if err == sql.ErrNoRows || (err == nil && (!peerHost.Valid || peerHost.String == "")) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("lookup source call edge: %w", err)
-	}
-	if _, err := q.Exec(
-		`UPDATE edges SET drift_count = drift_count + 1 WHERE peer_host=? AND direction=?`,
-		peerHost.String, direction.String,
-	); err != nil {
-		return fmt.Errorf("bump edge drift: %w", err)
-	}
-	return nil
-}
-
 // MarkPromoted implements evict-after-promote: a flagged call is unpinned and
 // stamped promoted_at, returning it to the eviction pool.
 func (s *sqliteStore) MarkPromoted(id string) error {
@@ -435,6 +430,13 @@ func (s *sqliteStore) MarkPromoted(id string) error {
 // one row at a time so the window is never cut below its cap. Caller must hold
 // s.mu.
 func (s *sqliteStore) evictLocked(keepID string) error {
+	// The ledger no longer rides on call eviction — it has its own clock — but
+	// this pass is the store's housekeeping beat, so it is where the TTL prune
+	// runs on the call path (InsertCall, MarkPromoted). One indexed range
+	// delete; in steady state it matches nothing.
+	if err := pruneOccurrences(s.db, s.rebind, time.Now()); err != nil {
+		return err
+	}
 	for {
 		var rows int
 		var bytes sql.NullInt64
