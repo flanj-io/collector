@@ -19,12 +19,15 @@ import {
 import { hashForTab, hashForThread, routeFromHash, type Tab } from './route';
 import {
   ADD_CONTRACT,
+  CONTRACT_OVER_CAP_TAG,
   MCP_SELF_REPORTS,
   NO_CONTRACT_ROW,
   NO_CONTRACT_SECTION,
   REPLACE_CONTRACT,
   UPLOADER_DISCARD_CONFIRM,
   VERSION_DIFF_NO_CALL,
+  contractOverCap,
+  contractOverCapLine,
   contractMeta,
   contractOrigin,
   provenanceWord,
@@ -545,6 +548,24 @@ function cardValidatedCalls(p: ContractCard): number {
     n++;
   }
   return n;
+}
+
+/**
+ * Is this card's stored document past the contract channel's 8 MB cap?
+ *
+ * Gated on `serves_fronts`, and that gate is the whole reason this reads a
+ * health field at all. The cap is a property of the FRONT hop: a single pod's
+ * drift processor reads the same row in-process, crosses no boundary, applies
+ * no cap, and validates against the document exactly as it always has. Showing
+ * "too large to serve" there would warn about something that works, which is
+ * the class of claim this surface exists to stop making. On the store pod of a
+ * tiered deployment the same row genuinely cannot reach any front.
+ *
+ * Absent `serves_fronts` (an older collector) reads as no fronts — the
+ * pre-tiered default, and the one that claims nothing.
+ */
+function cardOverCap(p: ContractCard): boolean {
+  return !!health.value?.serves_fronts && !!p.spec && contractOverCap(p.spec);
 }
 
 /** The evidence line under a card: `validated 0 calls since upload`. Always
@@ -1673,6 +1694,11 @@ watch(tab, (t) => {
                  the slug is what tells `acme-tools` from `acme-tools-stdio`. -->
             <span v-if="p.spec?.integration" class="prov-integration mono">integration: {{ p.spec.integration }}</span>
             <span class="prov-status">
+              <!-- FIRST in the lane: it explains the chips beside it. A card
+                   whose document no front can read shows "no calls validated
+                   yet" forever, and without this the operator reads that as a
+                   quiet edge rather than as a channel that is refusing. -->
+              <span v-if="cardOverCap(p)" class="tag warn">{{ CONTRACT_OVER_CAP_TAG }}</span>
               <!-- Tier-split chips — same taxonomy as the tab pills, so the sums always agree. -->
               <span v-if="cardBreakingCount(p)" class="tag drift">{{ breakingChipLabel(cardBreakingCount(p)) }}</span>
               <span v-if="cardInfoCount(p)" class="tag warn" :title="cardInfoTitle(p)">{{ informationalChipLabel(cardInfoCount(p)) }}</span>
@@ -1689,6 +1715,13 @@ watch(tab, (t) => {
               <span v-else-if="!cardBreakingCount(p) && !cardInfoCount(p)" class="tag none">no contract loaded</span>
             </span>
           </div>
+
+          <!-- What the chip above means, in the muted text channel the card
+               already uses for a per-row explanation (NO_CONTRACT_ROW sits in
+               the same slot). Names the size, the overage, and both branches of
+               what a front does with it — this surface cannot know which front
+               holds a baseline, and guessing would be a statement. -->
+          <p v-if="cardOverCap(p) && p.spec" class="prov-oversize">{{ contractOverCapLine(p.spec) }}</p>
 
           <ContractUploader
             v-if="uploadFor === p.peerHost && p.peerHost"
@@ -2447,6 +2480,11 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
    not in a 0.78rem slug at the end of the row. */
 .prov-origin { color: var(--muted); font-weight: 400; }
 .prov-nospec { color: var(--muted); font-size: 0.88rem; margin: 0.6rem 0 0; }
+/* The document-cap line. Same slot and same size as .prov-nospec — it is the
+   same kind of sentence — in the amber TEXT role rather than the muted one,
+   because this one names something the operator can act on. --warn-text, not
+   --warn: the fill is for chips, and --accent is never semantic. */
+.prov-oversize { color: var(--warn-text); font-size: 0.88rem; margin: 0.6rem 0 0; }
 .prov-integration { color: var(--muted); font-size: 0.78rem; }
 .finding.nested { background: var(--panel2); margin: 0.75rem 0 0; }
 /* Acked rows: dimmed in place (matches the disabled idiom); evidence stays visible. */

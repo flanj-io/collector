@@ -112,16 +112,30 @@ func (f *fakeStore) ListEdges(externalOnly bool) ([]model.Edge, error) {
 	return out, nil
 }
 func (f *fakeStore) EdgeCallCountsSince(string) (map[string]int, error) { return map[string]int{}, nil }
-func (f *fakeStore) PutSpecInfo(si model.SpecInfo, _ []byte) error {
+func (f *fakeStore) PutSpecInfo(si model.SpecInfo, raw []byte) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.specDocs == nil {
+		f.specDocs = map[string][]byte{}
+	}
+	if len(raw) > 0 {
+		f.specDocs[si.Integration] = raw
+	}
 	f.specInfos = append(f.specInfos, si)
 	return nil
 }
+
+// ListSpecInfos mirrors the real backends, which MEASURE the stored document at
+// list time (store.base.ListSpecInfos). A fake that reported no size would make
+// every over-cap row here look like an ordinary one.
 func (f *fakeStore) ListSpecInfos() ([]model.SpecInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]model.SpecInfo(nil), f.specInfos...), nil
+	out := append([]model.SpecInfo(nil), f.specInfos...)
+	for i := range out {
+		out[i].DocBytes = len(f.specDocs[out[i].Integration])
+	}
+	return out, nil
 }
 func (f *fakeStore) GetSpecDoc(integration string) ([]byte, string, bool, error) {
 	f.mu.Lock()

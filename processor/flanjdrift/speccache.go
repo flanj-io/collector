@@ -65,6 +65,16 @@ type specSource interface {
 	listSpecs() ([]model.SpecInfo, error)
 	// specDoc returns one raw contract document.
 	specDoc(integration string) ([]byte, error)
+	// overCap reports, from the METADATA alone, that this source will refuse
+	// the row's document for its size — nil when it will not.
+	//
+	// It is on the SOURCE and not on the row because the cap belongs to the
+	// HOP, not to the document. A co-located store hands the drift processor
+	// the same bytes in the same process, crosses no boundary and applies no
+	// cap, so it always answers nil and an oversized document keeps validating
+	// on a single pod exactly as it did. Only the tiered channel refuses, at
+	// both of its ends (model.MaxContractDocBytes, collector#50).
+	overCap(si model.SpecInfo) *overCapError
 }
 
 // storeSpecSource reads the co-located store directly.
@@ -82,6 +92,12 @@ func (s storeSpecSource) specDoc(integration string) ([]byte, error) {
 	}
 	return raw, nil
 }
+
+// overCap is always nil here: this read crosses no boundary, so no cap applies.
+// A document past model.MaxContractDocBytes is bound and validating on a single
+// pod, and refusing it here would break detection that works today in order to
+// enforce a limit on a hop this source does not take.
+func (storeSpecSource) overCap(model.SpecInfo) *overCapError { return nil }
 
 // cachedSpec is one parsed provider contract, plus the change token that lets a
 // refresh skip re-parsing it.
@@ -201,6 +217,20 @@ func (c *specCache) reconcile(infos []model.SpecInfo, src specSource) (changed [
 	// documents while a replacement is being prepared.
 	fresh := make(map[string]cachedSpec, len(stale))
 	for _, si := range stale {
+		// A row the source will refuse for its SIZE is skipped without asking.
+		// It is skipped either way — the refusal is at both ends of the channel
+		// — but asking cost one request per oversized edge every ten seconds
+		// and a log line on both pods for each. The condition is returned as a
+		// typed error so the caller can report it on transition rather than on
+		// every tick (processor.go).
+		//
+		// An over-cap row is never cached, so it is stale on every pass and
+		// this branch fires on every pass: that is what makes the condition
+		// observable, and what lets it CLEAR the moment the document shrinks.
+		if oc := src.overCap(si); oc != nil {
+			errs = append(errs, oc)
+			continue
+		}
 		raw, err := src.specDoc(si.Integration)
 		if err != nil {
 			errs = append(errs, err)

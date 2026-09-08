@@ -76,6 +76,32 @@ func (e *uiExtension) announceSpecChange() {
 	}
 }
 
+// servesFronts reports whether the store extension beside this one hands its
+// contracts to FRONT collectors (store.ContractServer — i.e. `spec_endpoint` is
+// configured).
+//
+// The Contracts card asks so it can be honest about the document cap, which
+// belongs to that hop alone: a co-located drift processor reads the same rows
+// in-process with no cap at all, so an over-cap document is bound and
+// validating on a single pod and a card calling it "too large to serve" there
+// would warn about something that works.
+//
+// Not latched, like announceSpecChange and unlike resolveStore: this scans a
+// handful of extensions on a poll that already reads the store, and a host with
+// no store extension — or one predating the interface — answers false, which is
+// the pre-tiered default and the safe one.
+func (e *uiExtension) servesFronts() bool {
+	if e.host == nil {
+		return false
+	}
+	for _, ext := range e.host.GetExtensions() {
+		if cs, ok := ext.(store.ContractServer); ok {
+			return cs.ServesContracts()
+		}
+	}
+	return false
+}
+
 // Start wires the CP client and serves the UI on the loopback endpoint. The
 // store is resolved lazily (see resolveStore).
 func (e *uiExtension) Start(ctx context.Context, host component.Host) error {

@@ -127,6 +127,16 @@ export interface Health {
   held_prior_data?: boolean;
   consumer_display_name?: string;
   provider_display_name?: string;
+  /** Does this pod hand its stored contracts to FRONT collectors — i.e. is it
+   *  the store pod of a tiered deployment (`flanjstore.spec_endpoint`)?
+   *
+   *  The Contracts card needs it before it can say anything about the 8 MB
+   *  document cap, which belongs to that hop alone: a single pod's drift
+   *  processor reads the same rows in-process with no cap, so an oversized
+   *  document there is bound and validating. Absent on an older collector,
+   *  which reads as "no fronts" — the pre-tiered default, and the one that
+   *  claims nothing. */
+  serves_fronts?: boolean;
 }
 
 /** POST /api/flag success body. */

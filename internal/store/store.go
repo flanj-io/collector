@@ -178,12 +178,42 @@ type SpecSubscriber interface {
 	OnSpecsChanged(fn func())
 }
 
+// ContractServer is implemented by the store extension and answers ONE
+// question the UI cannot answer for itself: does this pod serve its stored
+// contracts to FRONT collectors?
+//
+// It exists because the document cap is a property of that HOP and of nothing
+// else. A co-located drift processor reads the store in-process, crosses no
+// boundary and applies no cap, so a document past MaxContractDocBytes is bound
+// and validating on a single pod — and a card that called it "too large to
+// serve" there would be a warning about a thing that is working, which is the
+// class of lie this surface exists to end. The same row on a store pod with a
+// configured `spec_endpoint` is refused at both ends of the channel and its
+// edge really is unchecked on every front.
+//
+// Discovered the way Provider and SpecPublisher are: by type-asserting a host
+// extension. An extension that predates this interface answers nothing, which
+// reads as "no fronts" — the pre-tiered default, and the safe one.
+type ContractServer interface {
+	// ServesContracts reports whether this pod's intra-cluster contract
+	// endpoint is configured and listening.
+	ServesContracts() bool
+}
+
 // base holds what both backends share: the connection pool and the read path.
 // Queries are written with `?` placeholders; rebind converts them to the
 // backend's native style ($1..$n for postgres, identity for sqlite).
 type base struct {
 	db     *sql.DB
 	rebind func(string) string
+	// octetLength renders "the size of this TEXT column IN BYTES" for the
+	// backend. It is a dialect difference with a silent wrong answer, which is
+	// why it is a field rather than one portable-looking expression: sqlite's
+	// length() counts CHARACTERS of a TEXT value, so a document full of
+	// multi-byte UTF-8 measured smaller than the cap it had already blown,
+	// while postgres's length() is the same trap and octet_length() is its
+	// answer. Both are given the expression that counts bytes.
+	octetLength func(column string) string
 }
 
 // GetSetting returns the value stored under key, ok=false when absent.
@@ -500,6 +530,19 @@ func placeholders(n int) string {
 
 // rebindIdentity leaves `?` placeholders untouched (sqlite).
 func rebindIdentity(q string) string { return q }
+
+// sqliteOctetLength measures a TEXT column IN BYTES on sqlite.
+//
+// The cast is the whole point. sqlite's length() over a TEXT value counts
+// CHARACTERS, so a tools/list full of non-ASCII tool descriptions would have
+// measured well under a cap it had already blown — a size check that reads
+// smaller the more multi-byte content there is. Over a BLOB, length() counts
+// bytes, which is the unit the cap is written in.
+func sqliteOctetLength(column string) string { return "length(CAST(" + column + " AS BLOB))" }
+
+// pgOctetLength measures a TEXT column IN BYTES on postgres, where length()
+// counts characters exactly as sqlite's does and octet_length() is the answer.
+func pgOctetLength(column string) string { return "octet_length(" + column + ")" }
 
 // rebindDollar rewrites `?` placeholders to `$1..$n` (postgres), skipping
 // quoted literals.
@@ -877,11 +920,18 @@ func specSourceOf(info model.SpecInfo) string {
 // database whose column predates the NOT NULL DEFAULT, never a classifier —
 // the value is the writer's (see specSourceOf and each backend's open-time
 // repair of pre-2026-09-07 mcp rows).
+//
+// The document's SIZE is measured here and returned as DocBytes. Metadata-only
+// stays true — the size is an aggregate the backend computes over the column,
+// not the column — and it is what lets both ends of the tiered contract channel
+// recognise an over-cap row from the listing instead of by attempting the
+// transfer and reading the refusal (model.MaxContractDocBytes, collector#50).
 func (b *base) ListSpecInfos() ([]model.SpecInfo, error) {
 	rows, err := b.db.Query(
 		`SELECT integration, role, COALESCE(peer_host,''), COALESCE(edge_class,''), format, COALESCE(title,''),
 		        COALESCE(version,''), COALESCE(docs_url,''), endpoints, loaded_at,
-		        COALESCE(source,'config'), COALESCE(prev_version,''), COALESCE(prev_loaded_at,'')
+		        COALESCE(source,'config'), COALESCE(prev_version,''), COALESCE(prev_loaded_at,''),
+		        ` + b.octetLength("doc") + `
 		   FROM spec_infos ORDER BY role DESC, integration ASC`, // self first
 	)
 	if err != nil {
@@ -893,7 +943,7 @@ func (b *base) ListSpecInfos() ([]model.SpecInfo, error) {
 		var si model.SpecInfo
 		if err := rows.Scan(&si.Integration, &si.Role, &si.PeerHost, &si.EdgeClass, &si.Format, &si.Title,
 			&si.Version, &si.DocsURL, &si.Endpoints, &si.LoadedAt,
-			&si.Source, &si.PrevVersion, &si.PrevLoadedAt); err != nil {
+			&si.Source, &si.PrevVersion, &si.PrevLoadedAt, &si.DocBytes); err != nil {
 			return nil, err
 		}
 		out = append(out, si)

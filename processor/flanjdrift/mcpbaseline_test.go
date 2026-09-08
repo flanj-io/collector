@@ -32,6 +32,7 @@ func (f *fakeSource) putMCP(integration, host, loadedAt string, doc []byte) {
 		PeerHost:    host,
 		Source:      model.SpecSourceObserved,
 		LoadedAt:    loadedAt,
+		DocBytes:    len(doc),
 	})
 	f.docs[integration] = doc
 }

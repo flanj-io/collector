@@ -39,7 +39,7 @@ func OpenSQLite(path string, maxRows int, maxBytes int64) (Store, error) {
 		return nil, fmt.Errorf("ping sqlite: %w", err)
 	}
 	s := &sqliteStore{
-		base:     base{db: db, rebind: rebindIdentity},
+		base:     base{db: db, rebind: rebindIdentity, octetLength: sqliteOctetLength},
 		maxRows:  maxRows,
 		maxBytes: maxBytes,
 	}

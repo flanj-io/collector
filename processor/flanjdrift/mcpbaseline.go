@@ -129,6 +129,18 @@ func (s *mcpSeeds) reconcile(infos []model.SpecInfo, src specSource, det *drift.
 		if s.seen[si.Integration] == si.LoadedAt {
 			continue
 		}
+		// A row past the channel's document cap is skipped WITHOUT being
+		// marked seen, so the condition is re-derived every tick and clears
+		// the moment the server publishes a smaller catalogue. Costs nothing:
+		// the size comes from the listing, so nothing is requested. The
+		// detector keeps whatever baseline it already holds — the store's
+		// org-wide one from before the catalogue grew, or, on a front that
+		// never had one, nothing at all, which is the state every call on that
+		// edge is honestly stamped with.
+		if oc := src.overCap(si); oc != nil {
+			errs = append(errs, oc)
+			continue
+		}
 		raw, err := src.specDoc(si.Integration)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("mcp snapshot %q: %w", si.Integration, err))

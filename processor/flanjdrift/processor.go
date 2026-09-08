@@ -10,6 +10,7 @@ import (
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.uber.org/zap"
 
+	"github.com/flanj-io/collector/internal/condition"
 	"github.com/flanj-io/collector/internal/drift"
 	"github.com/flanj-io/collector/internal/model"
 	"github.com/flanj-io/collector/internal/otlpattr"
@@ -45,6 +46,12 @@ type driftProcessor struct {
 	// src is where contracts come from: the co-located store, or — on a front
 	// of the tiered topology, which has none — the store pod over HTTP.
 	src specSource
+	// overCap remembers which rows this front is refusing for their SIZE, so
+	// the refusal is logged when it STARTS and when it CLEARS. The refresh
+	// re-derives the condition every ten seconds and would otherwise write the
+	// same Warn line six times a minute per oversized edge, forever, which
+	// buries the one line an operator can act on under copies of itself.
+	overCap condition.Standing
 	// held are findings produced OFF the batch path — the definition diff
 	// drift.MCPDetector.Seed reports when the store's newer list displaces a
 	// live baseline, which happens on the refresh loop — parked until the
@@ -233,6 +240,12 @@ func (p *driftProcessor) refreshSpecs() {
 	changed, errs := p.specs.reconcile(infos, p.src)
 	seeded, seedFindings, seedErrs := p.mcpSeeds.reconcile(infos, p.src, p.mcp)
 	p.holdFindings(seedFindings)
+	// The document cap is a STANDING condition and comes out of the error lists
+	// separately: it is true for as long as the document stays big, and both
+	// reconcilers re-derive it on every tick by design (that is what lets it
+	// clear on its own). Everything else here is transient and still reports
+	// every time.
+	errs, seedErrs = p.reportOverCap(errs, seedErrs)
 	if p.logger == nil {
 		return
 	}
@@ -259,6 +272,71 @@ func (p *driftProcessor) refreshSpecs() {
 		p.logger.Info("mcp baseline adopted from the store reports definition changes",
 			zap.Int("findings", len(seedFindings)))
 	}
+}
+
+// Log lines for the front's half of the document cap. Named constants because
+// the tiered e2e lane waits on them: a front runs no UI and owns no store, so a
+// condition that produces no finding and no record has the log and nothing else.
+const (
+	msgSpecOverCap        = "contract refresh: the store pod holds a document past the cap, so this edge keeps whatever baseline this front already had"
+	msgSpecOverCapCleared = "contract refresh: the document is back under the cap and this edge is being read again"
+)
+
+// reportOverCap splits the document-cap condition out of the two error lists,
+// logs the TRANSITIONS, and returns the errors that remain — the transient ones,
+// which still report on every tick because each is a fresh event.
+//
+// Both reconcilers re-derive the condition every tick on purpose. An over-cap
+// row is never cached and never marked seen, so it is re-examined on every pass
+// at no cost (the size comes from the listing; nothing is requested), and that
+// is exactly what makes this a full sweep — the precondition for calling
+// Observe, which reads an absence as a clear.
+func (p *driftProcessor) reportOverCap(errs, seedErrs []error) (restErrs, restSeedErrs []error) {
+	now := make(map[string]int64)
+	rows := make(map[string]*overCapError)
+	keep := func(in []error) []error {
+		out := in[:0:0]
+		for _, err := range in {
+			oc, ok := asOverCap(err)
+			if !ok {
+				out = append(out, err)
+				continue
+			}
+			now[oc.integration] = int64(oc.bytes)
+			rows[oc.integration] = oc
+		}
+		return out
+	}
+	restErrs, restSeedErrs = keep(errs), keep(seedErrs)
+
+	raised, cleared := p.overCap.Observe(now)
+	if p.logger == nil {
+		return restErrs, restSeedErrs
+	}
+	for _, c := range raised {
+		fields := []zap.Field{
+			zap.String("integration", c.Key),
+			zap.Int("cap_bytes", maxSpecBytes),
+		}
+		if oc := rows[c.Key]; oc != nil {
+			if oc.peerHost != "" {
+				fields = append(fields, zap.String("peer_host", oc.peerHost))
+			}
+			// Zero when the store pod is on an image that predates doc_bytes:
+			// its 413 carries a status, not a measurement, and inventing one
+			// would be worse than omitting the field.
+			if oc.bytes > 0 {
+				fields = append(fields, zap.Int("bytes", oc.bytes))
+			}
+		}
+		p.logger.Warn(msgSpecOverCap, fields...)
+	}
+	for _, c := range cleared {
+		p.logger.Info(msgSpecOverCapCleared,
+			zap.String("integration", c.Key),
+			zap.Int("cap_bytes", maxSpecBytes))
+	}
+	return restErrs, restSeedErrs
 }
 
 // holdFindings parks findings produced off the batch path for the next batch.

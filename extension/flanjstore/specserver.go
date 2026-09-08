@@ -113,7 +113,60 @@ func (e *storeExtension) handleSpecList(w http.ResponseWriter, _ *http.Request) 
 			out = append(out, si)
 		}
 	}
+	// The listing carries each document's SIZE (model.SpecInfo.DocBytes), so a
+	// front recognises an over-cap row here and stops asking for a document it
+	// will be refused. This is also the store pod's own full sweep of the
+	// condition, and therefore where it is logged — on transition.
+	e.reportOverCap(out)
 	writeSpecJSON(w, map[string]any{"contracts": out})
+}
+
+// Log lines for the document cap. Named constants because the tiered e2e lane
+// waits on them: a front and a store pod have no other observable surface for
+// a condition that produces no finding and no record.
+const (
+	msgSpecOverCap        = "contract endpoint: a stored document is past the cap and will not be served"
+	msgSpecOverCapCleared = "contract endpoint: the stored document is back under the cap and is served again"
+)
+
+// reportOverCap logs the document-cap refusal ON TRANSITION — when a row first
+// goes past the cap, and when it comes back under it.
+//
+// Every listing re-derives the condition from scratch, and a front lists every
+// ten seconds. Logging what the sweep found would put six identical Warn lines
+// a minute per oversized edge per front into the store pod's log, forever,
+// which buries the one line that matters under a thousand copies of itself and
+// reads like a storm of new events rather than one unchanged fact. The start
+// and the end are the events; `condition.Standing` holds the rest.
+//
+// Called with the SERVABLE rows only — the ones that actually cross this
+// channel. A self contract or an unbound row is withheld from fronts for other
+// reasons entirely and its size decides nothing.
+func (e *storeExtension) reportOverCap(servable []model.SpecInfo) {
+	now := make(map[string]int64)
+	hosts := make(map[string]string)
+	for _, si := range servable {
+		if si.DocBytes > specMaxDoc {
+			now[si.Integration] = int64(si.DocBytes)
+			hosts[si.Integration] = si.PeerHost
+		}
+	}
+	raised, cleared := e.overCap.Observe(now)
+	if e.logger == nil {
+		return
+	}
+	for _, c := range raised {
+		e.logger.Warn(msgSpecOverCap,
+			zap.String("integration", c.Key),
+			zap.String("peer_host", hosts[c.Key]),
+			zap.Int64("bytes", c.Detail),
+			zap.Int("cap_bytes", specMaxDoc))
+	}
+	for _, c := range cleared {
+		e.logger.Info(msgSpecOverCapCleared,
+			zap.String("integration", c.Key),
+			zap.Int("cap_bytes", specMaxDoc))
+	}
 }
 
 // servableContract is the ONE rule for what may cross this hop, applied by the
@@ -165,14 +218,23 @@ func (e *storeExtension) handleSpecDoc(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	servable := false
+	var row model.SpecInfo
 	for _, si := range infos {
 		if si.Integration == integration && servableContract(si) {
-			servable = true
+			servable, row = true, si
 			break
 		}
 	}
 	if !servable {
 		http.Error(w, "no such contract", http.StatusNotFound)
+		return
+	}
+	// Refuse from the METADATA, before the document is read. The listing
+	// already measured it, and loading an over-cap document into this pod's
+	// heap on every request only to refuse it is the cost the cap exists to
+	// avoid — one that grows with the number of fronts asking.
+	if row.DocBytes > specMaxDoc {
+		e.refuseOverCap(w, row.Integration, row.PeerHost, row.DocBytes)
 		return
 	}
 	raw, _, ok, err := st.GetSpecDoc(integration)
@@ -200,21 +262,33 @@ func (e *storeExtension) handleSpecDoc(w http.ResponseWriter, r *http.Request) {
 		// request body — so a large enough catalogue lands in a row that has
 		// to cross this channel.
 		//
-		// The row stays LISTED. A front that keeps asking gets this same named
-		// refusal every tick, which is the only symptom either end gets; and
-		// the operator who can act on it — shrink the catalogue, or split the
-		// server — reads this pod's log.
-		if e.logger != nil {
-			e.logger.Warn("contract endpoint: a stored document is past the cap and will not be served",
-				zap.String("integration", integration),
-				zap.Int("bytes", len(raw)),
-				zap.Int("cap_bytes", specMaxDoc))
-		}
-		http.Error(w, "contract document larger than the cap", http.StatusRequestEntityTooLarge)
+		// The row stays LISTED, and since 2026-09-08 it is listed WITH ITS SIZE
+		// and with an explicit state on the Contracts card, so "a contract is
+		// present" and "this edge is unchecked on every front" stop
+		// contradicting each other. Reaching here past the metadata check above
+		// means the row was replaced between the list and the read.
+		e.refuseOverCap(w, integration, row.PeerHost, len(raw))
 		return
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
 	_, _ = w.Write(raw)
+}
+
+// refuseOverCap answers a document past the cap: 413, and a log line the FIRST
+// time this row is refused (or the first time a NEW over-cap document is stored
+// for it). A front asks every ten seconds and gets the same named refusal every
+// time, which is what the front needs; the store pod's operator needs the event,
+// not the repetition, so the line rides condition.Standing — the same set the
+// listing sweep clears, so the two routes cannot each log the row once.
+func (e *storeExtension) refuseOverCap(w http.ResponseWriter, integration, peerHost string, bytes int) {
+	if e.overCap.Raise(integration, int64(bytes)) && e.logger != nil {
+		e.logger.Warn(msgSpecOverCap,
+			zap.String("integration", integration),
+			zap.String("peer_host", peerHost),
+			zap.Int("bytes", bytes),
+			zap.Int("cap_bytes", specMaxDoc))
+	}
+	http.Error(w, "contract document larger than the cap", http.StatusRequestEntityTooLarge)
 }
 
 // specError logs the cause and tells the caller only that it failed — a peer
