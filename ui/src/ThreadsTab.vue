@@ -14,6 +14,7 @@ import { nextTick, ref, watch } from 'vue';
 import { ApiError, openThreadInNewTab } from './api';
 import {
   THREADS_READ_ONLY_NOTE,
+  WORKSPACE_LINK_OUT,
   knockNote,
   linkLabel,
   linkNeedsAttention,
@@ -37,6 +38,11 @@ const props = defineProps<{
    *  list on screen is short of it. */
   total: number;
   hasMore: boolean;
+  /** The CP workspace address, or '' when the collector offers none (not
+   *  Connected, or no address a browser off-host could open). Empty means the
+   *  link-out is not rendered — never a dead link, the same rule the Connected
+   *  pill follows. */
+  dashboardUrl: string;
 }>();
 // 'connect' is the only event left: the read-only tab mutates nothing, so the
 // old 'refresh' (emitted after close/reopen/replace) retired with the buttons.
@@ -84,6 +90,14 @@ watch(
          thread page now. Always visible, so nobody hunts for the buttons that
          used to be here. -->
     <p class="th-readonly">{{ THREADS_READ_ONLY_NOTE }}</p>
+    <!-- v1 phase 3: the one line out to the person's own workspace. This list is
+         the threads THIS collector created; the workspace is every thread they
+         are part of, which for anyone who has also answered someone else's
+         thread is a strictly larger set. Rendered only when there is somewhere
+         to go — absence keeps this tab exactly as it was. -->
+    <p v-if="dashboardUrl" class="th-workspace">
+      <a :href="dashboardUrl" target="_blank" rel="noopener noreferrer">{{ WORKSPACE_LINK_OUT }}</a>
+    </p>
     <p v-if="loadError" class="error">{{ loadError }}</p>
 
     <!-- "No threads yet" is a claim only a collector that could see the list may
@@ -152,7 +166,11 @@ watch(
 </template>
 
 <style scoped>
-.th-readonly { color: var(--ink-soft); font-size: 0.85rem; margin: -0.25rem 0 0.75rem; }
+.th-readonly { color: var(--ink-soft); font-size: 0.85rem; margin: -0.25rem 0 0.25rem; }
+/* The workspace link-out: an offer, not a prompt — same muted register as the
+   read-only note above it, and it names no colour of its own. */
+.th-workspace { font-size: 0.85rem; margin: 0 0 0.75rem; }
+.th-workspace a { color: var(--ink-soft); }
 .th-table { border: 1px solid var(--rule); border-radius: var(--radius); overflow: hidden; background: var(--surface); }
 .th-head, .th-main { display: grid; grid-template-columns: 1.05fr 1.55fr 0.5fr 1.45fr 0.95fr 0.85fr 0.45fr; gap: 0.6rem; align-items: center; padding: 0.55rem 0.9rem; }
 .th-head { color: var(--ink-soft); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--rule); background: var(--surface-sunk); }

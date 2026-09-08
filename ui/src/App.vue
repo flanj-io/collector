@@ -2036,6 +2036,7 @@ watch(tab, (t) => {
         :notice="threadsNotice"
         :total="threadsTotal"
         :has-more="threadsHasMore"
+        :dashboard-url="dashboardUrl"
         @connect="goToSettings"
       />
     </div>
