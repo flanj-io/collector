@@ -237,6 +237,51 @@ export function pasteText(opts: { endpoint: string; since: string; requestId?: s
   return lead + ' Details and reply here: ' + opts.link;
 }
 
+/**
+ * "What leaves this collector" for a finding that has NO source call — since
+ * v1p4 that is a flaggable state on every kind, not just `definition_change`
+ * (the collector relay stopped answering 400 finding_has_no_call). The standing
+ * HTTP lead names "this redacted request/response", which is not there.
+ */
+export const CALL_LESS_DISCLOSURE_LEAD = 'This finding, the endpoint, your message, and';
+export const CALL_LESS_DISCLOSURE_TAIL =
+  'No call is attached — this was found by comparing two versions of the contract, not by a call.';
+
+// ─── Question-only threads (v1 phase 4) ───────────────────────────────────
+// A thread started from an EDGE row carries no call and no finding. Every
+// string below exists because the evidence-bearing equivalent would be a false
+// claim on a thread that holds no evidence.
+
+/** Under the sheet title, where an evidence line sits on a flag. */
+export const QUESTION_LEAD =
+  'No evidence is attached — this thread carries your message and the domain, and nothing else.';
+
+/** The message field's label. On a flag it reads "Message (optional)"; here the
+ *  message IS the thread, so it is required and says so. */
+export const QUESTION_MESSAGE_LABEL = 'Your question';
+
+/** Shown while the textarea is empty: Create thread is inert until it is not. */
+export const QUESTION_MESSAGE_REQUIRED = 'Write your question first — there is no evidence to send in its place.';
+
+/** "What leaves this collector", question variant: the lead before the
+ *  `<C> · <E>` names, and the tail after them. */
+export function questionDisclosureLead(domain: string): string {
+  return `Your message, the domain ${domain}, and`;
+}
+export const QUESTION_DISCLOSURE_TAIL = 'No calls, no findings and no local data leave this collector.';
+
+/** The success-state warning. The flag variant says "read the redacted
+ *  evidence", which is not true of a thread that carries none. */
+export function questionShareWarning(provider: string): string {
+  return `Anyone with this link can read your message and reply. Paste it where you already talk to ${provider}'s team. It lasts 30 days and extends with each reply.`;
+}
+
+/** "Copy link + message" for a question: no request id, no endpoint, no drift
+ *  claim — the domain and the link, which is all there is. */
+export function questionPasteText(opts: { domain: string; link: string }): string {
+  return `A question about ${opts.domain} — reply here: ${opts.link}`;
+}
+
 /** Prefilled, editable, optional message for the Flag sheet. */
 export function defaultFlagMessage(f: {
   endpoint: string;

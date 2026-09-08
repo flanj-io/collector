@@ -2,9 +2,12 @@ package flanjui
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"io/fs"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -40,6 +43,9 @@ func (e *uiExtension) routes() http.Handler {
 	mux.HandleFunc("/api/contracts/remove", e.handleContractRemove)
 	mux.HandleFunc("/api/connect", e.handleConnect)
 	mux.HandleFunc("/api/flag", e.handleFlag)
+	// Start a thread from an edge row (v1 phase 4) — a MESSAGE-ONLY thread. A
+	// relay route like /api/flag, and behind the same Connect gate.
+	mux.HandleFunc("/api/edges/thread", e.handleEdgeThread)
 	mux.HandleFunc("/api/threads", e.handleThreads)
 	mux.HandleFunc("/api/threads/{id}/summary", e.handleThreadSummary)
 	mux.HandleFunc("/api/threads/{id}/open", e.handleThreadOpen)
@@ -509,6 +515,37 @@ type flagRequestBody struct {
 // canonical implementation in internal/promote.
 func humanizeIntegration(id string) string { return promote.HumanizeIntegration(id) }
 
+// requireConnectedForThread is the Connect gate every thread-CREATING route
+// shares: a key AND a confirmed contact. The gate is "a confirmed contact
+// exists" (`confirmed_contact_email` from `me`), not "the latest contact is
+// confirmed" — while a NEW email is pending the previously confirmed one keeps
+// Create thread available (CONTRACTS-CP §5.3). With none confirmed yet the CP is
+// re-asked right now (bypassing the me-cache) so Create thread works the moment
+// the confirmation click lands.
+//
+// One implementation, so the flag sheet and the edge "Start a thread" sheet
+// answer with the SAME 412s: the sheet unlocks on one code path, and a gate that
+// drifted between the two doors would be a gate on one of them.
+func (e *uiExtension) requireConnectedForThread(w http.ResponseWriter, r *http.Request, st store.Store) (connectState, *promote.Client, bool) {
+	cs, err := loadConnect(st)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "store_error", msgStoreUnavailable)
+		return cs, nil, false
+	}
+	if cs.CollectorKey == "" {
+		writeErr(w, http.StatusPreconditionFailed, "not_connected", msgNotConnected)
+		return cs, nil, false
+	}
+	if !cs.hasConfirmedContact() {
+		cs, _ = e.refreshConnect(r.Context(), st, cs, true)
+		if !cs.hasConfirmedContact() {
+			writeErr(w, http.StatusPreconditionFailed, "contact_unconfirmed", contactUnconfirmedMessage(cs.ContactEmail))
+			return cs, nil, false
+		}
+	}
+	return cs, e.keyedClient(cs), true
+}
+
 // handleFlag = Create thread: requires a Connected collector with a confirmed
 // contact (412 not_connected | contact_unconfirmed otherwise — viewing local data
 // never does), promotes the redacted failing call + finding to the control plane
@@ -535,29 +572,10 @@ func (e *uiExtension) handleFlag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Connect gate: a key AND a confirmed contact. The gate is "a confirmed
-	// contact exists" (`confirmed_contact_email` from `me`), not "the latest
-	// contact is confirmed" — while a NEW email is pending the previously
-	// confirmed one keeps Create thread available (CONTRACTS-CP §5.3). With
-	// none confirmed yet the CP is re-asked right now (bypassing the me-cache)
-	// so Create thread works the moment the confirmation click lands.
-	cs, err := loadConnect(st)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "store_error", msgStoreUnavailable)
+	cs, cli, ok := e.requireConnectedForThread(w, r, st)
+	if !ok {
 		return
 	}
-	if cs.CollectorKey == "" {
-		writeErr(w, http.StatusPreconditionFailed, "not_connected", msgNotConnected)
-		return
-	}
-	if !cs.hasConfirmedContact() {
-		cs, _ = e.refreshConnect(r.Context(), st, cs, true)
-		if !cs.hasConfirmedContact() {
-			writeErr(w, http.StatusPreconditionFailed, "contact_unconfirmed", contactUnconfirmedMessage(cs.ContactEmail))
-			return
-		}
-	}
-	cli := e.keyedClient(cs)
 
 	finding, ok, err := st.GetFinding(body.FindingID)
 	if err != nil {
@@ -575,13 +593,21 @@ func (e *uiExtension) handleFlag(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, "not_flaggable", msgNotFlaggable)
 		return
 	}
-	// CALL-LESS flagging (qfix2-2026-08-26, ux-design-v2 §2.7.5): a
-	// definition_change has no failing call by nature — the evidence is the
-	// provider's own tools/list, before and after — so 400 finding_has_no_call
-	// is lifted for it. Every other kind still needs its call: an
-	// output_mismatch without one has nothing to show, and a flag control that
-	// 400s is worse than no control at all.
-	callLess := finding.Kind == model.KindDefinitionChange
+	// CALL-LESS flagging. qfix2-2026-08-26 (ux-design-v2 §2.7.5) lifted
+	// 400 finding_has_no_call for a definition_change — no failing call exists
+	// by nature; the evidence is the provider's own tools/list, before and after.
+	// v1p4-2026-09-08 (v1-build-spec §3 Step 4, ruling 3) widens it to EVERY
+	// kind, because the reason it was narrow was never good: a version-diff has
+	// no source call by construction either, and answering its Flag control with
+	// a 400 is worse than having no control. `call` is optional on the wire
+	// whenever the request carries a message, and this relay always sends one —
+	// the sheet prefills it and promote.Build substitutes a default for an
+	// emptied textarea. So a finding that simply HAS no source call now flags.
+	//
+	// An EVICTED call is a different thing and still refuses: the sheet showed
+	// the operator an "Evidence (1)" line for that call, and quietly turning
+	// their flag into a call-less one would create a thread they did not mean to
+	// create. Only a definition_change is exempt (it never had a call to lose).
 	var call *model.RedactedCall
 	if finding.SourceCallID != nil && *finding.SourceCallID != "" {
 		c, ok, err := st.GetCall(*finding.SourceCallID)
@@ -589,16 +615,13 @@ func (e *uiExtension) handleFlag(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusInternalServerError, "store_error", msgStoreUnavailable)
 			return
 		}
-		if !ok && !callLess {
+		if !ok && finding.Kind != model.KindDefinitionChange {
 			writeErr(w, http.StatusNotFound, "call_not_found", msgCallEvicted)
 			return
 		}
 		if ok {
 			call = &c
 		}
-	} else if !callLess {
-		writeErr(w, http.StatusBadRequest, "finding_has_no_call", msgFindingNoCall)
-		return
 	}
 
 	// The consumer org is the Connected one (config is the fallback for display
@@ -680,6 +703,159 @@ func (e *uiExtension) handleFlag(w http.ResponseWriter, r *http.Request) {
 		"status":           resp.Status,
 		"finding_id":       finding.ID,
 	})
+}
+
+// edgeThreadRequestBody is the UI -> collector payload for "Start a thread" on
+// an edge row (v1 phase 4). No finding id: an edge is a registrable domain, not
+// a drift, so there is nothing local to attach.
+//
+// RequestID is minted by the SHEET, once, when it opens — it is what makes the
+// idempotency key stable across a retry after a failed create. The collector
+// cannot mint it here: this handler is stateless, so a retry would land on a
+// fresh key and a second thread. Two DIFFERENT questions about one edge are two
+// threads, which is why the key is not derived from the host.
+type edgeThreadRequestBody struct {
+	Host      string `json:"host"`
+	Message   string `json:"message"`
+	RequestID string `json:"request_id"`
+}
+
+// handleEdgeThread = Start a thread from an edge row (v1 phase 4, CONTRACTS §5):
+// a MESSAGE-ONLY thread. Same Connect gate as a flag (the same 412s, from the
+// same helper), same relay, same thread record — the only difference is what is
+// on the wire: no call, no finding, `provider_host` naming the edge so the
+// thread page can resolve a verified name for its provider slot.
+//
+// The message is REQUIRED here, before the round-trip: it is the entire artifact.
+// The CP enforces the same rule (400 finding_has_no_call), but a sheet that shows
+// its own refusal beats one that relays a control-plane error for a field the
+// operator can see.
+func (e *uiExtension) handleEdgeThread(w http.ResponseWriter, r *http.Request) {
+	if !e.guardMutating(w, r) {
+		return
+	}
+	var body edgeThreadRequestBody
+	// Same cap and same "too large" refusal as the flag message: a person can
+	// overflow this textarea by pasting a log without meaning to.
+	if !readJSONBody(w, r, maxSmallBodyBytes, &body, "request_too_large", msgRequestTooLarge) {
+		return
+	}
+	body.Host = strings.TrimSpace(body.Host)
+	if body.Host == "" {
+		writeErr(w, http.StatusBadRequest, "missing_fields", msgEdgeHostRequired)
+		return
+	}
+	if strings.TrimSpace(body.Message) == "" {
+		writeErr(w, http.StatusBadRequest, "missing_fields", msgEdgeThreadMessageRequired)
+		return
+	}
+	st := e.storeOrError(w)
+	if st == nil {
+		return
+	}
+	cs, cli, ok := e.requireConnectedForThread(w, r, st)
+	if !ok {
+		return
+	}
+
+	// The host must resolve to a discovered external OUTBOUND edge — the same
+	// rule the rename route enforces, for the same reason: inbound `peer_host`
+	// is a forgeable XFF first hop and is never identity (v1 spec §5), and an
+	// internal edge never crosses the org boundary at all.
+	edges, err := st.ListEdges(true)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "store_error", msgStoreUnavailable)
+		return
+	}
+	domain := edge.RegistrableDomain(body.Host)
+	var target *model.Edge
+	for i := range edges {
+		if edges[i].Direction == edge.DirectionClient && edge.RegistrableDomain(edges[i].PeerHost) == domain {
+			target = &edges[i]
+			break
+		}
+	}
+	if domain == "" || target == nil {
+		writeErr(w, http.StatusNotFound, "edge_not_found", msgEdgeNotFound)
+		return
+	}
+
+	consumerName := cs.ConsumerDisplayName
+	if consumerName == "" {
+		consumerName = e.cfg.ConsumerDisplayName
+	}
+	// The provider name is the edge's RESOLVED name (user > contract > directory
+	// > auto) — the same string the row the operator clicked is rendering. An
+	// unnamed edge sends no name at all rather than a humanized host: the CP
+	// falls back to its own resolution, and the thread page anchors on the
+	// domain we are sending anyway.
+	names := e.newNameResolver(st)
+	providerName, _ := names.resolve(target.PeerHost, domain)
+
+	req := promote.BuildQuestion(promote.QuestionInput{
+		IdempotencyKey:      edgeThreadIdempotencyKey(body.RequestID, target.PeerHost),
+		ConsumerDisplayName: consumerName,
+		ProviderDisplayName: providerName,
+		ProviderHost:        target.PeerHost,
+		Message:             body.Message,
+	})
+
+	resp, code, err := cli.Post(r.Context(), req)
+	if err != nil {
+		if ce := promote.AsCPError(err); ce != nil && ce.Status == http.StatusPreconditionFailed {
+			// The CP disagrees with our cached state — fold it back in, exactly
+			// as the flag path does.
+			if ce.Code == "contact_unconfirmed" {
+				cs.ContactStatus, cs.ConfirmedAt, cs.ConfirmedContactEmail = contactPending, "", ""
+				_ = saveConnect(st, cs)
+				writeErr(w, http.StatusPreconditionFailed, ce.Code, contactUnconfirmedMessage(cs.ContactEmail))
+				return
+			}
+			writeErr(w, http.StatusPreconditionFailed, "not_connected", msgNotConnected)
+			return
+		}
+		writeCPError(w, err, msgCPUnreachableFlag)
+		return
+	}
+	// There is no finding to key a thread.finding.<id> record on, so the link is
+	// parked under thread.link.<thread_id> — the existing key for a thread this
+	// collector holds no finding record for. One blind PutSetting, no
+	// read-modify-write, and the Threads tab still lists the row (the LIST comes
+	// from the CP) with a working Copy thread link.
+	if resp.ThreadURL != "" {
+		if err := st.PutSetting(settingThreadLinkPrefix+resp.ThreadID, resp.ThreadURL); err != nil {
+			e.telemetry.Logger.Warn("thread created but persisting its link failed: " + err.Error())
+		}
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, code, map[string]any{
+		"thread_id":        resp.ThreadID,
+		"thread_public_id": resp.ThreadPublicID,
+		"thread_url":       resp.ThreadURL,
+		"state":            resp.State,
+		"status":           resp.Status,
+	})
+}
+
+// edgeThreadIdempotencyKey namespaces the sheet's request id so a question can
+// never collide with a flag's `flag_<finding_id>` key. A missing, blank or
+// over-long request id (an older UI build, or a hand-made request) falls back to
+// a fresh random one: the caller loses retry-safety, which is theirs to lose, but
+// two questions never silently become ONE thread — which is exactly what a
+// host-derived key would do to a second question about the same edge.
+func edgeThreadIdempotencyKey(requestID, host string) string {
+	id := strings.TrimSpace(requestID)
+	if id == "" || utf8.RuneCountInString(id) > 64 {
+		var b [16]byte
+		if _, err := rand.Read(b[:]); err != nil {
+			// crypto/rand failing is not a reason to drop the operator's
+			// question; a time-based key still never collides with a live one.
+			id = "t" + strconv.FormatInt(time.Now().UTC().UnixNano(), 36)
+		} else {
+			id = hex.EncodeToString(b[:])
+		}
+	}
+	return "edge_" + host + "_" + id
 }
 
 // contactUnconfirmedMessage is the deck's 412 line, naming the pending address.

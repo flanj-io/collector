@@ -201,7 +201,7 @@ export const UPLOADER_DISCARD_CONFIRM =
  * about severity.
  */
 export const VERSION_DIFF_NO_CALL =
-  'Found by comparing this contract with the version it replaced — there’s no failing call to attach, so it can’t be flagged from here.';
+  'Found by comparing this contract with the version it replaced — there’s no failing call to attach, so your message is what the thread carries.';
 
 /** Pre-traffic upload is legitimate — on a fresh install there are no edges at
  *  all — so this explains rather than warns. */

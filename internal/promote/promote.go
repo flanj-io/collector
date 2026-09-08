@@ -29,13 +29,25 @@ import (
 // nature — its evidence is the provider's own two published tools/list
 // snapshots, not a failing call — so the field is omitted entirely rather than
 // carrying a fabricated or empty call record. We never invent evidence.
+//
+// Finding is a POINTER since v1p4-2026-09-08 for the same reason one step
+// further: a QUESTION thread started from an edge row has no finding either — an
+// edge is a registrable domain, not a drift — so the key is omitted rather than
+// carrying a zero-valued Finding, which would fail the CP's schema read and
+// would be a fabricated artifact if it did not.
+//
+// ProviderHost rides only on a call-less request: the domain is the anchor and
+// the name is decoration (CONTRACTS §5), so a thread with no call still names
+// the edge it is about and the thread page can resolve a verified directory name
+// for its provider slot instead of an unattributed consumer-asserted one.
 type FlagRequest struct {
 	IdempotencyKey      string              `json:"idempotency_key"`
 	ConsumerDisplayName string              `json:"consumer_display_name"`
 	ProviderDisplayName string              `json:"provider_display_name"`
+	ProviderHost        string              `json:"provider_host,omitempty"`
 	Message             string              `json:"message"`
 	Call                *model.RedactedCall `json:"call,omitempty"`
-	Finding             model.Finding       `json:"finding"`
+	Finding             *model.Finding      `json:"finding,omitempty"`
 }
 
 // FlagResponse is the CP reply (201 created | 200 existing). ThreadURL is the
@@ -63,6 +75,22 @@ type Input struct {
 	Finding model.Finding
 }
 
+// QuestionInput is what the UI hands the promoter for one "Start a thread" click
+// on an EDGE row (v1p4). There is no finding and no call: the operator is asking
+// about a counterparty, not reporting drift on one. The message is therefore
+// REQUIRED — the CP refuses a flag that carries neither evidence nor words — and
+// the idempotency key comes from the caller, because an edge has no finding id to
+// derive one from and two different questions about one edge are two threads.
+type QuestionInput struct {
+	IdempotencyKey      string
+	ConsumerDisplayName string
+	ProviderDisplayName string
+	// ProviderHost is the edge's observed host — the anchor for the thread page's
+	// provider slot. Empty is legal; it just costs the verified-name resolution.
+	ProviderHost string
+	Message      string
+}
+
 // Build assembles a schema-valid FlagRequest. The idempotency key is derived
 // from the finding id so re-flagging the same finding returns the existing
 // thread (CONTRACTS §5). The message is redacted defense-in-depth. When no
@@ -83,13 +111,30 @@ func Build(in Input) FlagRequest {
 		}
 		provider = HumanizeIntegration(integration)
 	}
+	finding := in.Finding
 	return FlagRequest{
 		IdempotencyKey:      "flag_" + in.Finding.ID,
 		ConsumerDisplayName: in.ConsumerDisplayName,
 		ProviderDisplayName: provider,
 		Message:             msg,
 		Call:                in.Call,
-		Finding:             in.Finding,
+		Finding:             &finding,
+	}
+}
+
+// BuildQuestion assembles a schema-valid message-only FlagRequest: no call, no
+// finding, and a message that must already be non-empty (the caller validates it
+// so the operator sees the refusal in the sheet, not as a CP round-trip). The
+// message is redacted defense-in-depth on this path too — free text is free text,
+// and a question is exactly where someone pastes the response they are asking
+// about.
+func BuildQuestion(in QuestionInput) FlagRequest {
+	return FlagRequest{
+		IdempotencyKey:      in.IdempotencyKey,
+		ConsumerDisplayName: in.ConsumerDisplayName,
+		ProviderDisplayName: strings.TrimSpace(in.ProviderDisplayName),
+		ProviderHost:        strings.TrimSpace(in.ProviderHost),
+		Message:             redact.New().Redact(strings.TrimSpace(in.Message)).Text,
 	}
 }
 

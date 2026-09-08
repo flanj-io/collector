@@ -50,7 +50,9 @@ with the wrong `store_pod_token`). A call with no verdict is `not checked`, neve
 (previous snapshot kept for diffing; persisted as a `spec_infos` row, format `"mcp"` / source `"observed"`, so the
 Contracts tab lists the server and restarts re-seed). MCP findings: `output_mismatch` + `definition_change` (flaggable at every class — DESCRIPTION included
 since qfix2-2026-08-26; a human always presses the control) and the local-only `stale_client`; the flag relay REFUSES local-only kinds server-side
-(`403 not_flaggable` — CONTRACTS §4). A drift is **per endpoint** (HTTP: method+route; MCP: the tool name): findings
+(`403 not_flaggable` — CONTRACTS §4). **Since v1p4-2026-09-08 a finding needs no call to be flagged**
+(the message carries the ask — `400 finding_has_no_call` is gone from the relay), and `POST
+/api/edges/thread` starts a MESSAGE-ONLY thread from an edge row: no call, no finding, `evidence_count: 0`. A drift is **per endpoint** (HTTP: method+route; MCP: the tool name): findings
 dedup by `signature`, so one drift = one finding (with an `occurrence_count`) = one flag.
 
 ## Stack & commands

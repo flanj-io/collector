@@ -110,6 +110,7 @@ import {
   suggestTooLong,
   toggleSuggest,
   typeDraft,
+  START_THREAD_LABEL,
   type EdgeNameEdit
 } from './edge-names';
 import {
@@ -202,6 +203,10 @@ const threadsKnown = ref(false);
 const threadsTotal = ref(0);
 const threadsHasMore = ref(false);
 const sheetFinding = ref<Finding | null>(null);
+/** v1 phase 4 — the edge "Start a thread" was pressed on. Mutually exclusive
+ *  with `sheetFinding`: the sheet reads QUESTION mode off the missing finding. */
+const sheetEdge = ref<{ host: string; domain: string; name: string } | null>(null);
+const sheetOpen = computed(() => sheetFinding.value !== null || sheetEdge.value !== null);
 const highlightThreadId = ref<string | null>(null);
 // `#contracts/<finding_id>` deep link IN (the control plane's findings index
 // links here): the Contracts tab opens with that finding's row highlighted and
@@ -365,8 +370,32 @@ function providerNameFor(f: Finding): string {
 }
 
 function openSheet(f: Finding) {
+  sheetEdge.value = null;
   sheetFinding.value = f;
   if (connectStatus.value !== 'connected') loadConnect();
+}
+
+/**
+ * "Start a thread" on an outbound edge row (v1 phase 4): the SAME sheet, minus
+ * the evidence block. Connect-gated identically — the sheet shows the inline
+ * Connect prompt and unlocks the moment the confirmation click lands, which is
+ * why this starts the same poll the flag path does.
+ */
+function openEdgeSheet(e: Edge) {
+  sheetFinding.value = null;
+  sheetEdge.value = {
+    host: e.peer_host,
+    domain: e.registrable_domain || e.peer_host,
+    // The name the row the operator clicked is rendering — never a humanized
+    // host standing in for one that was never given.
+    name: e.display_name || e.peer_host
+  };
+  if (connectStatus.value !== 'connected') loadConnect();
+}
+
+function closeSheet() {
+  sheetFinding.value = null;
+  sheetEdge.value = null;
 }
 
 function onThreadCreated(_r: FlagResult) {
@@ -1341,7 +1370,7 @@ let connectTimer: number | undefined;
 let threadsTimer: number | undefined;
 
 function connectPollWanted(): boolean {
-  return connectStatus.value === 'pending' || tab.value === 'settings' || sheetFinding.value !== null;
+  return connectStatus.value === 'pending' || tab.value === 'settings' || sheetOpen.value;
 }
 
 function onFocus() {
@@ -1584,6 +1613,10 @@ watch(tab, (t) => {
                   </span>
                   <span class="num">{{ fmtRPM(e.rpm) }}<span class="unit">/min</span></span>
                   <span class="edge-actions">
+                    <!-- v1 phase 4. It sits FIRST because it is the only action
+                         on this row that reaches the other org; Rename is
+                         local housekeeping beside it. -->
+                    <button type="button" class="btn ghost small" @click="openEdgeSheet(e)">{{ START_THREAD_LABEL }}</button>
                     <button type="button" class="btn ghost small" @click="startRename(e)">{{ renameLabel(e.name_source) }}</button>
                     <button
                       v-if="e.name_source === 'user'"
@@ -1916,8 +1949,17 @@ watch(tab, (t) => {
                    since the version diffs joined contractTabRows that is a real
                    surface, not a fallback: a version-diff has no source call by
                    construction, so every one of its rows renders it. -->
-              <button v-else-if="f.source_call_id && !isLocalNotice(f)" type="button" class="btn primary flag" @click="openSheet(f)">Flag this</button>
-              <span v-else-if="!isLocalNotice(f)" class="hint-inline">{{ VERSION_DIFF_NO_CALL }}</span>
+              <!-- v1p4: a finding with NO source call is flaggable now — the
+                   relay stopped answering 400 finding_has_no_call for every
+                   kind, so a version diff (which has no call by construction)
+                   gets the same control as everything else. The hint stays
+                   beside it and says what the thread carries instead; it used
+                   to say the row "can't be flagged from here", which is the
+                   sentence this phase exists to delete. -->
+              <template v-else-if="!isLocalNotice(f)">
+                <button type="button" class="btn primary flag" @click="openSheet(f)">Flag this</button>
+                <span v-if="!f.source_call_id" class="hint-inline">{{ VERSION_DIFF_NO_CALL }}</span>
+              </template>
             </div>
           </article>
         </article>
@@ -2239,7 +2281,21 @@ watch(tab, (t) => {
       :consumer="consumerName"
       :connect="connect"
       :default-org="health?.consumer_display_name"
-      @close="sheetFinding = null"
+      @close="closeSheet"
+      @created="onThreadCreated"
+      @update:connect="onConnectUpdated"
+    />
+    <!-- QUESTION mode: no finding, no call, no correlation. The sheet branches
+         on the missing finding, so nothing here may pass one. -->
+    <FlagSheet
+      v-else-if="sheetEdge"
+      :key="'edge-' + sheetEdge.host"
+      :edge="sheetEdge"
+      :provider="sheetEdge.name"
+      :consumer="consumerName"
+      :connect="connect"
+      :default-org="health?.consumer_display_name"
+      @close="closeSheet"
       @created="onThreadCreated"
       @update:connect="onConnectUpdated"
     />

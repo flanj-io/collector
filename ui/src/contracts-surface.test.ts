@@ -166,16 +166,20 @@ describe('a version-diff finding renders on the card its contract owns', () => {
     expect(row.find('.occ').exists()).toBe(false);
   });
 
-  it('says why it has no Flag control without calling a breaking finding informational', async () => {
+  it('IS flaggable (v1p4) and says what stands in for the call, never calling a breaking finding informational', async () => {
     const w = await mountApp();
     const row = w.find(`#finding-${VERSION_DIFF.id}`);
-    // No flag control: it is call-less and the relay refuses it.
-    expect(row.find('button.flag').exists()).toBe(false);
-    // ...and the reason given is the evidence, never the severity. The badge on
-    // this very row says `breaking`.
+    // v1p4-2026-09-08: the relay stopped answering 400 finding_has_no_call for
+    // every kind, so a call-less version diff now gets the same Flag control as
+    // everything else — the 400 gap closed by design. Before this it rendered a
+    // sentence saying it "can't be flagged from here".
+    expect(row.find('button.flag').exists()).toBe(true);
+    // The hint stays, and still explains the EVIDENCE, never the severity. The
+    // badge on this very row says `breaking`.
     expect(row.find('.badge').text()).toBe('breaking');
     expect(row.text()).not.toContain('Informational');
     expect(row.text()).toContain('no failing call');
+    expect(row.text()).not.toContain("can’t be flagged");
   });
 });
 

@@ -7,28 +7,42 @@
   "required": [
     "idempotency_key",
     "consumer_display_name",
-    "message",
-    "finding"
+    "message"
   ],
   "allOf": [
     {
-      "$comment": "qfix2-2026-08-26, additive relaxation: `call` is OPTIONAL when the finding is a `definition_change` — that kind is evidenced by two published tools/list snapshots and has `source_call_id: null` by nature, so no call exists to send. Every other kind still REQUIRES `call` (a call-less `output_mismatch` / `type-mismatch` is refused with 400 finding_has_no_call). Every payload valid before this change is still valid.",
+      "$comment": "v1p4-2026-09-08, additive relaxation WIDENING qfix2-2026-08-26: `call` is OPTIONAL when EITHER the request carries a non-empty `message` OR the finding is a kind that is call-less by nature (`definition_change`, evidenced by two published tools/list snapshots, `source_call_id: null` by construction). It is REQUIRED otherwise. The qfix2 arm is kept verbatim as the second disjunct so that every payload valid before this change is still valid — a snapshot-only definition_change with an EMPTY message was legal and stays legal. What the first disjunct adds is the case qfix2 left open: every OTHER kind used to be refused with 400 finding_has_no_call even when the operator had written out what they were asking, which is a Flag control that answers 400. The rule that survives is the honest one — a thread must carry something: evidence, or words. `finding` is optional outright (dropped from `required`), which is what makes a message-only thread from an EDGE possible: an edge is a registrable domain, not a drift, so no finding exists to attach. Such a thread is created with evidence_count 0.",
       "if": {
-        "required": [
-          "finding"
-        ],
-        "properties": {
-          "finding": {
+        "anyOf": [
+          {
             "required": [
-              "kind"
+              "message"
             ],
             "properties": {
-              "kind": {
-                "const": "definition_change"
+              "message": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          {
+            "required": [
+              "finding"
+            ],
+            "properties": {
+              "finding": {
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "const": "definition_change"
+                  }
+                }
               }
             }
           }
-        }
+        ]
       },
       "then": {},
       "else": {
@@ -50,6 +64,10 @@
     "provider_display_name": {
       "type": "string"
     },
+    "provider_host": {
+      "type": "string",
+      "description": "OPTIONAL, additive (v1p4-2026-09-08): the observed host of the edge this thread is about, for a thread that carries NO call. The domain is the anchor and the name is decoration (v1 spec §5), so a message-only thread started from an edge row sends the host it was started from and the thread page resolves a VERIFIED directory name or the bare domain for its provider slot instead of an unattributed consumer-asserted name. IGNORED whenever `call` is present — the evidence's own URL always wins over a client assertion. Unparseable values are dropped, never guessed at."
+    },
     "invitee_email": {
       "type": "string",
       "format": "email",
@@ -67,10 +85,11 @@
       "description": "OPTIONAL, additive (slice2-2026-08-28): how the evidence call was chosen. Absent means \"finding\" — the flag came off a finding row, so the promoted call's bodies start WITHHELD from the provider. \"call_pick\" — the operator chose the call while looking at it, so it starts revealed. The CP reads unknown values as \"finding\" (tolerant)."
     },
     "call": {
-      "description": "The redacted evidence call. REQUIRED for every finding kind except `definition_change`, which is call-less by nature (qfix2-2026-08-26).",
+      "description": "The redacted evidence call. OPTIONAL when the request carries a non-empty `message` (any kind, and for a message-only thread with no finding at all) or when the finding is call-less by nature (`definition_change` — qfix2-2026-08-26); REQUIRED otherwise, because a thread with neither evidence nor words says nothing.",
       "$ref": "https://flanj.io/contracts/v1/redacted-call.schema.json"
     },
     "finding": {
+      "description": "The finding artifact. OPTIONAL since v1p4-2026-09-08: a message-only thread started from an edge row has no finding — the edge is a domain, not a drift. Absent finding AND absent call is the 0-evidence (question) thread.",
       "$ref": "https://flanj.io/contracts/v1/finding.schema.json"
     }
   }

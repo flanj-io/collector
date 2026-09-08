@@ -346,3 +346,69 @@ func TestBuild_RedactsMessage(t *testing.T) {
 		t.Errorf("raw PAN leaked into flag message: %q", req.Message)
 	}
 }
+
+// TestQuestionBody_ConformsToSchema — v1p4: the MESSAGE-ONLY flag a "Start a
+// thread" click on an edge row sends. No `call` key, no `finding` key, and the
+// amended schema accepts it because the message is non-empty. The three
+// negative cases pin the rule rather than the happy path: the schema is the
+// only thing standing between "0 evidence" and "no thread at all".
+func TestQuestionBody_ConformsToSchema(t *testing.T) {
+	sch := flagSchema(t)
+
+	req := BuildQuestion(QuestionInput{
+		IdempotencyKey:      "edge_api.globex.test_abc",
+		ConsumerDisplayName: "Acme Consumer Ltd",
+		ProviderDisplayName: "Globex Payments",
+		ProviderHost:        "api.globex.test",
+		Message:             "Are you versioning /v1/refunds this quarter?",
+	})
+	body, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	validate(t, sch, body)
+
+	var wire map[string]any
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, has := wire["call"]; has {
+		t.Errorf("a message-only flag must omit `call`, not send an empty one: %s", body)
+	}
+	if _, has := wire["finding"]; has {
+		t.Errorf("a message-only flag must omit `finding`, not send a zero-valued one: %s", body)
+	}
+	if wire["provider_host"] != "api.globex.test" {
+		t.Errorf("provider_host = %v", wire["provider_host"])
+	}
+
+	// The rule the amendment turns on: with no call and no finding, the message
+	// is the whole artifact, so an EMPTY one is not a thread.
+	blank := BuildQuestion(QuestionInput{
+		IdempotencyKey:      "edge_blank",
+		ConsumerDisplayName: "Acme Consumer Ltd",
+		Message:             "   ",
+	})
+	blankBody, _ := json.Marshal(blank)
+	inst, err := jsonschema.UnmarshalJSON(bytes.NewReader(blankBody))
+	if err != nil {
+		t.Fatalf("unmarshal instance: %v", err)
+	}
+	if err := sch.Validate(inst); err == nil {
+		t.Errorf("a flag with neither evidence nor words must NOT validate: %s", blankBody)
+	}
+}
+
+// TestQuestionBody_RedactsTheMessage: a question is exactly where someone pastes
+// the response they are asking about, so the free text passes the redaction floor
+// on this path too — the message is the ONLY thing this envelope carries.
+func TestQuestionBody_RedactsTheMessage(t *testing.T) {
+	req := BuildQuestion(QuestionInput{
+		IdempotencyKey:      "edge_1",
+		ConsumerDisplayName: "Acme Consumer Ltd",
+		Message:             "Is 4111111111111111 still on file?",
+	})
+	if strings.Contains(req.Message, "4111111111111111") {
+		t.Errorf("the PAN survived the redaction floor: %q", req.Message)
+	}
+}

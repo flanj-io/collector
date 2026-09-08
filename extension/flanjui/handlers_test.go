@@ -1311,15 +1311,54 @@ func TestFlagRefusesLocalOnlyKinds(t *testing.T) {
 		t.Errorf("promoted finding = %v, want the DESCRIPTION definition change", fnd)
 	}
 
-	// A finding that SHOULD have a call and does not still 400 — the lift is
-	// scoped to definition_change, not a blanket removal of the guard.
+	// v1p4-2026-09-08: the lift is no longer scoped to definition_change. A
+	// finding that has no source call at ALL — a version diff, or an
+	// output_mismatch whose call was never stored — now flags CALL-LESS instead
+	// of answering 400 finding_has_no_call, because the message carries the ask.
+	// This is the 400 gap closed by design (v1-build-spec §3 Step 4, ruling 3).
 	_ = r.st.InsertFinding(model.Finding{SchemaVersion: 1, ID: "fnd_mismatch_nocall", Kind: model.KindOutputMismatch,
 		Severity: model.SeverityBreaking, Integration: "acme-payments", Endpoint: "list_transactions",
 		Expected: "type=integer", Actual: `type=string ("1200")`, Rule: "type-mismatch",
 		DetectedAt: "2026-08-24T10:00:01Z"})
-	resp, out, _ = r.do(t, http.MethodPost, "/api/flag", map[string]string{"finding_id": "fnd_mismatch_nocall"})
-	if resp.StatusCode != 400 || out["error"] != "finding_has_no_call" {
-		t.Errorf("output_mismatch with no call = %d %v, want 400 finding_has_no_call", resp.StatusCode, out)
+	resp, out, raw = r.do(t, http.MethodPost, "/api/flag", map[string]string{"finding_id": "fnd_mismatch_nocall"})
+	if (resp.StatusCode != 201 && resp.StatusCode != 200) || out["thread_url"] == "" {
+		t.Fatalf("call-less output_mismatch: %d %s", resp.StatusCode, raw)
+	}
+	if _, has := r.cp.lastFlagBody["call"]; has {
+		t.Errorf("a call-less flag must not carry a `call` key: %v", r.cp.lastFlagBody)
+	}
+	// It still carries a message — that is what makes it acceptable at the CP.
+	if msg, _ := r.cp.lastFlagBody["message"].(string); strings.TrimSpace(msg) == "" {
+		t.Errorf("a call-less flag must carry a message: %v", r.cp.lastFlagBody)
+	}
+}
+
+// TestFlagEvictedCallStillRefuses: the v1p4 widening lifts the 400 for a finding
+// that never had a call. It does NOT quietly downgrade a flag whose call was
+// EVICTED — the sheet showed the operator an "Evidence (1)" line for that call,
+// so sending a call-less thread instead would create a thread they did not mean
+// to create. Only a definition_change is exempt: it never had a call to lose.
+func TestFlagEvictedCallStillRefuses(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, ConsumerDisplayName: "Acme",
+		ContactEmail: "ops@acme.test", ContactStatus: "confirmed", ConfirmedContactEmail: "ops@acme.test"})
+	r.cp.mu.Lock()
+	r.cp.contactEmail, r.cp.contactStatus, r.cp.confirmedEmail = "ops@acme.test", "confirmed", "ops@acme.test"
+	r.cp.mu.Unlock()
+
+	gone := "call_evicted"
+	_ = r.st.InsertFinding(model.Finding{SchemaVersion: 1, ID: "fnd_evicted", Kind: model.KindOutputMismatch,
+		Severity: model.SeverityBreaking, Integration: "acme-payments", Endpoint: "list_transactions",
+		Expected: "type=integer", Actual: `type=string ("1200")`, Rule: "type-mismatch",
+		SourceCallID: &gone, DetectedAt: "2026-08-24T10:00:01Z"})
+
+	resp, out, _ := r.do(t, http.MethodPost, "/api/flag", map[string]string{"finding_id": "fnd_evicted"})
+	if resp.StatusCode != 404 || out["error"] != "call_not_found" {
+		t.Errorf("evicted call = %d %v, want 404 call_not_found", resp.StatusCode, out)
+	}
+	if r.cp.flagCalls != 0 {
+		t.Errorf("flag calls = %d, want 0 — nothing may reach the CP", r.cp.flagCalls)
 	}
 }
 

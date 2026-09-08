@@ -73,10 +73,17 @@ API + the flag action.
     thread**: `403 {error: not_flaggable}` for LOCAL-ONLY finding kinds
     (`model.Finding.Flaggable()` — `stale_client`, and only `stale_client`): the
     evidence rule is enforced server-side in the relay, never just by UI
-    absence, so a hand-crafted request cannot promote a local notice. A
-    `definition_change` is CALL-LESS by nature, so `400 finding_has_no_call` is
-    lifted for that kind (qfix2-2026-08-26) and the body omits `call`; every
-    other kind still needs its failing call. `412 {error: not_connected |
+    absence, so a hand-crafted request cannot promote a local notice.
+    **CALL-LESS flagging, widened v1p4-2026-09-08:** the body omits `call` for
+    ANY finding with no source call — a `definition_change` (call-less by
+    nature, qfix2-2026-08-26) and, since v1p4, a version diff or anything else
+    that reached the store without one. `400 finding_has_no_call` is gone from
+    this relay: the message carries the ask, `promote.Build` never sends an
+    empty one, and a Flag control that answers 400 is worse than no control.
+    An EVICTED call still refuses (`404 call_not_found`) for every kind but
+    `definition_change` — the sheet showed an "Evidence (1)" line for that call,
+    and downgrading the flag silently would create a thread the operator did not
+    mean to create. `412 {error: not_connected |
     contact_unconfirmed}` before Connect /
     the FIRST confirmation — the gate is "a confirmed contact exists"
     (`confirmed_contact_email` non-null), so a new pending contact never blocks
@@ -97,6 +104,22 @@ API + the flag action.
     in place on re-flag and the KV has no delete, so a superseded pointer
     survives and must resolve to "no local record", never to the new thread.
     No email field; nothing is emailed.
+  - `POST /api/edges/thread {host, message, request_id}` — **Start a thread**
+    from an EDGE row (v1 phase 4): a MESSAGE-ONLY thread. Same Connect gate as
+    the flag, from the same helper (`requireConnectedForThread`) so the two
+    doors answer with the same 412s. Outbound rows only (`404 edge_not_found`
+    for an unknown or INBOUND host — an inbound `peer_host` is a forgeable XFF
+    first hop and is never identity); the message is required
+    (`400 missing_fields`) because it is the entire artifact, and it passes the
+    redaction floor like every other free text. On the wire: no `call`, no
+    `finding`, and `provider_host` naming the edge so the thread page anchors
+    its provider slot on the domain rather than an unattributed asserted name.
+    Idempotency key = `edge_<host>_<request_id>`, the request id minted ONCE by
+    the sheet — so a retry replays and two different questions about one edge
+    are two threads. No finding id to key a local record on, so the thread link
+    is parked under `thread.link.<thread_id>` (the existing key for a thread
+    with no finding record) → `{thread_id, thread_public_id, thread_url, state,
+    status}`.
   - `GET /api/threads` — ONE call to the CP's §5.5a list (Bearer collector key,
     most-recently-active first), each row joined to the local record by thread
     id. The envelope is the collector's own internal shape:
@@ -167,7 +190,8 @@ collector is outbound-only; nothing serves off-host.
 - **Only the redacted call promotes.** The flag body carries the stored
   `RedactedCall` — raw bodies never existed past redaction-at-source.
 - Flag idempotency key = `flag_<finding.id>` (re-flag returns the existing
-  thread).
+  thread). Question idempotency key = `edge_<host>_<request_id>` — a different
+  namespace, so a question can never collide with a flag.
 - **Create thread needs Connect + a confirmed contact; viewing local data never
   does.** The collector key is read from the store on every relay call (never
   cached in a per-pod file) and never logged or returned to the UI.

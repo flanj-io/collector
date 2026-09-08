@@ -59,12 +59,12 @@ const (
 	msgNotFlaggable                 = "This finding is a local notice — stale-client calls stay on this collector and can't be flagged to the provider."
 	msgNotAckable                   = "Only non-breaking informational findings can be acknowledged — breaking findings need a fix or a thread."
 	msgFindingNotFound              = "That finding is no longer in the local store."
-	// The parenthetical used to read "(spec-version findings are informational)"
-	// — which contradicted the finding it refused: a version-diff is emitted at
-	// severity `breaking` (CONTRACTS §4, oasdiff Level=ERR), and the UI renders
-	// it under a red breaking badge counted by the red tab pill. The refusal is
-	// about EVIDENCE, not severity: a change found by diffing two documents has
-	// no failing call to send. Say that instead.
+	// RETIRED as a refusal by v1p4-2026-09-08: a finding with no source call is
+	// now flaggable on every kind (the message carries the ask), so nothing
+	// answers 400 finding_has_no_call any more. The string stays because the
+	// naming denylist test walks every user-facing constant in this file and
+	// because a future caller that bypasses promote.Build could still meet the
+	// CP's own version of this refusal.
 	msgFindingNoCall  = "This finding has no failing call to share — it was found by comparing two versions of the contract, not by a call."
 	msgCallEvicted    = "The failing call is no longer in the local store (it was evicted from the rolling window)."
 	msgThreadNotFound = "No thread with that id was created from this collector."
@@ -78,6 +78,10 @@ const (
 	// The distinct partial-success copy: the local save landed, only the
 	// OPT-IN directory suggestion did not go out (brief-common copy deck).
 	msgNameSavedSuggestFailed = "Name saved. The suggestion didn't reach the directory — it stays local."
+	// Question-only threads (v1 phase 4). A message-only thread has NOTHING but
+	// the message, so an empty one is refused HERE — the operator sees it in the
+	// sheet rather than as a control-plane round-trip that answers 400.
+	msgEdgeThreadMessageRequired = "Write your question first — a thread started from an edge carries no evidence, only what you say."
 )
 
 // msgNameSuggestRefused is the OTHER partial-success copy: the local save
