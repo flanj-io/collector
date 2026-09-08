@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
@@ -624,9 +626,9 @@ func TestSeed(t *testing.T) {
 	if d.HasBaseline(v1.PeerHost, "client") {
 		t.Fatal("an empty detector claims a baseline")
 	}
-	adopted, err := d.Seed(info, []byte(v1.SnapshotJSON))
-	if err != nil || !adopted {
-		t.Fatalf("first seed: adopted=%v err=%v, want adopted", adopted, err)
+	fs0, adopted, err := d.Seed(info, []byte(v1.SnapshotJSON))
+	if err != nil || !adopted || len(fs0) != 0 {
+		t.Fatalf("first seed: adopted=%v findings=%v err=%v, want adopted, nothing to diff", adopted, fs0, err)
 	}
 	if !d.HasBaseline(v1.PeerHost, "client") {
 		t.Fatal("seeded edge reports no baseline")
@@ -662,8 +664,8 @@ func TestSeed(t *testing.T) {
 
 	// An OLDER seed never displaces live state: this process is ahead of the
 	// store, and the store catches up from the spec_info it forwards.
-	if adopted, err := d.Seed(info, []byte(v1.SnapshotJSON)); err != nil || adopted {
-		t.Fatalf("older seed: adopted=%v err=%v, want live state kept", adopted, err)
+	if fs, adopted, err := d.Seed(info, []byte(v1.SnapshotJSON)); err != nil || adopted || len(fs) != 0 {
+		t.Fatalf("older seed: adopted=%v findings=%v err=%v, want live state kept", adopted, fs, err)
 	}
 	if cur, _ := observed(); cur != v2.ObservedAt {
 		t.Errorf("older seed overrode live state: current observed_at=%s", cur)
@@ -674,23 +676,32 @@ func TestSeed(t *testing.T) {
 	// the row's loaded_at are anchored on).
 	same := info
 	same.LoadedAt = "2026-08-24T17:00:00.000Z"
-	if adopted, err := d.Seed(same, []byte(v2.SnapshotJSON)); err != nil || adopted {
-		t.Fatalf("same-content newer seed: adopted=%v err=%v, want nothing learned", adopted, err)
+	if fs, adopted, err := d.Seed(same, []byte(v2.SnapshotJSON)); err != nil || adopted || len(fs) != 0 {
+		t.Fatalf("same-content newer seed: adopted=%v findings=%v err=%v, want nothing learned", adopted, fs, err)
 	}
 	if cur, _ := observed(); cur != v2.ObservedAt {
 		t.Errorf("same-content seed restamped the live version: %s", cur)
 	}
 
 	// A NEWER seed with DIFFERENT content: a sibling front observed a change
-	// this process never saw. Adopted, silently — the sibling reported it and
-	// findings dedup by signature — with the live list kept as previous.
+	// this process never saw. Adopted, with the live list kept as previous —
+	// and the change between them REPORTED, exactly as observing it would
+	// have (TestSeedReportsTheChangeItAdopts has the case that made this
+	// necessary); findings dedup by signature.
 	v3JSON := mutateSnapshotJSON(t, v1.SnapshotJSON, func(doc map[string]any) {
 		tool(t, doc, "get_balance")["description"] = "Balance, reworded again."
 	})
 	newer := info
 	newer.LoadedAt = "2026-08-24T18:00:00.000Z"
-	if adopted, err := d.Seed(newer, []byte(v3JSON)); err != nil || !adopted {
+	fs3, adopted, err := d.Seed(newer, []byte(v3JSON))
+	if err != nil || !adopted {
 		t.Fatalf("newer seed: adopted=%v err=%v, want adopted", adopted, err)
+	}
+	if len(fs3) != 1 || fs3[0].Kind != model.KindDefinitionChange || fs3[0].Rule != diff.RuleDescriptionChanged {
+		t.Fatalf("newer seed reported %+v, want the one description change", fs3)
+	}
+	if fs3[0].SnapshotObservedFrom != v2.ObservedAt || fs3[0].SnapshotObservedAt != newer.LoadedAt {
+		t.Errorf("seed finding spans %s → %s, want %s → %s", fs3[0].SnapshotObservedFrom, fs3[0].SnapshotObservedAt, v2.ObservedAt, newer.LoadedAt)
 	}
 	if cur, prev := observed(); cur != newer.LoadedAt || prev != v2.ObservedAt {
 		t.Errorf("newer seed: current=%s previous=%s, want %s / %s", cur, prev, newer.LoadedAt, v2.ObservedAt)
@@ -727,7 +738,7 @@ func TestSeed(t *testing.T) {
 	}
 
 	// A non-MCP row never seeds.
-	if adopted, err := d.Seed(model.SpecInfo{Format: model.SpecFormatOpenAPI}, []byte("openapi: 3.0.3")); err != nil || adopted {
+	if _, adopted, err := d.Seed(model.SpecInfo{Format: model.SpecFormatOpenAPI}, []byte("openapi: 3.0.3")); err != nil || adopted {
 		t.Errorf("openapi rows must be ignored, got adopted=%v err=%v", adopted, err)
 	}
 }
@@ -738,5 +749,154 @@ func TestRuleDescriptionChangedMirror(t *testing.T) {
 	if model.RuleDescriptionChanged != diff.RuleDescriptionChanged {
 		t.Fatalf("model.RuleDescriptionChanged %q != diff.RuleDescriptionChanged %q",
 			model.RuleDescriptionChanged, diff.RuleDescriptionChanged)
+	}
+}
+
+// TestSeedTwoFrontsConvergeOnTheEarlierStamp is review finding 3 on the
+// baseline seeding (2026-09-08), detector side. Two fronts observe the
+// IDENTICAL tools/list, each before its own tick could seed it: front-a at
+// t1, front-b at t2. Each forwards a spec_info row carrying its OWN first
+// sighting, so the store row alternated t1/t2 on every re-observation — each
+// flip re-downloaded the document on every front and moved the UI's "since
+// this snapshot" anchor, the NOT CHECKED flip this seeding was built to end.
+// Seeding across, both ways, must leave both fronts on t1 and reporting t1 on
+// every re-observation from then on, so the row never moves again and nothing
+// is re-downloaded.
+func TestSeedTwoFrontsConvergeOnTheEarlierStamp(t *testing.T) {
+	first := goldenSnapshot(t) // front-a's sighting, at t1
+	later := first             // the same list, front-b's sighting, at t2
+	later.ObservedAt = "2026-08-24T13:00:00.000Z"
+	if !observedAfter(later.ObservedAt, first.ObservedAt) {
+		t.Fatalf("fixture: %s must be after %s", later.ObservedAt, first.ObservedAt)
+	}
+	t1 := first.ObservedAt
+
+	a, b := NewMCPDetector(), NewMCPDetector()
+	_, rowA, rawA, err := a.LoadSnapshot(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, rowB, rawB, err := b.LoadSnapshot(later)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rowA.LoadedAt != t1 || rowB.LoadedAt != later.ObservedAt {
+		t.Fatalf("each front forwards its own first sighting: a=%s b=%s", rowA.LoadedAt, rowB.LoadedAt)
+	}
+
+	// front-a is offered front-b's row: the same list, sighted later — nothing
+	// to learn, nothing changes.
+	if fs, adopted, err := a.Seed(rowB, rawB); err != nil || adopted || len(fs) != 0 {
+		t.Fatalf("a offered the later stamp: adopted=%v findings=%v err=%v, want nothing", adopted, fs, err)
+	}
+	// front-b is offered front-a's row: the same list, sighted EARLIER —
+	// b converges on it. A stamp, not a contract: no findings, no rotation.
+	fs, adopted, err := b.Seed(rowA, rawA)
+	if err != nil || !adopted || len(fs) != 0 {
+		t.Fatalf("b offered the earlier stamp: adopted=%v findings=%v err=%v, want adopted, no findings", adopted, fs, err)
+	}
+	b.mu.Lock()
+	st := b.edges[mcpEdgeRef(first.PeerHost, "client")]
+	cur, prev := st.current.Version.ObservedAt, st.previous
+	b.mu.Unlock()
+	if cur != t1 || prev != nil {
+		t.Fatalf("b after convergence: current=%s previous=%v, want %s / nil", cur, prev, t1)
+	}
+
+	// From here on both fronts report t1 on every re-observation, so the row
+	// they both keep forwarding never moves — and nothing is re-downloaded.
+	again := first
+	again.ObservedAt = "2026-08-24T14:00:00.000Z"
+	for name, d := range map[string]*MCPDetector{"a": a, "b": b} {
+		fs, row, raw, err := d.LoadSnapshot(again)
+		if err != nil || len(fs) != 0 || row.LoadedAt != t1 {
+			t.Fatalf("%s re-observation: findings=%v loaded_at=%s err=%v, want none / %s", name, fs, row.LoadedAt, err, t1)
+		}
+		// The converged row is nothing more for either to learn: quiescent.
+		if fs, adopted, err := d.Seed(row, raw); err != nil || adopted || len(fs) != 0 {
+			t.Errorf("%s offered the converged row: adopted=%v findings=%v err=%v, want nothing", name, adopted, fs, err)
+		}
+		// And the baseline still judges calls, anchored on t1.
+		if fs := d.DetectCall(goldenMCPCall(t)); len(fs) != 1 || fs[0].SnapshotObservedAt != t1 {
+			t.Errorf("%s judges %+v, want the golden output_mismatch anchored on %s", name, fs, t1)
+		}
+	}
+}
+
+// TestSeedReportsTheChangeItAdopts is review finding 4 on the baseline
+// seeding (2026-09-08). front-a holds V1. The server renames a tool, and the
+// FIRST front to list it is front-b, which has no baseline yet: it observes
+// V2, has nothing to diff, reports nothing, and forwards V2. front-a then
+// met V2 as a newer seed and adopted it silently — a rename reported by
+// nobody, where front-a used to diff V1→V2 on its own next observation.
+// Adopting a newer, different list over a live baseline reports the diff,
+// exactly as observing it would have.
+func TestSeedReportsTheChangeItAdopts(t *testing.T) {
+	v1 := goldenSnapshot(t)
+	a := NewMCPDetector()
+	if _, _, _, err := a.LoadSnapshot(v1); err != nil {
+		t.Fatal(err)
+	}
+
+	// What front-b forwarded: the renamed list, first sighted at t2.
+	v2JSON := mutateSnapshotJSON(t, v1.SnapshotJSON, func(doc map[string]any) {
+		tool(t, doc, "get_balance")["name"] = "get_account_balance"
+	})
+	row := model.SpecInfo{Integration: v1.Integration, Role: model.SpecRoleProvider, PeerHost: v1.PeerHost,
+		Format: model.SpecFormatMCP, LoadedAt: "2026-08-24T13:00:00.000Z"}
+
+	fs, adopted, err := a.Seed(row, []byte(v2JSON))
+	if err != nil || !adopted {
+		t.Fatalf("seed: adopted=%v err=%v, want adopted", adopted, err)
+	}
+	if len(fs) == 0 {
+		t.Fatal("adopting the rename over a live baseline reported nothing")
+	}
+
+	// The very findings observing V2 would have produced — the same
+	// signatures, so a front that did observe it dedups into one occurrence
+	// more, not a second finding.
+	ref := NewMCPDetector()
+	if _, _, _, err := ref.LoadSnapshot(v1); err != nil {
+		t.Fatal(err)
+	}
+	v2 := v1
+	v2.ObservedAt = row.LoadedAt
+	v2.SnapshotJSON = v2JSON
+	want, _, _, err := ref.LoadSnapshot(v2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, exp := sigs(fs), sigs(want)
+	sort.Strings(got)
+	sort.Strings(exp)
+	if !reflect.DeepEqual(got, exp) {
+		t.Fatalf("seed reported %v, observing reports %v: must be the same findings", got, exp)
+	}
+	renamed := false
+	for _, f := range fs {
+		if f.Kind != model.KindDefinitionChange {
+			t.Errorf("seed reported a %s finding: %+v", f.Kind, f)
+		}
+		if f.SnapshotObservedFrom != v1.ObservedAt || f.SnapshotObservedAt != row.LoadedAt {
+			t.Errorf("finding spans %s → %s, want %s → %s", f.SnapshotObservedFrom, f.SnapshotObservedAt, v1.ObservedAt, row.LoadedAt)
+		}
+		if f.Rule == diff.RuleOperationRenamed && f.Endpoint == "get_balance" {
+			renamed = true
+		}
+	}
+	if !renamed {
+		t.Errorf("no %s finding on get_balance among %v", diff.RuleOperationRenamed, got)
+	}
+
+	// The baseline rotated: a client still calling the old name through
+	// front-a is a stale_client here too.
+	stale := a.DetectCall(mcpCall("call_stale", "get_balance", `{"account_id":"a1"}`, `{}`))
+	if len(stale) != 1 || stale[0].Kind != model.KindStaleClient || stale[0].Rule != RuleToolNotListed {
+		t.Fatalf("pre-rename name after adoption = %+v, want stale_client tool-not-listed", stale)
+	}
+	// Offered the same row again (next tick, or re-listed): nothing more.
+	if fs, adopted, err := a.Seed(row, []byte(v2JSON)); err != nil || adopted || len(fs) != 0 {
+		t.Errorf("re-offered row: adopted=%v findings=%v err=%v, want nothing", adopted, fs, err)
 	}
 }

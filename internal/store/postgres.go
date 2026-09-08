@@ -482,6 +482,13 @@ func (p *postgresStore) evict(keepID string) error {
 // PutSpecInfo upserts the provider contract loaded by the drift processor —
 // a single atomic upsert, safe for concurrent pod starts (last writer wins,
 // and every pod loads the same mounted spec).
+//
+// An MCP row's loaded_at moves only when its document does (2026-09-08): the
+// stamp is the "since this snapshot" anchor and the contract channel's change
+// token, and every front that re-observes a list writes the row again with
+// its own first-sighting stamp — restamping on each write flip-flopped the row
+// between two fronts' stamps forever. Same rule, same reasons, as the sqlite
+// backend; the upsert stays one statement, so N pods need no coordination.
 func (p *postgresStore) PutSpecInfo(info model.SpecInfo, rawSpec []byte) error {
 	role := info.Role
 	if role == "" {
@@ -493,9 +500,11 @@ func (p *postgresStore) PutSpecInfo(info model.SpecInfo, rawSpec []byte) error {
 		 ON CONFLICT (integration) DO UPDATE SET
 		   role=excluded.role, peer_host=excluded.peer_host, edge_class=excluded.edge_class, format=excluded.format, title=excluded.title,
 		   version=excluded.version, docs_url=excluded.docs_url, endpoints=excluded.endpoints,
-		   loaded_at=excluded.loaded_at, doc=excluded.doc`),
+		   loaded_at=CASE WHEN excluded.format=? AND spec_infos.doc=excluded.doc THEN spec_infos.loaded_at ELSE excluded.loaded_at END,
+		   doc=excluded.doc`),
 		info.Integration, role, nullStr(info.PeerHost), nullStr(info.EdgeClass), info.Format, nullStr(info.Title),
 		nullStr(info.Version), nullStr(info.DocsURL), info.Endpoints, info.LoadedAt, string(rawSpec),
+		model.SpecFormatMCP,
 	)
 	if err != nil {
 		return fmt.Errorf("put spec info: %w", err)

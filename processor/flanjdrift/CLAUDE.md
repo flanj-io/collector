@@ -37,14 +37,27 @@ baseline was whatever that one process had witnessed, so a tool renamed while
 front-a was watching raised nothing when the stale client called through
 front-b, and restarting a front forgot the baseline outright. The conflict
 rule is **newer observation wins**, by `observed_at`: a store row newer than
-the live snapshot is adopted silently (no findings — the front that observed
-the change reported it, and findings dedup by signature); the same content is
-nothing to learn; and a live snapshot newer than the store's stays, reaching
-the store as the forwarded `spec_info` record exactly as before. An MCP call
-to an edge with no baseline kicks an early refresh, like an uncovered REST
-host. A re-observed IDENTICAL list reports the row with the FIRST observation's
-stamp, so `loaded_at` — the UI's "since this snapshot" anchor and the channel's
-change token — moves only when the contract does.
+the live snapshot is adopted, the live one rotates to previous, and the
+definition diff between them is REPORTED exactly as observing it would be —
+it used to be silent, on the theory that the observing front had reported
+it, but a front with no baseline observes a change and reports nothing, so a
+rename first listed by a fresh front was reported by nobody (findings dedup
+by signature; one occurrence per front is the honest count). The same
+content converges the edge on the EARLIER stamp: two fronts' first sightings
+of one list otherwise flip-flopped the store row forever. And a live snapshot
+newer than the store's stays, reaching the store as the forwarded `spec_info`
+record exactly as before. Findings the refresh produces have no batch to
+ride, so the processor holds them for the next one (`holdFindings`). An MCP
+call to an edge with no baseline kicks an early refresh, like an uncovered
+REST host. A re-observed IDENTICAL list reports the row with the FIRST
+observation's stamp, and the store keeps an MCP row's `loaded_at` for an
+unchanged document whichever front wrote it, so `loaded_at` — the UI's
+"since this snapshot" anchor and the channel's change token — moves only
+when the contract does. Over the store pod's channel (`mcpSeeds.remote`) a
+`local-process` (stdio) row is never offered: its `peer_host` is the
+server's `serverInfo.name`, not a host identity, so it names every tenant's
+build of a same-named stdio server at once and two builds would ping-pong
+`definition_change`; a pod's own co-located store still seeds its own.
 
 **Technical adherence ONLY** — fields/types/shapes/enums. Never business/economic
 correctness (pricing, quantities, business rules) — that would be a false-positive storm.

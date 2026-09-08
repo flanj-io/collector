@@ -138,9 +138,18 @@ no custom protocol exists between the tiers.
   what that one process happened to witness. Before this, a tool renamed while
   front-a was watching raised nothing when a stale client called through
   front-b, and restarting a front forgot the baseline. The newer observation
-  wins on each front, silently: the front that observed a change is the one
-  that reports it, and findings dedup by signature. An MCP call to an edge a
-  front has no baseline for asks for an early refresh, like an uncovered host.
+  wins on each front, and adopting a newer list over a live baseline reports
+  the diff between them — the front that first listed a change may have had
+  no baseline to diff it against; findings dedup by signature, one occurrence
+  per front. An identical list converges every front on its EARLIEST sighting
+  and the store keeps `loaded_at` for an unchanged MCP document, so the row —
+  the "since this snapshot" anchor, the channel's change token — moves only
+  when the list does, never between two fronts' stamps (2026-09-08). A
+  `local-process` (stdio) row never seeds a front over the channel: its
+  `peer_host` is the server's own name, not a host identity, so two tenants'
+  builds of a same-named stdio server would seed each other's fronts in turn;
+  a pod's own store still seeds its own. An MCP call to an edge a front has no
+  baseline for asks for an early refresh, like an uncovered host.
 
 ### Tiered: invariants
 

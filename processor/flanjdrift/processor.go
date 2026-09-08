@@ -45,6 +45,15 @@ type driftProcessor struct {
 	// src is where contracts come from: the co-located store, or — on a front
 	// of the tiered topology, which has none — the store pod over HTTP.
 	src specSource
+	// held are findings produced OFF the batch path — the definition diff
+	// drift.MCPDetector.Seed reports when the store's newer list displaces a
+	// live baseline, which happens on the refresh loop — parked until the
+	// next batch carries them downstream. This processor has no consumer of
+	// its own to hand a record to (processorhelper), and a front always has
+	// traffic, so the next batch is soon; findings dedup by signature, so
+	// the delay costs nothing but latency.
+	heldMu sync.Mutex
+	held   []model.Finding
 	// kick asks the refresh loop to run early, on first sight of a host with no
 	// cached contract. Buffered to 1: a kick already pending is the same
 	// request, and the loop floors how often it may act on one.
@@ -112,6 +121,9 @@ func (p *driftProcessor) start(_ context.Context, host component.Host) error {
 		p.src = storeSpecSource{st: p.st}
 	case p.cfg.StorePodEndpoint != "":
 		p.src = newRemoteSpecSource(p.cfg.StorePodEndpoint, p.cfg.StorePodToken)
+		// The rows are other processes' observations, org-wide: the seed's
+		// admission rule for stdio servers differs (mcpbaseline.go).
+		p.mcpSeeds.remote = true
 	default:
 		// No store and no endpoint: a front that was never told where the
 		// store pod is. Uploaded contracts cannot reach it, and saying so once
@@ -222,7 +234,8 @@ func (p *driftProcessor) refreshSpecs() {
 		return
 	}
 	changed, errs := p.specs.reconcile(infos, p.src)
-	seeded, seedErrs := p.mcpSeeds.reconcile(infos, p.src, p.mcp)
+	seeded, seedFindings, seedErrs := p.mcpSeeds.reconcile(infos, p.src, p.mcp)
+	p.holdFindings(seedFindings)
 	if p.logger == nil {
 		return
 	}
@@ -245,6 +258,30 @@ func (p *driftProcessor) refreshSpecs() {
 			zap.String("peer_host", sd.peerHost),
 			zap.String("observed_at", sd.observedAt))
 	}
+	if len(seedFindings) > 0 {
+		p.logger.Info("mcp baseline adopted from the store reports definition changes",
+			zap.Int("findings", len(seedFindings)))
+	}
+}
+
+// holdFindings parks findings produced off the batch path for the next batch.
+func (p *driftProcessor) holdFindings(fs []model.Finding) {
+	if len(fs) == 0 {
+		return
+	}
+	p.heldMu.Lock()
+	p.held = append(p.held, fs...)
+	p.heldMu.Unlock()
+}
+
+// takeHeldFindings drains what holdFindings parked. Safe for concurrent
+// processLogs calls: each finding leaves with exactly one batch.
+func (p *driftProcessor) takeHeldFindings() []model.Finding {
+	p.heldMu.Lock()
+	defer p.heldMu.Unlock()
+	fs := p.held
+	p.held = nil
+	return fs
 }
 
 // kickRefresh asks for an early refresh without ever blocking the pipeline or
@@ -423,6 +460,8 @@ func (p *driftProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.Logs
 	specs := make([]specInfoRecord, 0, len(due)+len(mcpSpecs))
 	specs = append(specs, due...)
 	specs = append(specs, mcpSpecs...)
+	// Findings the refresh loop produced since the last batch ride this one.
+	findings = append(findings, p.takeHeldFindings()...)
 	if len(findings) > 0 || len(specs) > 0 {
 		appendRecords(ld, findings, specs)
 	}

@@ -924,3 +924,107 @@ func TestSettings_EdgeNameKeys(t *testing.T) {
 		}
 	})
 }
+
+// TestSpecInfo_MCPUnchangedDocKeepsLoadedAt is review finding 3 on the
+// per-edge MCP baseline seeding (2026-09-08), store side. An observed
+// tools/list row is written by EVERY front that re-observes the list, each
+// with its own first-sighting stamp, and loaded_at is both the UI's "since
+// this snapshot" anchor and the contract channel's change token: moving it
+// for a document that did not change flip-flopped the row between two
+// fronts' stamps forever, re-downloading the document on every front on
+// every flip. An unchanged document keeps its stamp; only a changed one
+// moves it. Scoped to MCP rows — an OpenAPI row is one uploader's document.
+func TestSpecInfo_MCPUnchangedDocKeepsLoadedAt(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, b *testBackend) {
+		s := b.open(t, 0, 0)
+		v1 := []byte(`{"tools":[{"name":"get_balance"}],"serverInfo":{"name":"acme-payments-mcp"}}`)
+		v2 := []byte(`{"tools":[{"name":"get_account_balance"}],"serverInfo":{"name":"acme-payments-mcp"}}`)
+		put := func(loadedAt, title string, doc []byte) {
+			t.Helper()
+			if err := s.PutSpecInfo(model.SpecInfo{
+				Integration: "acme-payments", Role: model.SpecRoleProvider, PeerHost: "mcp.acme.test",
+				EdgeClass: model.EdgeClassExternal, Format: model.SpecFormatMCP, Title: title, Endpoints: 1,
+				LoadedAt: loadedAt,
+			}, doc); err != nil {
+				t.Fatalf("put %s: %v", loadedAt, err)
+			}
+		}
+		row := func() model.SpecInfo {
+			t.Helper()
+			infos, err := s.ListSpecInfos()
+			if err != nil {
+				t.Fatalf("list: %v", err)
+			}
+			for _, si := range infos {
+				if si.Integration == "acme-payments" {
+					return si
+				}
+			}
+			t.Fatal("acme-payments row missing")
+			return model.SpecInfo{}
+		}
+		doc := func() string {
+			t.Helper()
+			raw, _, ok, err := s.GetSpecDoc("acme-payments")
+			if err != nil || !ok {
+				t.Fatalf("get doc: ok=%v err=%v", ok, err)
+			}
+			return string(raw)
+		}
+
+		// front-a's first sighting, then front-b re-observing the same list
+		// five seconds later: the anchor stays where the store first learned
+		// of this content.
+		put("2026-09-07T10:00:00.000Z", "acme-payments-mcp", v1)
+		put("2026-09-07T10:00:05.000Z", "acme-payments-mcp", v1)
+		if got := row().LoadedAt; got != "2026-09-07T10:00:00.000Z" {
+			t.Fatalf("unchanged mcp document moved loaded_at to %s", got)
+		}
+		// Stable, not minimal: an earlier stamp arriving late does not move
+		// it either. Converging the fronts on the earliest sighting is the
+		// detector's job (drift.MCPDetector.Seed); the store's is to hold
+		// still for a list that did not change.
+		put("2026-09-07T09:59:00.000Z", "acme-payments-mcp", v1)
+		if got := row().LoadedAt; got != "2026-09-07T10:00:00.000Z" {
+			t.Fatalf("late earlier stamp moved loaded_at to %s", got)
+		}
+		// The rest of the row still follows the writer: only the stamp is pinned.
+		put("2026-09-07T10:00:09.000Z", "acme-payments-mcp v2", v1)
+		if r := row(); r.Title != "acme-payments-mcp v2" || r.LoadedAt != "2026-09-07T10:00:00.000Z" {
+			t.Fatalf("metadata refresh: title=%q loaded_at=%s, want the new title on the old stamp", r.Title, r.LoadedAt)
+		}
+
+		// A changed document IS a change: the anchor moves with it…
+		put("2026-09-07T11:00:00.000Z", "acme-payments-mcp", v2)
+		if r := row(); r.LoadedAt != "2026-09-07T11:00:00.000Z" || doc() != string(v2) {
+			t.Fatalf("changed document: loaded_at=%s doc=%s, want 11:00 / v2", r.LoadedAt, doc())
+		}
+		// …and holds still again from there.
+		put("2026-09-07T11:00:05.000Z", "acme-payments-mcp", v2)
+		if got := row().LoadedAt; got != "2026-09-07T11:00:00.000Z" {
+			t.Fatalf("unchanged v2 moved loaded_at to %s", got)
+		}
+
+		// Scope: an OpenAPI row is one uploader's document, reloaded on
+		// purpose — the same bytes still take the writer's stamp.
+		api := model.SpecInfo{Integration: "api-acme", Role: model.SpecRoleProvider, PeerHost: "api.acme.test",
+			Format: model.SpecFormatOpenAPI, LoadedAt: "2026-09-07T10:00:00.000Z"}
+		openapi := []byte("openapi: 3.0.3\ninfo:\n  title: Acme\n")
+		if err := s.PutSpecInfo(api, openapi); err != nil {
+			t.Fatalf("put openapi: %v", err)
+		}
+		api.LoadedAt = "2026-09-07T10:00:05.000Z"
+		if err := s.PutSpecInfo(api, openapi); err != nil {
+			t.Fatalf("re-put openapi: %v", err)
+		}
+		infos, err := s.ListSpecInfos()
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		for _, si := range infos {
+			if si.Integration == "api-acme" && si.LoadedAt != "2026-09-07T10:00:05.000Z" {
+				t.Errorf("openapi reload kept the old stamp %s; the rule is MCP-only", si.LoadedAt)
+			}
+		}
+	})
+}

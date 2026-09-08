@@ -26,8 +26,11 @@ import (
 // polls for uploaded contracts: the store pod serves its spec_infos rows of
 // format "mcp" — persisted from every front's forwarded spec_info records —
 // and this file offers each one to the detector, which keeps the newer of what
-// it holds and what the store holds (drift.MCPDetector.Seed decides; it never
-// emits findings). The metadata-first rule of speccache.go applies unchanged:
+// it holds and what the store holds (drift.MCPDetector.Seed decides). When
+// the store's newer list displaces a live baseline the detector reports the
+// definition diff between them; those findings arise on the refresh loop,
+// where there is no batch to ride, so the processor holds them for the next
+// one. The metadata-first rule of speccache.go applies unchanged:
 // rows are compared by loaded_at, and a document is downloaded only when its
 // row moved. On a single pod the rows are this process's own, so the seed is
 // a no-op after the one read that establishes that; on a shared-postgres
@@ -44,6 +47,16 @@ const mcpSeedLogMessage = "mcp baseline seeded from the store"
 type mcpSeeds struct {
 	mu   sync.Mutex
 	seen map[string]string
+	// remote marks the rows as the store pod's contract channel — lists
+	// observed by OTHER processes, across the org — rather than this pod's own
+	// co-located store. Set at start, next to the source. It gates the one
+	// admission rule that differs by provenance: a `local-process` (stdio)
+	// row's peer_host is the server's serverInfo.name, not a host identity,
+	// so over the channel it names every tenant's build of a same-named
+	// stdio server at once — and two different builds would seed each other's
+	// fronts in turn, ping-ponging definition_change forever. A pod's own
+	// store holds only its own such rows, which it may keep seeding.
+	remote bool
 }
 
 // mcpSeed is one adopted baseline, for the log line.
@@ -55,17 +68,19 @@ type mcpSeed struct {
 
 // reconcile offers the detector every MCP row whose loaded_at moved since it
 // was last offered, and forgets rows the store no longer lists, so a row that
-// comes back is offered again. Returns the baselines adopted, for logging;
-// a row the detector declined (same content, or older than what it holds) is
-// remembered too, so it is not re-downloaded every tick.
+// comes back is offered again. Returns the baselines adopted, for logging,
+// and the findings those adoptions reported (the diff against a displaced
+// live baseline — drift.MCPDetector.Seed), for the caller to carry
+// downstream; a row the detector declined (same content, or older than what
+// it holds) is remembered too, so it is not re-downloaded every tick.
 //
 // A per-row failure is reported and skipped, never fatal to the others. A row
 // whose document will not parse is remembered as offered: it will not parse
 // next tick either, and refetching it every ten seconds would be the hot loop
 // speccache.go's floor exists to prevent.
-func (s *mcpSeeds) reconcile(infos []model.SpecInfo, src specSource, det *drift.MCPDetector) (adopted []mcpSeed, errs []error) {
+func (s *mcpSeeds) reconcile(infos []model.SpecInfo, src specSource, det *drift.MCPDetector) (adopted []mcpSeed, findings []model.Finding, errs []error) {
 	if s == nil || det == nil || src == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -78,6 +93,11 @@ func (s *mcpSeeds) reconcile(infos []model.SpecInfo, src specSource, det *drift.
 		// The same admission rule as the store pod's channel: a provider's
 		// observed tools/list, bound to the edge it was observed on.
 		if si.Format != model.SpecFormatMCP || si.Role != model.SpecRoleProvider || si.PeerHost == "" {
+			continue
+		}
+		// Over the channel a stdio server's row is not bound to an edge this
+		// front can identify (see the remote field): never seed from it.
+		if s.remote && si.EdgeClass == model.EdgeClassLocalProcess {
 			continue
 		}
 		listed[si.Integration] = struct{}{}
@@ -93,11 +113,12 @@ func (s *mcpSeeds) reconcile(infos []model.SpecInfo, src specSource, det *drift.
 			continue // the row lost its document between list and fetch; next tick
 		}
 		s.seen[si.Integration] = si.LoadedAt
-		ok, err := det.Seed(si, raw)
+		fs, ok, err := det.Seed(si, raw)
 		if err != nil {
 			errs = append(errs, err)
 			continue
 		}
+		findings = append(findings, fs...)
 		if ok {
 			adopted = append(adopted, mcpSeed{integration: si.Integration, peerHost: si.PeerHost, observedAt: si.LoadedAt})
 		}
@@ -107,5 +128,5 @@ func (s *mcpSeeds) reconcile(infos []model.SpecInfo, src specSource, det *drift.
 			delete(s.seen, integration)
 		}
 	}
-	return adopted, errs
+	return adopted, findings, errs
 }

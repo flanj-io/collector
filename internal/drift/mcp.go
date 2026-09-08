@@ -197,7 +197,8 @@ func schemaUndecodable(raw json.RawMessage) bool {
 }
 
 // Seed offers an edge the snapshot the STORE holds — the org-wide baseline —
-// and reports whether it was adopted.
+// and reports what came of it: whether the edge's state changed, and the
+// findings the adoption produced, if any.
 //
 // The store's spec_infos rows of format "mcp" are written by every collector
 // that observes a tools/list (directly when a store is co-located, as a
@@ -213,48 +214,75 @@ func schemaUndecodable(raw json.RawMessage) bool {
 // The newer observation wins, ordered by when each list was observed
 // (contract.Version.ObservedAt; on the seed side that is the row's loaded_at):
 //   - no live baseline: the seed becomes it;
-//   - same content as the live baseline: nothing to learn, and the live
-//     version metadata is kept — a seed must never restamp "since this
-//     snapshot" for a list that did not change;
+//   - same content as the live baseline: nothing to learn about the contract,
+//     but the two stamps are two fronts' FIRST sightings of one list, and the
+//     edge converges on the EARLIER. Every front forwards its stamp back up on
+//     each re-observation; while each kept its own, the store row alternated
+//     between the two forever — every flip re-downloaded the document on every
+//     front and moved the UI's "since this snapshot" anchor, the NOT CHECKED
+//     flip this seeding exists to end (2026-09-08). With every front holding
+//     the earliest stamp they all forward the same one, and the row never
+//     moves for a list that did not. A seed at the same instant or later
+//     changes nothing;
 //   - the seed was observed strictly later: adopted; the live baseline
-//     rotates to previous, and NO findings are emitted. The collector that
-//     observed the change already reported it, and findings dedup by
-//     signature, so reporting it again from here would only inflate
-//     occurrence_count for a drift this process never witnessed;
+//     rotates to previous, and the definition diff between them is REPORTED,
+//     exactly as the observe path reports it. It used to be adopted silently,
+//     on the theory that the front which observed the change had reported
+//     it — but a front with NO baseline observes a change and reports nothing
+//     (it has nothing to diff), so a rename first seen by a fresh front was
+//     reported by nobody while the front holding V1 adopted V2 without a
+//     word. Findings dedup by signature, so a front that did already report
+//     it adds an occurrence: the honest count, since this front now judges
+//     calls against the changed list too;
 //   - otherwise — the live baseline is newer, or the two cannot be ordered —
 //     live wins. This process is ahead of the store, and the store catches
 //     up the way it always has: the spec_info record LoadSnapshot emitted.
-func (d *MCPDetector) Seed(info model.SpecInfo, raw []byte) (bool, error) {
+func (d *MCPDetector) Seed(info model.SpecInfo, raw []byte) ([]model.Finding, bool, error) {
 	if info.Format != model.SpecFormatMCP || len(raw) == 0 {
-		return false, nil
+		return nil, false, nil
 	}
 	tools, err := contract.ParseToolsList(raw)
 	if err != nil {
-		return false, fmt.Errorf("seed mcp contract %q: %w", info.Integration, err)
+		return nil, false, fmt.Errorf("seed mcp contract %q: %w", info.Integration, err)
 	}
 	tools = dropUndecodableSchemas(tools)
 	edgeRef := mcpEdgeRef(info.PeerHost, "client")
 	c, err := contract.FromToolsList(tools, edgeRef, info.LoadedAt, "observed tools/list at "+info.LoadedAt)
 	if err != nil {
-		return false, fmt.Errorf("seed mcp contract %q: %w", info.Integration, err)
+		return nil, false, fmt.Errorf("seed mcp contract %q: %w", info.Integration, err)
 	}
 	d.mu.Lock()
-	defer d.mu.Unlock()
 	st := d.edges[edgeRef]
 	if st == nil || st.current == nil {
 		d.edges[edgeRef] = &mcpEdgeState{integration: info.Integration, current: c}
-		return true, nil
+		d.mu.Unlock()
+		return nil, true, nil
 	}
 	if st.current.Version.ContentHash == c.Version.ContentHash {
-		return false, nil // same list; the live stamp stays
+		if !observedAfter(st.current.Version.ObservedAt, c.Version.ObservedAt) {
+			d.mu.Unlock()
+			return nil, false, nil // same list, and live already holds the earlier stamp
+		}
+		st.current = c // same list, first sighted earlier elsewhere: converge; previous stays
+		d.mu.Unlock()
+		return nil, true, nil
 	}
 	if !observedAfter(c.Version.ObservedAt, st.current.Version.ObservedAt) {
-		return false, nil // live is newer (or the order is unknowable): live wins
+		d.mu.Unlock()
+		return nil, false, nil // live is newer (or the order is unknowable): live wins
 	}
 	st.integration = info.Integration
 	st.previous = st.current
 	st.current = c
-	return true, nil
+	prev, cur := st.previous, st.current
+	d.mu.Unlock()
+
+	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00")
+	var findings []model.Finding
+	for _, ch := range diff.Classify(prev, cur) {
+		findings = append(findings, definitionChangeFinding(info.Integration, ch, prev, cur, now))
+	}
+	return findings, true, nil
 }
 
 // observedAfter reports whether a was observed strictly later than b. Both are

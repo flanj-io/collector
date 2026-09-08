@@ -1,10 +1,10 @@
 package store
 
 import (
-	"strings"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -420,6 +420,15 @@ func (s *sqliteStore) evictLocked(keepID string) error {
 // PutSpecInfo upserts the provider contract loaded by the drift processor,
 // keyed by integration. rawSpec is the spec document exactly as loaded; the UI
 // serves it verbatim so engineers can open the contract being validated.
+//
+// An MCP row's loaded_at moves only when its document does (2026-09-08). That
+// stamp is the UI's "since this snapshot" anchor and the contract channel's
+// change token, and an observed tools/list is written by EVERY front that
+// re-observes it, each with its own first-sighting stamp: restamping on each
+// write flip-flopped the row between two fronts' stamps forever, and every
+// flip re-downloaded the document on every front and flipped calls captured
+// before the newer stamp to NOT CHECKED. An OpenAPI row is one uploader's
+// document, written once per upload, and keeps the plain upsert.
 func (s *sqliteStore) PutSpecInfo(info model.SpecInfo, rawSpec []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -433,9 +442,11 @@ func (s *sqliteStore) PutSpecInfo(info model.SpecInfo, rawSpec []byte) error {
 		 ON CONFLICT(integration) DO UPDATE SET
 		   role=excluded.role, peer_host=excluded.peer_host, edge_class=excluded.edge_class, format=excluded.format, title=excluded.title,
 		   version=excluded.version, docs_url=excluded.docs_url, endpoints=excluded.endpoints,
-		   loaded_at=excluded.loaded_at, doc=excluded.doc`,
+		   loaded_at=CASE WHEN excluded.format=? AND spec_infos.doc=excluded.doc THEN spec_infos.loaded_at ELSE excluded.loaded_at END,
+		   doc=excluded.doc`,
 		info.Integration, role, nullStr(info.PeerHost), nullStr(info.EdgeClass), info.Format, nullStr(info.Title),
 		nullStr(info.Version), nullStr(info.DocsURL), info.Endpoints, info.LoadedAt, string(rawSpec),
+		model.SpecFormatMCP,
 	)
 	if err != nil {
 		return fmt.Errorf("put spec info: %w", err)
@@ -470,6 +481,7 @@ func (s *sqliteStore) PutUploadedSpec(info model.SpecInfo, rawSpec []byte) (Uplo
 	}
 	return prev, nil
 }
+
 // execUploadedSpec writes the row for both backends: the new document current,
 // the one it displaced kept as the single previous.
 func execUploadedSpec(tx interface {
