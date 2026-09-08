@@ -224,7 +224,7 @@ JSON Schema: [`v1/redacted-call.schema.json`](./v1/redacted-call.schema.json). S
 ```
 
 Three **store-owned, read-API-only** fields ride on the STORED call (`GET /api/calls`, `GET
-/api/calls/…`) and never promote to the CP — readers tolerate them via `additionalProperties: true`:
+/api/calls/…`) and are store-owned facts: a flag body carries them as part of the call record (the CP ignores them — its schema tolerates them via `additionalProperties: true`) and no reader may treat them as CP-verified:
 
 | Field | Type | Meaning |
 |---|---|---|
