@@ -11,7 +11,7 @@
   ],
   "allOf": [
     {
-      "$comment": "v1p4-2026-09-08, additive relaxation WIDENING qfix2-2026-08-26: `call` is OPTIONAL when EITHER the request carries a non-empty `message` OR the finding is a kind that is call-less by nature (`definition_change`, evidenced by two published tools/list snapshots, `source_call_id: null` by construction). It is REQUIRED otherwise. The qfix2 arm is kept verbatim as the second disjunct so that every payload valid before this change is still valid — a snapshot-only definition_change with an EMPTY message was legal and stays legal. What the first disjunct adds is the case qfix2 left open: every OTHER kind used to be refused with 400 finding_has_no_call even when the operator had written out what they were asking, which is a Flag control that answers 400. The rule that survives is the honest one — a thread must carry something: evidence, or words. `finding` is optional outright (dropped from `required`), which is what makes a message-only thread from an EDGE possible: an edge is a registrable domain, not a drift, so no finding exists to attach. Such a thread is created with evidence_count 0.",
+      "$comment": "v1p4-2026-09-08, additive relaxation WIDENING qfix2-2026-08-26: `call` is OPTIONAL when EITHER the request carries a `message` with a non-whitespace character in it (the readers trim before judging, so the schema matches on `\\S` rather than on a length — a message of spaces is not words) OR the finding is a kind that is call-less by nature (`definition_change`, evidenced by two published tools/list snapshots, `source_call_id: null` by construction). It is REQUIRED otherwise. The qfix2 arm is kept verbatim as the second disjunct so that every payload valid before this change is still valid — a snapshot-only definition_change with an EMPTY message was legal and stays legal. What the first disjunct adds is the case qfix2 left open: every OTHER kind used to be refused with 400 finding_has_no_call even when the operator had written out what they were asking, which is a Flag control that answers 400. The rule that survives is the honest one — a thread must carry something: evidence, or words. `finding` is optional outright (dropped from `required`), which is what makes a message-only thread from an EDGE possible: an edge is a registrable domain, not a drift, so no finding exists to attach. Such a thread is created with evidence_count 0.",
       "if": {
         "anyOf": [
           {
@@ -21,7 +21,8 @@
             "properties": {
               "message": {
                 "type": "string",
-                "minLength": 1
+                "minLength": 1,
+                "pattern": "\\S"
               }
             }
           },
