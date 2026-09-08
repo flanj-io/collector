@@ -121,9 +121,6 @@ func (p *driftProcessor) start(_ context.Context, host component.Host) error {
 		p.src = storeSpecSource{st: p.st}
 	case p.cfg.StorePodEndpoint != "":
 		p.src = newRemoteSpecSource(p.cfg.StorePodEndpoint, p.cfg.StorePodToken)
-		// The rows are other processes' observations, org-wide: the seed's
-		// admission rule for stdio servers differs (mcpbaseline.go).
-		p.mcpSeeds.remote = true
 	default:
 		// No store and no endpoint: a front that was never told where the
 		// store pod is. Uploaded contracts cannot reach it, and saying so once

@@ -115,7 +115,9 @@ contracts/                         # vendored contract: CONTRACTS.md + fixtures,
    contracts from the store pod's read-only `spec_endpoint` (`flanjstore`), authenticated by a shared
    token: uploaded OpenAPI contracts, and — since 2026-09-07 — the observed MCP `tools/list` snapshots
    every front forwards up, so a front's MCP baseline is the org-wide one and not what that one process
-   witnessed. That listener serves contracts and nothing else — no calls, no findings, no settings —
+   witnessed — except a **stdio** (`local-process`) server's, which seeds nobody from any source, because
+   its `peer_host` is a `serverInfo.name` and one row covers every pod's own subprocess
+   (`processor/flanjdrift/mcpbaseline.go`). That listener serves contracts and nothing else — no calls, no findings, no settings —
    and it is NOT the UI: the UI stays loopback (#5). Leave `store_pod_endpoint` unset on a tiered front
    and it detects no REST drift at all, whatever has been uploaded, and judges MCP calls only against
    the lists it observed itself.
