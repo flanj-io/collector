@@ -15,7 +15,9 @@
 #     call, on the front.
 #   * Contracts are uploaded HERE (the UI lives on this pod) and read BY the
 #     fronts over spec_endpoint below. That read is the only reason an upload
-#     takes effect on a tiered deployment at all.
+#     takes effect on a tiered deployment at all — and, since 2026-09-07, how
+#     every front shares one MCP baseline: the tools/list snapshots the fronts
+#     forward up are served back down over the same endpoint.
 #   * flanjredaction stays on (idempotent, add-only, skips non-call records): the
 #     floor on the last hop before persistence, even if something bypasses a front.
 #   * sqlite: db_path on a PVC, one pod per file. postgres: dsn, no PVC.

@@ -24,10 +24,40 @@ the **local-only** `stale_client`. Flaggability lives in
 `model.Finding.Flaggable()` and is enforced by the UI relay (`403
 not_flaggable`). Every observed snapshot is also emitted as a `spec_info`
 record (format `"mcp"`, raw doc = the snapshot JSON) and — when a store is
-co-located — upserted directly, so the Contracts tab lists the server and a
-restart re-seeds the diff baseline from the store (`MCPDetector.Seed`); a
-front collector without a store simply re-baselines from the next observed
-list.
+co-located — upserted directly, so the Contracts tab lists the server.
+
+**The MCP baseline is the STORE's, not this process's** (2026-09-07). Every
+refresh offers the detector the store's `spec_infos` rows of format `"mcp"`
+(`mcpbaseline.go` → `MCPDetector.Seed`), from whichever `specSource` this
+processor has — the co-located store, or the store pod's contract channel on a
+tiered FRONT, which now serves MCP rows too. So a restart re-seeds the diff
+baseline, a shared-postgres pod learns what a sibling pod observed, and a
+tiered front learns what a SIBLING FRONT observed: until this landed a front's
+baseline was whatever that one process had witnessed, so a tool renamed while
+front-a was watching raised nothing when the stale client called through
+front-b, and restarting a front forgot the baseline outright. The conflict
+rule is **newer observation wins**, by `observed_at`: a store row newer than
+the live snapshot is adopted, the live one rotates to previous, and the
+definition diff between them is REPORTED exactly as observing it would be —
+it used to be silent, on the theory that the observing front had reported
+it, but a front with no baseline observes a change and reports nothing, so a
+rename first listed by a fresh front was reported by nobody (findings dedup
+by signature; one occurrence per front is the honest count). The same
+content converges the edge on the EARLIER stamp: two fronts' first sightings
+of one list otherwise flip-flopped the store row forever. And a live snapshot
+newer than the store's stays, reaching the store as the forwarded `spec_info`
+record exactly as before. Findings the refresh produces have no batch to
+ride, so the processor holds them for the next one (`holdFindings`). An MCP
+call to an edge with no baseline kicks an early refresh, like an uncovered
+REST host. A re-observed IDENTICAL list reports the row with the FIRST
+observation's stamp, and the store keeps an MCP row's `loaded_at` for an
+unchanged document whichever front wrote it, so `loaded_at` — the UI's
+"since this snapshot" anchor and the channel's change token — moves only
+when the contract does. Over the store pod's channel (`mcpSeeds.remote`) a
+`local-process` (stdio) row is never offered: its `peer_host` is the
+server's `serverInfo.name`, not a host identity, so it names every tenant's
+build of a same-named stdio server at once and two builds would ping-pong
+`definition_change`; a pod's own co-located store still seeds its own.
 
 **Technical adherence ONLY** — fields/types/shapes/enums. Never business/economic
 correctness (pricing, quantities, business rules) — that would be a false-positive storm.
@@ -66,7 +96,8 @@ implementations:
 - `remoteSpecSource` (`remotesource.go`) — the store pod's read-only contract
   endpoint (`flanjstore.spec_endpoint`), for a FRONT of the tiered topology,
   which runs drift but owns no store. Without it a front detects no REST drift
-  however many contracts are uploaded, and says so once at Start. Shaped like
+  however many contracts are uploaded — and judges MCP calls only against the
+  lists it observed itself — and says so once at Start. Shaped like
   the deferred CP per-domain fetch on purpose: that lands as a third
   implementation, not a third channel.
 
@@ -101,6 +132,11 @@ store dedups on it — the first call creates the finding, later calls increment
   steady state on a fifty-provider front is six small requests a minute. Read
   methods are nil-safe — no contract source degrades to pass-through, never to a
   panic on the hot path.
+- `mcpbaseline.go` — the MCP half of the same listing: offers the store's
+  `"mcp"` rows to the detector, tracked by `loaded_at` so nothing is
+  re-downloaded until a row moves. Logs `mcp baseline seeded from the store`
+  on adoption — the tiered e2e lane waits on that line, since a front has no
+  other observable surface.
 - `remotesource.go` — the tiered topology's front-side client.
 - `processor.go` — per-batch live-vs-spec detection + the refresh loop +
   rate-limited spec_info emission; appends finding + spec_info records under a
@@ -192,5 +228,9 @@ findings, and the MCP battery (`mcp_test.go`): golden snapshot + golden MCP
 call → exactly one `output_mismatch`; no-`outputSchema` and
 extra-undeclared-field no-finding cases; token-aware props verdicts;
 `stale_client`; the classifier classes with flaggability; snapshot versioning
-and seeding. `processor_test.go` here drives the same loop at the record level
-(snapshot in → spec_info + findings out; HTTP pass-through untouched).
+and seeding (the newer-wins rule). `processor_test.go` here drives the same
+loop at the record level (snapshot in → spec_info + findings out; HTTP
+pass-through untouched); `mcpbaseline_test.go` is the tiered defect at the
+processor level (a source-only processor judges its FIRST call against the
+store's baseline; live-ahead is forwarded, not overridden; restart against a
+real store) — all verified red with seeding disabled.

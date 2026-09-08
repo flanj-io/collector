@@ -29,6 +29,13 @@ Two backends (`docs/STORE.md` is the user-facing guide):
 - `config.go` — frozen keys `backend`, `dsn`, `db_path`, `window_max_rows`,
   `window_max_bytes` (CONTRACTS §8). Validation is backend-conditional:
   sqlite ⇒ `db_path` required (PVC); postgres ⇒ `dsn` required.
+- `specserver.go` — the tiered topology's contract channel (`spec_endpoint` +
+  `spec_token`, CONTRACTS §8): a read-only, token-gated listener on the
+  cluster interface serving provider contracts bound to an edge — uploaded
+  OpenAPI documents and, since 2026-09-07, observed MCP `tools/list` snapshots
+  (the org-wide MCP baseline a front seeds from). `servableContract` is the ONE
+  admission rule, applied to the list and the doc route alike; the self
+  contract and unbound rows never cross.
 
 ## Invariants
 

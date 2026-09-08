@@ -107,14 +107,15 @@ func TestSpecEndpointServesProviderContracts(t *testing.T) {
 }
 
 // TestSpecEndpointExposesOnlyProviderContracts: the channel carries what a
-// front needs to validate its dependencies' traffic and nothing else. The self
-// contract is the store pod's own config, MCP snapshots are self-delivering
-// from traffic the front already sees, and an unbound row cannot be keyed by
-// host — none of them may cross the hop.
+// front needs to validate its dependencies' traffic and nothing else — a
+// PROVIDER's contract bound to an edge, whether an uploaded OpenAPI document
+// or an observed MCP tools/list snapshot. The self contract is the store pod's
+// own config and an unbound row cannot be keyed by host; neither crosses.
 func TestSpecEndpointExposesOnlyProviderContracts(t *testing.T) {
 	e, base := startStorePod(t, testSpecToken)
 	doc := []byte("openapi: 3.0.3\n")
 	seedContract(t, e, "acme", "api.acme.test", model.SpecRoleProvider, model.SpecFormatOpenAPI, doc)
+	seedContract(t, e, "acme-tools", "mcp.acme.test", model.SpecRoleProvider, model.SpecFormatMCP, []byte(`{"tools":[]}`))
 	seedContract(t, e, "self", "api.self.test", model.SpecRoleSelf, model.SpecFormatOpenAPI, doc)
 	seedContract(t, e, "unbound", "", model.SpecRoleProvider, model.SpecFormatOpenAPI, doc)
 
@@ -125,11 +126,62 @@ func TestSpecEndpointExposesOnlyProviderContracts(t *testing.T) {
 	if err := json.Unmarshal(body, &listed); err != nil {
 		t.Fatal(err)
 	}
-	if len(listed.Contracts) != 1 {
-		t.Fatalf("contracts = %+v, want only the bound provider contract", listed.Contracts)
+	got := map[string]string{}
+	for _, c := range listed.Contracts {
+		got[c.Integration] = c.Format
 	}
-	if listed.Contracts[0].Integration != "acme" {
-		t.Errorf("served %q, want acme", listed.Contracts[0].Integration)
+	if len(got) != 2 || got["acme"] != model.SpecFormatOpenAPI || got["acme-tools"] != model.SpecFormatMCP {
+		t.Fatalf("contracts = %+v, want exactly the two bound provider contracts (openapi + mcp)", listed.Contracts)
+	}
+}
+
+// TestSpecEndpointServesMCPSnapshots: the MCP half of the channel. Until
+// 2026-09-07 an observed tools/list was withheld here as "self-delivering from
+// traffic the front already sees" — true for the ONE front that saw it, and
+// the reason every other front's baseline was its own memory: a rename
+// observed through front-a raised nothing when the stale client called
+// through front-b, and a restarted front forgot the baseline. The store holds
+// the org-wide baseline; a front reads it back through this route, metadata
+// first and the raw snapshot document verbatim.
+func TestSpecEndpointServesMCPSnapshots(t *testing.T) {
+	e, base := startStorePod(t, testSpecToken)
+	snapshot := []byte(`{"tools":[{"name":"get_balance","inputSchema":{"type":"object"}}],"serverInfo":{"name":"acme-tools-mcp","version":"1.2.0"}}`)
+	if err := e.Store().PutSpecInfo(model.SpecInfo{
+		Integration: "acme-tools",
+		Role:        model.SpecRoleProvider,
+		Format:      model.SpecFormatMCP,
+		PeerHost:    "mcp.acme.test",
+		EdgeClass:   "external",
+		Title:       "acme-tools-mcp",
+		Version:     "1.2.0",
+		Endpoints:   1,
+		Source:      model.SpecSourceObserved,
+		LoadedAt:    "2026-09-07T10:00:00.000Z",
+	}, snapshot); err != nil {
+		t.Fatal(err)
+	}
+
+	_, body := get(t, base+"/internal/contracts", testSpecToken)
+	var listed struct {
+		Contracts []model.SpecInfo `json:"contracts"`
+	}
+	if err := json.Unmarshal(body, &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Contracts) != 1 {
+		t.Fatalf("contracts = %+v, want the one MCP snapshot", listed.Contracts)
+	}
+	row := listed.Contracts[0]
+	if row.Format != model.SpecFormatMCP || row.PeerHost != "mcp.acme.test" || row.LoadedAt != "2026-09-07T10:00:00.000Z" || row.EdgeClass != "external" {
+		t.Errorf("row = %+v: the front seeds by peer_host and refreshes on loaded_at, and the UI tells stdio twins apart by edge_class", row)
+	}
+
+	code, doc := get(t, base+"/internal/contracts/doc?integration=acme-tools", testSpecToken)
+	if code != http.StatusOK {
+		t.Fatalf("doc status = %d, want 200", code)
+	}
+	if string(doc) != string(snapshot) {
+		t.Errorf("doc = %q, want the stored snapshot verbatim — the front hashes it for versioning", doc)
 	}
 }
 
@@ -292,13 +344,15 @@ func TestSpecAuthFailsClosedOnAnEmptyToken(t *testing.T) {
 //
 // BUG (cross-repo review, 2026-09-01): handleSpecList filtered to
 // `Role == provider && PeerHost != ""` with the explicit rationale that the
-// self contract and MCP snapshots have "no business crossing this hop", while
-// handleSpecDoc passed the caller-supplied integration straight to GetSpecDoc —
-// a bare lookup over the same table. So a token-holding front could fetch the
+// self contract has "no business crossing this hop", while handleSpecDoc
+// passed the caller-supplied integration straight to GetSpecDoc — a bare
+// lookup over the same table. So a token-holding front could fetch the
 // ORGANISATION'S OWN OpenAPI document with
 // `GET /internal/contracts/doc?integration=self`, which the list route was
 // written specifically to withhold. A filter on the index and none on the
-// item is not a filter.
+// item is not a filter. (MCP snapshots were withheld too at the time; they
+// are served since 2026-09-07 — see TestSpecEndpointServesMCPSnapshots — and
+// the one rule still governs both routes.)
 func TestSpecDocServesOnlyWhatTheListAdmits(t *testing.T) {
 	const token = "s3cret"
 	e, base := startStorePod(t, token)
@@ -306,14 +360,16 @@ func TestSpecDocServesOnlyWhatTheListAdmits(t *testing.T) {
 	seedContract(t, e, "acme", "api.acme.test", model.SpecRoleProvider, model.SpecFormatOpenAPI, doc)
 	seedContract(t, e, "self", "api.self.test", model.SpecRoleSelf, model.SpecFormatOpenAPI, doc)
 	seedContract(t, e, "unbound", "", model.SpecRoleProvider, model.SpecFormatOpenAPI, doc)
-	seedContract(t, e, "acme-tools", "mcp.acme.test", model.SpecRoleProvider, model.SpecFormatMCP, doc)
+	seedContract(t, e, "acme-tools", "mcp.acme.test", model.SpecRoleProvider, model.SpecFormatMCP, []byte(`{"tools":[]}`))
 
-	// The one the list admits is fetchable.
-	if code, _ := get(t, base+"/internal/contracts/doc?integration=acme", token); code != http.StatusOK {
-		t.Errorf("provider contract doc: status %d, want 200", code)
+	// What the list admits is fetchable, in either format.
+	for _, integration := range []string{"acme", "acme-tools"} {
+		if code, _ := get(t, base+"/internal/contracts/doc?integration="+integration, token); code != http.StatusOK {
+			t.Errorf("%s doc: status %d, want 200", integration, code)
+		}
 	}
 	// Everything the list withholds must be unfetchable by id.
-	for _, integration := range []string{"self", "unbound", "acme-tools"} {
+	for _, integration := range []string{"self", "unbound"} {
 		code, body := get(t, base+"/internal/contracts/doc?integration="+integration, token)
 		if code == http.StatusOK {
 			t.Errorf("GET doc?integration=%s returned 200 — the list route deliberately "+

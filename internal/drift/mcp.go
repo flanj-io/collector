@@ -109,7 +109,6 @@ func (d *MCPDetector) LoadSnapshot(snap otlpattr.ContractSnapshot) ([]model.Find
 		Title:     snap.ServerName,
 		Version:   snap.ServerVersion,
 		Endpoints: len(tools),
-		LoadedAt:  snap.ObservedAt,
 	}
 
 	d.mu.Lock()
@@ -134,6 +133,18 @@ func (d *MCPDetector) LoadSnapshot(snap otlpattr.ContractSnapshot) ([]model.Find
 	}
 	cur := st.current
 	d.mu.Unlock()
+
+	// The row's loaded_at is when THIS CONTENT was first observed — the
+	// current contract's own stamp — not when this record happened to arrive.
+	// The two differ on every re-observation of an unchanged list, and the
+	// store row is what the UI anchors "validated N calls since this snapshot"
+	// on: restamping it on each identical tools/list flipped every call
+	// captured before the restamp to NOT CHECKED with no change to the
+	// contract at all (seen on the tiered lane, 2026-09-07, where a second
+	// front's first listing did exactly that to the first front's calls). The
+	// same stability is what lets the store's loaded_at serve as the change
+	// token the contract channel refreshes on.
+	info.LoadedAt = cur.Version.ObservedAt
 
 	var findings []model.Finding
 	if prev != nil {
@@ -190,31 +201,115 @@ func schemaUndecodable(raw json.RawMessage) bool {
 	return err != nil
 }
 
-// Seed restores an edge's CURRENT snapshot from the store (spec_infos rows
-// with format "mcp", written by earlier LoadSnapshots) so a restarted
-// collector diffs the next observed list against the last persisted one
-// instead of silently re-baselining. It never overrides live state.
-func (d *MCPDetector) Seed(info model.SpecInfo, raw []byte) error {
+// Seed offers an edge the snapshot the STORE holds — the org-wide baseline —
+// and reports what came of it: whether the edge's state changed, and the
+// findings the adoption produced, if any.
+//
+// The store's spec_infos rows of format "mcp" are written by every collector
+// that observes a tools/list (directly when a store is co-located, as a
+// forwarded spec_info record from a tiered front). Seeding from them is what
+// keeps the baseline from being one process's memory. At Start it is how a
+// restarted collector diffs the next observed list against the last one
+// anyone persisted instead of silently re-baselining. On every refresh it is
+// how a tiered FRONT — which owns no store and has witnessed nothing — learns
+// what a SIBLING front observed: the rename front-a saw must make the stale
+// client calling through front-b a stale_client finding, not a NOT CHECKED
+// call, and it must not take a restart of front-b to get there.
+//
+// The newer observation wins, ordered by when each list was observed
+// (contract.Version.ObservedAt; on the seed side that is the row's loaded_at):
+//   - no live baseline: the seed becomes it;
+//   - same content as the live baseline: nothing to learn about the contract,
+//     but the two stamps are two fronts' FIRST sightings of one list, and the
+//     edge converges on the EARLIER. Every front forwards its stamp back up on
+//     each re-observation; while each kept its own, the store row alternated
+//     between the two forever — every flip re-downloaded the document on every
+//     front and moved the UI's "since this snapshot" anchor, the NOT CHECKED
+//     flip this seeding exists to end (2026-09-08). With every front holding
+//     the earliest stamp they all forward the same one, and the row never
+//     moves for a list that did not. A seed at the same instant or later
+//     changes nothing;
+//   - the seed was observed strictly later: adopted; the live baseline
+//     rotates to previous, and the definition diff between them is REPORTED,
+//     exactly as the observe path reports it. It used to be adopted silently,
+//     on the theory that the front which observed the change had reported
+//     it — but a front with NO baseline observes a change and reports nothing
+//     (it has nothing to diff), so a rename first seen by a fresh front was
+//     reported by nobody while the front holding V1 adopted V2 without a
+//     word. Findings dedup by signature, so a front that did already report
+//     it adds an occurrence: the honest count, since this front now judges
+//     calls against the changed list too;
+//   - otherwise — the live baseline is newer, or the two cannot be ordered —
+//     live wins. This process is ahead of the store, and the store catches
+//     up the way it always has: the spec_info record LoadSnapshot emitted.
+func (d *MCPDetector) Seed(info model.SpecInfo, raw []byte) ([]model.Finding, bool, error) {
 	if info.Format != model.SpecFormatMCP || len(raw) == 0 {
-		return nil
+		return nil, false, nil
 	}
 	tools, err := contract.ParseToolsList(raw)
 	if err != nil {
-		return fmt.Errorf("seed mcp contract %q: %w", info.Integration, err)
+		return nil, false, fmt.Errorf("seed mcp contract %q: %w", info.Integration, err)
 	}
 	tools = dropUndecodableSchemas(tools)
 	edgeRef := mcpEdgeRef(info.PeerHost, "client")
 	c, err := contract.FromToolsList(tools, edgeRef, info.LoadedAt, "observed tools/list at "+info.LoadedAt)
 	if err != nil {
-		return fmt.Errorf("seed mcp contract %q: %w", info.Integration, err)
+		return nil, false, fmt.Errorf("seed mcp contract %q: %w", info.Integration, err)
 	}
 	d.mu.Lock()
-	defer d.mu.Unlock()
-	if st := d.edges[edgeRef]; st != nil && st.current != nil {
-		return nil // live state wins
+	st := d.edges[edgeRef]
+	if st == nil || st.current == nil {
+		d.edges[edgeRef] = &mcpEdgeState{integration: info.Integration, current: c}
+		d.mu.Unlock()
+		return nil, true, nil
 	}
-	d.edges[edgeRef] = &mcpEdgeState{integration: info.Integration, current: c}
-	return nil
+	if st.current.Version.ContentHash == c.Version.ContentHash {
+		if !observedAfter(st.current.Version.ObservedAt, c.Version.ObservedAt) {
+			d.mu.Unlock()
+			return nil, false, nil // same list, and live already holds the earlier stamp
+		}
+		st.current = c // same list, first sighted earlier elsewhere: converge; previous stays
+		d.mu.Unlock()
+		return nil, true, nil
+	}
+	if !observedAfter(c.Version.ObservedAt, st.current.Version.ObservedAt) {
+		d.mu.Unlock()
+		return nil, false, nil // live is newer (or the order is unknowable): live wins
+	}
+	st.integration = info.Integration
+	st.previous = st.current
+	st.current = c
+	prev, cur := st.previous, st.current
+	d.mu.Unlock()
+
+	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00")
+	var findings []model.Finding
+	for _, ch := range diff.Classify(prev, cur) {
+		findings = append(findings, definitionChangeFinding(info.Integration, ch, prev, cur, now))
+	}
+	return findings, true, nil
+}
+
+// observedAfter reports whether a was observed strictly later than b. Both are
+// RFC 3339 stamps — the SDK's record time on one side, the store row's
+// loaded_at on the other — parsed rather than compared as text so a
+// millisecond stamp and a whole-second one order correctly. A pair that will
+// not parse falls back to the lexical order ISO-8601 UTC provides, and a tie
+// is never "after": it must not displace live state.
+func observedAfter(a, b string) bool {
+	ta, errA := time.Parse(time.RFC3339Nano, a)
+	tb, errB := time.Parse(time.RFC3339Nano, b)
+	if errA == nil && errB == nil {
+		return ta.After(tb)
+	}
+	return a > b
+}
+
+// HasBaseline reports whether the edge holds a CURRENT snapshot — observed or
+// seeded — to judge calls against. A call to an edge without one is captured,
+// not judged, which is the caller's cue to ask the store for a baseline.
+func (d *MCPDetector) HasBaseline(peerHost, direction string) bool {
+	return d.currentContract(peerHost, direction) != nil
 }
 
 // currentContract returns the edge's CURRENT contract (nil when no snapshot

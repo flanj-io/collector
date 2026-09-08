@@ -112,10 +112,13 @@ contracts/                         # vendored contract: CONTRACTS.md + fixtures,
    store is order-independent for call/finding pairs (late pin) — nothing upstream may rely on or
    compensate for record order.
 7. **Contracts flow store → front, calls flow front → store.** A front owns no store, so it reads
-   uploaded contracts from the store pod's read-only `spec_endpoint` (`flanjstore`), authenticated by a
-   shared token. That listener serves contracts and nothing else — no calls, no findings, no settings —
+   contracts from the store pod's read-only `spec_endpoint` (`flanjstore`), authenticated by a shared
+   token: uploaded OpenAPI contracts, and — since 2026-09-07 — the observed MCP `tools/list` snapshots
+   every front forwards up, so a front's MCP baseline is the org-wide one and not what that one process
+   witnessed. That listener serves contracts and nothing else — no calls, no findings, no settings —
    and it is NOT the UI: the UI stays loopback (#5). Leave `store_pod_endpoint` unset on a tiered front
-   and it detects no REST drift at all, whatever has been uploaded.
+   and it detects no REST drift at all, whatever has been uploaded, and judges MCP calls only against
+   the lists it observed itself.
 
 ## Contract
 

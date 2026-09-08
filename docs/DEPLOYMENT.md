@@ -172,6 +172,14 @@ Flow specifics:
   hear it. The reads are metadata-only and download nothing when nothing moved. What still travels front → store as `spec_info` is a front's
   own SELF contract (`self_spec_path`) and its observed MCP `tools/list`
   snapshots — never a provider contract.
+- **MCP snapshots travel both ways.** Each front forwards the `tools/list` it
+  observes, and the store pod serves every front's snapshots back over the same
+  `spec_endpoint` (since 2026-09-07), so a front's MCP baseline is the store's:
+  a tool renamed while one front was watching is a `definition_change` — and
+  the stale client calling the old name through another front a `stale_client`
+  — whichever front sees what, and a restarted front resumes from the store
+  rather than from the next list it happens to observe. On each front the newer
+  observation wins, silently; the front that observed a change reports it.
 - The flag action runs on the store pod (it holds the evidence); its outbound
   calls to the control plane (Connect, flag, thread state) are the only
   off-cluster egress. **Connect** is per deployment, not per pod: the collector
