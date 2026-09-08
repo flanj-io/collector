@@ -64,6 +64,22 @@ is not equivalent, so use the sidecar. In Kubernetes it is
 `kubectl port-forward <pod> 5335:5335`. Either way the bind stays loopback —
 tunnel to it, never rebind it.
 
+## Run it on Kubernetes
+
+```bash
+helm install flanj oci://registry-1.docker.io/flanj/flanj-collector \
+  --namespace flanj --create-namespace \
+  --set specToken.value="$(openssl rand -hex 32)" \
+  --set integration.id=acme-payments
+```
+
+That is the tiered shape: N stateless front collectors and one store pod, which
+is where the UI and the rolling window live. Values, tiers (sqlite on an
+emptyDir / sqlite on a PVC / postgres) and what the chart refuses to install:
+[`charts/flanj-collector`](charts/flanj-collector/README.md). The single-pod and
+shared-postgres shapes, and the objects behind all three, are in
+[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
+
 Point your app at the collector with the [SDK](https://github.com/flanj-io/sdk):
 
 ```bash

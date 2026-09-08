@@ -1,0 +1,131 @@
+{{- if .Values.postgres.enabled }}
+{{/*
+EVALUATION postgres. One replica, one PVC, default configuration, no backups,
+no HA, no tuning, no upgrade path. It exists so `store.backend=postgres` can be
+tried in one command. Anything you would page someone about belongs on a
+database you operate — point store.dsn at it and leave this off.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "flanj-collector.postgres.fullname" . }}
+  labels:
+    {{- include "flanj-collector.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP
+  selector:
+    {{- include "flanj-collector.postgres.selectorLabels" . | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "flanj-collector.postgres.fullname" . }}
+  labels:
+    {{- include "flanj-collector.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: 1
+  serviceName: {{ include "flanj-collector.postgres.fullname" . }}
+  selector:
+    matchLabels:
+      {{- include "flanj-collector.postgres.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "flanj-collector.postgres.selectorLabels" . | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: {{ .Values.postgres.image | quote }}
+          imagePullPolicy: {{ .Values.postgres.imagePullPolicy }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+              protocol: TCP
+          env:
+            - name: POSTGRES_DB
+              value: {{ .Values.postgres.database | quote }}
+            - name: POSTGRES_USER
+              value: {{ .Values.postgres.username | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "flanj-collector.postgres.fullname" . }}
+                  key: password
+            # The image initdb's into a SUBDIRECTORY of the mount: a fresh PVC
+            # arrives with a lost+found on some provisioners, and postgres
+            # refuses a non-empty data directory.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ .Values.postgres.username | quote }}, "-d", {{ .Values.postgres.database | quote }}]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ .Values.postgres.username | quote }}, "-d", {{ .Values.postgres.database | quote }}]
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          {{- with .Values.postgres.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      {{- if not .Values.postgres.persistence.enabled }}
+      volumes:
+        - name: data
+          emptyDir: {}
+      {{- end }}
+  {{- if .Values.postgres.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: {{ .Values.postgres.persistence.size | quote }}
+        {{- if .Values.postgres.persistence.storageClass }}
+        storageClassName: {{ .Values.postgres.persistence.storageClass | quote }}
+        {{- end }}
+  {{- end }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "flanj-collector.postgres.fullname" . }}
+  labels:
+    {{- include "flanj-collector.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+type: Opaque
+stringData:
+  password: {{ .Values.postgres.password | quote }}
+{{- end }}

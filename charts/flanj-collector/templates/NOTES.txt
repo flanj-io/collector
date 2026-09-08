@@ -1,0 +1,49 @@
+{{ .Chart.Name }} {{ .Chart.Version }} installed as {{ .Release.Name }} in {{ .Release.Namespace }}.
+
+  fronts   {{ if .Values.collector.autoscaling.enabled }}HPA {{ .Values.collector.autoscaling.minReplicas }}–{{ .Values.collector.autoscaling.maxReplicas }}{{ else }}{{ .Values.collector.replicas }} replica(s){{ end }}   {{ include "flanj-collector.front.fullname" . }}
+  store    {{ .Values.store.backend }}{{ if eq .Values.store.backend "sqlite" }}{{ if .Values.store.persistence.enabled }} on a {{ .Values.store.persistence.size }} PVC{{ else }} on an emptyDir — EVALUATION: the window dies with the pod{{ end }}{{ else }}, {{ int .Values.store.replicas }} replica(s){{ if .Values.postgres.enabled }}, bundled evaluation database{{ end }}{{ end }}   {{ include "flanj-collector.store.fullname" . }}
+
+1. Point the SDK at the fronts:
+
+     FLANJ_OTLP_ENDPOINT=http://{{ include "flanj-collector.front.fullname" . }}.{{ .Release.Namespace }}:{{ int .Values.service.front.port }}/v1/logs
+
+2. Open the UI. It binds container loopback on the STORE pod by design — the
+   collector is outbound-only and nothing it serves is reachable off-host:
+
+     kubectl -n {{ .Release.Namespace }} port-forward {{ if eq .Values.store.backend "sqlite" }}sts/{{ include "flanj-collector.store.fullname" . }}{{ else }}deploy/{{ include "flanj-collector.store.fullname" . }}{{ end }} 5335:5335
+
+   then http://localhost:5335 (health: /api/health).
+
+3. CHECK A FRONT'S LOGS, not just that its pods are Ready. The two roles fail
+   differently on purpose: the store pod refuses to start without a contract
+   token, a front with the wrong one starts, gets 401, and quietly detects no
+   REST drift at all. This chart gives both roles the same Secret key, so the
+   only way to see this is an existingSecret whose value changed under you.
+
+     kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "flanj-collector.front.fullname" . }} | grep -i 'contract refresh'
+
+   Silence there is the healthy result.
+{{ if not .Values.controlPlane.baseUrl }}
+4. No controlPlane.baseUrl is set, so this deployment is fully local: it
+   captures, redacts and detects drift, and it cannot create thread links.
+   Set controlPlane.baseUrl (and controlPlane.deployToken) to Connect.
+{{- else }}
+4. Connect in the UI (Settings → Connect) to create thread links. The Connected
+   pill's dashboard door is minted from
+   {{ if .Values.controlPlane.publicUrl }}controlPlane.publicUrl ({{ .Values.controlPlane.publicUrl }}){{ else }}controlPlane.baseUrl, which is not set for a browser: an in-cluster
+   address a laptop cannot resolve leaves the pill a Settings button rather
+   than a dead link. Set controlPlane.publicUrl if the two differ{{ end }}.
+{{- end }}
+{{- if and (eq .Values.store.backend "sqlite") (not .Values.store.persistence.enabled) }}
+
+WARNING  store.persistence.enabled=false — the store is an emptyDir. Every
+         captured call, finding and uploaded contract is lost when the pod is
+         replaced, including by a `helm upgrade`. Set it true for anything you
+         want to keep.
+{{- end }}
+{{- if .Values.postgres.enabled }}
+
+WARNING  postgres.enabled=true runs the BUNDLED evaluation database: one
+         replica, no backups, no HA, no upgrade path. For production, point
+         store.dsn at a database you operate and set postgres.enabled=false.
+{{- end }}

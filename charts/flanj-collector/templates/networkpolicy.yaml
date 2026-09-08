@@ -1,0 +1,38 @@
+{{- if .Values.networkPolicy.enabled }}
+{{/*
+The store pod's two cluster ports carry every captured call and every uploaded
+contract. Nothing outside this release's fronts has business reaching them.
+Ingress-only: the store's egress is the control-plane relay, which this policy
+must not touch.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "flanj-collector.store.fullname" . }}
+  labels:
+    {{- include "flanj-collector.labels" . | nindent 4 }}
+    app.kubernetes.io/component: store
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "flanj-collector.store.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "flanj-collector.front.selectorLabels" . | nindent 14 }}
+        {{- with .Values.networkPolicy.extraStorePeers }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      ports:
+        - port: 4318
+          protocol: TCP
+        - port: 5337
+          protocol: TCP
+{{- end }}
