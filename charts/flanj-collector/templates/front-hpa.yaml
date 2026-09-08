@@ -1,0 +1,42 @@
+{{- if .Values.collector.autoscaling.enabled }}
+{{/* Fronts are stateless and CPU-bound (redaction + schema validation). */}}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "flanj-collector.front.fullname" . }}
+  labels:
+    {{- include "flanj-collector.labels" . | nindent 4 }}
+    app.kubernetes.io/component: front
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "flanj-collector.front.fullname" . }}
+  minReplicas: {{ int .Values.collector.autoscaling.minReplicas }}
+  maxReplicas: {{ int .Values.collector.autoscaling.maxReplicas }}
+  metrics:
+    {{- if gt (int .Values.collector.autoscaling.targetCPUUtilizationPercentage) 0 }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ int .Values.collector.autoscaling.targetCPUUtilizationPercentage }}
+    {{- end }}
+    {{- if gt (int .Values.collector.autoscaling.targetMemoryUtilizationPercentage) 0 }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ int .Values.collector.autoscaling.targetMemoryUtilizationPercentage }}
+    {{- end }}
+  {{- with .Values.collector.autoscaling.behavior }}
+  behavior:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

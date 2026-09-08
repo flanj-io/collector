@@ -3,7 +3,8 @@ name: ci
 # Per-PR CI for the collector. Fixtures-only — never needs the private control-plane (flag POST is
 # tested against a stub). Builds the multi-stage image, runs Go unit + contract tests (ingest
 # contracts/golden-otlp-call.json -> expected Finding; redaction vs vectors), and checks the
-# operator doc still matches the config surface. Pings e2e on merge.
+# operator doc still matches the config surface, lints the Helm chart and smokes the tiered shape it
+# installs in a kind cluster. Pings e2e on merge.
 
 on:
   pull_request:
@@ -25,17 +26,16 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          # --no-merges: DCO certifies AUTHORED contributions, and a merge commit
-          # introduces none — it only joins two histories whose own commits this
-          # loop already checks. Without the flag the gate is unsatisfiable by
-          # construction: a merge made with GitHub's own "Update branch" button
-          # is authored by GitHub and can never carry a trailer, so bringing main
-          # into a long-running branch (the standard remedy for a stale or
-          # conflicted PR) permanently reds the check, and the only way back is a
-          # force-push. Every commit a human wrote is still checked; this matches
-          # what the upstream DCO app does. Residual, stated so it is not a
-          # surprise: an "evil merge" that carries content present in neither
-          # parent would now skip the check — narrow, and visible in review.
+          # --no-merges: a merge commit contributes no authored content — the
+          # commits it brings in carry their own sign-offs — and nothing that
+          # creates one signs it: not GitHub's "Update branch" button, not the
+          # `git merge origin/main` this workspace prescribes for resolving a
+          # conflict. Without this, syncing a PR with main reds its own DCO
+          # check, and the only way out is force-pushing an amended merge onto
+          # a shared branch. The upstream DCO app skips merges for the same
+          # reason. Residual, stated so it is not a surprise: an "evil merge"
+          # carrying content present in NEITHER parent now skips the check —
+          # narrow, and visible in review.
           missing=0
           for c in $(git rev-list --no-merges "$BASE_SHA..$HEAD_SHA"); do
             if ! git log -1 --format=%B "$c" | grep -qiE '^Signed-off-by: .+ <.+@.+>'; then
@@ -50,7 +50,8 @@ jobs:
     # covered by any other job. PR #19 changed the config surface without
     # touching it, leaving DEPLOYMENT.md describing a store pod that refuses to
     # boot (a REQUIRED FLANJ_SPEC_TOKEN was missing from its env table). This
-    # asserts that every FLANJ_* variable the shipped example configs reference
+    # asserts that every FLANJ_* variable the shipped example configs — and the
+    # Helm chart's rendered role configs, which are a second way in — reference
     # is documented there, so the next config change cannot strand it silently.
     runs-on: ubuntu-latest
     steps:
@@ -130,8 +131,49 @@ jobs:
       - name: Build collector image
         run: docker build -t flanj-collector:ci .
 
+  helm:
+    # The chart is greenfield and the tiered shape has two failures that are
+    # invisible from `kubectl get pods`: a store pod with no contract token
+    # exits at startup, and a front with the wrong one runs Ready forever while
+    # detecting nothing at all. `helm lint` cannot see either — it proves the
+    # chart renders, not that what it renders boots. So this job lints every
+    # tier's values and then INSTALLS two of them into a kind cluster and
+    # asserts behaviour: the UI answers on the store pod's loopback bind, a
+    # call POSTed to the front service arrives in the store's window, and no
+    # front is logging a contract-refresh 401.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v4
+        with: { version: v3.16.1 }
+      - name: helm lint — every tier in charts/flanj-collector/ci
+        run: |
+          fail=0
+          for f in charts/flanj-collector/ci/*-values.yaml; do
+            echo "::group::$f"
+            helm lint --strict charts/flanj-collector -f "$f" || fail=1
+            echo "::endgroup::"
+          done
+          exit $fail
+      - uses: docker/setup-buildx-action@v4
+      - name: Build collector image
+        run: docker build -t flanj-collector:helm-smoke .
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: flanj-helm-smoke
+          wait: 120s
+      - name: Kind smoke — the tiered lane, sqlite and postgres
+        env:
+          SKIP_CLUSTER: "1" # kind-action already made the cluster
+        run: |
+          kind load docker-image flanj-collector:helm-smoke --name flanj-helm-smoke
+          PG_IMAGE="$(helm show values charts/flanj-collector | awk '/^  image: postgres/ {print $2}')"
+          docker pull "$PG_IMAGE"
+          kind load docker-image "$PG_IMAGE" --name flanj-helm-smoke
+          bash scripts/helm-smoke.sh flanj-collector:helm-smoke
+
   notify-e2e:
-    needs: [dco, docs, go-test, docker-build]
+    needs: [dco, docs, go-test, docker-build, helm]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:

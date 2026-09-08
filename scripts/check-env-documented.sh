@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Guard: every FLANJ_* environment variable referenced by a shipped example
-# config must be documented in docs/DEPLOYMENT.md's env table.
+# config OR BY THE HELM CHART's rendered role configs must be documented in
+# docs/DEPLOYMENT.md's env table.
 #
 # Why this exists: PR #19 changed the config surface (contracts moved from
 # spec_path to UI uploads, which introduced spec_endpoint + FLANJ_SPEC_TOKEN)
@@ -23,10 +24,22 @@ SECTION='## Environment variables the configs read'
 # Every FLANJ_* name inside a ${env:...} reference in the shipped examples.
 # Commented-out lines count on purpose: they are documented variants an
 # operator is invited to uncomment (FLANJ_PG_DSN is only ever shown that way).
-referenced=$(grep -rhoE '\$\{env:FLANJ_[A-Z0-9_]+' config/*.example.yaml \
+from_config=$(grep -rhoE '\$\{env:FLANJ_[A-Z0-9_]+' config/*.example.yaml \
   | sed 's/^\${env://' | sort -u)
 
-[ -n "$referenced" ] || { echo "::error::no \${env:FLANJ_*} references found in config/*.example.yaml — has the scan broken?"; exit 1; }
+[ -n "$from_config" ] || { echo "::error::no \${env:FLANJ_*} references found in config/*.example.yaml — has the scan broken?"; exit 1; }
+
+# The Helm chart renders its OWN role configs rather than using the image's
+# baked ones, so it is a second way a variable can enter the operator contract
+# without the doc noticing — the exact shape of #19, one directory over. Its
+# templates are scanned the same way and held to the same table.
+from_chart=""
+if compgen -G 'charts/*/templates/*.yaml' >/dev/null; then
+  from_chart=$(grep -rhoE '\$\{env:FLANJ_[A-Z0-9_]+' charts/*/templates/*.yaml \
+    | sed 's/^\${env://' | sort -u)
+fi
+
+referenced=$(printf '%s\n%s\n' "$from_config" "$from_chart" | grep -v '^$' | sort -u)
 
 # The env table: rows between the section heading and the next '## ' heading.
 table=$(awk -v want="$SECTION" '
@@ -40,7 +53,9 @@ table=$(awk -v want="$SECTION" '
 missing=0
 for var in $referenced; do
   if ! grep -qF "$var" <<<"$table"; then
-    echo "::error file=$DOC::$var is referenced by config/*.example.yaml but is missing from the env table under '$SECTION'"
+    src="config/*.example.yaml"
+    grep -qx "$var" <<<"$from_config" || src="charts/*/templates"
+    echo "::error file=$DOC::$var is referenced by $src but is missing from the env table under '$SECTION'"
     missing=1
   fi
 done
@@ -52,6 +67,12 @@ if [ "$missing" -ne 0 ]; then
   exit 1
 fi
 
-echo "env contract OK — $(wc -w <<<"$referenced" | tr -d ' ') FLANJ_* variables documented:"
+echo "env contract OK — $(wc -w <<<"$referenced" | tr -d ' ') FLANJ_* variables documented"
+echo "  config/*.example.yaml:"
 # shellcheck disable=SC2086
-printf '  %s\n' $referenced
+printf '    %s\n' $from_config
+if [ -n "$from_chart" ]; then
+  echo "  charts/*/templates:"
+  # shellcheck disable=SC2086
+  printf '    %s\n' $from_chart
+fi

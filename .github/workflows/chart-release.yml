@@ -1,0 +1,98 @@
+name: chart-release
+
+# Publishes charts/flanj-collector to the same OCI registry as the collector
+# image. Manual, or on a `chart-v*` tag — never on a merge to main: a chart
+# version is published once and cannot be republished, so the push is a
+# deliberate act, not a side effect of landing a PR.
+#
+# The chart's default `image.repository` / `appVersion` must point at an image
+# tag that EXISTS in the registry before this runs. A chart that installs and
+# then ImagePullBackOffs is worse than no chart.
+
+on:
+  push:
+    tags: ['chart-v*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Package and verify only — do not push'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v4
+        with: { version: v3.16.1 }
+
+      - name: Lint every tier
+        run: |
+          fail=0
+          for f in charts/flanj-collector/ci/*-values.yaml; do
+            helm lint --strict charts/flanj-collector -f "$f" || fail=1
+          done
+          exit $fail
+
+      - name: Package
+        id: pkg
+        run: |
+          helm package charts/flanj-collector -d dist
+          tgz=$(ls dist/*.tgz)
+          echo "tgz=$tgz" >> "$GITHUB_OUTPUT"
+          helm show chart "$tgz"
+
+      - name: The image this chart defaults to must exist
+        # The whole point of publishing a chart is that `helm install <oci ref>`
+        # works for someone who has never seen this repo. It does not if the
+        # image tag it defaults to is not in the registry yet.
+        run: |
+          repo=$(helm show values charts/flanj-collector | awk '/^  repository:/ {print $2; exit}')
+          tag=$(helm show chart charts/flanj-collector | awk '/^appVersion:/ {gsub(/"/,"",$2); print $2}')
+          echo "chart defaults to $repo:$tag"
+          docker manifest inspect "$repo:$tag" >/dev/null \
+            || { echo "::error::$repo:$tag is not in the registry — publish the image first (see the launch plan's publish step), or fix the chart's appVersion"; exit 1; }
+
+      # Before the push, not after: a publish cannot be undone, and this is the
+      # only copy of exactly what went out.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: chart
+          path: dist/*.tgz
+
+      # Deliberately OUTSIDE the dry-run condition. The credential is the most
+      # likely thing to be wrong, and a dry run that skips the login proves
+      # everything except the one step that can strand you mid-publish. `helm
+      # registry login` pings the registry, so a bad or under-scoped token
+      # fails here, before anything irreversible.
+      - name: Registry login
+        env:
+          # The namespace is hardcoded in the push URL below, so the account is
+          # not a secret — only the token is. Override it only if the chart is
+          # pushed by an account other than the one that owns the namespace.
+          USER: ${{ secrets.DOCKERHUB_USERNAME || 'flanj' }}
+          TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          # registry-1.docker.io, NOT docker.io — Docker Hub's OCI endpoint is
+          # the former and helm does not rewrite it.
+          [ -n "$TOKEN" ] || { echo "::error::DOCKERHUB_TOKEN is not set — add it to this repo's Actions secrets (a Docker Hub personal access token with Read & Write on the flanj account)"; exit 1; }
+          echo "$TOKEN" | helm registry login registry-1.docker.io -u "$USER" --password-stdin
+          echo "authenticated to registry-1.docker.io as $USER"
+
+      - name: Push to OCI
+        if: github.event_name == 'push' || inputs.dry_run == false
+        env:
+          TGZ: ${{ steps.pkg.outputs.tgz }}
+        run: |
+          helm push "$TGZ" oci://registry-1.docker.io/flanj
+          echo "NOTE: helm creates flanj/flanj-collector on first push, with the"
+          echo "account's DEFAULT repository privacy. If that default is private,"
+          echo "the chart exists but nobody can install it — check it reads Public."
+
+      - name: Registry logout
+        if: always()
+        run: helm registry logout registry-1.docker.io || true
