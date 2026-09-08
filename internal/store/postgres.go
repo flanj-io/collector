@@ -159,7 +159,12 @@ CREATE TABLE IF NOT EXISTS finding_occurrences (
   source_call_id TEXT,
   seen_at        TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_finding_occurrences_call ON finding_occurrences(source_call_id);
+CREATE INDEX IF NOT EXISTS idx_finding_occurrences_seen ON finding_occurrences(seen_at);
+-- The ledger is pruned by the store clock (occurrenceTTL), not by the call a
+-- finding names, so the source_call_id index has nothing left to serve — same
+-- rule as the sqlite backend. The COLUMN stays: it is the diagnostic trail
+-- from a ledger row back to its evidence.
+DROP INDEX IF EXISTS idx_finding_occurrences_call;
 CREATE INDEX IF NOT EXISTS idx_calls_pinned_seq ON calls(pinned, seq);
 CREATE INDEX IF NOT EXISTS idx_findings_source ON findings(source_call_id);
 CREATE INDEX IF NOT EXISTS idx_calls_captured_edge ON calls(captured_at, peer_host, direction);
@@ -326,12 +331,27 @@ func (p *postgresStore) InsertFinding(f model.Finding) (err error) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	applied, err := recordOccurrence(tx, p.rebind, f, sourceCallID, seen)
+	// The ledger is stamped with the STORE's clock, not f.DetectedAt: a
+	// re-delivered record repeats its DetectedAt, so only the store's own
+	// reading says how long this copy can still be in flight (occurrenceTTL).
+	// Every pod of a shared database reads its own clock; the TTL is an hour
+	// and pod clocks are NTP-synced, so a few seconds of skew changes nothing.
+	now := time.Now()
+	applied, err := recordOccurrence(tx, p.rebind, f, sourceCallID, isoTime(now))
 	if err != nil {
 		return err
 	}
 	if !applied {
 		return nil // a re-delivered record: already applied, nothing to do
+	}
+	// Bound the ledger from the path that grows it, so a deployment whose
+	// findings are all CALL-LESS (a flapping MCP snapshot) — which never
+	// reaches the eviction pass — stays bounded too. Concurrent pods pruning
+	// the same expired rows is safe: one predicate, one index order, so they
+	// serialise on the rows rather than deadlock, and in steady state the
+	// range is empty and no row is locked at all.
+	if err := pruneOccurrences(tx, p.rebind, now); err != nil {
+		return err
 	}
 
 	res, err := tx.Exec(p.rebind(
@@ -380,7 +400,7 @@ func (p *postgresStore) InsertFinding(f model.Finding) (err error) {
 			if _, err := tx.Exec(p.rebind(`UPDATE calls SET pinned=1 WHERE id=?`), *sourceCallID); err != nil {
 				return fmt.Errorf("pin source call: %w", err)
 			}
-			if err := p.bumpEdgeDriftTx(tx, *sourceCallID); err != nil {
+			if err := bumpEdgeDrift(tx, p.rebind, *sourceCallID); err != nil {
 				return err
 			}
 		}
@@ -426,26 +446,6 @@ func (p *postgresStore) InsertFinding(f model.Finding) (err error) {
 	return nil
 }
 
-// bumpEdgeDriftTx increments drift_count on the edge that owns the given
-// source call.
-func (p *postgresStore) bumpEdgeDriftTx(tx *sql.Tx, sourceCallID string) error {
-	var peerHost, direction sql.NullString
-	err := tx.QueryRow(p.rebind(`SELECT peer_host, direction FROM calls WHERE id=?`), sourceCallID).Scan(&peerHost, &direction)
-	if err == sql.ErrNoRows || (err == nil && (!peerHost.Valid || peerHost.String == "")) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("lookup source call edge: %w", err)
-	}
-	if _, err := tx.Exec(p.rebind(
-		`UPDATE edges SET drift_count = drift_count + 1 WHERE peer_host=? AND direction=?`),
-		peerHost.String, direction.String,
-	); err != nil {
-		return fmt.Errorf("bump edge drift: %w", err)
-	}
-	return nil
-}
-
 // MarkPromoted implements evict-after-promote: a flagged call is unpinned and
 // stamped promoted_at, returning it to the eviction pool.
 func (p *postgresStore) MarkPromoted(id string) error {
@@ -474,6 +474,13 @@ func (p *postgresStore) evict(keepID string) error {
 	}
 	if !got {
 		return nil // another pod is evicting right now
+	}
+	// The ledger no longer rides on call eviction — it has its own clock — but
+	// this pass is the store's housekeeping beat, so it is where the TTL prune
+	// runs on the call path (InsertCall, MarkPromoted). Under the eviction lock
+	// exactly one pod does it at a time.
+	if err := pruneOccurrences(tx, p.rebind, time.Now()); err != nil {
+		return err
 	}
 	for {
 		var rows int

@@ -43,6 +43,28 @@ import (
 // the eviction lock).
 const evictBatchMax = 256
 
+// occurrenceTTL is how long a finding-occurrence ledger row is kept, measured
+// on the STORE's own clock (seen_at, stamped at insert — never the record's
+// DetectedAt, which is the front's clock and is what a re-delivery repeats).
+//
+// It is sized to the RE-DELIVERY HORIZON: the longest a copy of one record can
+// still be in flight somewhere. That is this store exporter's retry budget
+// (retry_on_failure.max_elapsed_time, 15 min) plus a tiered front's own
+// otlphttp budget (5 min) — 20 minutes, rounded up to an hour so a slow
+// operator restart in between is still covered. A ledger row younger than the
+// TTL therefore still recognises every copy that can arrive; one older than it
+// cannot be re-delivered any more and is dead weight.
+//
+// Why a clock and not the source call: until 2026-09-08 the ledger was pruned
+// with the CALL a finding named (evictOldest), which got both halves wrong. A
+// busy window rolls past a call in seconds, so a retry landing after the roll
+// found no ledger row and counted the finding again — or, under a new
+// signature, hit findings.id UNIQUE (rejected_test.go drives exactly that).
+// And a CALL-LESS finding (definition_change, version-diff) named no call at
+// all, so its row was never pruned: a flapping MCP snapshot grew the ledger
+// without bound.
+const occurrenceTTL = time.Hour
+
 // Store is the backend-agnostic store surface. Both backends satisfy it; the
 // flanjstore extension picks the implementation from its config.
 type Store interface {
@@ -272,11 +294,14 @@ type queryExecer interface {
 // caller then applies nothing. A record with no id cannot be tracked and is
 // applied unconditionally, as before.
 //
-// Bounded: evictOldest drops the ledger rows of the calls it evicts, so the
-// ledger lives exactly as long as the evidence it dedups (call-less findings —
-// definition_change, version-diff — keep theirs; there is one per contract
-// change, not one per call).
-func recordOccurrence(ex execer, rebind func(string) string, f model.Finding, sourceCallID *string, seen string) (bool, error) {
+// Bounded by occurrenceTTL, on the store's own clock: seenAt is stamped HERE,
+// at insert, and pruneOccurrences drops every row older than the TTL. It is
+// deliberately not the record's DetectedAt — that is the front's clock and it
+// is identical on every copy of a re-delivered record, so it says when the
+// drift was detected, never how long the copy can still be in flight. Every
+// kind is bounded the same way, calls or no calls (source_call_id is kept for
+// diagnostics only; nothing reads it back).
+func recordOccurrence(ex execer, rebind func(string) string, f model.Finding, sourceCallID *string, seenAt string) (bool, error) {
 	if f.ID == "" {
 		return true, nil
 	}
@@ -284,7 +309,7 @@ func recordOccurrence(ex execer, rebind func(string) string, f model.Finding, so
 		`INSERT INTO finding_occurrences (id, signature, source_call_id, seen_at)
 		 VALUES (?,?,?,?)
 		 ON CONFLICT (id) DO NOTHING`),
-		f.ID, f.Signature, nullPtr(sourceCallID), seen,
+		f.ID, f.Signature, nullPtr(sourceCallID), seenAt,
 	)
 	if err != nil {
 		return false, fmt.Errorf("record finding occurrence: %w", err)
@@ -293,52 +318,78 @@ func recordOccurrence(ex execer, rebind func(string) string, f model.Finding, so
 	return n > 0, nil
 }
 
+// pruneOccurrences drops ledger rows the re-delivery horizon has passed —
+// everything stamped before now-occurrenceTTL. Timestamps are the store's
+// fixed-width ISO-8601 UTC text, which compares lexically, so this is one
+// indexed range delete (idx_finding_occurrences_seen); in steady state it
+// matches nothing.
+//
+// Run from every path that writes the ledger, so no shape leaves it unbounded:
+// the eviction pass (InsertCall, MarkPromoted) and InsertFinding itself — a
+// deployment whose only findings are call-less, a flapping MCP snapshot, never
+// reaches the eviction path at all.
+func pruneOccurrences(ex execer, rebind func(string) string, now time.Time) error {
+	if _, err := ex.Exec(rebind(
+		`DELETE FROM finding_occurrences WHERE seen_at < ?`),
+		isoTime(now.Add(-occurrenceTTL)),
+	); err != nil {
+		return fmt.Errorf("prune finding occurrences: %w", err)
+	}
+	return nil
+}
+
+// isoTime renders the store's one timestamp format: fixed-width ISO-8601 in
+// UTC, so text columns order and compare chronologically.
+func isoTime(t time.Time) string {
+	return t.UTC().Format("2006-01-02T15:04:05.000Z07:00")
+}
+
 // evictOldest deletes up to batch of the oldest unpinned calls (never keepID)
-// and, for the rows that actually went, prunes their occurrence-ledger entries
-// — the same statement sequence on both backends, inside the caller's
-// serialisation (the store mutex on sqlite, the eviction tx on postgres).
-// Returns how many calls were evicted. RETURNING makes the two deletes agree
-// on the exact row set, so a call that survives (pinned in between, on a
-// shared database) keeps its ledger rows.
-func evictOldest(q queryExecer, rebind func(string) string, keepID string, batch int) (int, error) {
-	rows, err := q.Query(rebind(
+// and returns how many went — the same statement on both backends, inside the
+// caller's serialisation (the store mutex on sqlite, the eviction tx on
+// postgres).
+//
+// It does NOT touch the occurrence ledger. Until 2026-09-08 it did, deleting
+// the ledger rows of the calls it evicted, and that coupling is the bug
+// occurrenceTTL replaces: the window rolls on traffic, the re-delivery horizon
+// runs on the clock, and a retry that outlived the window found its ledger row
+// already gone. pruneOccurrences owns the bound now.
+func evictOldest(ex execer, rebind func(string) string, keepID string, batch int) (int, error) {
+	res, err := ex.Exec(rebind(
 		`DELETE FROM calls
-		  WHERE seq IN (SELECT seq FROM calls WHERE pinned=0 AND id<>? ORDER BY seq ASC LIMIT ?)
-		  RETURNING id`), keepID, batch)
+		  WHERE seq IN (SELECT seq FROM calls WHERE pinned=0 AND id<>? ORDER BY seq ASC LIMIT ?)`),
+		keepID, batch)
 	if err != nil {
 		return 0, fmt.Errorf("evict: %w", err)
 	}
-	var evicted []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			_ = rows.Close()
-			return 0, fmt.Errorf("evict: scan: %w", err)
-		}
-		evicted = append(evicted, id)
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("evict: rows affected: %w", err)
 	}
-	// Close BEFORE the next statement: the sqlite handle is a single connection.
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return 0, fmt.Errorf("evict: %w", err)
+	return int(n), nil
+}
+
+// bumpEdgeDrift increments drift_count on the edge that owns sourceCallID,
+// inside the caller's transaction — ONE helper for both backends (they had
+// identical bodies modulo rebind until 2026-09-08). A call with no row, or one
+// captured without a peer host (a local-process MCP server), attributes to no
+// edge and is a no-op.
+func bumpEdgeDrift(q queryExecer, rebind func(string) string, sourceCallID string) error {
+	var peerHost, direction sql.NullString
+	err := q.QueryRow(rebind(`SELECT peer_host, direction FROM calls WHERE id=?`), sourceCallID).Scan(&peerHost, &direction)
+	if err == sql.ErrNoRows || (err == nil && (!peerHost.Valid || peerHost.String == "")) {
+		return nil
 	}
-	if err := rows.Close(); err != nil {
-		return 0, fmt.Errorf("evict: %w", err)
-	}
-	if len(evicted) == 0 {
-		return 0, nil
-	}
-	args := make([]any, len(evicted))
-	for i, id := range evicted {
-		args[i] = id
+	if err != nil {
+		return fmt.Errorf("lookup source call edge: %w", err)
 	}
 	if _, err := q.Exec(rebind(
-		`DELETE FROM finding_occurrences WHERE source_call_id IN (`+placeholders(len(evicted))+`)`),
-		args...,
+		`UPDATE edges SET drift_count = drift_count + 1 WHERE peer_host=? AND direction=?`),
+		peerHost.String, direction.String,
 	); err != nil {
-		return 0, fmt.Errorf("evict: prune finding occurrences: %w", err)
+		return fmt.Errorf("bump edge drift: %w", err)
 	}
-	return len(evicted), nil
+	return nil
 }
 
 // marksSourceCallDrifted reports whether a finding of this kind means THE CALL

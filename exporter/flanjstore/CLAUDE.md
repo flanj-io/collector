@@ -24,12 +24,17 @@ this exporter routes those to `PutSpecInfo` like any spec_info; a raw
   `exporterhelper.NewLogs` with `WithStart`, `WithRetry` and `WithQueue`
   (see "Durability").
 - `exporter.go` — `start` resolves the store (`store.Provider`); `consumeLogs`
-  dispatches by `flanj.record.type`, stamps `flanj.call.id` onto an unstamped
-  call record (`otlpattr.EnsureCallID`, BEFORE decoding — "Durability" below)
-  and classifies a failed write (`writeErr`: `store.ErrRejected` → permanent,
-  everything else retryable). `InsertFinding` pins the source call
-  (pin-on-finding). `consumerCaps` declares `MutatesData` for the stamp — this
-  is the terminal, sole consumer, so the fanout clones nothing.
+  walks the batch keeping a flat record index, and classifies a failed write:
+  `store.ErrRejected` drops THAT record (logged, batch goes on, batch ends
+  `consumererror.NewPermanent`), everything else hands back the unapplied tail
+  as `consumererror.NewLogs(err, remainingFrom(ld, idx))` — "Durability" below.
+  `writeOne` applies one record, dispatching by `flanj.record.type` and
+  stamping `flanj.call.id` onto an unstamped call record
+  (`otlpattr.EnsureCallID`, BEFORE decoding); `remainingFrom` copies the
+  records from a flat index onward, keeping their resource/scope grouping.
+  `InsertFinding` pins the source call (pin-on-finding). `consumerCaps`
+  declares `MutatesData` for the stamp — this is the terminal, sole consumer,
+  so the fanout clones nothing.
 - `config.go` — `Config` carries ONLY upstream's two failure sections,
   `sending_queue` + `retry_on_failure` (the same keys as a front's `otlphttp`),
   both on by default with defaults tuned for the last hop before persistence.
@@ -39,8 +44,13 @@ this exporter routes those to `PutSpecInfo` like any spec_info; a raw
   exactly once; a full queue refuses retryably; the default config keeps the
   queue + retry on. Review of #46 (2026-09-08): an UNSTAMPED call (the golden
   record as the SDK sends it) retried mid-batch lands as two rows, not three;
-  a poison batch (id-less finding + a store-rejected record) is dropped after
-  ONE attempt and logged, while a transient failure still retries and lands.
+  a poison batch (id-less finding + a store-rejected record) attempts the
+  rejected record ONCE and logs it while the records BEHIND it still land, and
+  a transient failure still retries and lands. Partial retry (follow-up of #46,
+  same day) is measured PER RECORD — `flakyStore.attemptsPerRecord`, since the
+  batch-wide counters cannot tell a tail re-delivery from a whole-batch one:
+  the applied head is attempted once, and a two-resource-group batch keeps its
+  grouping (and its call-id stamps) across the retry.
 
 ## Invariants
 
@@ -88,19 +98,28 @@ on both record ids:
 - **`retry_on_failure`** — exponential backoff on a failed write, 1 s → 30 s,
   giving up after **15 minutes** (three times a front's 5, because this is the
   durable sink; `0` never gives up — memory is bounded by the queue either way).
-  **What is dropped and what is retried** (review of #46, 2026-09-08):
-  `consumeLogs` drops — per record, logged, the rest of the batch going on — a
-  finding or `spec_info` that does not decode, and a finding with no `id` (the
-  occurrence ledger cannot track it, so a retry would count it again). A
-  record the STORE refuses (`store.ErrRejected`: sqlite `SQLITE_CONSTRAINT`,
-  postgres SQLSTATE class 23/22 — deterministic on the record, so every
-  attempt would fail the same way) is returned `consumererror.NewPermanent`:
-  the retry sender drops that batch after ONE attempt, logged with the record
-  id. What landed before it stays (idempotent); what came after it in the
-  batch is lost with it — a partial retry (`consumererror.NewLogs`) is a
-  follow-up. Everything else (connection, lock, timeout) is retried for the
-  full `max_elapsed_time`. Without the split, a poison batch pinned a queue
-  consumer for 15 minutes on every re-delivery.
+  **What is dropped and what is retried** (review of #46, 2026-09-08;
+  partial retry the same day): `consumeLogs` drops — per record, logged, the
+  rest of the batch going on — a finding or `spec_info` that does not decode,
+  and a finding with no `id` (the occurrence ledger cannot track it, so a retry
+  would count it again). A record the STORE refuses (`store.ErrRejected`:
+  sqlite `SQLITE_CONSTRAINT`, postgres SQLSTATE class 23/22 — deterministic on
+  the record, so every attempt would fail the same way) is dropped the same
+  way, logged with its id, and the records BEHIND it still get their write;
+  the batch then ends `consumererror.NewPermanent`, so the retry sender stops
+  after this ONE attempt. (That marks the whole request dropped in the
+  helper's own accounting, which over-counts — only the named record was
+  refused, and the precise line is the one this exporter logs.) Everything
+  else (connection, lock, timeout) is retried for the full `max_elapsed_time`,
+  and only the records that have NOT been applied — the failing one and
+  everything after it — go back: `consumererror.NewLogs(err, remainingFrom(ld,
+  idx))`, which `exporterhelper`'s `logsRequest.OnError` swaps in as the next
+  attempt's request. The store was already idempotent, so this is about WORK,
+  not correctness: before it, a 15-minute outage re-executed the whole
+  already-applied head on every one of ~50 attempts, and on postgres each of
+  those no-ops is still a transaction and an advisory lock. Without the
+  rejection split, a poison batch pinned a queue consumer for 15 minutes on
+  every re-delivery.
 - **Idempotent writes** — `InsertCall` is `ON CONFLICT (id) DO NOTHING` (edge
   `call_count` bumps only for a new row) — keyed on `flanj.call.id`, which
   the SDK never emits and only the drift processor stamps, so a call reaching
@@ -115,6 +134,13 @@ on both record ids:
   batch, whole or partial, therefore cannot duplicate rows or double an
   `occurrence_count`. The exporter never dedups itself: the ledger is in the
   store, where a front re-sending to another postgres pod is also caught.
+  A ledger row is kept for the **re-delivery horizon** — `occurrenceTTL`, one
+  hour on the store's own clock: this exporter's 15-minute retry budget plus a
+  front's 5-minute `otlphttp` one, rounded up. Change `max_elapsed_time` far
+  past that and the TTL has to move with it, or a retry landing after the hour
+  is counted a second time. Until 2026-09-08 the row was pruned with the CALL
+  it named instead, which a busy window rolls past in seconds — that is the
+  bug the TTL replaces (`internal/store` `pruneOccurrences`).
 
 **Why the queue does not add a second writer.** Non-negotiable #1 is one
 OWNER (the extension holds the one handle) and one WRITER (this exporter is the
@@ -146,9 +172,9 @@ something the write path cannot honour.
 
 ## Tests
 
-Store behaviour (ring buffer, pin, promote, the occurrence ledger, and the
-`ErrRejected` classification on both backends — `rejected_test.go`) is tested
-in `internal/store`; this exporter's queue/retry/idempotency contract in
+Store behaviour (ring buffer, pin, promote, the occurrence ledger and its TTL
+prune, and the `ErrRejected` classification on both backends —
+`rejected_test.go`) is tested in `internal/store`; this exporter's queue/retry/idempotency contract in
 `exporter_test.go` (above). The e2e postgres lane drives the real thing
 (`e2e/tests/store-durability.spec.ts`: DB stopped for longer than the SDK's own
 retry budget, a call and its finding driven meanwhile, both present exactly once
