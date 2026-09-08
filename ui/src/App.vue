@@ -72,6 +72,7 @@ import {
   isAcked,
   isBreakingFinding,
   isLocalNotice,
+  isMcpCall,
   isMcpFinding,
   localNoticesSubFor,
   mcpBadgeLabel,
@@ -537,7 +538,7 @@ function cardValidatedCalls(p: ContractCard): number {
     // captured BEFORE this contract was bound is not evidence for it, however
     // well the hosts match. Uploading a document used to flip six already
     // captured calls to validated with no new traffic at all.
-    if (coverageOf(c) !== 'checked') continue;
+    if (!isValidated(c)) continue;
     if (!isEvidenceFor(c, card)) continue;
     n++;
   }
@@ -565,6 +566,15 @@ function coverageVerdictOf(c: RedactedCall): CoverageVerdict {
 
 function coverageOf(c: RedactedCall): Coverage {
   return coverageVerdictOf(c).coverage;
+}
+
+/** Did a contract actually check THIS call? The one per-call validated fact
+ *  every evidence count reads — the Overview headline, each MCP server's own
+ *  line, the contract cards' `validated N calls`. Today it is the coverage
+ *  mirror's `checked` verdict (ui/src/coverage.ts, residuals and all); when
+ *  the server-side stamp lands it replaces THIS body and nothing else. */
+function isValidated(c: RedactedCall): boolean {
+  return coverageOf(c) === 'checked';
 }
 
 /** The `not checked` tooltip for THIS row, named after the actual cause — a
@@ -1008,7 +1018,8 @@ const mcpHosts = computed(() => {
 });
 
 // Per-server MCP health headline (deck §2): output mismatch → definition
-// change (breaking, no calls affected yet) → clean.
+// change (breaking, no calls affected yet) → nothing validated yet (neutral)
+// → clean. Three tones, like the REST line above it.
 const mcpOverview = computed(() =>
   mcpContracts.value.map((s) => ({
     key: s.integration,
@@ -1018,7 +1029,11 @@ const mcpOverview = computed(() =>
       // for two different servers again.
       { name: s.title || s.integration, version: s.version, origin: contractOrigin(s) },
       mcpFindings.value.filter((f) => f.integration === s.integration),
-      humanTime
+      humanTime,
+      // Evidence for THIS server only: its own validated tool calls. Zero is
+      // the neutral state — a snapshot that has judged nothing is not an
+      // all-clear, however complete the Contracts card beside it looks.
+      calls.value.filter((c) => isMcpCall(c) && c.integration === s.integration && isValidated(c)).length
     )
   }))
 );
@@ -1098,20 +1113,21 @@ const sheetCall = computed(() =>
   sheetFinding.value?.source_call_id ? callsById.value[sheetFinding.value.source_call_id] || null : null
 );
 
-/** Calls in the window that a contract was actually in a position to check —
- *  the evidence behind the headline, and the same `checked` verdict the Traffic
- *  chips and the contract cards read. */
-const validatedCallCount = computed(() => calls.value.filter((c) => coverageOf(c) === 'checked').length);
-
 // Headline counts LIVE drift only — spec-version diffs are informational and
 // intentionally excluded from the divergence status. The wording, the neutral
 // zero state and the reason it exists all live in ui/src/headline.ts, where
 // vitest can see them: this line used to assert `No drift detected` on an
 // install where nothing had ever been validated.
+//
+// It gets the window's calls, each with its per-call validated fact, NOT a
+// count: it counted every validated call in the window here, MCP tool calls
+// included, and spent an MCP server's evidence on the REST provider it names
+// beneath. Which calls are evidence for THIS line — the REST ones — is decided
+// in headline.ts, beside the tests that pin it.
 const headline = computed(() =>
   headlineFor({
     liveFindings: liveFindings.value,
-    validatedCalls: validatedCallCount.value,
+    calls: calls.value.map((c) => ({ transport: c.transport, integration: c.integration, validated: isValidated(c) })),
     integration: health.value?.integration
   })
 );
@@ -1427,17 +1443,21 @@ watch(tab, (t) => {
         <div class="hl-you">
           You: <strong>{{ headline.you }}</strong>
         </div>
-        <!-- Pre-traffic honesty: no integration observed yet → the fragment is
-             simply absent (no replacement copy). -->
+        <!-- Pre-traffic honesty: no integration observed on a REST edge yet →
+             the fragment is simply absent (no replacement copy). An MCP edge
+             alone does not count — the slug is a REST integration's name, and
+             the MCP server has its own line below (ui/src/headline.ts). -->
         <div v-if="headline.integration" class="hl-sub">on integration <code>{{ headline.integration }}</code></div>
       </section>
 
-      <!-- MCP servers (v0.5): one headline per observed server (deck §2). -->
+      <!-- MCP servers (v0.5): one headline per observed server (deck §2), on
+           the same three tones as the REST line: a server whose snapshot has
+           validated nothing yet is neutral, not green (ui/src/mcp.ts). -->
       <section
         v-for="m in mcpOverview"
         :key="'mcp-hl-' + m.key"
         class="headline mcp-headline"
-        :class="{ ok: m.headline.ok, drift: !m.headline.ok }"
+        :class="m.headline.tone"
       >
         <div class="hl-you">
           <span class="mcp-badge" :title="MCP_BADGE_TOOLTIP">MCP</span>
