@@ -151,8 +151,19 @@ are `not-validated` / `status-undeclared` / `media-type-undeclared` / `body-not-
 ## Detection lives in `internal/drift`
 
 - `DetectLiveVsSpec` — `openapi3filter.ValidateResponse` with `MultiError:true`,
-  reconstructing the request from the stored call. `JudgeLiveVsSpec` is the
-  same plus the per-call verdict (above); the processor stamps off that.
+  reconstructing the request from the stored call. The response media type is
+  resolved against the contract RFC 6839-aware — verbatim, then parsed, then the
+  base its `+json` suffix denotes (`application/problem+json` → the contract's
+  `application/json` entry; the body still decodes and validates as JSON). A
+  media type the contract declares under none of those names, on a status the
+  contract DECLARES by its EXACT code (not a `4XX`/`5XX` range, not `default`, not absent), is a
+  `content-type-mismatch` finding (one per endpoint); a gateway's `502
+  text/html` on an undeclared status is not the provider's breach. Anything
+  else kin-openapi refuses to judge — undeclared status, empty/truncated/
+  non-JSON body — yields no finding; the per-call verdict stamp
+  (`feat/per-call-validated-stamp`) records those as NOT validated, and it must
+  never let them read clean. `JudgeLiveVsSpec` is `DetectLiveVsSpec` plus the
+  per-call verdict (above); the processor stamps off that.
 - `MCPDetector` (`mcp.go`) — `LoadSnapshot` (contract_snapshot →
   `contract.FromToolsList`, versioned by content hash, previous kept, diff via
   `contract/diff`) + `DetectCall` (the three MCP findings; SAME kin-openapi

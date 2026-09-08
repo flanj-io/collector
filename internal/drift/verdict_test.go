@@ -76,16 +76,16 @@ func TestJudgeLiveVsSpec_Verdicts(t *testing.T) {
 		c.ResponseContentType = "application/problem+json"
 		c.ResponseBody = `{"type":"about:blank","title":"Bad Gateway","status":502}`
 		fs, v, _ := JudgeLiveVsSpec(doc, c)
-		if len(fs) != 0 {
-			t.Fatalf("findings = %+v, want none (the detector reports schema violations only)", fs)
+		if len(fs) == 0 {
+			t.Fatalf("findings = %+v, want the amount drift: a problem+json body is JUDGED against the application/json schema (collector#44)", fs)
 		}
-		if v.Verdict != model.ValidatedNot || v.Reason != model.NotValidatedMediaTypeUndeclared {
-			t.Errorf("verdict = %+v, want not-validated / media-type-undeclared (200 is declared, problem+json is not)", v)
+		if v.Verdict != model.ValidatedDrifted {
+			t.Errorf("verdict = %+v, want drifted (composed with collector#44: the +json body is judged)", v)
 		}
-		// The old reading, pinned: no error, no finding — which is exactly why
-		// the processor stamps off the verdict and not off this pair.
-		if fs, err := DetectLiveVsSpec(doc, c); err != nil || len(fs) != 0 {
-			t.Errorf("DetectLiveVsSpec = (%+v, %v), want (none, nil) for an undeclared media type", fs, err)
+		// DetectLiveVsSpec is the same judgement without the verdict: the same
+		// findings, no error (composed with collector#44 the +json body is judged).
+		if fs2, err := DetectLiveVsSpec(doc, c); err != nil || len(fs2) != len(fs) {
+			t.Errorf("DetectLiveVsSpec = (%+v, %v), want the same %d findings and no error", fs2, err, len(fs))
 		}
 	})
 
@@ -156,16 +156,16 @@ func TestJudgeLiveVsSpec_DefaultOnlyStatus(t *testing.T) {
 		t.Errorf("default-only: verdict = %+v, want not-validated / media-type-undeclared", v)
 	}
 
-	// A 502 problem+json under that JSON default reaches the same branch today.
-	// #44's RFC 6839 lookup validates it against the default's schema BEFORE
-	// this point; pinning the current answer makes that rebase a deliberate
-	// change to this line, not a silent one.
+	// A 502 problem+json under that JSON default is JUDGED: collector#44's
+	// RFC 6839 lookup resolves +json to the default's application/json entry
+	// before this branch, so a conforming Problem body is clean — and only a
+	// FOREIGN media type on a default-only status reaches media-type-undeclared.
 	problem := gateway
 	problem.ResponseContentType = "application/problem+json"
 	problem.ResponseBody = `{"type":"about:blank","title":"Bad Gateway","status":502}`
 	_, v, _ = JudgeLiveVsSpec(withDefault, problem)
-	if v.Reason != model.NotValidatedMediaTypeUndeclared {
-		t.Errorf("default-only problem+json (pre-#44): verdict = %+v, want media-type-undeclared", v)
+	if v.Verdict != model.ValidatedClean {
+		t.Errorf("default-only problem+json (composed with collector#44: judged against the default Problem schema, conforming): verdict = %+v, want clean", v)
 	}
 }
 

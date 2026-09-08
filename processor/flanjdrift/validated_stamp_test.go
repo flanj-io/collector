@@ -152,11 +152,14 @@ func TestStamp_ResponseTheContractDoesNotDescribe(t *testing.T) {
 	problem.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0).Attributes().PutStr(otlpattr.AttrRespBody,
 		`{"type":"about:blank","title":"Bad Gateway","status":502}`)
 	v, counts := processOne(t, p, problem)
-	if v.Verdict != model.ValidatedNot || v.Reason != model.NotValidatedMediaTypeUndeclared {
-		t.Errorf("problem+json under an application/json contract: verdict = %+v, want not-validated / media-type-undeclared", v)
+	// Composed with collector#44: the +json body is JUDGED against the
+	// application/json schema, and this Problem body is not a Charge — drifted,
+	// with schema findings. (Before #44 this refused as media-type-undeclared.)
+	if v.Verdict != model.ValidatedDrifted {
+		t.Errorf("problem+json under an application/json contract: verdict = %+v, want drifted", v)
 	}
-	if counts[otlpattr.RecordTypeFinding] != 0 {
-		t.Errorf("problem+json: findings = %d, want 0", counts[otlpattr.RecordTypeFinding])
+	if counts[otlpattr.RecordTypeFinding] == 0 {
+		t.Errorf("problem+json: findings = %d, want > 0", counts[otlpattr.RecordTypeFinding])
 	}
 
 	garbage := goldenBatchWith(t, otlpattr.AttrRespBody, `<html>upstream error</html>`)
