@@ -68,8 +68,11 @@ edge; repeats bump `occurrence_count`); `spec_info` → upsert by integration.
 
 ## Single pod
 
-- Container: `flanj-collector`, default `CMD --config /etc/flanj/config.yaml`
-  (mount your own over it, or a ConfigMap). `EXPOSE 4318` (OTLP from the SDK).
+- Image: **`flanj/collector:v0.1.0`** on Docker Hub (`linux/amd64` +
+  `linux/arm64`; `:latest` tracks the newest release — pin the version tag in a
+  manifest). Container: `flanj-collector`, default
+  `CMD --config /etc/flanj/config.yaml` (mount your own over it, or a
+  ConfigMap). `EXPOSE 4318` (OTLP from the SDK).
 - State: `/data` on a PVC (sqlite). `user` is `nonroot` (uid 65532) — pre-chown
   the volume or use an fsGroup.
 - UI: loopback only by design — `kubectl port-forward <pod> 5335:5335`.
