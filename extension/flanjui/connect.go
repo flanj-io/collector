@@ -400,6 +400,65 @@ func dashboardURL(publicURL, baseURL string) string {
 // button instead of its door, which is the deliberate direction to fail in: a
 // dead link in the operator's browser is worse than no link, and cp_public_url
 // is the override for every case this heuristic gets wrong either way.
+// reservedDocHost reports whether a host sits under a name the IETF reserves for
+// documentation and examples — RFC 2606's .test / .example / .invalid and
+// example.com/.net/.org. Those can never be delegated, so a cp_base_url pointing
+// at one is not an address that happens to be down: it is an address that cannot
+// exist, and the failure is a config error wearing a network error's clothes
+// (issue #55).
+//
+// This is deliberately NARROWER than obviouslyNonPublicHost, which is about what
+// a BROWSER can open and rightly refuses docker DNS names, k8s Services and
+// private IPs. Every one of those is a legitimate cp_base_url — the example
+// config says so in as many words — so classifying them here would call a
+// working in-network deployment a placeholder. .localhost is left out for the
+// same reason: a control plane on the operator's own laptop is a real one.
+func reservedDocHost(host string) bool {
+	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	if host == "" {
+		return false
+	}
+	labels := strings.Split(host, ".")
+	switch labels[len(labels)-1] {
+	case "test", "example", "invalid":
+		return true
+	}
+	if len(labels) >= 2 {
+		switch strings.Join(labels[len(labels)-2:], ".") {
+		case "example.com", "example.net", "example.org":
+			return true
+		}
+	}
+	return false
+}
+
+// cpBaseHost is the hostname of the configured cp_base_url, port stripped, or ""
+// when nothing is configured or the value does not parse.
+func cpBaseHost(base string) string {
+	u, err := url.Parse(strings.TrimSpace(base))
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
+}
+
+// cpUnreachableMsg picks the copy for a TRANSPORT failure against the control
+// plane: the action's own "nothing happened" line, unless cp_base_url is a
+// reserved documentation name, in which case nothing was ever going to answer
+// and the operator needs to be pointed at the config rather than at their
+// network.
+//
+// Applied on Connect and nowhere else on purpose. Connect is the only relay
+// route reachable before a collector key exists; every other one (flag, threads)
+// already requires a Connect that succeeded, which a reserved host cannot
+// produce.
+func (e *uiExtension) cpUnreachableMsg(action string) string {
+	if reservedDocHost(cpBaseHost(e.cfg.CPBaseURL)) {
+		return msgCPPlaceholderHost
+	}
+	return action
+}
+
 func obviouslyNonPublicHost(host string) bool {
 	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
 	if host == "" {
@@ -541,7 +600,7 @@ func (e *uiExtension) handleConnectPost(w http.ResponseWriter, r *http.Request) 
 		resp, _, err = e.cp.Register(r.Context(), req)
 	}
 	if err != nil {
-		writeCPError(w, err, msgCPUnreachableSend)
+		writeCPError(w, err, e.cpUnreachableMsg(msgCPUnreachableSend))
 		return
 	}
 	// What actually happened to the confirmation mail. Carried straight through

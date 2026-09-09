@@ -285,3 +285,96 @@ func connectRig(t *testing.T, r *testRig) {
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+// TestReservedDocHost pins the classifier behind the placeholder message. The
+// whole value of that message is that it is only ever shown when it is TRUE, so
+// the cases that must stay false matter more than the ones that must be true: a
+// docker DNS name, a k8s Service and a private IP are all legitimate cp_base_url
+// values (the example config says so), and calling one a placeholder would tell
+// an operator with a working in-network control plane to go change it.
+func TestReservedDocHost(t *testing.T) {
+	cases := []struct {
+		host string
+		want bool
+	}{
+		// RFC 2606 / 6761 — reserved, can never be delegated.
+		{"cp.flanj.test", true},
+		{"cp.flanj.example", true},
+		{"cp.flanj.invalid", true},
+		{"example.com", true},
+		{"cp.example.com", true},
+		{"cp.example.net", true},
+		{"cp.example.org", true},
+		{"CP.FLANJ.TEST", true},  // case does not launder it
+		{"cp.flanj.test.", true}, // nor does a trailing dot
+		// Real deployments that are merely non-public. Every one of these is a
+		// working cp_base_url and must NOT be called a placeholder.
+		{"cp-api", false},
+		{"cp-api.flanj", false},
+		{"cp-api.flanj.svc.cluster.local", false},
+		{"10.1.2.3", false},
+		{"192.168.1.10", false},
+		{"localhost", false},
+		{"cp.flanj.local", false},
+		{"cp.flanj.internal", false},
+		// Public.
+		{"cp.flanj.io", false},
+		{"dash.acme.co.uk", false},
+		// Degenerate: nothing configured is cp_not_configured's job, not this one.
+		{"", false},
+		// The reserved label must be the LAST one, not merely present.
+		{"test.acme.io", false},
+		{"example.acme.io", false},
+	}
+	for _, c := range cases {
+		t.Run(c.host, func(t *testing.T) {
+			if got := reservedDocHost(c.host); got != c.want {
+				t.Fatalf("reservedDocHost(%q) = %v, want %v", c.host, got, c.want)
+			}
+		})
+	}
+}
+
+// TestConnectAgainstAPlaceholderCPSaysSo is the issue #55 regression. A
+// cp_base_url under a reserved name cannot resolve, so "couldn't reach the
+// control plane" sends the operator to debug a network that is not at fault. The
+// CODE stays cp_unreachable (it is still a transport failure, and the UI switches
+// on it); only the sentence changes.
+func TestConnectAgainstAPlaceholderCPSaysSo(t *testing.T) {
+	r := newRig(t)
+	r.ext.cfg.CPBaseURL = "https://cp.flanj.test" // the value config.example.yaml carries
+	r.start(t)
+	r.cp.srv.Close()
+
+	resp, out, _ := r.do(t, http.MethodPost, "/api/connect", map[string]string{
+		"consumer_display_name": "Stranger Test", "contact_email": "nobody@acme.test"})
+	if resp.StatusCode != 502 || out["error"] != "cp_unreachable" {
+		t.Fatalf("want 502 cp_unreachable, got %d %v", resp.StatusCode, out)
+	}
+	if out["message"] != msgCPPlaceholderHost {
+		t.Errorf("a placeholder cp_base_url must name the config, not the network:\n got %q\nwant %q", out["message"], msgCPPlaceholderHost)
+	}
+	if _, has := r.st.settings[settingCollectorKey]; has {
+		t.Errorf("nothing may be persisted when the CP was never reachable")
+	}
+}
+
+// TestConnectAgainstAnInNetworkCPKeepsTheNetworkMessage is the other half, and
+// the one that would catch a classifier widened until it swallowed real
+// deployments: a docker DNS control plane that is genuinely down is a network
+// problem, and must still say so.
+func TestConnectAgainstAnInNetworkCPKeepsTheNetworkMessage(t *testing.T) {
+	r := newRig(t)
+	r.ext.cfg.CPBaseURL = "http://cp-api:3001" // what a compose/Helm deployment renders
+	r.start(t)
+	r.cp.srv.Close()
+
+	resp, out, _ := r.do(t, http.MethodPost, "/api/connect", map[string]string{
+		"consumer_display_name": "Acme", "contact_email": "ops@acme.test"})
+	if resp.StatusCode != 502 || out["error"] != "cp_unreachable" {
+		t.Fatalf("want 502 cp_unreachable, got %d %v", resp.StatusCode, out)
+	}
+	if out["message"] != msgCPUnreachableSend {
+		t.Errorf("an in-network CP that is down is a network failure:\n got %q\nwant %q", out["message"], msgCPUnreachableSend)
+	}
+}
