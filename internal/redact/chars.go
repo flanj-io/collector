@@ -37,7 +37,8 @@ func isWordCharAt(s string, i int) bool {
 }
 
 // byteAt returns the byte at i, or 0 when out of range (mirrors chars.ts charAt
-// returning ”; callers only compare against ASCII punctuation, never against 0).
+// returning the empty string; callers only compare against ASCII punctuation,
+// never against 0).
 func byteAt(s string, i int) byte {
 	if i < 0 || i >= len(s) {
 		return 0

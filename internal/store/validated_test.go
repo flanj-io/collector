@@ -113,9 +113,10 @@ func TestValidated_DriftedFromStampSurvivesTheFindingPath(t *testing.T) {
 }
 
 // TestValidated_PreMigrationRowReadsEmpty: a row written by a collector from
-// before the column existed. The migration adds the column with DEFAULT ”,  so
-// the row reads back with NO verdict — and a row inserted after it on the same
-// store carries its stamp, so the two are distinguishable on one screen.
+// before the column existed. The migration adds the column defaulting to the
+// empty string, so the row reads back with NO verdict — and a row inserted
+// after it on the same store carries its stamp, so the two are
+// distinguishable on one screen.
 func TestValidated_PreMigrationRowReadsEmpty(t *testing.T) {
 	legacyDoc := func(id string) string {
 		c := makeEdgeCall(0, "api.acme.test", "client", "external")
@@ -212,7 +213,8 @@ func assertLegacyThenStamped(t *testing.T, s Store) {
 
 // TestMigrateFromSQLite_CarriesValidated: the one-shot sqlite→postgres import
 // copies the verdict with the pinned evidence, and copes with a legacy file
-// from before the column existed (a ” verdict, exactly as the default gives).
+// from before the column existed (an empty verdict, exactly as the default
+// gives).
 func TestMigrateFromSQLite_CarriesValidated(t *testing.T) {
 	build := func(t *testing.T, dropColumn bool) (path string, pinnedID string) {
 		t.Helper()
