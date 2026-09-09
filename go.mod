@@ -8,7 +8,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/nyaruka/phonenumbers v1.8.1
-	github.com/oasdiff/oasdiff v1.29.1
+	github.com/oasdiff/oasdiff v1.31.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	go.opentelemetry.io/collector/pdata v1.65.0
 	golang.org/x/net v0.58.0
