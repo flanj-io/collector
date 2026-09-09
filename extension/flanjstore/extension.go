@@ -144,6 +144,16 @@ func (e *storeExtension) Start(_ context.Context, _ component.Host) error {
 	switch backend {
 	case BackendSQLite:
 		st, err = store.OpenSQLite(e.cfg.DBPath, e.cfg.WindowMaxRows, e.cfg.WindowMaxBytes)
+		if err != nil {
+			// The driver reports "unable to open database file (14)" for every
+			// reason a file cannot be created, including the one an operator
+			// actually hits: the directory is not writable by this uid. Lead
+			// with that when it is true, and keep the driver's error wrapped
+			// so errors.Is/As still reach it (dbpath.go).
+			if diag := diagnoseDBPath(e.cfg.DBPath); diag != "" {
+				err = fmt.Errorf("%s (%w)", diag, err)
+			}
+		}
 	case BackendPostgres:
 		st, err = store.OpenPostgres(e.cfg.DSN, e.cfg.WindowMaxRows, e.cfg.WindowMaxBytes)
 		if err == nil && e.cfg.DBPath != "" {
