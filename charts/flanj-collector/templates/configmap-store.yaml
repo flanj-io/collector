@@ -69,6 +69,7 @@ data:
         {{- end }}
         finding_sync: {{ .Values.controlPlane.findingSync }}
         directory_sync: {{ .Values.controlPlane.directorySync }}
+        edge_sync: {{ .Values.controlPlane.edgeSync }}
 
     receivers:
       otlp:

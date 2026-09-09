@@ -15,12 +15,14 @@ package flanjui
 // inline. Log lines carry only status + counts: never the bearer, never any
 // finding content.
 //
-// ONE ticker, TWO independently gated legs (owner ruling 2026-08-31): the
-// directory display-name refresh (directory.go) rides this same ticker but
-// answers to its own key, `directory_sync`. They are two different egresses
-// with two different privacy stories — findings go OUT, the directory only
-// comes IN — so neither switch may silently turn the other off. With BOTH
-// false the goroutine is never started at all: no ticker, no work, nothing.
+// ONE ticker, THREE independently gated legs (owner ruling 2026-08-31,
+// extended by v1 phase 2): the directory display-name refresh (directory.go)
+// rides this same ticker under its own key `directory_sync`, and edge
+// registration (edges.go) under `edge_sync`. Three different egresses with
+// three different privacy stories — findings go OUT, the directory only comes
+// IN, registration sends the external DOMAINS and nothing else — so no switch
+// may silently turn another off. With ALL THREE false the goroutine is never
+// started at all: no ticker, no work, nothing.
 
 import (
 	"context"
@@ -37,7 +39,7 @@ import (
 const findingSyncInterval = 15 * time.Second
 
 // startFindingSync launches the sync ticker goroutine (called from Start).
-// No-op when no control plane is configured, or when BOTH legs are switched
+// No-op when no control plane is configured, or when EVERY leg is switched
 // off — with nothing left for a tick to do, no ticker is created.
 func (e *uiExtension) startFindingSync() {
 	if e.cp == nil {
@@ -45,8 +47,8 @@ func (e *uiExtension) startFindingSync() {
 	}
 	// Read the switches ONCE, here, and hand them to the goroutine: the loop
 	// must not read e.cfg concurrently with anyone else.
-	syncFindings, syncDirectory := e.cfg.FindingSync, e.cfg.DirectorySync
-	if !syncFindings && !syncDirectory {
+	syncFindings, syncDirectory, syncEdges := e.cfg.FindingSync, e.cfg.DirectorySync, e.cfg.EdgeSync
+	if !syncFindings && !syncDirectory && !syncEdges {
 		return
 	}
 	// Not Start's ctx (that one ends with the Start call): the loop lives until
@@ -69,6 +71,14 @@ func (e *uiExtension) startFindingSync() {
 			// key, so finding_sync: false never stops a name refresh.
 			if syncDirectory {
 				e.syncDirectoryOnce(ctx)
+			}
+			// Leg 3 — edge registration (edge_sync): the external edges this
+			// deployment has discovered, by registrable domain (v1 phase 2 —
+			// edges.go). Same cadence, same skip conditions, silent. Gated on
+			// its OWN key, so neither of the other two switches stops it and
+			// it stops neither of them.
+			if syncEdges {
+				e.syncEdgesOnce(ctx)
 			}
 			select {
 			case <-ctx.Done():

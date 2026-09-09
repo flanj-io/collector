@@ -156,6 +156,12 @@ export interface ConnectState {
    *  base here, which was a dead link off-host. */
   dashboard_url?: string;
   cp_configured?: boolean;
+  /** Whether this collector registers its external edges to the control plane
+   *  (`edge_sync`, CONTRACTS §8 — default true). Drives the Connect panel's
+   *  disclosure line, which must state what actually leaves: with the switch
+   *  off the on-copy would be a lie. Absent on a collector predating v1 phase 2
+   *  — the panel then renders no disclosure rather than guessing. */
+  edge_sync?: boolean;
   error?: string;
   /** What actually happened to the confirmation mail on THIS request (CONTRACTS-CP §5.1):
    *  `sent` | `failed` | `cooldown`. Present only when a send was attempted — absent on a poll,

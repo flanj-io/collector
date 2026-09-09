@@ -266,12 +266,26 @@ Flow specifics:
   and a prefix of exactly 8 MiB is indistinguishable from a document that fits.
   Roll the store pod first.
 - The flag action runs on the store pod (it holds the evidence); its outbound
-  calls to the control plane (Connect, flag, thread state) are the only
-  off-cluster egress. **Connect** is per deployment, not per pod: the collector
+  calls to the control plane (Connect, flag, thread state, and the three
+  background sync legs below) are the only off-cluster egress. **Connect** is
+  per deployment, not per pod: the collector
   key it returns lives in the store's settings KV (sqlite file / shared
   postgres) next to the evidence — nothing to mount or copy, and a replaced pod
   is still Connected. `cp_deploy_token` is only used for that first
   registration.
+- **What the background ticker sends, and how to turn each leg off.** Once
+  Connected, one 15s ticker on the store pod runs three independently gated
+  legs, each with its own key in the `flanjui` block (all default `true`):
+  `finding_sync` posts the SHAPE of current findings (never `expected` /
+  `actual` / `detail`); `directory_sync` is a pure FETCH of the display-name
+  table (nothing about your edges is sent); and — since v1 phase 2 —
+  `edge_sync` registers each **external** edge as `{registrable_domain,
+  direction, first_seen, last_seen}` and nothing more. No calls, no bodies, no
+  payloads, no call counts, and **no internal edge, ever** — the classification
+  that keeps internal same-team traffic off the Edges view keeps it off the
+  wire too. Setting one to `false` disables only that leg; all three off and no
+  ticker starts at all. The Connect panel states the registration before the
+  operator Connects, and nothing is sent by a collector that never did.
 - UI: `kubectl port-forward sts/flanj-store 5335:5335`. The Connected pill's
   dashboard link is built from the store pod's `cp_public_url` (see "Single
   pod"): a `cp_base_url` naming a Service or a VPC-private ingress is right for

@@ -143,7 +143,9 @@ API + the flag action.
     otherwise onto `thread.link.<thread_id>` — a key only that thread's Replace
     link writes, blind.
   - `GET /api/health` also carries `connect_status` (from the store only) and
-    the configured display names.
+    the configured display names. `GET /api/connect` also carries `edge_sync` —
+    this deployment's actual registration setting, so the panel's disclosure
+    line states what really leaves rather than what usually does.
 
 - **Agent-facing drift read surface (`mcp.go`) — a read-only MCP server at
   `/mcp` on THIS listener.** Streamable HTTP (`github.com/modelcontextprotocol/go-sdk`),
@@ -230,7 +232,20 @@ collector is outbound-only; nothing serves off-host.
 - `config.go` — frozen keys `ui_endpoint`, `integration_id`,
   `consumer_display_name`, `provider_display_name`, `cp_base_url`, `cp_public_url`
   (optional, browser-facing — validated at boot: absolute http(s), no
-  credentials), `cp_deploy_token` (CONTRACTS §8).
+  credentials), `cp_deploy_token`, and the three independently gated sync
+  switches `finding_sync` / `directory_sync` / `edge_sync` (all default true —
+  CONTRACTS §8).
+- `sync.go` — ONE 15s ticker, THREE independently gated legs. `edges.go` is the
+  third (v1 phase 2): **edge registration**, `POST /api/v1/edges/sync` with the
+  collector key. It lists the store's EXTERNAL edges and hands them to
+  `promote.BuildEdgeRegistrations`, which emits `{registrable_domain, direction,
+  first_seen, last_seen}` per (domain, direction) — folding the hosts under a
+  domain into one row and dropping everything not classified external. Two walls,
+  deliberately: the store query, and the builder's own re-check with a wire-bytes
+  test on it. Gated on Connect (no key, no request), disclosed in the Connect
+  panel before the operator Connects, and switchable with `edge_sync: false`
+  without touching the other two legs. The log line carries counts and a status —
+  never a domain, which would put the dependency graph in the pod logs.
   `provider_display_name` is the FLAG's fallback provider name only — it stopped
   naming edges when contracts moved into the UI (its edge linkage came from the
   config spec's `peer_host`).

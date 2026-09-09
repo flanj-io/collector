@@ -137,6 +137,9 @@
         "directorySync": {
           "type": "boolean"
         },
+        "edgeSync": {
+          "type": "boolean"
+        },
         "deployToken": {
           "type": "object",
           "properties": {

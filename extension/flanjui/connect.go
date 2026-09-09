@@ -314,6 +314,13 @@ func (e *uiExtension) handleConnectGet(w http.ResponseWriter, r *http.Request) {
 	cs, cpErr := e.refreshConnect(r.Context(), st, cs, false)
 	out := cs.view()
 	out["cp_configured"] = e.cp != nil
+	// v1 phase 2 — the edge-registration disclosure. The panel states what
+	// Connecting causes BEFORE you Connect ("this collector registers the
+	// external domains it observes — never calls, bodies, or payloads"), so the
+	// SPA needs the deployment's actual `edge_sync` setting: with the switch off
+	// that sentence would be a lie, and a disclosure that overstates what leaves
+	// is as wrong as one that understates it.
+	out["edge_sync"] = e.cfg.EdgeSync
 	// The UI's one link OUT to the control plane. Emitted only when this
 	// deployment is actually Connected, so the SPA can never offer a door to a
 	// place this collector has no identity at. The collector composes the path
@@ -595,6 +602,11 @@ func (e *uiExtension) handleConnectPost(w http.ResponseWriter, r *http.Request) 
 
 	out := cs.view()
 	out["cp_configured"] = true
+	// Same field the GET carries, for the same reason — and it must be on BOTH:
+	// the SPA replaces its whole connect state from this response, so omitting it
+	// here would blank the disclosure the instant the operator pressed Connect,
+	// until the next background poll put it back.
+	out["edge_sync"] = e.cfg.EdgeSync
 	if cs.status() == "connected" {
 		writeJSON(w, http.StatusOK, out)
 		return
