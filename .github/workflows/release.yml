@@ -1,0 +1,169 @@
+name: release
+
+# Publishes flanj/collector to Docker Hub on a `v*` tag. Before this existed the
+# release was typed by hand from a laptop (v0.1.0, 2026-09-08): nothing recorded
+# which commit an image came from, and the next release depended on somebody
+# remembering `--build-arg VERSION=` — omit it and /api/health reports "dev" on a
+# tagged release, which nothing would have caught (issue #56).
+#
+# ci.yml's docker-build job is NOT this. It builds one platform, passes no
+# VERSION, and throws the result away; it proves the Dockerfile still builds on
+# a PR. This is the only thing in the repo that publishes.
+#
+# BEFORE YOU TAG: the workflow is read from the TAG's own tree, so a tag placed
+# on an old commit runs that commit's workflows — or, if the file did not exist
+# there, nothing at all, silently. Tag a freshly fetched origin/main and then
+# confirm a run actually started.
+#
+# Requires two repository or organization secrets:
+#   DOCKERHUB_USERNAME  (optional — defaults to the `flanj` namespace owner)
+#   DOCKERHUB_TOKEN     a Docker Hub personal access token, Read & Write
+# Without the token the job fails at the login step with that message, before
+# anything is built.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Version to build, e.g. v0.1.1 (must match a tag for a real push)'
+        required: true
+      dry_run:
+        description: 'Build and verify only — do not push'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Resolve the version being released
+        id: v
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          version="${INPUT_TAG:-${GITHUB_REF_NAME}}"
+          # A tag that is not vMAJOR.MINOR.PATCH would publish under a name the
+          # chart's appVersion and the docs cannot refer to. Refuse it here
+          # rather than after the push, which cannot be undone.
+          case "$version" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::'$version' is not a vMAJOR.MINOR.PATCH tag"; exit 1 ;;
+          esac
+          {
+            echo "version=$version"
+            echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_OUTPUT"
+          echo "releasing $version from ${GITHUB_SHA}"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v4
+
+      # Deliberately BEFORE the build, and outside the dry-run condition. The
+      # credential is the most likely thing to be wrong, and a dry run that
+      # skips the login proves everything except the one step that can strand
+      # you mid-publish (chart-release.yml takes the same stance).
+      - name: Registry login
+        env:
+          USER: ${{ secrets.DOCKERHUB_USERNAME || 'flanj' }}
+          TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          [ -n "$TOKEN" ] || { echo "::error::DOCKERHUB_TOKEN is not set — add it to this repo's Actions secrets (a Docker Hub personal access token with Read & Write on the flanj account)"; exit 1; }
+          echo "$TOKEN" | docker login -u "$USER" --password-stdin
+          echo "authenticated to Docker Hub as $USER"
+
+      # Built for THIS runner's platform only and loaded locally, so the next
+      # step can actually run it. The multi-arch build below reuses every layer
+      # from this one's cache, so the second build is cheap.
+      - name: Build amd64 locally, to run it
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: flanj-collector:verify
+          platforms: linux/amd64
+          build-args: |
+            VERSION=${{ steps.v.outputs.version }}
+            REVISION=${{ github.sha }}
+            CREATED=${{ steps.v.outputs.created }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # The mismatch issue #56 names: forget the build-arg and a tagged release
+      # reports "dev" from /api/health, with nothing to catch it. The UI binds
+      # CONTAINER loopback, so the check runs curl inside the collector's own
+      # network namespace rather than publishing a port.
+      - name: The binary must report the tag it was built for
+        env:
+          WANT: ${{ steps.v.outputs.version }}
+        run: |
+          set -euo pipefail
+          # --tmpfs, because the image declares VOLUME /data and runs as
+          # nonroot(65532): an anonymous volume is created root-owned, the
+          # store cannot open its sqlite file there, and the collector exits 1
+          # before it serves anything. The README's run command bind-mounts a
+          # directory instead; this check just needs somewhere writable.
+          docker run -d --name verify --tmpfs /data:uid=65532,gid=65532 flanj-collector:verify >/dev/null
+          trap 'docker rm -f verify >/dev/null 2>&1 || true' EXIT
+          for _ in $(seq 1 30); do
+            got=$(docker run --rm --network container:verify curlimages/curl:8.11.1 \
+                    -sf http://127.0.0.1:5335/api/health 2>/dev/null \
+                  | sed -n 's/.*"collector_version":"\([^"]*\)".*/\1/p') || true
+            [ -n "${got:-}" ] && break
+            sleep 2
+          done
+          [ -n "${got:-}" ] || { echo "::error::the collector never answered /api/health"; docker logs verify; exit 1; }
+          echo "tag=$WANT  binary reports=$got"
+          [ "$got" = "$WANT" ] || { echo "::error::the image reports '$got' but is being published as '$WANT' — the VERSION build-arg did not reach the binary"; exit 1; }
+
+      - name: Labels must carry the commit
+        run: |
+          set -euo pipefail
+          rev=$(docker image inspect flanj-collector:verify \
+                  --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')
+          echo "revision label=$rev"
+          [ "$rev" = "${GITHUB_SHA}" ] || { echo "::error::revision label is '$rev', expected ${GITHUB_SHA} — an image nobody can trace to a commit is what this workflow exists to stop"; exit 1; }
+
+      - name: Build both platforms and push
+        if: github.event_name == 'push' || inputs.dry_run == false
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            flanj/collector:${{ steps.v.outputs.version }}
+            flanj/collector:latest
+          build-args: |
+            VERSION=${{ steps.v.outputs.version }}
+            REVISION=${{ github.sha }}
+            CREATED=${{ steps.v.outputs.created }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # An anonymous read, because that is the thing a stranger does and the
+      # only way to catch a repository whose privacy default made the push
+      # succeed and the pull impossible.
+      - name: Verify the published index anonymously
+        if: github.event_name == 'push' || inputs.dry_run == false
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker logout
+          got=$(docker manifest inspect "flanj/collector:$VERSION" \
+                | grep -c '"architecture"' || true)
+          echo "platforms in the published index: $got"
+          docker manifest inspect "flanj/collector:$VERSION" | grep '"architecture"'
+          [ "$got" -ge 2 ] || { echo "::error::flanj/collector:$VERSION is not a multi-platform index"; exit 1; }
+
+      - name: Log out
+        if: always()
+        run: docker logout || true
