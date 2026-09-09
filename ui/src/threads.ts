@@ -72,6 +72,18 @@ export interface ThreadListResponse {
  *  the tab header says so — always visible, exact deck copy. */
 export const THREADS_READ_ONLY_NOTE = 'Close, reopen and link changes happen on the thread page — View thread opens it.';
 
+/** The workspace link-out (v1 phase 3). This tab lists the threads THIS collector
+ *  created; the CP workspace lists every thread the person is part of, including
+ *  ones they answered as a respondent at someone else's collector — which is a
+ *  different set, and the reason the line is worth having at all.
+ *
+ *  It is one muted line under an existing list, shown only when the collector
+ *  already offers a `dashboard_url` (Connected, with an address a browser can
+ *  actually open). The brief's rule for this slice is NO NEW NAG SURFACES: no
+ *  banner, no dismissable card, nothing that appears before there is anything on
+ *  the other end. */
+export const WORKSPACE_LINK_OUT = 'See all your threads — create your workspace.';
+
 /** Shown when the control plane has more threads than one page can carry: say
  *  what is on screen and what is not. There is no cursor to page with. The
  *  participant inbox (`peek-web/assets/inbox.js`) says this same sentence — one

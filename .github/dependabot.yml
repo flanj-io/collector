@@ -1,4 +1,9 @@
 version: 2
+
+# Grouping is an Actions-minutes decision as much as a review one: every Dependabot PR is a full
+# CI run, and ungrouped weekly bumps were opening one PR (one pipeline) per dependency. Minor and
+# patch updates ride together in a single PR per ecosystem; MAJORS stay ungrouped on purpose —
+# a major deserves its own run and its own review.
 updates:
   - package-ecosystem: "gomod"
     directory: "/"
@@ -7,6 +12,10 @@ updates:
     open-pull-requests-limit: 10
     commit-message:
       prefix: "chore(deps)"
+    groups:
+      gomod-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
     ignore:
       # The OpenTelemetry Collector modules are version-locked to the ocb build triad
       # (ocb == beta == stable pin) and MUST be bumped together, by hand — never piecemeal.
@@ -17,9 +26,16 @@ updates:
       interval: "weekly"
     commit-message:
       prefix: "chore(deps)"
+    groups:
+      ui-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
     commit-message:
       prefix: "chore(ci)"
+    groups:
+      actions:
+        patterns: ["*"]
