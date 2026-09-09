@@ -56,6 +56,29 @@ IMAGE_TAG="${IMAGE##*:}"
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 fail() { printf '\n\033[31mFAIL: %s\033[0m\n' "$*" >&2; exit 1; }
 
+# The one pattern that means "the store pod refused this front's token". Kept
+# here, next to its self-test, because the previous version of it (a bare
+# `401|Unauthorized`) matched a millisecond in a timestamp and reported a
+# token mismatch that did not exist.
+AUTH_REFUSAL_RE='store pod returned 40[13]'
+
+# Self-test the pattern before the cluster costs five minutes: it must fire on
+# the sentence a front really logs, and NOT on the timestamp that broke it.
+# Three lines, no cluster, and the bug cannot come back unnoticed.
+# `if` rather than `&&`/`||`: under `set -e` a bare `grep -q ... && fail` makes
+# the PASSING case (grep finds nothing) the failing status of the statement.
+selftest_auth_refusal_re() {
+  local real='store pod returned 401 Unauthorized'
+  local decoy='2026-09-08T21:04:46.401Z  warn  builders/builders.go:40  "otlphttp" alias is deprecated'
+  if ! grep -qE "$AUTH_REFUSAL_RE" <<<"$real"; then
+    fail "self-test: the token-refusal pattern no longer matches a front's real 401 line"
+  fi
+  if grep -qE "$AUTH_REFUSAL_RE" <<<"$decoy"; then
+    fail "self-test: the token-refusal pattern matches a plain timestamp (.401Z) — it would fail a healthy lane"
+  fi
+}
+selftest_auth_refusal_re
+
 PF_PID=""
 cleanup() {
   local rc=$?
@@ -182,8 +205,24 @@ install_and_check() {
 
   # 401 is the one that never clears: the roles hold different tokens, the pod
   # stays Ready, and no contract is ever read.
-  if grep -qiE '401|Unauthorized' <<<"$frontlog"; then
-    grep -iE '401|Unauthorized' <<<"$frontlog" | sed 's/^/  /' >&2
+  #
+  # MATCH THE COLLECTOR'S OWN SENTENCE, never a bare `401`. A front's log is
+  # full of RFC3339 timestamps, and one in a thousand of them ends its
+  # millisecond field in 401 — `2026-09-08T21:04:46.401Z`. On 2026-09-08 that
+  # is exactly what happened: `grep -qiE '401|Unauthorized'` matched the
+  # timestamp on an "otlphttp alias is deprecated" line and failed main with
+  # "the two roles hold different tokens", while the fronts' only real problem
+  # was the startup race the block below already tolerates. A check that
+  # reports the wrong cause is worse than no check — it sends the next person
+  # to read a token that was never wrong.
+  #
+  # The front emits `store pod returned 401 Unauthorized` and nothing else
+  # (processor/flanjdrift/remotesource.go: `store pod returned %s` with
+  # resp.Status; the store pod's specserver answers 401 for a bad token).
+  # 403 is matched too: a proxy in front of the store pod authorizes
+  # differently, and it is the same operator fix.
+  if grep -qE "$AUTH_REFUSAL_RE" <<<"$frontlog"; then
+    grep -E "$AUTH_REFUSAL_RE" <<<"$frontlog" | sed 's/^/  /' >&2
     fail "$release: a front is getting 401 from the store pod's contract endpoint — the two roles hold different tokens"
   fi
   # A front with no store_pod_endpoint detects no REST drift at all, and says
