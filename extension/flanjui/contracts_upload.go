@@ -125,12 +125,12 @@ type uploadRequest struct {
 
 // contractPreview is what the confirm step renders before anything is written.
 type contractPreview struct {
-	PeerHost    string   `json:"peer_host"`
-	Integration string   `json:"integration"`
-	Title       string   `json:"title,omitempty"`
-	Version     string   `json:"version,omitempty"`
-	Endpoints   int      `json:"endpoints"`
-	DocsURL     string   `json:"docs_url,omitempty"`
+	PeerHost    string `json:"peer_host"`
+	Integration string `json:"integration"`
+	Title       string `json:"title,omitempty"`
+	Version     string `json:"version,omitempty"`
+	Endpoints   int    `json:"endpoints"`
+	DocsURL     string `json:"docs_url,omitempty"`
 	// Servers are the `servers:` URLs the document declares. They CORROBORATE
 	// the binding, never decide it — proxy, gateway and staging hosts are
 	// legitimate and common, so a mismatch warns and never blocks.
@@ -406,11 +406,11 @@ func specInfoFromDoc(sum drift.SpecSummary, integration, host string) model.Spec
 		// card's origin line has a source that never guesses.
 		EdgeClass: model.EdgeClassExternal,
 		Source:    model.SpecSourceUpload,
-		LoadedAt:    time.Now().UTC().Format(time.RFC3339),
-		Title:       sum.Title,
-		Version:     sum.Version,
-		Endpoints:   sum.Endpoints,
-		DocsURL:     sum.DocsURL,
+		LoadedAt:  time.Now().UTC().Format(time.RFC3339),
+		Title:     sum.Title,
+		Version:   sum.Version,
+		Endpoints: sum.Endpoints,
+		DocsURL:   sum.DocsURL,
 	}
 }
 

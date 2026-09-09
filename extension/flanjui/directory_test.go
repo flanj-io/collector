@@ -213,7 +213,6 @@ func TestContractNamePassesTheRedactionFloor(t *testing.T) {
 	}
 }
 
-
 // TestHealthZeroTrafficHonesty: a fresh zero-traffic collector fabricates
 // nothing — /api/health omits `integration` and `provider_display_name`
 // entirely (no replacement values). They appear once an external outbound edge

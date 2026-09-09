@@ -1961,13 +1961,13 @@ func (b *brokenStore) Stats() (int, int64, error) { return 0, 0, b.err }
 func (b *brokenStore) ListEdges(bool) ([]model.Edge, error) {
 	return nil, b.err
 }
-func (b *brokenStore) EdgeCallCountsSince(string) (map[string]int, error)   { return nil, b.err }
-func (b *brokenStore) ListCalls(int) ([]model.RedactedCall, error)          { return nil, b.err }
-func (b *brokenStore) ListFindings(int) ([]model.Finding, error)            { return nil, b.err }
-func (b *brokenStore) ListSpecInfos() ([]model.SpecInfo, error)             { return nil, b.err }
-func (b *brokenStore) GetSpecDoc(string) ([]byte, string, bool, error)      { return nil, "", false, b.err }
-func (b *brokenStore) CallPeerHosts([]string) (map[string]string, error)    { return nil, b.err }
-func (b *brokenStore) GetSetting(string) (string, bool, error)              { return "", false, b.err }
+func (b *brokenStore) EdgeCallCountsSince(string) (map[string]int, error) { return nil, b.err }
+func (b *brokenStore) ListCalls(int) ([]model.RedactedCall, error)        { return nil, b.err }
+func (b *brokenStore) ListFindings(int) ([]model.Finding, error)          { return nil, b.err }
+func (b *brokenStore) ListSpecInfos() ([]model.SpecInfo, error)           { return nil, b.err }
+func (b *brokenStore) GetSpecDoc(string) ([]byte, string, bool, error)    { return nil, "", false, b.err }
+func (b *brokenStore) CallPeerHosts([]string) (map[string]string, error)  { return nil, b.err }
+func (b *brokenStore) GetSetting(string) (string, bool, error)            { return "", false, b.err }
 
 // TestReadRoutesNeverLeakTheStoreError is the regression for the postgres-lane
 // walk (2026-09-02): with the database stopped, every read route answered

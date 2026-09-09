@@ -285,7 +285,7 @@ func TestMigrateFromSQLite_CarriesDriftedFlag(t *testing.T) {
 		t.Fatalf("GetCall after migration: ok=%v err=%v", ok, err)
 	}
 	if !got.Drifted {
-		t.Errorf("migrated call: drifted=false, want true — a backend switch must not "+
+		t.Errorf("migrated call: drifted=false, want true — a backend switch must not " +
 			"relabel retained drift evidence as conforming")
 	}
 }

@@ -67,6 +67,55 @@ jobs:
       - name: Operator env contract — config/*.example.yaml vs DEPLOYMENT.md
         run: bash scripts/check-env-documented.sh
 
+  fmt:
+    # Formatting went unchecked from day one and ten files had drifted off
+    # gofmt by 2026-09-09. That is not a cosmetic problem: any PR that runs
+    # `gofmt -w` over a package it is editing sweeps up the unrelated
+    # reformatting of every neighbouring file, and the author then has to pick
+    # their own change back out by hand before committing (issue #55, same
+    # day). One check at the gate keeps the tree at a fixed point so a
+    # `gofmt -w` is always a no-op on files nobody touched.
+    #
+    # `gofmt` is filesystem-based, not module-aware, so ONE run at the repo
+    # root covers all six modules — root plus the five components that
+    # builder-config.yaml binds by path (extension/flanjui, extension/flanjstore,
+    # exporter/flanjstore, processor/flanjdrift, processor/flanjredaction).
+    # There is no vendor or testdata tree to exclude. `go vet` is the opposite:
+    # it IS module-aware and sees only the module it runs in, so it needs the
+    # same per-module loop go-test uses.
+    #
+    # go-version is pinned to the same '1.26' as go-test on purpose: gofmt's
+    # output is a function of its toolchain, so an unpinned runner could start
+    # demanding a reformat that no contributor's local gofmt produces.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: { go-version: '1.26' }
+      - name: gofmt — the whole tree, every module
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::these files are not gofmt-clean; run 'gofmt -w .' at the repo root"
+            echo "$unformatted" | while read -r f; do echo "::error file=$f::not gofmt-clean"; done
+            echo "--- diff ---"
+            gofmt -d .
+            exit 1
+          fi
+          echo "gofmt clean"
+      - name: go vet — the root module and each component module
+        # Same module list as go-test's suite loop. Kept as a loop rather than
+        # a workspace so a new module cannot be silently skipped: adding one
+        # means editing this list, in the same place as the test list.
+        run: |
+          fail=0
+          for m in . extension/flanjui extension/flanjstore processor/flanjdrift processor/flanjredaction exporter/flanjstore; do
+            echo "::group::go vet $m"
+            ( cd "$m" && go vet ./... ) || fail=1
+            echo "::endgroup::"
+          done
+          exit $fail
+
   go-test:
     runs-on: ubuntu-latest
     services:
@@ -193,7 +242,7 @@ jobs:
           bash scripts/helm-smoke.sh flanj-collector:helm-smoke
 
   notify-e2e:
-    needs: [dco, docs, go-test, docker-build, helm]
+    needs: [dco, docs, fmt, go-test, docker-build, helm]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
