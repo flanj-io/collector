@@ -97,7 +97,13 @@ edge; repeats bump `occurrence_count`); `spec_info` → upsert by integration.
   `linux/arm64`; `:latest` tracks the newest release — pin the version tag in a
   manifest). Container: `flanj-collector`, default
   `CMD --config /etc/flanj/config.yaml` (mount your own over it, or a
-  ConfigMap). `EXPOSE 4318` (OTLP from the SDK).
+  ConfigMap). `EXPOSE 4318` (OTLP from the SDK). That baked file is
+  `config/config.default.yaml` and is **neutral** — no `integration_id`, no
+  display names, no `cp_base_url` — so an unconfigured pod captures, redacts and
+  serves its UI but reports `cp_configured: false` and refuses Connect with
+  `cp_not_configured` rather than claiming an identity nobody gave it. The two
+  ROLE configs beside it (`front.yaml`, `store.yaml`) still carry example
+  identity; the chart renders its own over them.
 - State: `/data` on a PVC (sqlite). `user` is `nonroot` (uid 65532) — pre-chown
   the volume or use an fsGroup.
 - UI: loopback only by design — `kubectl port-forward <pod> 5335:5335`.

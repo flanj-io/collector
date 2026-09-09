@@ -1,0 +1,76 @@
+# The configuration the IMAGE bakes at /etc/flanj/config.yaml — the default CMD.
+#
+# It is deliberately NOT config.example.yaml. That file is the annotated teaching
+# document, and it is full of illustrative values: `acme-payments`, `Acme Consumer
+# Ltd`, a `cp_base_url` of `https://cp.flanj.test`. Baking it meant a stranger's
+# first `docker run` came up wearing somebody else's org identity, reported
+# `cp_configured: true` on a machine nobody had configured, and met a Connect that
+# failed with "couldn't reach the control plane" — which reads as a network fault
+# and was in fact a placeholder host in the image's own config (issue #55).
+#
+# So this file carries NO identity and NO control plane. What that buys:
+#
+#   - `/api/health` reports no consumer_display_name, because none has been given
+#   - `cp_configured` is false, which is true of this config AND of reality
+#   - Connect answers `cp_not_configured`, naming the two keys to set, instead of
+#     failing as if the operator's network were at fault
+#
+# Everything else works on the first run with no configuration at all: OTLP
+# ingest, the redaction floor, drift, edge discovery, the store and the UI. That
+# is deliberate — looking around without connecting is a property of this thing,
+# so an unconfigured collector must boot rather than refuse.
+#
+# TO CONNECT: copy config/config.example.yaml, set integration_id,
+# consumer_display_name, cp_base_url and cp_deploy_token, and mount it over
+# /etc/flanj/config.yaml (README "Run it on a laptop"). Every key is frozen in
+# contracts/CONTRACTS.md §8; the example documents all of them, this file
+# documents none, and that split is the point.
+#
+# The two tiered-topology role configs are baked alongside this one, unchanged:
+# /etc/flanj/front.yaml and /etc/flanj/store.yaml (docs/STORE.md "Topologies").
+
+extensions:
+  flanjstore:
+    backend: sqlite
+    db_path: /data/flanj.db # MUST be on a persistent volume — /data is the image's VOLUME
+    window_max_rows: 10000
+    window_max_bytes: 268435456 # 256 MiB
+
+  flanjui:
+    ui_endpoint: 127.0.0.1:5335 # loopback only — the collector is outbound-only
+    # integration_id, consumer_display_name, provider_display_name: ABSENT on
+    # purpose. An identity belongs to whoever installed this collector, and the
+    # image has never met them. Connect asks for the org name in the UI.
+    #
+    # cp_base_url, cp_deploy_token: ABSENT on purpose. With no base URL the CP
+    # client is never built, so nothing outbound exists to fail. The sync
+    # switches (finding_sync, directory_sync, edge_sync) default true and are
+    # inert without it — they return early with no collector key.
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  flanjredaction: {}
+  # Keep this in the pipeline with nothing uploaded: it stamps flanj.call.id,
+  # which capture and edge discovery depend on. Contracts are UPLOADED in the UI.
+  flanjdrift: {}
+
+exporters:
+  # Queue and retry defaults are the example's documented values; `{}` is the
+  # same thing.
+  flanjstore: {}
+
+service:
+  extensions: [flanjstore, flanjui]
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [flanjredaction, flanjdrift]
+      exporters: [flanjstore]
+  telemetry:
+    logs:
+      level: info

@@ -111,6 +111,13 @@ func (e *uiExtension) Start(ctx context.Context, host component.Host) error {
 	e.host = host
 	if e.cfg.CPBaseURL != "" {
 		e.cp = promote.NewClient(e.cfg.CPBaseURL, e.cfg.CPDeployToken, collectorVersion)
+		// Said at boot rather than only at the first Connect, because a headless
+		// operator never presses Connect and would otherwise learn this from a
+		// UI they cannot open. The VALUE is deliberately not logged — the key
+		// name is enough to act on, and config values stay out of the log.
+		if reservedDocHost(cpBaseHost(e.cfg.CPBaseURL)) {
+			e.telemetry.Logger.Warn("flanj: cp_base_url is a name reserved for documentation and can never resolve to a control plane — Connect will fail until it names a real one")
+		}
 	}
 
 	handler := e.routes()

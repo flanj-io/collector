@@ -96,14 +96,18 @@ Also read: `OTEL_SERVICE_NAME`, `FLANJ_BODY_CAP_BYTES` (default 16384),
 `FLANJ_IGNORE_URLS` (comma-separated; the SDK always ignores its own OTLP host).
 Make some calls, then watch **Traffic** fill.
 
-**Before you press Connect, replace the baked-in config.** The image ships
-`config/config.example.yaml` at `/etc/flanj/config.yaml`, and it is an *example*
-— `consumer_display_name: Acme Consumer Ltd`, `integration_id: acme-payments`,
-and a `cp_base_url` of `https://cp.flanj.test`, which does not resolve. Traffic
-capture, drift detection and the UI all work as shipped; **Connect** is the one
-thing that does not, and it fails with `Couldn't reach the control plane —
-nothing was sent.` Copy the example, set those three keys, and mount it over the
-baked path:
+**Before you press Connect, give it a config.** The image bakes
+`config/config.default.yaml` at `/etc/flanj/config.yaml`, and that file carries
+**no identity and no control plane** on purpose: nothing in the image knows who
+installed it, so it claims nothing. Traffic capture, drift detection, edge
+discovery and the UI all work on the first run with no configuration at all —
+looking around without connecting is the point. **Connect** is the one thing that
+needs you first, and until it has a control plane it says so: `The control plane
+is not configured on this collector (set cp_base_url and cp_deploy_token).`
+
+Copy `config/config.example.yaml`, which documents every key, set
+`integration_id`, `consumer_display_name`, `cp_base_url` and `cp_deploy_token`,
+and mount it over the baked path:
 
 ```bash
 docker run -d --name flanj \

@@ -21,13 +21,16 @@ SECTION='## Environment variables the configs read'
 
 [ -f "$DOC" ] || { echo "::error::$DOC not found"; exit 1; }
 
-# Every FLANJ_* name inside a ${env:...} reference in the shipped examples.
+# Every FLANJ_* name inside a ${env:...} reference in a shipped config. The glob
+# is config/*.yaml, not config/*.example.yaml: the image bakes config.default.yaml
+# (issue #55), which is a shipped config that is not an example, and a variable
+# entering the contract through it must land in the table like any other.
 # Commented-out lines count on purpose: they are documented variants an
 # operator is invited to uncomment (FLANJ_PG_DSN is only ever shown that way).
-from_config=$(grep -rhoE '\$\{env:FLANJ_[A-Z0-9_]+' config/*.example.yaml \
+from_config=$(grep -rhoE '\$\{env:FLANJ_[A-Z0-9_]+' config/*.yaml \
   | sed 's/^\${env://' | sort -u)
 
-[ -n "$from_config" ] || { echo "::error::no \${env:FLANJ_*} references found in config/*.example.yaml — has the scan broken?"; exit 1; }
+[ -n "$from_config" ] || { echo "::error::no \${env:FLANJ_*} references found in config/*.yaml — has the scan broken?"; exit 1; }
 
 # The Helm chart renders its OWN role configs rather than using the image's
 # baked ones, so it is a second way a variable can enter the operator contract
@@ -53,7 +56,7 @@ table=$(awk -v want="$SECTION" '
 missing=0
 for var in $referenced; do
   if ! grep -qF "$var" <<<"$table"; then
-    src="config/*.example.yaml"
+    src="config/*.yaml"
     grep -qx "$var" <<<"$from_config" || src="charts/*/templates"
     echo "::error file=$DOC::$var is referenced by $src but is missing from the env table under '$SECTION'"
     missing=1
@@ -68,7 +71,7 @@ if [ "$missing" -ne 0 ]; then
 fi
 
 echo "env contract OK — $(wc -w <<<"$referenced" | tr -d ' ') FLANJ_* variables documented"
-echo "  config/*.example.yaml:"
+echo "  config/*.yaml:"
 # shellcheck disable=SC2086
 printf '    %s\n' $from_config
 if [ -n "$from_chart" ]; then

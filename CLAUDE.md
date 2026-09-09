@@ -98,6 +98,9 @@ contract/                          # PUBLIC transport-neutral Contract model + M
                                    # v0.5 Step A; deliberately NOT internal/ — imported by mcp-drift-watch (one classifier, ever)
 internal/                          # redact | drift | store | edge | promote | model | otlpattr — the unit-tested logic (internal/CLAUDE.md)
 config/config.example.yaml         # annotated example config (every key frozen in CONTRACTS §8)
+config/config.default.yaml         # what the IMAGE bakes at /etc/flanj/config.yaml — NEUTRAL: no identity,
+                                   # no cp_base_url, so a stranger's first run claims nobody's org and Connect
+                                   # says cp_not_configured instead of failing like a network fault (issue #55)
 charts/flanj-collector/            # the Helm chart — the TIERED shape only (N fronts + 1 store pod), published to the
                                    # same OCI registry as the image. It renders both role configs from values (mounted at
                                    # /etc/flanj/chart/, NOT the baked /etc/flanj/*.yaml), hands both roles ONE Secret key

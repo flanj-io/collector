@@ -142,7 +142,7 @@ func userFacingChunks(src string, isVue bool) []textChunk {
 func relayMessages() []string {
 	return []string{
 		msgNotConnected, msgContactUnconfirmed, msgCPUnreachableFlag, msgCPUnreachableSend, msgCPUnreachable,
-		msgCPNotConfigured, msgStoreUnavailable, msgPostOnly, msgUIHeaderRequired, msgJSONRequired, msgForeignOrigin,
+		msgCPNotConfigured, msgCPPlaceholderHost, msgStoreUnavailable, msgPostOnly, msgUIHeaderRequired, msgJSONRequired, msgForeignOrigin,
 		msgInvalidJSON, msgConnectFields, msgInvalidEmail, msgFindingRequired, msgFindingNotFound, msgFindingNoCall,
 		msgCallEvicted, msgThreadNotFound, msgWrongOrigin, msgKeyMissing, msgNotAckable, contactUnconfirmedMessage("ops@example.test"),
 		msgEdgeHostRequired, msgEdgeNotFound, msgNameTooLong, msgNameEmpty, msgNameSavedSuggestFailed,

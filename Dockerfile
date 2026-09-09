@@ -51,7 +51,12 @@ RUN builder --config builder-config.yaml \
 # ---- 3. runtime -----------------------------------------------------------
 FROM gcr.io/distroless/static-debian12:nonroot AS runtime
 COPY --from=build /src/_build/flanj-collector /flanj-collector
-COPY --from=build /src/config/config.example.yaml /etc/flanj/config.yaml
+# The image bakes a NEUTRAL config, not the annotated example: the example's
+# illustrative identity and its `https://cp.flanj.test` control plane made a
+# stranger's first run come up as somebody else's org with a Connect that failed
+# like a network fault (issue #55). config.default.yaml carries no identity and no
+# cp_base_url, so Connect says `cp_not_configured` and names the keys to set.
+COPY --from=build /src/config/config.default.yaml /etc/flanj/config.yaml
 # Tiered-topology role configs (docs/STORE.md "Topologies"): select a role with
 # `--config /etc/flanj/front.yaml` (N stateless fronts: otlp -> redaction ->
 # drift -> otlphttp) or `--config /etc/flanj/store.yaml` (the ONE store pod:
