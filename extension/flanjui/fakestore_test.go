@@ -191,8 +191,8 @@ func (f *fakeStore) DeleteSpecInfo(integration string) (bool, error) {
 	return false, nil
 }
 
-func (f *fakeStore) Stats() (int, int64, error)                         { return len(f.calls), 0, nil }
-func (f *fakeStore) Counts() (int, int, error)                          { return len(f.calls), len(f.findings), nil }
+func (f *fakeStore) Stats() (int, int64, error) { return len(f.calls), 0, nil }
+func (f *fakeStore) Counts() (int, int, error)  { return len(f.calls), len(f.findings), nil }
 func (f *fakeStore) GetSetting(key string) (string, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

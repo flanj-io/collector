@@ -253,8 +253,6 @@ func (r nameResolver) resolve(host, domain string) (string, string) {
 	return "", nameSourceAuto
 }
 
-
-
 // syncDirectoryOnce is one directory pull, riding the sync ticker after the
 // findings tick (same cadence, same skip conditions, all silent): a configured
 // CP and a collector key, or nothing happens. The caller (sync.go) gates this

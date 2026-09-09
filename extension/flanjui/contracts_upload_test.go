@@ -754,7 +754,9 @@ func (p *recordingPublisher) Start(context.Context, component.Host) error { retu
 func (p *recordingPublisher) Shutdown(context.Context) error              { return nil }
 
 // extHost is a component.Host carrying a fixed extension set.
-type extHost struct{ exts map[component.ID]component.Component }
+type extHost struct {
+	exts map[component.ID]component.Component
+}
 
 func (h extHost) GetExtensions() map[component.ID]component.Component { return h.exts }
 

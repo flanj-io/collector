@@ -9,28 +9,28 @@ import "testing"
 func TestClassify(t *testing.T) {
 	cases := map[string]string{
 		// External (public destinations).
-		"api.acme.test":        ClassExternal,
-		"partner.acme.test":    ClassExternal,
-		"api.stripe.com:443":   ClassExternal,
-		"8.8.8.8":              ClassExternal,
+		"api.acme.test":          ClassExternal,
+		"partner.acme.test":      ClassExternal,
+		"api.stripe.com:443":     ClassExternal,
+		"8.8.8.8":                ClassExternal,
 		"[2606:4700:4700::1111]": ClassExternal,
 		// Internal — RFC1918.
-		"10.0.0.5":       ClassInternal,
-		"10.0.0.5:8080":  ClassInternal,
-		"172.16.3.4":     ClassInternal,
-		"192.168.1.10":   ClassInternal,
+		"10.0.0.5":      ClassInternal,
+		"10.0.0.5:8080": ClassInternal,
+		"172.16.3.4":    ClassInternal,
+		"192.168.1.10":  ClassInternal,
 		// Internal — loopback / link-local / ULA / unspecified.
-		"127.0.0.1":     ClassInternal,
-		"[::1]:5335":    ClassInternal,
-		"169.254.10.2":  ClassInternal,
-		"fc00::1":       ClassInternal,
+		"127.0.0.1":    ClassInternal,
+		"[::1]:5335":   ClassInternal,
+		"169.254.10.2": ClassInternal,
+		"fc00::1":      ClassInternal,
 		// Internal — names.
-		"localhost":                   ClassInternal,
-		"payments.svc.cluster.local":  ClassInternal,
-		"billing.internal":            ClassInternal,
-		"printer.local":               ClassInternal,
-		"orders":                      ClassInternal, // single label, no dot
-		"":                            ClassInternal, // no identity → safe default
+		"localhost":                  ClassInternal,
+		"payments.svc.cluster.local": ClassInternal,
+		"billing.internal":           ClassInternal,
+		"printer.local":              ClassInternal,
+		"orders":                     ClassInternal, // single label, no dot
+		"":                           ClassInternal, // no identity → safe default
 	}
 	for host, want := range cases {
 		if got := Classify(host); got != want {
