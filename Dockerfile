@@ -69,6 +69,25 @@ COPY --from=build /src/config/config.store.example.yaml /etc/flanj/store.yaml
 # `spec_path` keys that once pointed at them no longer exist. They remain in
 # contracts/ as test fixtures, which is the only thing that ever used them.
 
+# Provenance. REVISION above all: without it nothing in a pulled image says
+# which commit produced it, and the v0.1.0 publish (by hand, from a laptop)
+# recorded that nowhere at all. The release workflow passes all three; a local
+# `docker build` with no args gets honest placeholders rather than a wrong claim.
+# ARGs are redeclared here because the ones above belong to the build stage.
+ARG VERSION=dev
+ARG REVISION=unknown
+ARG CREATED=
+LABEL org.opencontainers.image.title="Flanj Collector" \
+      org.opencontainers.image.description="Integration-reliability collector: captures and redacts third-party API traffic near source, detects drift against provider contracts, and serves a localhost UI." \
+      org.opencontainers.image.url="https://github.com/flanj-io/collector" \
+      org.opencontainers.image.source="https://github.com/flanj-io/collector" \
+      org.opencontainers.image.documentation="https://github.com/flanj-io/collector#readme" \
+      org.opencontainers.image.licenses="Elastic-2.0" \
+      org.opencontainers.image.vendor="Flanj" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${REVISION}" \
+      org.opencontainers.image.created="${CREATED}"
+
 # OTLP/HTTP ingest. The UI (127.0.0.1:5335) is loopback-only and deliberately
 # NOT exposed — reach it via `kubectl port-forward` / an SSH tunnel.
 EXPOSE 4318
