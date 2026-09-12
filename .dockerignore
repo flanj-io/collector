@@ -15,6 +15,13 @@ extension/flanjui/web/dist/assets/
 *.db-shm
 *.log
 .git/
+# Every session works in a `.claude/worktrees/<slug>` worktree (the workspace CLAUDE.md makes that
+# mandatory) and they accumulate — 1.6 GB here on 2026-09-12, each with its own build output and
+# `node_modules` at a depth `**/node_modules/` does match but only after the daemon has already
+# walked and transferred the tree. Excluding the root keeps the collector context lean: the e2e
+# gate builds this image from `${FLANJ_WORKSPACE}/collector` before every lane.
+.claude/
+.worktrees/
 .env
 .env.*
 .DS_Store
