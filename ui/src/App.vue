@@ -476,7 +476,7 @@ const expanded = ref<Record<string, boolean>>({});
 // ─── Appearance (Settings): Light / Dark, default LIGHT ───────────────────
 // ux-design-v2 §3: the collector matches the thread page — light by default,
 // dark opt-in, NO System option. Persisted as `flanj.theme` and applied as
-// data-theme on <html>; the dark palette lives under [data-theme="dark"] only
+// data-flanj-theme on <html>; the dark palette lives under [data-flanj-theme="dark"] only
 // and the prefers-color-scheme media query is gone from the stylesheet.
 const themePref = ref<ThemePref>(loadThemePref());
 function setTheme(pref: ThemePref) {
@@ -2312,9 +2312,9 @@ watch(tab, (t) => {
    bug, not a style choice.
 
    Theme (ux-design-v2 §3.3) is unchanged by the token adoption: LIGHT is the
-   base, dark applies under [data-theme="dark"] ONLY, and there is no
+   base, dark applies under [data-flanj-theme="dark"] ONLY, and there is no
    OS-following state. tokens.css does ship a `prefers-color-scheme` block for
-   surfaces whose toggle is optional — index.html stamps data-theme="light" on
+   surfaces whose toggle is optional — index.html stamps data-flanj-theme="light" on
    <html> so it never fires here, exactly the escape hatch tokens.css documents.
 
    Severity is the product-fixed triad and nothing else may borrow it:

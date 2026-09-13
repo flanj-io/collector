@@ -39,14 +39,14 @@ describe('theme preference (Light / Dark, default Light — ux-design-v2 §3)', 
     expect(normalizeTheme('system')).toBe('light');
   });
 
-  it('always stamps data-theme — there is no attribute-less state any more', () => {
+  it('always stamps data-flanj-theme — there is no attribute-less state any more', () => {
     expect(themeAttribute('light')).toBe('light');
     expect(themeAttribute('dark')).toBe('dark');
     const root = fakeRoot();
     applyTheme('dark', root);
-    expect(root.get('data-theme')).toBe('dark');
+    expect(root.get('data-flanj-theme')).toBe('dark');
     applyTheme('light', root);
-    expect(root.get('data-theme')).toBe('light');
+    expect(root.get('data-flanj-theme')).toBe('light');
   });
 
   it('persists under flanj.theme; Light is written explicitly, not by absence', () => {

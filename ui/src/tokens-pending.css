@@ -31,17 +31,17 @@
   --verified-contrast: #ffffff;
 }
 
-[data-theme='dark'] {
+[data-flanj-theme='dark'] {
   --verified: #46d19e;
   --verified-ink: #46d19e;
   --verified-contrast: #04231a;
 }
 
-/* Mirrors [data-theme="dark"] exactly, for surfaces that let the OS decide.
-   The collector never reaches this (index.html stamps data-theme="light"), but
+/* Mirrors [data-flanj-theme="dark"] exactly, for surfaces that let the OS decide.
+   The collector never reaches this (index.html stamps data-flanj-theme="light"), but
    the file must not become the reason a future surface loses its dark values. */
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) {
+  :root:not([data-flanj-theme='light']) {
     --verified: #46d19e;
     --verified-ink: #46d19e;
     --verified-contrast: #04231a;

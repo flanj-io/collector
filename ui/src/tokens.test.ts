@@ -83,10 +83,10 @@ describe('design tokens', () => {
   it('first paint is light for everyone — the OS never decides here', () => {
     // tokens.css ships a prefers-color-scheme block for surfaces whose toggle is
     // optional. The collector opts out the way that file documents: a stamped
-    // data-theme="light" on <html>, present in the served HTML rather than
+    // data-flanj-theme="light" on <html>, present in the served HTML rather than
     // applied by script, so a dark-OS visitor never sees a dark flash.
     const html = readFileSync(join(src, '..', 'index.html'), 'utf8');
-    expect(html).toMatch(/<html lang="en" data-theme="light">/);
+    expect(html).toMatch(/<html lang="en" data-flanj-theme="light">/);
     expect(tokens).toContain(':root:not([data-flanj-theme="light"])');
   });
 
