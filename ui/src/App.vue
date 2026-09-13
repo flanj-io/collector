@@ -2346,7 +2346,7 @@ body { margin: 0; background: var(--ground); color: var(--ink); font: 15px/1.5 v
 .page { max-width: 1040px; margin: 0 auto; padding: 1.5rem 1.25rem 4rem; }
 .topbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
 .brand { display: inline-flex; align-items: center; gap: 0.5rem; font-weight: 700; letter-spacing: -0.02em; font-size: 1.2rem; color: var(--ink); }
-.brand-mark { width: 22px; height: 22px; flex: none; }
+.brand-mark { width: 24px; height: 24px; flex: none; }
 .brand-product { color: var(--ink-soft); font-weight: 500; margin-left: 0.35rem; }
 .meta { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 .pill { background: var(--surface-sunk); border: 1px solid var(--rule); color: var(--ink-soft); border-radius: var(--radius); padding: 0.15rem 0.6rem; font-size: 0.8rem; }
