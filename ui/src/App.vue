@@ -1413,7 +1413,15 @@ watch(tab, (t) => {
 <template>
   <div class="page">
     <header class="topbar">
-      <div class="brand">Flanj<span>Collector</span></div>
+      <!-- The mark is docs/design/flanj-mark-mono.svg inlined (currentColor, so it
+           themes with the ink); the wordmark is text, never an image. -->
+      <div class="brand">
+        <svg class="brand-mark" viewBox="0 0 512 512" fill="none" aria-hidden="true" focusable="false">
+          <path d="M15 376.5H106M106 376.5V346.5H166.5M106 376.5V407H166.5M166.5 346.5V407M166.5 346.5V286H106V226H166.5V165.5M166.5 407V435.5H227V256.25V77H166.5V105.5M15 136H106M106 136V165.5H166.5M106 136V105.5H166.5M166.5 165.5V105.5M498 136H407M407 136V165.5H346.5M407 136V105.5H346.5M346.5 165.5V105.5M346.5 165.5V226H407V286H346.5V346.5M346.5 105.5V77H286V136M498 376.5H407M407 376.5V346.5H346.5M407 376.5V407H346.5M346.5 346.5V407M346.5 407V435.5H286V376.5M286 136H227M286 136V376.5M286 376.5H227" stroke="currentColor" stroke-width="15" stroke-linecap="round" stroke-linejoin="round" />
+          <path d="M198.5 407.5V256M317 41H198.5V256M198.5 256H133M316.5 104.5V256M198 471H316.5V256M316.5 256H382" stroke="currentColor" stroke-width="26" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        <span class="brand-name">Flanj</span><span class="brand-product">Collector</span>
+      </div>
       <div class="meta" v-if="health">
         <!-- Org identity only — never the integration slug (it scopes a spec,
              not this org; it lives on the Overview headline + its Contracts card). -->
@@ -2337,8 +2345,9 @@ watch(tab, (t) => {
 body { margin: 0; background: var(--ground); color: var(--ink); font: 15px/1.5 var(--font-sans); }
 .page { max-width: 1040px; margin: 0 auto; padding: 1.5rem 1.25rem 4rem; }
 .topbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
-.brand { font-weight: 700; letter-spacing: -0.02em; font-size: 1.2rem; }
-.brand span { color: var(--ink-soft); font-weight: 500; margin-left: 0.35rem; }
+.brand { display: inline-flex; align-items: center; gap: 0.5rem; font-weight: 700; letter-spacing: -0.02em; font-size: 1.2rem; color: var(--ink); }
+.brand-mark { width: 22px; height: 22px; flex: none; }
+.brand-product { color: var(--ink-soft); font-weight: 500; margin-left: 0.35rem; }
 .meta { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 .pill { background: var(--surface-sunk); border: 1px solid var(--rule); color: var(--ink-soft); border-radius: var(--radius); padding: 0.15rem 0.6rem; font-size: 0.8rem; }
 /* Attention states (not configured, pending) are the accent, outlined and

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io/fs"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -904,15 +905,38 @@ func (e *uiExtension) spaHandler() http.Handler {
 			http.Error(w, "UI assets missing", http.StatusInternalServerError)
 		})
 	}
+	return spaHandlerFS(sub)
+}
+
+// spaHandlerFS is spaHandler over any filesystem, so the fallback rule is
+// testable without a built bundle. A path that exists is served as the file
+// it is (index.html, the hashed assets, favicon.svg). A path that does not
+// exist falls back to the SPA entrypoint ONLY when it looks like a client
+// route: a request whose last segment carries a file extension — /favicon.ico
+// from a browser that ignores <link rel="icon">, a stale hashed asset, a
+// missing image — gets a plain 404. Answering those with index.html at 200
+// handed the browser an HTML document as its tab icon and hid every broken
+// asset reference behind a green status.
+func spaHandlerFS(sub fs.FS) http.Handler {
 	fileServer := http.FileServer(http.FS(sub))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, err := fs.Stat(sub, trimLeadingSlash(r.URL.Path)); err != nil && r.URL.Path != "/" {
-			// Unknown path with no matching asset -> SPA entrypoint.
+			if looksLikeFile(r.URL.Path) {
+				http.NotFound(w, r)
+				return
+			}
+			// Unknown extension-less path -> SPA entrypoint.
 			r = r.Clone(r.Context())
 			r.URL.Path = "/"
 		}
 		fileServer.ServeHTTP(w, r)
 	})
+}
+
+// looksLikeFile reports whether the request path's last segment has a file
+// extension — the shape of an asset request rather than a client route.
+func looksLikeFile(p string) bool {
+	return path.Ext(path.Base(p)) != ""
 }
 
 func trimLeadingSlash(p string) string {
