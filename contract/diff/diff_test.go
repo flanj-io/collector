@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"testing"
 
@@ -123,19 +124,38 @@ func TestClassify_FixtureBattery(t *testing.T) {
 				// Fragments, not whole schemas: every schema-level change must
 				// carry a before and/or after fragment.
 				switch c.Rule {
-				case RuleInputTypeChanged, RuleOutputPropertyTypeChanged,
-					RuleInputEnumValueRemoved, RuleInputEnumValueAdded,
-					RuleOutputEnumValueRemoved, RuleOutputEnumValueAdded:
+				case RuleInputTypeWidened, RuleInputTypeNarrowed, RuleInputTypeChanged,
+					RuleOutputPropertyTypeWidened, RuleOutputPropertyTypeNarrowed, RuleOutputPropertyTypeChanged,
+					RuleInputEnumValueRemoved, RuleInputEnumValueAdded, RuleInputEnumValueReplaced,
+					RuleOutputEnumValueRemoved, RuleOutputEnumValueAdded, RuleOutputEnumValueReplaced,
+					RuleInputPropertyRenamed, RuleOutputPropertyRenamed:
 					if c.Before == nil || c.After == nil {
 						t.Errorf("%s at %s: missing before/after fragment", c.Rule, c.FieldPath)
 					}
-				case RuleInputPropertyRemoved, RuleOutputRequiredPropertyRemoved:
+				case RuleInputRequiredPropertyRemoved, RuleInputOptionalPropertyRemoved, RuleOutputRequiredPropertyRemoved:
 					if c.Before == nil {
 						t.Errorf("%s at %s: missing before fragment", c.Rule, c.FieldPath)
 					}
 				case RuleInputRequiredPropertyAdded, RuleInputOptionalPropertyAdded, RuleOutputOptionalPropertyAdded:
 					if c.After == nil {
 						t.Errorf("%s at %s: missing after fragment", c.Rule, c.FieldPath)
+					}
+				}
+				// The optional-removal cell is the one whose class the rule id
+				// does not state, so it must say why in Detail; no other rule
+				// carries one.
+				if (c.Rule == RuleInputOptionalPropertyRemoved) != (c.Detail != "") {
+					t.Errorf("%s at %s: Detail %q — only input-optional-property-removed carries a Detail", c.Rule, c.FieldPath, c.Detail)
+				}
+				// Where the battery pins fragments, they must match exactly.
+				for _, e := range tc.Expect {
+					if e.Rule == c.Rule && e.FieldPath == c.FieldPath && e.OperationID == c.OperationID {
+						if e.Before != nil && !reflect.DeepEqual(e.Before, c.Before) {
+							t.Errorf("%s at %s: before = %v, want %v", c.Rule, c.FieldPath, c.Before, e.Before)
+						}
+						if e.After != nil && !reflect.DeepEqual(e.After, c.After) {
+							t.Errorf("%s at %s: after = %v, want %v", c.Rule, c.FieldPath, c.After, e.After)
+						}
 					}
 				}
 			}

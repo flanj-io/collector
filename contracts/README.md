@@ -24,7 +24,7 @@ repo proves conformance standalone; the `e2e` integration gate is the cross-repo
 | `redacted-call.schema.json`, `finding.schema.json`, `cp-flag-request.schema.json` | JSON Schemas for `RedactedCall`, `Finding`, and the flag request body | `internal/promote/promote_test.go` (compiles all three); `internal/model` mirrors the first two |
 | `sample-redacted-call.json`, `sample-finding.json` | sample payloads used to build a conforming flag | `internal/promote/promote_test.go` |
 | `contract-normalization-openapi.yaml`, `contract-normalization-tools-list.json` | **collector-owned** (v0.5 Step A, like `golden-otlp-server-call.json`) — the SAME logical contract expressed as OpenAPI and as an MCP `tools/list`; normalizing both must yield deep-equal Operations | `contract/normalize_test.go` |
-| `contract-diff-cases.json` | **collector-owned** (v0.5 Step A) — the definition-diff classifier battery (≥2 cases per class BREAKING / NON_BREAKING / DESCRIPTION, incl. a rename) | `contract/diff/diff_test.go` |
+| `contract-diff-cases.json` | **collector-owned** (v0.5 Step A) — the definition-diff classifier battery (≥2 cases per class BREAKING / NON_BREAKING / DESCRIPTION, incl. a rename; since 2026-09-13 one case per cell of the direction-aware rule table in `CONTRACTS.md` §4) | `contract/diff/diff_test.go` (+ `directions_test.go`, the per-cell fragments and details) |
 
 ## Layout note
 

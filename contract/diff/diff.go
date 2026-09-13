@@ -1,13 +1,55 @@
 // Package diff is the transport-neutral definition-diff classifier
 // (v0.5 spec §4 Step A). It compares two revisions of a Contract and
 // classifies every change as BREAKING / NON_BREAKING / DESCRIPTION per the
-// spec's classification table — the SINGLE implementation, imported by the
-// collector's findings pipeline (Step C) and by mcp-drift-watch (Step F).
+// rule table in contracts/CONTRACTS.md §4 — the SINGLE implementation,
+// imported by the collector's findings pipeline (Step C) and by
+// mcp-drift-watch (Step F).
 //
 // The classifier is generic over contract.Contract: it never looks at the
 // transport (http vs mcp_tool), only at operations and their JSON Schema
 // constraint surface. Technical adherence only — types/shapes/enums — never
 // business/economic correctness.
+//
+// Direction matters (2026-09-13). A change of a property's type SET is judged
+// by which way it moved: a union that gained a member (`number` ->
+// `["number","string"]`) is a WIDENING, one that lost a member is a NARROWING,
+// and a set replaced outright is a CHANGE. The three carry distinct rule ids
+// on both sides, and their classes differ by side:
+//
+//   - input widened is the one additive cell — every argument a caller sends
+//     today still validates;
+//   - input narrowed / changed are breaking — a caller sending the dropped
+//     type now fails validation;
+//   - EVERY output cell is breaking. Widened: the consumer may now receive a
+//     type it never handled. Narrowed: the product's frozen posture on
+//     response enums (internal/drift/versiondiff.go promotes
+//     response-property-enum-value-removed to breaking because "a value the
+//     consumer's code may branch on has silently disappeared") applies to a
+//     type member verbatim — `["null","string"]` -> `["string"]` makes the
+//     consumer's null branch dead code, `["null","string"]` -> `["null"]`
+//     makes the field's data disappear, and this classifier cannot tell the
+//     two apart without a business judgement it is not allowed to make.
+//     Changed: both at once.
+//
+// JSON Schema's one subtype relation is honoured in the set comparison: every
+// `integer` is a `number`, so `number` -> `integer` narrows and `integer` ->
+// `number` widens. Two sets that accept the same values under that relation
+// (`["number","integer"]` vs `["number"]`) are no change at all.
+//
+// Removal of an input property is judged by whether callers were REQUIRED to
+// send it: a required removal is breaking; an optional one is breaking only
+// when the new schema declares `additionalProperties: false` (a caller still
+// sending it now fails validation) and otherwise non-breaking, with the
+// consequence stated on the change's Detail. Optional OUTPUT removals stay
+// unclassified (the table's standing posture: a value consumers were never
+// promised).
+//
+// An enum whose value set moved is ONE change per field per comparison,
+// carrying the removed and the added values as its before/after fragments:
+// `*-enum-value-removed` (breaking) when values only left, `*-enum-value-added`
+// (non-breaking) when values only arrived, `*-enum-value-replaced` (breaking)
+// when both happened at once — a swap used to read as two rows carrying the
+// same two full lists.
 //
 // Rename pairing — a DELIBERATE strengthening of spec §4.A: the spec's table
 // pairs "removed + added with identical inputSchema" as one rename. This
@@ -16,12 +58,24 @@
 // empty-object tools carry no identity to match on — any removed tool would
 // pair with any added one — so they always classify as operation-removed +
 // operation-added, never as a rename.
+//
+// The same idea applies one level down: a property removed from a schema node
+// with a SAME-TYPED twin added under a name that normalises to the same key
+// (camelCase / snake_case / kebab-case fold to one key: `branchId`,
+// `branch_id` and `branch-id` are one name) is ONE `*-property-renamed` change
+// (breaking — callers and consumers still use the old name), not a removal
+// plus an addition. "Same-typed" is a declared, non-empty type set equal on
+// both sides; a pair without a declared type never pairs. On the output side
+// only a REQUIRED removed property pairs, because an optional output removal
+// is not a classified change — its twin stays an optional addition.
 package diff
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 
 	"github.com/flanj-io/collector/contract"
 )
@@ -36,24 +90,34 @@ const (
 )
 
 // Rule identifiers. Stable strings: the drift signature
-// (edge, operation.id, rule, fieldPath) hangs off them.
+// (edge, operation.id, rule, fieldPath) hangs off them. The full table, with
+// the class of every cell and the argument for it, is contracts/CONTRACTS.md §4.
 const (
 	RuleOperationRemoved = "operation-removed"
 	RuleOperationRenamed = "operation-renamed"
 	RuleOperationAdded   = "operation-added"
 
-	RuleInputRequiredPropertyAdded = "input-required-property-added"
-	RuleInputOptionalPropertyAdded = "input-optional-property-added"
-	RuleInputPropertyRemoved       = "input-property-removed"
-	RuleInputTypeChanged           = "input-type-changed"
-	RuleInputEnumValueRemoved      = "input-enum-value-removed"
-	RuleInputEnumValueAdded        = "input-enum-value-added"
+	RuleInputRequiredPropertyAdded   = "input-required-property-added"
+	RuleInputOptionalPropertyAdded   = "input-optional-property-added"
+	RuleInputRequiredPropertyRemoved = "input-required-property-removed"
+	RuleInputOptionalPropertyRemoved = "input-optional-property-removed"
+	RuleInputPropertyRenamed         = "input-property-renamed"
+	RuleInputTypeWidened             = "input-type-widened"
+	RuleInputTypeNarrowed            = "input-type-narrowed"
+	RuleInputTypeChanged             = "input-type-changed"
+	RuleInputEnumValueRemoved        = "input-enum-value-removed"
+	RuleInputEnumValueAdded          = "input-enum-value-added"
+	RuleInputEnumValueReplaced       = "input-enum-value-replaced"
 
 	RuleOutputRequiredPropertyRemoved = "output-required-property-removed"
 	RuleOutputOptionalPropertyAdded   = "output-optional-property-added"
+	RuleOutputPropertyRenamed         = "output-property-renamed"
+	RuleOutputPropertyTypeWidened     = "output-property-type-widened"
+	RuleOutputPropertyTypeNarrowed    = "output-property-type-narrowed"
 	RuleOutputPropertyTypeChanged     = "output-property-type-changed"
 	RuleOutputEnumValueRemoved        = "output-enum-value-removed"
 	RuleOutputEnumValueAdded          = "output-enum-value-added"
+	RuleOutputEnumValueReplaced       = "output-enum-value-replaced"
 	RuleOutputSchemaRemoved           = "output-schema-removed"
 	RuleOutputSchemaDeclared          = "output-schema-declared"
 
@@ -61,7 +125,10 @@ const (
 )
 
 // Change is one classified definition change. Before/After carry schema
-// FRAGMENTS (the changed keyword or property), never whole schemas.
+// FRAGMENTS (the changed keyword or property), never whole schemas. Detail is
+// set only where the class depends on context the rule id alone does not
+// state (the optional-removal cells): one sentence naming the consequence for
+// a caller, in the vocabulary of the schema, never of the business.
 type Change struct {
 	Class       Class  `json:"class"`
 	OperationID string `json:"operationId"`
@@ -69,6 +136,7 @@ type Change struct {
 	FieldPath   string `json:"fieldPath"`
 	Before      any    `json:"before,omitempty"`
 	After       any    `json:"after,omitempty"`
+	Detail      string `json:"detail,omitempty"`
 }
 
 // Classify diffs two revisions of a contract (before -> after) and returns the
@@ -251,62 +319,46 @@ const (
 // diffSchema walks one schema node pair (old vs new) at fieldPath, emitting
 // the table's classifications, then recurses into shared properties and items.
 func diffSchema(opID string, s side, path string, old, new map[string]any, out *[]Change) {
-	// type changed/narrowed (compared as a set — union order is not semantic)
-	oldT, newT := typeSet(old), typeSet(new)
-	if len(oldT) > 0 && len(newT) > 0 && !sameStringSet(oldT, newT) {
-		rule := RuleInputTypeChanged
-		if s == sideOutput {
-			rule = RuleOutputPropertyTypeChanged
-		}
-		*out = append(*out, Change{
-			Class: ClassBreaking, OperationID: opID, Rule: rule, FieldPath: path,
-			Before: map[string]any{"type": old["type"]},
-			After:  map[string]any{"type": new["type"]},
-		})
-	}
+	diffType(opID, s, path, old, new, out)
+	diffEnum(opID, s, path, old, new, out)
 
-	// enum values removed / added (only when both revisions constrain by enum;
-	// adding or dropping the enum keyword itself is outside the table)
-	oldE, oldHas := old["enum"].([]any)
-	newE, newHas := new["enum"].([]any)
-	if oldHas && newHas {
-		removed := enumMissingFrom(oldE, newE)
-		added := enumMissingFrom(newE, oldE)
-		if len(removed) > 0 {
-			rule := RuleInputEnumValueRemoved
-			if s == sideOutput {
-				rule = RuleOutputEnumValueRemoved
-			}
-			*out = append(*out, Change{
-				Class: ClassBreaking, OperationID: opID, Rule: rule, FieldPath: path,
-				Before: map[string]any{"enum": oldE}, After: map[string]any{"enum": newE},
-			})
-		}
-		if len(added) > 0 {
-			rule := RuleInputEnumValueAdded
-			if s == sideOutput {
-				rule = RuleOutputEnumValueAdded
-			}
-			*out = append(*out, Change{
-				Class: ClassNonBreaking, OperationID: opID, Rule: rule, FieldPath: path,
-				Before: map[string]any{"enum": oldE}, After: map[string]any{"enum": newE},
-			})
-		}
-	}
-
-	// properties removed / added / recursed
+	// properties removed / renamed / added / recursed
 	oldProps := propMap(old)
 	newProps := propMap(new)
 	newReq := requiredSet(new)
 	oldReq := requiredSet(old)
+	renamedTo := pairRenamedProperties(s, oldProps, newProps, oldReq)
+	renamedFrom := map[string]string{}
+	for oldName, newName := range renamedTo {
+		renamedFrom[newName] = oldName
+	}
+
 	for _, name := range sortedKeys(oldProps) {
 		child := path + "." + name
+		if newName, ok := renamedTo[name]; ok {
+			rule := RuleInputPropertyRenamed
+			if s == sideOutput {
+				rule = RuleOutputPropertyRenamed
+			}
+			*out = append(*out, Change{
+				Class: ClassBreaking, OperationID: opID, Rule: rule, FieldPath: child,
+				Before: map[string]any{"name": name, "schema": oldProps[name]},
+				After:  map[string]any{"name": newName, "schema": newProps[newName]},
+			})
+			// Changes that co-occur with the rename (an enum, a nested
+			// property) surface under the NEW name — the surviving surface —
+			// exactly as an operation rename diffs its description + output
+			// under the new id. The type is identical by pairing construction.
+			if op, ok := oldProps[name].(map[string]any); ok {
+				if np, ok := newProps[newName].(map[string]any); ok {
+					diffSchema(opID, s, path+"."+newName, op, np, out)
+				}
+			}
+			continue
+		}
 		if _, ok := newProps[name]; !ok {
 			if s == sideInput {
-				*out = append(*out, Change{
-					Class: ClassBreaking, OperationID: opID, Rule: RuleInputPropertyRemoved,
-					FieldPath: child, Before: oldProps[name],
-				})
+				*out = append(*out, inputPropertyRemoved(opID, child, name, oldProps[name], oldReq[name], new))
 			} else if oldReq[name] {
 				// spec table: OUTPUT property removal is classified when the
 				// property was required (a value consumers were promised)
@@ -326,6 +378,9 @@ func diffSchema(opID string, s side, path string, old, new map[string]any, out *
 	for _, name := range sortedKeys(newProps) {
 		if _, ok := oldProps[name]; ok {
 			continue
+		}
+		if _, ok := renamedFrom[name]; ok {
+			continue // the surviving half of a rename, reported above
 		}
 		child := path + "." + name
 		if s == sideInput {
@@ -354,6 +409,180 @@ func diffSchema(opID string, s side, path string, old, new map[string]any, out *
 			diffSchema(opID, s, path+".items", oi, ni, out)
 		}
 	}
+}
+
+// diffType classifies a moved type SET by direction — widened / narrowed /
+// changed — with the class of each (side, direction) cell from the table in
+// the package comment. Union order is not semantic; the sets are compared
+// under JSON Schema's integer ⊂ number, and two sets that accept the same
+// values are no change.
+func diffType(opID string, s side, path string, old, new map[string]any, out *[]Change) {
+	oldT, newT := typeSet(old), typeSet(new)
+	if len(oldT) == 0 || len(newT) == 0 || sameStringSet(oldT, newT) {
+		return
+	}
+	oldCoversNew := typeCovers(oldT, newT)
+	newCoversOld := typeCovers(newT, oldT)
+	if oldCoversNew && newCoversOld {
+		return // equivalent under integer ⊂ number, e.g. ["number","integer"] vs ["number"]
+	}
+	var rule string
+	class := ClassBreaking
+	switch {
+	case newCoversOld: // widened: the new set accepts everything the old one did, and more
+		if s == sideInput {
+			rule, class = RuleInputTypeWidened, ClassNonBreaking
+		} else {
+			rule = RuleOutputPropertyTypeWidened
+		}
+	case oldCoversNew: // narrowed: the new set accepts a strict subset
+		if s == sideInput {
+			rule = RuleInputTypeNarrowed
+		} else {
+			rule = RuleOutputPropertyTypeNarrowed
+		}
+	default: // changed: neither covers the other (a swap)
+		if s == sideInput {
+			rule = RuleInputTypeChanged
+		} else {
+			rule = RuleOutputPropertyTypeChanged
+		}
+	}
+	*out = append(*out, Change{
+		Class: class, OperationID: opID, Rule: rule, FieldPath: path,
+		Before: map[string]any{"type": old["type"]},
+		After:  map[string]any{"type": new["type"]},
+	})
+}
+
+// diffEnum emits ONE change for a field whose enum value set moved (only when
+// both revisions constrain by enum; adding or dropping the enum keyword itself
+// is outside the table). The before fragment carries the values that left,
+// the after fragment the values that arrived — an empty list on either side is
+// stated as `[]`, never omitted.
+func diffEnum(opID string, s side, path string, old, new map[string]any, out *[]Change) {
+	oldE, oldHas := old["enum"].([]any)
+	newE, newHas := new["enum"].([]any)
+	if !oldHas || !newHas {
+		return
+	}
+	removed := enumMissingFrom(oldE, newE)
+	added := enumMissingFrom(newE, oldE)
+	var rule string
+	class := ClassBreaking
+	switch {
+	case len(removed) > 0 && len(added) > 0:
+		rule = RuleInputEnumValueReplaced
+		if s == sideOutput {
+			rule = RuleOutputEnumValueReplaced
+		}
+	case len(removed) > 0:
+		rule = RuleInputEnumValueRemoved
+		if s == sideOutput {
+			rule = RuleOutputEnumValueRemoved
+		}
+	case len(added) > 0:
+		class = ClassNonBreaking
+		rule = RuleInputEnumValueAdded
+		if s == sideOutput {
+			rule = RuleOutputEnumValueAdded
+		}
+	default:
+		return
+	}
+	*out = append(*out, Change{
+		Class: class, OperationID: opID, Rule: rule, FieldPath: path,
+		Before: map[string]any{"enum": removed}, After: map[string]any{"enum": added},
+	})
+}
+
+// inputPropertyRemoved classifies the removal of one input property by whether
+// callers were required to send it, and — for an optional one — by whether
+// the new schema still tolerates it (`additionalProperties: false` turns a
+// stray argument into a validation failure). Detail states the consequence,
+// because the class of the optional cell is not readable off the rule id.
+func inputPropertyRemoved(opID, child, name string, before any, wasRequired bool, new map[string]any) Change {
+	if wasRequired {
+		return Change{
+			Class: ClassBreaking, OperationID: opID, Rule: RuleInputRequiredPropertyRemoved,
+			FieldPath: child, Before: before,
+		}
+	}
+	if additionalPropertiesFalse(new) {
+		return Change{
+			Class: ClassBreaking, OperationID: opID, Rule: RuleInputOptionalPropertyRemoved,
+			FieldPath: child, Before: before,
+			Detail: fmt.Sprintf("callers still sending `%s` now fail validation: the new schema declares additionalProperties: false", name),
+		}
+	}
+	return Change{
+		Class: ClassNonBreaking, OperationID: opID, Rule: RuleInputOptionalPropertyRemoved,
+		FieldPath: child, Before: before,
+		Detail: fmt.Sprintf("callers still sending `%s` are not rejected (the new schema does not declare additionalProperties: false), but the value no longer has a declared effect", name),
+	}
+}
+
+// pairRenamedProperties pairs each removed property with the first added
+// property (both in name order, deterministic) whose name normalises to the
+// same key and whose declared type set is equal and non-empty. On the output
+// side only a REQUIRED removed property pairs — an optional output removal is
+// not a classified change, so its twin stays an optional addition.
+func pairRenamedProperties(s side, oldProps, newProps map[string]any, oldReq map[string]bool) map[string]string {
+	var removed, added []string
+	for _, name := range sortedKeys(oldProps) {
+		if _, ok := newProps[name]; !ok {
+			removed = append(removed, name)
+		}
+	}
+	for _, name := range sortedKeys(newProps) {
+		if _, ok := oldProps[name]; !ok {
+			added = append(added, name)
+		}
+	}
+	renamedTo := map[string]string{}
+	taken := map[string]bool{}
+	for _, oldName := range removed {
+		if s == sideOutput && !oldReq[oldName] {
+			continue
+		}
+		op, ok := oldProps[oldName].(map[string]any)
+		if !ok {
+			continue
+		}
+		oldT := typeSet(op)
+		if len(oldT) == 0 {
+			continue // no declared type to be "same-typed" on — never pair blind
+		}
+		key := normalizeName(oldName)
+		for _, newName := range added {
+			if taken[newName] || normalizeName(newName) != key {
+				continue
+			}
+			np, ok := newProps[newName].(map[string]any)
+			if !ok || !sameStringSet(oldT, typeSet(np)) {
+				continue
+			}
+			renamedTo[oldName] = newName
+			taken[newName] = true
+			break
+		}
+	}
+	return renamedTo
+}
+
+// normalizeName folds camelCase, snake_case and kebab-case spellings of one
+// name onto one key: case is dropped and `_` / `-` are removed, so `branchId`,
+// `branch_id`, `branch-id` and `BranchID` are all `branchid`.
+func normalizeName(name string) string {
+	return strings.ToLower(strings.NewReplacer("_", "", "-", "").Replace(name))
+}
+
+// additionalPropertiesFalse reports whether the schema node forbids properties
+// it does not declare. Only the literal `false` counts: an absent keyword, a
+// `true` or a schema-valued `additionalProperties` all tolerate a stray key.
+func additionalPropertiesFalse(s map[string]any) bool {
+	v, ok := s["additionalProperties"].(bool)
+	return ok && !v
 }
 
 func orEmpty(s contract.Schema) map[string]any {
@@ -405,14 +634,35 @@ func sameStringSet(a, b []string) bool {
 	return true
 }
 
+// typeCovers reports whether type set a accepts every value type set b
+// accepts: each member of b is in a, or is `integer` while a has `number` —
+// JSON Schema's one subtype relation (every integer is a number).
+func typeCovers(a, b []string) bool {
+	have := map[string]bool{}
+	for _, t := range a {
+		have[t] = true
+	}
+	for _, t := range b {
+		if have[t] {
+			continue
+		}
+		if t == "integer" && have["number"] {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 // enumMissingFrom returns the values of a that are absent from b, compared by
-// canonical JSON encoding (enum members may be any JSON value).
+// canonical JSON encoding (enum members may be any JSON value). Never nil: an
+// empty result is an empty list, so a fragment states `[]` rather than `null`.
 func enumMissingFrom(a, b []any) []any {
 	have := map[string]bool{}
 	for _, v := range b {
 		have[jsonKey(v)] = true
 	}
-	var out []any
+	out := []any{}
 	for _, v := range a {
 		if !have[jsonKey(v)] {
 			out = append(out, v)
