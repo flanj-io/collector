@@ -1,15 +1,16 @@
-# Flanj — Concepts (engineering overview)
+# Flanj — concepts (engineering overview)
 
-*This is a technical overview for contributors to the public `sdk` / `collector` repos. It intentionally
-contains only the engineering model — not product strategy.*
+*A technical overview for contributors to the public `sdk` and `collector` repos. It contains the
+engineering model only, not product strategy.*
 
 ## What Flanj does
 
-Flanj is an integration-reliability tool. It captures the real request/response traffic between a
-service and a third-party API it depends on, and validates that live traffic against the provider's
-published OpenAPI spec. When the live traffic diverges from the spec (a field changes type, an
-enum gains an undocumented value, a webhook stops arriving), that **drift** is surfaced with the exact
-evidence — the redacted call that proves it.
+Flanj is an integration-reliability tool. It captures the real request and response traffic between a
+service and a third-party API it depends on, redacts it at source, and validates that live traffic against
+the provider's published contract (an OpenAPI document, or for MCP the observed `tools/list`). When the
+live traffic diverges from the contract (a field changes type, an enum gains an undocumented value, a tool
+definition changes), that **drift** is surfaced with the exact evidence: the redacted call that proves it.
+Raw calls never leave the environment they were captured in.
 
 ## Two planes
 
@@ -51,7 +52,7 @@ Three properties make it safe to hand to a model:
 ## Non-negotiables (why the code is shaped the way it is)
 
 1. **Redaction at source, before store or transmit.** A redaction floor — composed, hardened validators
-   (Luhn-gated PAN, email, IBAN, phone) behind our own interface, with deep traversal of nested bodies and
+   (Luhn-gated card number, email, IBAN, phone) behind our own interface, with deep traversal of nested bodies and
    base64 decode-then-scan; local, zero external calls — is mandatory and runs before a body is ever attached
    to a span/log or written to disk. This is defense in depth — the collector re-applies the identical floor
    in Go (`internal/redact`), idempotently, and a shared fixture suite keeps the two byte-for-byte in parity.

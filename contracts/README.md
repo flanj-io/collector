@@ -1,4 +1,18 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/flanj-io/collector/main/docs/brand/flanj-lockup-dark.svg">
+    <img alt="Flanj" src="https://raw.githubusercontent.com/flanj-io/collector/main/docs/brand/flanj-lockup.svg" width="166" height="48">
+  </picture>
+</p>
+
 # `contracts/` — vendored cross-repo contract (do not hand-edit)
+
+The wire contract the Flanj Collector is built against, vendored byte-for-byte: the OTLP convention it
+ingests, the redacted-call and finding shapes, the redaction floor it enforces in parity with the SDK, and
+the control-plane endpoints it calls.
+
+[![License: Elastic License 2.0](https://img.shields.io/badge/license-Elastic%202.0-1f2933)](https://github.com/flanj-io/collector/blob/main/LICENSE)
+[![CI](https://github.com/flanj-io/collector/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/flanj-io/collector/actions/workflows/ci.yml)
 
 Everything in this directory except `golden-otlp-server-call.json` and the three
 `contract-*` Step A fixtures (see the table) is a **byte-identical copy** of the
