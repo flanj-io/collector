@@ -1,4 +1,4 @@
-# Contributing to the Flanj Collector
+# Contributing to the Flanj collector
 
 Thanks for your interest in contributing. This repository is licensed under the **Elastic License 2.0
 (ELv2)**: source-available; self-hosting, modification and internal use are unrestricted; offering it as a

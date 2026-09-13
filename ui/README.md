@@ -1,18 +1,18 @@
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/flanj-io/collector/main/docs/brand/flanj-lockup-dark.svg">
-    <img alt="Flanj" src="https://raw.githubusercontent.com/flanj-io/collector/main/docs/brand/flanj-lockup.svg" width="166" height="48">
-  </picture>
-</p>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/flanj-io/collector/main/docs/brand/flanj-lockup-dark.svg">
+  <img alt="Flanj" src="https://raw.githubusercontent.com/flanj-io/collector/main/docs/brand/flanj-lockup.svg" width="166" height="48">
+</picture>
 
-# ui/ — Flanj Collector local UI
+# ui/ — Flanj collector local UI
 
-The Flanj Collector's local UI: a Vue 3 + Vite single-page app, served embedded by the `flanjui`
-extension (`go:embed`) on the collector's loopback listener. It shows redacted calls only, and nothing it
-renders is reachable off-host.
+Your integrations break when the other side changes. Flanj catches it, with proof both teams can act on.
 
 [![License: Elastic License 2.0](https://img.shields.io/badge/license-Elastic%202.0-1f2933)](https://github.com/flanj-io/collector/blob/main/LICENSE)
 [![CI](https://github.com/flanj-io/collector/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/flanj-io/collector/actions/workflows/ci.yml)
+
+The Flanj collector's local UI: a Vue 3 + Vite single-page app, served embedded by the `flanjui`
+extension (`go:embed`) on the collector's loopback listener. It shows redacted calls only, and nothing it
+renders is reachable off-host.
 
 Built to static assets; no runtime server of its own.
 

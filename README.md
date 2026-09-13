@@ -1,21 +1,21 @@
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/flanj-io/collector/main/docs/brand/flanj-lockup-dark.svg">
-    <img alt="Flanj" src="https://raw.githubusercontent.com/flanj-io/collector/main/docs/brand/flanj-lockup.svg" width="166" height="48">
-  </picture>
-</p>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/flanj-io/collector/main/docs/brand/flanj-lockup-dark.svg">
+  <img alt="Flanj" src="https://raw.githubusercontent.com/flanj-io/collector/main/docs/brand/flanj-lockup.svg" width="166" height="48">
+</picture>
 
-# Flanj Collector
+# Flanj collector
 
-The self-hosted side of Flanj: an [OpenTelemetry Collector](https://opentelemetry.io/docs/collector/)
-distribution that receives the calls the [SDK](https://github.com/flanj-io/sdk) already redacted at source,
-redacts them once more, validates them against the provider's contract to detect drift, keeps a rolling
-window of redacted calls on your own host and serves a local UI. Raw calls never leave your environment.
+Your integrations break when the other side changes. Flanj catches it, with proof both teams can act on.
 
 [![License: Elastic License 2.0](https://img.shields.io/badge/license-Elastic%202.0-1f2933)](LICENSE)
 [![Docker Hub: flanj/collector](https://img.shields.io/docker/v/flanj/collector?sort=semver&label=docker%20hub&color=1f2933)](https://hub.docker.com/r/flanj/collector)
 [![Helm chart: oci://registry-1.docker.io/flanj/flanj-collector](https://img.shields.io/badge/helm%20chart-oci%3A%2F%2Fregistry--1.docker.io%2Fflanj%2Fflanj--collector-1f2933)](charts/flanj-collector/README.md)
 [![CI](https://github.com/flanj-io/collector/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/flanj-io/collector/actions/workflows/ci.yml)
+
+The self-hosted side of Flanj: an [OpenTelemetry Collector](https://opentelemetry.io/docs/collector/)
+distribution that receives the calls the [SDK](https://github.com/flanj-io/sdk) already redacted at source,
+redacts them once more, validates them against the provider's contract to detect drift, keeps a rolling
+window of redacted calls on your own host and serves a local UI. Raw calls never leave your environment.
 
 Headless and outbound-only apart from the localhost UI. Ships and deploys as one unit: collector, store and
 UI in one binary.
@@ -81,7 +81,7 @@ Desktop it is not equivalent, so use the sidecar. In Kubernetes it is `kubectl p
 helm install flanj oci://registry-1.docker.io/flanj/flanj-collector \
   --namespace flanj --create-namespace \
   --set specToken.value="$(openssl rand -hex 32)" \
-  --set integration.id=acme-orders
+  --set integration.id=acme-payments
 ```
 
 That is the tiered shape: N stateless front collectors and one store pod, which is where the UI and the
@@ -96,7 +96,7 @@ npm install @flanj/sdk
 ```
 
 ```bash
-export FLANJ_INTEGRATION_ID=acme-orders        # labels this integration
+export FLANJ_INTEGRATION_ID=acme-payments        # labels this integration
 export FLANJ_OTLP_ENDPOINT=http://localhost:4318/v1/logs   # this is the default
 node -r @flanj/sdk/register app.js
 ```

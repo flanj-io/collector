@@ -1,20 +1,20 @@
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/flanj-io/collector/main/docs/brand/flanj-lockup-dark.svg">
-    <img alt="Flanj" src="https://raw.githubusercontent.com/flanj-io/collector/main/docs/brand/flanj-lockup.svg" width="166" height="48">
-  </picture>
-</p>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/flanj-io/collector/main/docs/brand/flanj-lockup-dark.svg">
+  <img alt="Flanj" src="https://raw.githubusercontent.com/flanj-io/collector/main/docs/brand/flanj-lockup.svg" width="166" height="48">
+</picture>
 
 # flanj-collector — Helm chart
 
-The Helm chart for the Flanj Collector's tiered shape: N stateless front collectors and one store pod, the
-same image in two roles. Every call it handles was redacted at source and again on arrival; the window it
-keeps stays on your cluster, and raw calls never leave.
+Your integrations break when the other side changes. Flanj catches it, with proof both teams can act on.
 
 [![Helm chart: oci://registry-1.docker.io/flanj/flanj-collector](https://img.shields.io/badge/helm%20chart-oci%3A%2F%2Fregistry--1.docker.io%2Fflanj%2Fflanj--collector-1f2933)](https://github.com/flanj-io/collector/tree/main/charts/flanj-collector)
 [![Docker Hub: flanj/collector](https://img.shields.io/docker/v/flanj/collector?sort=semver&label=docker%20hub&color=1f2933)](https://hub.docker.com/r/flanj/collector)
 [![License: Elastic License 2.0](https://img.shields.io/badge/license-Elastic%202.0-1f2933)](https://github.com/flanj-io/collector/blob/main/LICENSE)
 [![CI](https://github.com/flanj-io/collector/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/flanj-io/collector/actions/workflows/ci.yml)
+
+The Helm chart for the Flanj collector's tiered shape: N stateless front collectors and one store pod, the
+same image in two roles. Every call it handles was redacted at source and again on arrival; the window it
+keeps stays on your cluster, and raw calls never leave.
 
 One `helm install` gives you the tiered shape:
 
@@ -22,7 +22,7 @@ One `helm install` gives you the tiered shape:
 helm install flanj oci://registry-1.docker.io/flanj/flanj-collector \
   --namespace flanj --create-namespace \
   --set specToken.value="$(openssl rand -hex 32)" \
-  --set integration.id=acme-orders \
+  --set integration.id=acme-payments \
   --set integration.consumerDisplayName='Acme Consumer Ltd'
 ```
 

@@ -1,7 +1,7 @@
 apiVersion: v2
 name: flanj-collector
 description: >-
-  The Flanj Collector in its tiered shape — N stateless front collectors
+  The Flanj collector in its tiered shape — N stateless front collectors
   forwarding to one store pod that owns the window and serves the local UI.
 type: application
 

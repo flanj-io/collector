@@ -1,4 +1,4 @@
-<!-- Thanks for contributing to the Flanj Collector. Please fill this out so we can review quickly. -->
+<!-- Thanks for contributing to the Flanj collector. Please fill this out so we can review quickly. -->
 
 ## What and why
 
