@@ -9,12 +9,23 @@
          collector. -->
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <!-- data-flanj-theme is stamped on <html> above so the FIRST PAINT is light for
-         everyone, including a dark-OS visitor: tokens.css carries a
-         `prefers-color-scheme` block for surfaces whose toggle is optional, and
+         everyone who never chose, including a dark-OS visitor: tokens.css carries
+         a `prefers-color-scheme` block for surfaces whose toggle is optional, and
          its own `:root:not([data-flanj-theme="light"])` guard is the documented way to
-         opt out of it. main.ts re-stamps the stored preference before mount, so
-         a dark-mode user still gets dark with no flash of the wrong palette.
-         The collector's theme ruling (ux-design-v2 §3) is unchanged. -->
+         opt out of it. The collector's theme ruling (ux-design-v2 §3) is unchanged.
+
+         The inline script below re-stamps a STORED dark choice before the first
+         paint. main.ts also applies it before mount, but a module script runs
+         after the first frame, so a dark-theme user got a light shell for
+         ~100 ms on every load (QA 2026-09-14). Same key and values as
+         src/theme.ts (`flanj.theme`: 'light' | 'dark', absent = light); no
+         other value is honoured, and a storage that throws leaves the light
+         stamp alone. The CP's /d and /t/ pages stamp the same way. -->
+    <script>
+      try {
+        if (localStorage.getItem('flanj.theme') === 'dark') document.documentElement.setAttribute('data-flanj-theme', 'dark');
+      } catch (e) {}
+    </script>
     <title>Flanj Collector</title>
   </head>
   <body>
