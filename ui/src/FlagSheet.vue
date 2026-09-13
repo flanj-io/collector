@@ -467,8 +467,9 @@ textarea { background: var(--ground); border: 1px solid var(--rule); border-radi
 textarea:focus { outline: none; border-color: var(--accent); }
 .sheet-actions { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
 .link-input { width: 100%; background: var(--ground); border: 1px solid var(--accent); border-radius: var(--radius); color: var(--ink); font-size: 0.88rem; padding: 0.5rem 0.65rem; }
-.hint-copy { margin: 0; color: var(--sev-warning-ink); font-size: 0.85rem; }
-.warning { margin: 0; color: var(--sev-warning-ink); font-size: 0.85rem; }
+/* Cautions in the sheet are prose, not findings: body ink behind an accent rule
+   rather than the warning tier's colour, which is now the accent's own hue. */
+.hint-copy, .warning { margin: 0; color: var(--ink); font-size: 0.85rem; padding-left: 0.6rem; border-left: 3px solid var(--accent); }
 .paste-preview { font-size: 0.82rem; color: var(--ink-soft); }
 .paste-preview summary { cursor: pointer; }
 .paste { margin: 0.35rem 0 0; word-break: break-all; font-size: 0.8rem; background: var(--surface-sunk); border: 1px solid var(--rule); border-radius: var(--radius); padding: 0.5rem 0.65rem; }

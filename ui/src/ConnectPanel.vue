@@ -283,7 +283,8 @@ function cancelEdit() {
 .connect-sub { margin: 0 0 0.5rem; color: var(--ink-soft); font-size: 0.9rem; }
 .connect-state { background: var(--surface-sunk); border: 1px solid var(--rule); border-radius: var(--radius); padding: 0.8rem 1rem; }
 .connect-state.ok { border-color: var(--ok-ink); }
-.connect-state.pending { border-color: var(--sev-warning); }
+/* Pending is an attention state, not a finding: the accent outlines it. */
+.connect-state.pending { border-color: var(--accent); }
 /* A mail that never left is a failure, not a "waiting" state — the border must not say otherwise. */
 .connect-state.pending.mail-failed { border-color: var(--sev-breaking); }
 .connect-line { margin: 0; }

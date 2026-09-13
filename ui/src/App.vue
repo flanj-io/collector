@@ -1471,7 +1471,7 @@ watch(tab, (t) => {
       </button>
       <button role="tab" :aria-selected="tab === 'contract'" :class="{ active: tab === 'contract' }" @click="setTab('contract')">
         Contracts
-        <!-- red = act (breaking) · amber = review (informational, un-acked) -->
+        <!-- red = act (breaking) · copper = review (informational, un-acked) -->
         <span v-if="contractBreakingCount" class="tab-count bad" :title="breakingCountTitle(contractBreakingCount)">{{ contractBreakingCount }}</span>
         <span v-if="contractInfoCount" class="tab-count warn" :title="informationalCountTitle(contractInfoCount)">{{ contractInfoCount }}</span>
       </button>
@@ -2324,9 +2324,15 @@ watch(tab, (t) => {
    <html> so it never fires here, exactly the escape hatch tokens.css documents.
 
    Severity is the product-fixed triad and nothing else may borrow it:
-   --sev-breaking (red) / --sev-warning (yellow) / --sev-info (neutral), each
-   paired with its own -wash / -contrast / -edge role. --accent is NEVER
-   semantic. Corners are square (--radius: 0) as a brand decision. */
+   --sev-breaking (red) / --sev-warning (copper) / --sev-info (neutral), each
+   paired with its own -wash / -bolt / -contrast / -edge role. --accent is NEVER
+   semantic. Blueprint makes the warning tier the SAME copper as the accent on
+   purpose, so hue alone can no longer say "warning": every --sev-warning* use
+   below is a finding-tier renderer that carries a label or an outline (badge,
+   tag, tab count, binding checklist, over-cap line), and every attention state
+   that is not a finding (pending pill, connect banner, occurrence count, thread
+   chip, fix-reported status) uses --accent* instead. Corners are square
+   (--radius: 0) as a brand decision. */
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--ground); color: var(--ink); font: 15px/1.5 var(--font-sans); }
 .page { max-width: 1040px; margin: 0 auto; padding: 1.5rem 1.25rem 4rem; }
@@ -2335,7 +2341,9 @@ body { margin: 0; background: var(--ground); color: var(--ink); font: 15px/1.5 v
 .brand span { color: var(--ink-soft); font-weight: 500; margin-left: 0.35rem; }
 .meta { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 .pill { background: var(--surface-sunk); border: 1px solid var(--rule); color: var(--ink-soft); border-radius: var(--radius); padding: 0.15rem 0.6rem; font-size: 0.8rem; }
-.pill.warn { color: var(--sev-warning-ink); border-color: var(--sev-warning-ink); }
+/* Attention states (not configured, pending) are the accent, outlined and
+   labelled — the warning tier belongs to findings only. */
+.pill.warn { color: var(--accent-ink); border-color: var(--accent-ink); }
 .banner { margin: 1rem 0 0; }
 
 /* Tabs */
@@ -2406,19 +2414,19 @@ code { font-family: var(--font-mono); }
 .btn.ghost { background: transparent; color: var(--ink-soft); }
 .btn.ghost:hover { color: var(--ink); }
 .btn.small { padding: 0.28rem 0.65rem; font-size: 0.8rem; }
-.btn.attention { color: var(--sev-warning-ink); border-color: var(--sev-warning-ink); }
+.btn.attention { color: var(--accent-ink); border-color: var(--accent-ink); }
 .btn:disabled { opacity: 0.6; cursor: default; }
 /* A thread chip is a state, not a verdict: neutral ink, and `attention` lifts it to the accent. */
 .chip { display: inline-flex; align-items: center; font-size: 0.8rem; font-weight: 600; color: var(--ink-soft); border: 1px solid var(--ink-soft); border-radius: var(--radius); padding: 0.15rem 0.6rem; }
-.chip.attention { color: var(--sev-warning-ink); border-color: var(--sev-warning-ink); }
+.chip.attention { color: var(--accent-ink); border-color: var(--accent-ink); }
 .hint-inline { color: var(--ink-soft); font-size: 0.82rem; }
 .small-err { font-size: 0.82rem; }
 .pill-btn { cursor: pointer; font: inherit; font-size: 0.8rem; }
 .pill.ok { color: var(--ok-ink); border-color: var(--ok-ink); }
 .tab-right { margin-left: auto; }
-.tab-dot { width: 8px; height: 8px; border-radius: var(--radius); background: var(--sev-warning); display: inline-block; }
+.tab-dot { width: 8px; height: 8px; border-radius: var(--radius); background: var(--accent); display: inline-block; }
 .tab-dot.disconnected { background: var(--ink-soft); }
-.connect-banner { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin: 0.75rem 0 0; padding: 0.6rem 0.9rem; border: 1px solid var(--sev-warning); border-radius: var(--radius); background: var(--surface); font-size: 0.88rem; }
+.connect-banner { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin: 0.75rem 0 0; padding: 0.6rem 0.9rem; border: 1px solid var(--accent); border-radius: var(--radius); background: var(--surface); font-size: 0.88rem; }
 .connect-banner-actions { display: flex; gap: 0.5rem; }
 .connect-banner.info { border-color: var(--rule); color: var(--ink-soft); }
 /* The one-time theme-flip notice sits above the tab strip, not inside a tab. */
@@ -2474,7 +2482,7 @@ code { font-family: var(--font-mono); }
 .route { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .status-code { font-family: var(--font-mono); }
 .status-code.err { color: var(--sev-breaking); }
-.c-corr { display: flex; flex-direction: column; font-size: 0.78rem; color: var(--accent-ink); min-width: 0; }
+.c-corr { display: flex; flex-direction: column; font-size: 0.78rem; color: var(--ink); min-width: 0; }
 .c-corr span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .c-corr .dim { color: var(--ink-soft); }
 .tag { font-size: 0.72rem; font-weight: 700; padding: 0.12rem 0.5rem; border-radius: var(--radius); text-transform: uppercase; letter-spacing: 0.03em; }
@@ -2520,7 +2528,7 @@ code { font-family: var(--font-mono); }
    same kind of sentence — in the amber TEXT role rather than the muted one,
    because this one names something the operator can act on. --sev-warning, not
    --sev-warning-edge: the fill is for chips, and --accent is never semantic. */
-.prov-oversize { color: var(--sev-warning-ink); font-size: 0.88rem; margin: 0.6rem 0 0; }
+.prov-oversize { color: var(--sev-warning-ink); font-size: 0.88rem; margin: 0.6rem 0 0; padding-left: 0.6rem; border-left: 3px solid var(--sev-warning-edge); }
 .prov-integration { color: var(--ink-soft); font-size: 0.78rem; }
 .finding.nested { background: var(--surface-sunk); margin: 0.75rem 0 0; }
 /* Acked rows: dimmed in place (matches the disabled idiom); evidence stays visible. */
@@ -2532,7 +2540,9 @@ code { font-family: var(--font-mono); }
 .tr-detail { border-top: 1px dashed var(--rule); background: var(--ground); padding: 0.85rem 0.9rem 1.1rem; }
 .meta-line { color: var(--ink-soft); font-size: 0.82rem; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.75rem; }
 .meta-line .dim { opacity: 0.5; }
-.redacted-tag { color: var(--sev-warning-ink); }
+/* `redacted · patterns` is a fact about the row, stated in body ink at weight —
+   not a warning, and not a link. */
+.redacted-tag { color: var(--ink); font-weight: 600; }
 .reqres { display: grid; grid-template-columns: 1fr 1fr; gap: 0.85rem; }
 .rr-col { min-width: 0; }
 .rr-title { font-weight: 700; font-size: 0.85rem; margin-bottom: 0.4rem; }
@@ -2682,7 +2692,8 @@ pre.body { background: var(--surface-sunk); border: 1px solid var(--rule); borde
 .edge-row .num { text-align: right; font-variant-numeric: tabular-nums; }
 .edge-row .unit { color: var(--ink-soft); font-size: 0.72rem; margin-left: 0.12rem; }
 .empty.small { font-size: 0.85rem; }
-.occ { font-size: 0.72rem; color: var(--sev-warning-ink); font-weight: 700; border: 1px solid var(--sev-warning-ink); border-radius: var(--radius); padding: 0.05rem 0.45rem; }
+/* The occurrence count is a number, not a severity: accent, outlined. */
+.occ { font-size: 0.72rem; color: var(--accent-ink); font-weight: 700; border: 1px solid var(--accent-ink); border-radius: var(--radius); padding: 0.05rem 0.45rem; }
 .occ.single { color: var(--ink-soft); border-color: var(--rule); font-weight: 500; }
 
 /* ─── MCP surfaces (v0.5) ─── */
@@ -2713,7 +2724,9 @@ pre.body { background: var(--surface-sunk); border: 1px solid var(--rule); borde
 .seg button { background: var(--surface); border: 0; border-left: 1px solid var(--rule); color: var(--ink-soft); font: inherit; font-size: 0.85rem; font-weight: 600; padding: 0.35rem 0.85rem; cursor: pointer; }
 .seg button:first-child { border-left: 0; }
 .seg button:hover { color: var(--ink); }
-.seg button.active { background: var(--accent); color: var(--accent-contrast); }
+/* The pressed segment is ink-filled so it never reads as a primary button or a
+   warning chip — all three used to share the copper. */
+.seg button.active { background: var(--ink); color: var(--surface); }
 
 /* The two edge tables need the full width well before the phone breakpoint —
    side by side they squeeze the name cell to a few characters. */
