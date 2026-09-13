@@ -281,7 +281,7 @@ function cancelEdit() {
 .connect { display: flex; flex-direction: column; gap: 8px; }
 .connect-title { margin: 0; font-size: 14px; }
 .connect-sub { margin: 0 0 8px; color: var(--ink-soft); font-size: 13.5px; }
-.connect-state { background: var(--surface-sunk); border: 1px solid var(--rule); border-radius: var(--radius); padding: 12px 16px; }
+.connect-state { background: var(--surface-sunk); border: var(--border-w) solid var(--rule); border-radius: var(--radius); padding: 12px 16px; }
 .connect-state.ok { border-color: var(--ok-ink); }
 /* Pending is an attention state, not a finding: the accent outlines it. */
 .connect-state.pending { border-color: var(--accent); }
@@ -290,19 +290,19 @@ function cancelEdit() {
 .connect-line { margin: 0; }
 .connect-note { margin: 6px 0 0; color: var(--ok-ink); font-size: 13px; }
 .connect-note.muted { color: var(--ink-soft); }
-.connect-nudge { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 10px 0 0; padding-top: 10px; border-top: 1px dashed var(--rule); color: var(--ink-soft); font-size: 13.5px; }
+.connect-nudge { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 10px 0 0; padding-top: 10px; border-top: var(--border-w-hair) solid var(--rule); color: var(--ink-soft); font-size: 13.5px; }
 .connect-nudge-actions { display: flex; gap: 8px; }
 /* The edge-registration disclosure sits between the intro and the state block —
    read before Connecting, not hidden behind it. Muted, never alarming: it
    describes a designed, disclosed flow. `off` reads the same weight; the switch
    being off is a configuration fact, not a warning. */
-.connect-disclosure { margin: 0 0 12px; padding-left: 10px; border-left: 2px solid var(--rule); color: var(--ink-soft); font-size: 13px; line-height: 1.45; }
-.connect-form { display: flex; flex-direction: column; gap: 12px; background: var(--surface-sunk); border: 1px solid var(--rule); border-radius: var(--radius); padding: 14px 16px; }
+.connect-disclosure { margin: 0 0 12px; padding-left: 10px; border-left: var(--border-w) solid var(--rule); color: var(--ink-soft); font-size: 13px; line-height: 1.45; }
+.connect-form { display: flex; flex-direction: column; gap: 12px; background: var(--surface-sunk); border: var(--border-w) solid var(--rule); border-radius: var(--radius); padding: 14px 16px; }
 .connect.inline .connect-form { background: transparent; border: 0; padding: 0; }
 .field { display: flex; flex-direction: column; gap: 3px; }
 .field-label { font-size: 12.5px; font-weight: 600; }
 .field-help { font-size: 12px; color: var(--ink-soft); }
-.field input { background: var(--ground); border: 1px solid var(--rule); border-radius: var(--radius); color: var(--ink); font: inherit; font-size: 14px; padding: 8px 10px; }
+.field input { background: var(--ground); border: var(--border-w) solid var(--rule); border-radius: var(--radius); color: var(--ink); font: inherit; font-size: 14px; padding: 8px 10px; }
 .field input:focus { border-color: var(--accent); }
 .field input:focus-visible { outline: var(--focus-ring); outline-offset: var(--focus-offset); }
 .connect-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 6px; }

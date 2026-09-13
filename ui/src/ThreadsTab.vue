@@ -171,12 +171,12 @@ watch(
    read-only note above it, and it names no colour of its own. */
 .th-workspace { font-size: 13px; margin: 0 0 12px; }
 .th-workspace a { color: var(--ink-soft); }
-.th-table { border: 1px solid var(--rule); border-radius: var(--radius); overflow: hidden; background: var(--surface); }
+.th-table { border: var(--border-w) solid var(--rule); border-radius: var(--radius); overflow: hidden; background: var(--surface); }
 .th-head, .th-main { display: grid; grid-template-columns: 1.05fr 1.55fr 0.5fr 1.45fr 0.95fr 0.85fr 0.45fr; gap: 10px; align-items: center; padding: 8px 14px; }
-.th-head { color: var(--ink-soft); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--rule); background: var(--surface-sunk); }
-.th-row { border-top: 1px solid var(--rule); padding-bottom: 10px; }
+.th-head { color: var(--ink-soft); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: var(--border-w) solid var(--rule); background: var(--surface-sunk); }
+.th-row { border-top: var(--border-w-hair) solid var(--rule); padding-bottom: 10px; }
 .th-row:first-of-type { border-top: 0; }
-.th-row.highlight { box-shadow: inset 3px 0 0 var(--accent); background: var(--surface-sunk); }
+.th-row.highlight { box-shadow: inset var(--border-w-stripe) 0 0 var(--accent); background: var(--surface-sunk); }
 .th-row.closed .th-main { color: var(--ink-soft); }
 .th-main { font-size: 13.5px; padding-bottom: 4px; }
 .th-provider { font-weight: 600; }
@@ -197,7 +197,7 @@ watch(
 .error { color: var(--sev-breaking); margin: 6px 14px 0; font-size: 13px; }
 /* The blocked-tab note is prose with a link in it: body ink behind an accent
    rule, so the underlined link is the only accent-coloured text in the line. */
-.th-note { color: var(--ink); margin: 6px 14px 0; padding-left: 10px; border-left: 3px solid var(--accent); font-size: 13px; }
+.th-note { color: var(--ink); margin: 6px 14px 0; padding-left: 10px; border-left: var(--border-w-stripe) solid var(--accent); font-size: 13px; }
 .th-note a { color: var(--accent-ink); text-decoration: underline; }
 .empty { color: var(--ink-soft); display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .mono { font-family: var(--f-mono); }
