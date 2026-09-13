@@ -409,44 +409,44 @@ function onHostEdited() {
    rules only — every colour, rule width and radius is a token (src/tokens.css). */
 /* Rendered inline on whichever row opened it — there is one mutation, so only
    one can be open at a time. */
-.uploader { border: 1px dashed var(--rule); border-radius: var(--radius); padding: 0.7rem; margin-top: 0.5rem; background: var(--surface-sunk); }
-.uploader-host { display: flex; flex-direction: column; gap: 0.25rem; font-size: 12.5px; color: var(--ink-soft); margin-bottom: 0.6rem; }
+.uploader { border: 1px dashed var(--rule); border-radius: var(--radius); padding: 12px; margin-top: 8px; background: var(--surface-sunk); }
+.uploader-host { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--ink-soft); margin-bottom: 10px; }
 .uploader-host input {
-  padding: 0.35rem 0.5rem; border: 1px solid var(--rule); border-radius: var(--radius);
-  background: var(--surface); color: var(--ink); font-size: 13px; max-width: 22rem;
+  padding: 6px 8px; border: 1px solid var(--rule); border-radius: var(--radius);
+  background: var(--surface); color: var(--ink); font-size: 13px; max-width: 352px;
 }
 .dropzone {
-  border: 1px dashed var(--rule); border-radius: var(--radius); padding: 1.1rem 0.8rem;
+  border: 1px dashed var(--rule); border-radius: var(--radius); padding: 18px 12px;
   text-align: center; background: var(--surface);
 }
 .dropzone.dragging { border-color: var(--accent); background: var(--surface-sunk); }
-.dz-prompt { margin: 0 0 0.15rem; font-size: 13.5px; }
-.dz-formats { margin: 0 0 0.6rem; font-size: 12px; color: var(--ink-soft); }
+.dz-prompt { margin: 0 0 2px; font-size: 13.5px; }
+.dz-formats { margin: 0 0 10px; font-size: 12px; color: var(--ink-soft); }
 /* The privacy line sits AT the picker, where the document is chosen — the one
    moment the operator is deciding whether to hand over a vendor's document. */
-.uploader-privacy { margin: 0.55rem 0 0; font-size: 12px; color: var(--ink); }
-.uploader-note { margin: 0.2rem 0 0; font-size: 12px; color: var(--ink-soft); }
-.uploader-error { margin: 0.5rem 0 0; font-size: 12.5px; color: var(--sev-breaking); }
-.uploader-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.7rem; }
-.confirm-facts { display: grid; gap: 0.25rem; margin: 0 0 0.5rem; }
-.confirm-facts > div { display: flex; gap: 0.5rem; font-size: 13px; }
-.confirm-facts dt { color: var(--ink-soft); min-width: 6rem; }
+.uploader-privacy { margin: 8px 0 0; font-size: 12px; color: var(--ink); }
+.uploader-note { margin: 3px 0 0; font-size: 12px; color: var(--ink-soft); }
+.uploader-error { margin: 8px 0 0; font-size: 12.5px; color: var(--sev-breaking); }
+.uploader-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.confirm-facts { display: grid; gap: 4px; margin: 0 0 8px; }
+.confirm-facts > div { display: flex; gap: 8px; font-size: 13px; }
+.confirm-facts dt { color: var(--ink-soft); min-width: 96px; }
 .confirm-facts dd { margin: 0; }
 /* The binding checklist. A `servers:` mismatch used to render in body ink —
    "warn, never block" means warn VISIBLY, and that was a whisper. Warnings get
    the warning colour and a marker; the button still says go. */
-.binding-checks { list-style: none; margin: 0 0 0.5rem; padding: 0.5rem 0.6rem; display: grid; gap: 0.3rem; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--rule); }
+.binding-checks { list-style: none; margin: 0 0 8px; padding: 8px 10px; display: grid; gap: 4px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--rule); }
 .binding-checks.warned { border-color: var(--sev-warning-edge); background: var(--sev-warning-wash); }
-.binding-checks li { display: flex; gap: 0.45rem; align-items: flex-start; font-size: 12.5px; line-height: 1.45; color: var(--ink-soft); }
+.binding-checks li { display: flex; gap: 8px; align-items: flex-start; font-size: 12.5px; line-height: 1.45; color: var(--ink-soft); }
 .binding-checks li.warn { color: var(--ink); }
 .binding-checks .chk { flex: none; width: 1em; text-align: center; font-weight: 700; color: var(--ink-soft); }
 .binding-checks li.warn .chk { color: var(--sev-warning-ink); }
-.confirm-host { margin: 0.1rem 0 0.6rem; }
+.confirm-host { margin: 2px 0 10px; }
 .confirm-host input:disabled { opacity: 0.7; cursor: not-allowed; }
 .host-hint, .host-locked { font-size: 11px; color: var(--ink-soft); }
 .host-awaiting { font-size: 12px; color: var(--ink); }
 .uploader-host.awaiting input { border-color: var(--accent); }
-.confirm-timing { margin: 0 0 0.4rem; font-size: 12px; color: var(--ink-soft); }
+.confirm-timing { margin: 0 0 6px; font-size: 12px; color: var(--ink-soft); }
 .host-hint code { font-size: 0.95em; }
 .btn.warn { border-color: var(--sev-warning-ink); }
 .uploader-host input:focus-visible, .dropzone:focus-visible { outline: var(--focus-ring); outline-offset: var(--focus-offset); }
