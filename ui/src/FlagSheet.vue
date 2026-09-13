@@ -451,8 +451,8 @@ watch(result, (r) => {
 </template>
 
 <style scoped>
-.sheet-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55); display: flex; align-items: flex-start; justify-content: center; padding: 4vh 1rem; z-index: 50; overflow-y: auto; }
-.sheet { background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius); padding: 1.2rem 1.3rem 1.3rem; width: min(640px, 100%); display: flex; flex-direction: column; gap: 0.7rem; box-shadow: var(--shadow-overlay); }
+.sheet-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55); display: flex; align-items: flex-start; justify-content: center; padding: 4vh 16px; z-index: 50; overflow-y: auto; }
+.sheet { background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius); padding: 20px 20px 20px; width: min(640px, 100%); display: flex; flex-direction: column; gap: 12px; box-shadow: var(--shadow-overlay); }
 .sheet-title { margin: 0; font-size: 17px; border: 0; padding: 0; }
 .prompt { margin: 0; }
 .prompt-foot { margin: 0; color: var(--ink-soft); font-size: 12.5px; }
@@ -460,20 +460,20 @@ watch(result, (r) => {
 .evidence .k { color: var(--ink-soft); }
 .ids { margin: 0; color: var(--ink-soft); font-size: 13.5px; }
 .disclosure { align-self: flex-start; background: transparent; border: 0; color: var(--accent-ink); font: inherit; font-size: 13.5px; cursor: pointer; padding: 0; }
-.disclosure-body { margin: 0; color: var(--ink-soft); font-size: 13.5px; background: var(--surface-sunk); border: 1px solid var(--rule); border-radius: var(--radius); padding: 0.55rem 0.7rem; }
-.field { display: flex; flex-direction: column; gap: 0.25rem; }
+.disclosure-body { margin: 0; color: var(--ink-soft); font-size: 13.5px; background: var(--surface-sunk); border: 1px solid var(--rule); border-radius: var(--radius); padding: 8px 12px; }
+.field { display: flex; flex-direction: column; gap: 4px; }
 .field-label { font-size: 12.5px; font-weight: 600; }
-textarea { background: var(--ground); border: 1px solid var(--rule); border-radius: var(--radius); color: var(--ink); font: inherit; font-size: 14px; padding: 0.5rem 0.65rem; resize: vertical; }
+textarea { background: var(--ground); border: 1px solid var(--rule); border-radius: var(--radius); color: var(--ink); font: inherit; font-size: 14px; padding: 8px 10px; resize: vertical; }
 textarea:focus { border-color: var(--accent); }
 textarea:focus-visible, .link-input:focus-visible, .disclosure:focus-visible { outline: var(--focus-ring); outline-offset: var(--focus-offset); }
-.sheet-actions { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
-.link-input { width: 100%; background: var(--ground); border: 1px solid var(--accent); border-radius: var(--radius); color: var(--ink); font-size: 13.5px; padding: 0.5rem 0.65rem; }
+.sheet-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.link-input { width: 100%; background: var(--ground); border: 1px solid var(--accent); border-radius: var(--radius); color: var(--ink); font-size: 13.5px; padding: 8px 10px; }
 /* Cautions in the sheet are prose, not findings: body ink behind an accent rule
    rather than the warning tier's colour, which is now the accent's own hue. */
-.hint-copy, .warning { margin: 0; color: var(--ink); font-size: 13px; padding-left: 0.6rem; border-left: 3px solid var(--accent); }
+.hint-copy, .warning { margin: 0; color: var(--ink); font-size: 13px; padding-left: 10px; border-left: 3px solid var(--accent); }
 .paste-preview { font-size: 12.5px; color: var(--ink-soft); }
 .paste-preview summary { cursor: pointer; }
-.paste { margin: 0.35rem 0 0; word-break: break-all; font-size: 12.5px; background: var(--surface-sunk); border: 1px solid var(--rule); border-radius: var(--radius); padding: 0.5rem 0.65rem; }
+.paste { margin: 6px 0 0; word-break: break-all; font-size: 12.5px; background: var(--surface-sunk); border: 1px solid var(--rule); border-radius: var(--radius); padding: 8px 10px; }
 .guard { margin: 0; color: var(--ink-soft); font-size: 13.5px; }
 .error { color: var(--sev-breaking); margin: 0; font-size: 13.5px; }
 .mono { font-family: var(--f-mono); }

@@ -278,35 +278,35 @@ function cancelEdit() {
 </template>
 
 <style scoped>
-.connect { display: flex; flex-direction: column; gap: 0.5rem; }
+.connect { display: flex; flex-direction: column; gap: 8px; }
 .connect-title { margin: 0; font-size: 14px; }
-.connect-sub { margin: 0 0 0.5rem; color: var(--ink-soft); font-size: 13.5px; }
-.connect-state { background: var(--surface-sunk); border: 1px solid var(--rule); border-radius: var(--radius); padding: 0.8rem 1rem; }
+.connect-sub { margin: 0 0 8px; color: var(--ink-soft); font-size: 13.5px; }
+.connect-state { background: var(--surface-sunk); border: 1px solid var(--rule); border-radius: var(--radius); padding: 12px 16px; }
 .connect-state.ok { border-color: var(--ok-ink); }
 /* Pending is an attention state, not a finding: the accent outlines it. */
 .connect-state.pending { border-color: var(--accent); }
 /* A mail that never left is a failure, not a "waiting" state — the border must not say otherwise. */
 .connect-state.pending.mail-failed { border-color: var(--sev-breaking); }
 .connect-line { margin: 0; }
-.connect-note { margin: 0.35rem 0 0; color: var(--ok-ink); font-size: 13px; }
+.connect-note { margin: 6px 0 0; color: var(--ok-ink); font-size: 13px; }
 .connect-note.muted { color: var(--ink-soft); }
-.connect-nudge { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin: 0.6rem 0 0; padding-top: 0.6rem; border-top: 1px dashed var(--rule); color: var(--ink-soft); font-size: 13.5px; }
-.connect-nudge-actions { display: flex; gap: 0.5rem; }
+.connect-nudge { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 10px 0 0; padding-top: 10px; border-top: 1px dashed var(--rule); color: var(--ink-soft); font-size: 13.5px; }
+.connect-nudge-actions { display: flex; gap: 8px; }
 /* The edge-registration disclosure sits between the intro and the state block —
    read before Connecting, not hidden behind it. Muted, never alarming: it
    describes a designed, disclosed flow. `off` reads the same weight; the switch
    being off is a configuration fact, not a warning. */
-.connect-disclosure { margin: 0 0 0.7rem; padding-left: 0.6rem; border-left: 2px solid var(--rule); color: var(--ink-soft); font-size: 13px; line-height: 1.45; }
-.connect-form { display: flex; flex-direction: column; gap: 0.7rem; background: var(--surface-sunk); border: 1px solid var(--rule); border-radius: var(--radius); padding: 0.9rem 1rem; }
+.connect-disclosure { margin: 0 0 12px; padding-left: 10px; border-left: 2px solid var(--rule); color: var(--ink-soft); font-size: 13px; line-height: 1.45; }
+.connect-form { display: flex; flex-direction: column; gap: 12px; background: var(--surface-sunk); border: 1px solid var(--rule); border-radius: var(--radius); padding: 14px 16px; }
 .connect.inline .connect-form { background: transparent; border: 0; padding: 0; }
-.field { display: flex; flex-direction: column; gap: 0.2rem; }
+.field { display: flex; flex-direction: column; gap: 3px; }
 .field-label { font-size: 12.5px; font-weight: 600; }
 .field-help { font-size: 12px; color: var(--ink-soft); }
-.field input { background: var(--ground); border: 1px solid var(--rule); border-radius: var(--radius); color: var(--ink); font: inherit; font-size: 14px; padding: 0.45rem 0.65rem; }
+.field input { background: var(--ground); border: 1px solid var(--rule); border-radius: var(--radius); color: var(--ink); font: inherit; font-size: 14px; padding: 8px 10px; }
 .field input:focus { border-color: var(--accent); }
 .field input:focus-visible { outline: var(--focus-ring); outline-offset: var(--focus-offset); }
-.connect-actions { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; margin-top: 0.4rem; }
-.connect-foot { margin: 0.2rem 0 0; font-size: 12px; color: var(--ink-soft); }
+.connect-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 6px; }
+.connect-foot { margin: 3px 0 0; font-size: 12px; color: var(--ink-soft); }
 .dim { color: var(--ink-soft); font-weight: 400; }
 .error { color: var(--sev-breaking); margin: 0; font-size: 13.5px; }
 </style>
