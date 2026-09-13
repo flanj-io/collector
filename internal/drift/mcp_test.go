@@ -419,6 +419,19 @@ func TestDefinitionChange_Classes(t *testing.T) {
 		tool(t, doc, "list_transactions")["outputSchema"] = map[string]any{
 			"type": "object", "properties": map[string]any{"transactions": map[string]any{"type": "array"}},
 		}
+		// The direction-aware cells (2026-09-13), through the detector:
+		// BREAKING: get_balance output currency string -> [string, null] (WIDENED — the
+		// consumer may now receive a type it never handled)
+		gb["properties"].(map[string]any)["currency"] = map[string]any{"type": []any{"string", "null"}}
+		// NON_BREAKING: create_refund loses the OPTIONAL card_number, and the new schema
+		// does not declare additionalProperties: false — callers still sending it are
+		// tolerated; the Detail must say so.
+		delete(in["properties"].(map[string]any), "card_number")
+		// BREAKING: list_transactions renames account_id -> accountId (same type): ONE
+		// rename finding, never a removal plus a required addition.
+		lt := tool(t, doc, "list_transactions")["inputSchema"].(map[string]any)
+		lt["properties"] = map[string]any{"accountId": map[string]any{"type": "string"}}
+		lt["required"] = []any{"accountId"}
 	})
 
 	findings, _, _, err := d.LoadSnapshot(v2)
@@ -435,8 +448,8 @@ func TestDefinitionChange_Classes(t *testing.T) {
 		}
 		bySig[f.Signature] = f
 	}
-	if len(findings) != 4 {
-		t.Fatalf("findings = %d (%v), want exactly 4", len(findings), sigs(findings))
+	if len(findings) != 7 {
+		t.Fatalf("findings = %d (%v), want exactly 7", len(findings), sigs(findings))
 	}
 
 	check := func(op, rule, fieldPath, severity string, flaggable bool) model.Finding {
@@ -489,6 +502,78 @@ func TestDefinitionChange_Classes(t *testing.T) {
 	desc := check("create_refund", diff.RuleDescriptionChanged, "description", model.SeverityWarning, true)
 	if desc.Rule != model.RuleDescriptionChanged {
 		t.Errorf("model.RuleDescriptionChanged mirror out of sync: %q vs %q", desc.Rule, model.RuleDescriptionChanged)
+	}
+
+	// The 2026-09-13 cells. A widened OUTPUT type is breaking under its own id.
+	wid := check("get_balance", diff.RuleOutputPropertyTypeWidened, "output.currency", model.SeverityBreaking, true)
+	if !strings.Contains(wid.Expected, `"string"`) || !strings.Contains(wid.Actual, `"null"`) {
+		t.Errorf("widened fragments = %q / %q", wid.Expected, wid.Actual)
+	}
+	// An OPTIONAL input removal the new schema tolerates is info, flaggable
+	// like every non-breaking definition change, and its Detail states the
+	// consequence for a caller BEFORE the timestamp tail the UIs parse.
+	opt := check("create_refund", diff.RuleInputOptionalPropertyRemoved, "input.card_number", model.SeverityInfo, true)
+	if !strings.Contains(opt.Detail, "callers still sending `card_number`") || !strings.Contains(opt.Detail, "not rejected") {
+		t.Errorf("optional-removal Detail %q must state the consequence", opt.Detail)
+	}
+	if !strings.HasSuffix(opt.Detail, "tools/list observed "+v1.ObservedAt+" → "+v2.ObservedAt+".") {
+		t.Errorf("Detail must still END with the timestamp tail: %q", opt.Detail)
+	}
+	if opt.Actual != "(none)" {
+		t.Errorf("a removal has no after fragment; actual = %q", opt.Actual)
+	}
+	// A renamed input property is ONE breaking finding under the OLD path,
+	// carrying both names; the twin never surfaces as a required addition.
+	ren := check("list_transactions", diff.RuleInputPropertyRenamed, "input.account_id", model.SeverityBreaking, true)
+	if !strings.Contains(ren.Expected, `"account_id"`) || !strings.Contains(ren.Actual, `"accountId"`) {
+		t.Errorf("rename fragments = %q / %q, want old and new names", ren.Expected, ren.Actual)
+	}
+	for sig := range bySig {
+		if strings.Contains(sig, "|list_transactions|definition_change|input-required-property-added|") ||
+			strings.Contains(sig, "|list_transactions|definition_change|input-required-property-removed|") {
+			t.Errorf("rename must not also surface as removal/addition: %s", sig)
+		}
+	}
+}
+
+// TestDefinitionChange_EnumSwapIsOneFinding: a value replaced in an enum is
+// ONE breaking finding carrying the value that left and the value that
+// arrived — the dimhour 2026-09-07 `list_cities` swap (`region` -> `state`)
+// used to be two findings with identical fragments (a removed row and an
+// added row, both carrying the two full lists).
+func TestDefinitionChange_EnumSwapIsOneFinding(t *testing.T) {
+	d := NewMCPDetector()
+	v1 := goldenSnapshot(t)
+	// Step 1: the enum keyword appears (outside the table: no finding).
+	v1.SnapshotJSON = mutateSnapshotJSON(t, v1.SnapshotJSON, func(doc map[string]any) {
+		st := tool(t, doc, "create_refund")["outputSchema"].(map[string]any)["properties"].(map[string]any)["refund"].(map[string]any)["properties"].(map[string]any)["status"].(map[string]any)
+		st["enum"] = []any{"pending", "succeeded", "failed"}
+	})
+	if _, _, _, err := d.LoadSnapshot(v1); err != nil {
+		t.Fatal(err)
+	}
+	v2 := v1
+	v2.ObservedAt = "2026-08-24T12:00:00.000Z"
+	v2.SnapshotJSON = mutateSnapshotJSON(t, v1.SnapshotJSON, func(doc map[string]any) {
+		st := tool(t, doc, "create_refund")["outputSchema"].(map[string]any)["properties"].(map[string]any)["refund"].(map[string]any)["properties"].(map[string]any)["status"].(map[string]any)
+		st["enum"] = []any{"pending", "succeeded", "declined"}
+	})
+	findings, _, _, err := d.LoadSnapshot(v2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("findings = %d (%v), want exactly one", len(findings), sigs(findings))
+	}
+	f := findings[0]
+	if f.Rule != diff.RuleOutputEnumValueReplaced || f.Severity != model.SeverityBreaking || !f.Flaggable() {
+		t.Errorf("rule/severity/flaggable = %s/%s/%v", f.Rule, f.Severity, f.Flaggable())
+	}
+	if f.FieldPath == nil || *f.FieldPath != "output.refund.status" {
+		t.Errorf("field_path = %v", f.FieldPath)
+	}
+	if f.Expected != `{"enum":["failed"]}` || f.Actual != `{"enum":["declined"]}` {
+		t.Errorf("fragments = %q / %q, want the removed and the added values", f.Expected, f.Actual)
 	}
 }
 

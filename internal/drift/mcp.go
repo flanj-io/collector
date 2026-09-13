@@ -611,8 +611,12 @@ func definitionChangeFinding(integration string, ch diff.Change, prev, cur *cont
 		SpecVersionFrom: model.Ptr(shortHash(prev.Version.ContentHash)),
 		SpecVersionTo:   model.Ptr(shortHash(cur.Version.ContentHash)),
 		DetectedAt:      now,
-		Detail: fmt.Sprintf("Definition change (%s): %s on `%s`%s — tools/list observed %s → %s.",
-			ch.Class, ch.Rule, ch.OperationID, atFieldPath(ch.FieldPath),
+		// The classifier's Detail (set only where the class is not readable
+		// off the rule id — the optional-removal cells) goes BEFORE the
+		// timestamp tail, which two UIs regex out of the end of this string
+		// (TestDefinitionChangeDetailTail_UIRegex).
+		Detail: fmt.Sprintf("Definition change (%s): %s on `%s`%s%s — tools/list observed %s → %s.",
+			ch.Class, ch.Rule, ch.OperationID, atFieldPath(ch.FieldPath), consequence(ch.Detail),
 			prev.Version.ObservedAt, cur.Version.ObservedAt),
 		// The optional snapshot_observed_at (CONTRACTS §4): the AFTER snapshot.
 		SnapshotObservedAt: cur.Version.ObservedAt,
@@ -632,6 +636,15 @@ func atFieldPath(p string) string {
 		return ""
 	}
 	return " at " + p
+}
+
+// consequence renders a classifier Detail as a clause of the finding's Detail
+// prose, or nothing when the change carries none.
+func consequence(d string) string {
+	if d == "" {
+		return ""
+	}
+	return " — " + d
 }
 
 // fragmentJSON renders a classifier before/after schema FRAGMENT (never a
