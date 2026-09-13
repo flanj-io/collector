@@ -166,41 +166,41 @@ watch(
 </template>
 
 <style scoped>
-.th-readonly { color: var(--ink-soft); font-size: 0.85rem; margin: -0.25rem 0 0.25rem; }
+.th-readonly { color: var(--ink-soft); font-size: 13px; margin: -0.25rem 0 0.25rem; }
 /* The workspace link-out: an offer, not a prompt — same muted register as the
    read-only note above it, and it names no colour of its own. */
-.th-workspace { font-size: 0.85rem; margin: 0 0 0.75rem; }
+.th-workspace { font-size: 13px; margin: 0 0 0.75rem; }
 .th-workspace a { color: var(--ink-soft); }
 .th-table { border: 1px solid var(--rule); border-radius: var(--radius); overflow: hidden; background: var(--surface); }
 .th-head, .th-main { display: grid; grid-template-columns: 1.05fr 1.55fr 0.5fr 1.45fr 0.95fr 0.85fr 0.45fr; gap: 0.6rem; align-items: center; padding: 0.55rem 0.9rem; }
-.th-head { color: var(--ink-soft); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--rule); background: var(--surface-sunk); }
+.th-head { color: var(--ink-soft); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--rule); background: var(--surface-sunk); }
 .th-row { border-top: 1px solid var(--rule); padding-bottom: 0.6rem; }
 .th-row:first-of-type { border-top: 0; }
 .th-row.highlight { box-shadow: inset 3px 0 0 var(--accent); background: var(--surface-sunk); }
 .th-row.closed .th-main { color: var(--ink-soft); }
-.th-main { font-size: 0.9rem; padding-bottom: 0.25rem; }
+.th-main { font-size: 13.5px; padding-bottom: 0.25rem; }
 .th-provider { font-weight: 600; }
 .th-endpoint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* `attention` is a turn state (fix reported, replied while closed), not a finding
    severity: the accent carries it, and the status text is the label. */
 .th-status.attention { color: var(--accent-ink); font-weight: 600; }
-.th-activity, .th-last { color: var(--ink-soft); font-size: 0.85rem; white-space: nowrap; }
+.th-activity, .th-last { color: var(--ink-soft); font-size: 13px; white-space: nowrap; }
 .th-opens { font-variant-numeric: tabular-nums; }
 /* Line 2: link facts beside the one action, full row width. */
 .th-linkline { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; padding: 0 0.9rem; }
 .th-linkfacts { display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap; min-width: 0; }
-.th-link { font-size: 0.82rem; color: var(--ink-soft); white-space: nowrap; }
+.th-link { font-size: 12.5px; color: var(--ink-soft); white-space: nowrap; }
 .th-link.attention { color: var(--accent-ink); }
-.th-knock { font-size: 0.82rem; color: var(--ink-soft); }
+.th-knock { font-size: 12.5px; color: var(--ink-soft); }
 .th-actions { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-left: auto; }
-.th-truncated { color: var(--ink-soft); font-size: 0.85rem; margin: 0.5rem 0 0; }
-.error { color: var(--sev-breaking); margin: 0.4rem 0.9rem 0; font-size: 0.85rem; }
+.th-truncated { color: var(--ink-soft); font-size: 13px; margin: 0.5rem 0 0; }
+.error { color: var(--sev-breaking); margin: 0.4rem 0.9rem 0; font-size: 13px; }
 /* The blocked-tab note is prose with a link in it: body ink behind an accent
    rule, so the underlined link is the only accent-coloured text in the line. */
-.th-note { color: var(--ink); margin: 0.4rem 0.9rem 0; padding-left: 0.6rem; border-left: 3px solid var(--accent); font-size: 0.85rem; }
+.th-note { color: var(--ink); margin: 0.4rem 0.9rem 0; padding-left: 0.6rem; border-left: 3px solid var(--accent); font-size: 13px; }
 .th-note a { color: var(--accent-ink); text-decoration: underline; }
 .empty { color: var(--ink-soft); display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
-.mono { font-family: var(--font-mono); }
+.mono { font-family: var(--f-mono); }
 @media (max-width: 800px) {
   .th-head { display: none; }
   .th-main { grid-template-columns: 1fr 1fr; }
