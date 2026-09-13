@@ -278,15 +278,19 @@ function cancelEdit() {
 </template>
 
 <style scoped>
+/* Blueprint: the Connect card's states are framed blocks on the sunk surface;
+   the form's labels are mono eyebrows over 2px inputs. Layout and component
+   rules only — every colour is a token. */
 .connect { display: flex; flex-direction: column; gap: 8px; }
-.connect-title { margin: 0; font-size: 14px; }
+.connect-title { margin: 0; font-size: 14px; font-weight: 600; }
 .connect-sub { margin: 0 0 8px; color: var(--ink-soft); font-size: 13.5px; }
-.connect-state { background: var(--surface-sunk); border: var(--border-w) solid var(--rule); border-radius: var(--radius); padding: 12px 16px; }
-.connect-state.ok { border-color: var(--ok-ink); }
+.connect-state { background: var(--surface-sunk); border: var(--border-w) solid var(--rule); border-left-width: var(--border-w-stripe-lg); border-radius: var(--radius); padding: 12px 16px; }
+/* Connected is a reached state: the green rule. */
+.connect-state.ok { border-left-color: var(--ok); }
 /* Pending is an attention state, not a finding: the accent outlines it. */
-.connect-state.pending { border-color: var(--accent); }
-/* A mail that never left is a failure, not a "waiting" state — the border must not say otherwise. */
-.connect-state.pending.mail-failed { border-color: var(--sev-breaking); }
+.connect-state.pending { border-left-color: var(--accent); }
+/* A mail that never left is a failure, not a "waiting" state — the rule must not say otherwise. */
+.connect-state.pending.mail-failed { border-left-color: var(--sev-breaking); }
 .connect-line { margin: 0; }
 .connect-note { margin: 6px 0 0; color: var(--ok-ink); font-size: 13px; }
 .connect-note.muted { color: var(--ink-soft); }
@@ -296,17 +300,18 @@ function cancelEdit() {
    read before Connecting, not hidden behind it. Muted, never alarming: it
    describes a designed, disclosed flow. `off` reads the same weight; the switch
    being off is a configuration fact, not a warning. */
-.connect-disclosure { margin: 0 0 12px; padding-left: 10px; border-left: var(--border-w) solid var(--rule); color: var(--ink-soft); font-size: 13px; line-height: 1.45; }
+.connect-disclosure { margin: 0 0 12px; padding-left: 10px; border-left: var(--border-w-stripe) solid var(--rule); color: var(--ink-soft); font-size: 13px; line-height: 1.45; }
 .connect-form { display: flex; flex-direction: column; gap: 12px; background: var(--surface-sunk); border: var(--border-w) solid var(--rule); border-radius: var(--radius); padding: 14px 16px; }
 .connect.inline .connect-form { background: transparent; border: 0; padding: 0; }
-.field { display: flex; flex-direction: column; gap: 3px; }
-.field-label { font-size: 12.5px; font-weight: 600; }
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field-label { font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); }
 .field-help { font-size: 12px; color: var(--ink-soft); }
-.field input { background: var(--ground); border: var(--border-w) solid var(--rule); border-radius: var(--radius); color: var(--ink); font: inherit; font-size: 14px; padding: 8px 10px; }
-.field input:focus { border-color: var(--accent); }
+.field input { background: var(--surface); border: var(--border-w) solid var(--rule); border-radius: var(--radius); color: var(--ink); font: inherit; font-size: 14px; padding: 8px 10px; transition: border-color var(--dur-fast) var(--ease); }
+.field input:focus { border-color: var(--ink); }
 .field input:focus-visible { outline: var(--focus-ring); outline-offset: var(--focus-offset); }
+.field input:disabled { opacity: 0.6; }
 .connect-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 6px; }
 .connect-foot { margin: 3px 0 0; font-size: 12px; color: var(--ink-soft); }
-.dim { color: var(--ink-soft); font-weight: 400; }
-.error { color: var(--sev-breaking); margin: 0; font-size: 13.5px; }
+.dim { color: var(--ink-soft); font-weight: 400; text-transform: none; letter-spacing: 0; }
+.error { color: var(--sev-breaking-ink); margin: 0; font-size: 13.5px; }
 </style>

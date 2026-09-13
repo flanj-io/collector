@@ -166,26 +166,33 @@ watch(
 </template>
 
 <style scoped>
+/* Blueprint: a framed table with mono uppercase heads on the sunk surface,
+   hairline row separators, two-line rows (facts, then the link strip beside the
+   one action). Layout and component rules only — every colour is a token. */
 .th-readonly { color: var(--ink-soft); font-size: 13px; margin: -4px 0 4px; }
 /* The workspace link-out: an offer, not a prompt — same muted register as the
    read-only note above it, and it names no colour of its own. */
 .th-workspace { font-size: 13px; margin: 0 0 12px; }
 .th-workspace a { color: var(--ink-soft); }
-.th-table { border: var(--border-w) solid var(--rule); border-radius: var(--radius); overflow: hidden; background: var(--surface); }
-.th-head, .th-main { display: grid; grid-template-columns: 1.05fr 1.55fr 0.5fr 1.45fr 0.95fr 0.85fr 0.45fr; gap: 10px; align-items: center; padding: 8px 14px; }
-.th-head { color: var(--ink-soft); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: var(--border-w) solid var(--rule); background: var(--surface-sunk); }
-.th-row { border-top: var(--border-w-hair) solid var(--rule); padding-bottom: 10px; }
-.th-row:first-of-type { border-top: 0; }
+.th-workspace a:focus-visible { outline: var(--focus-ring); outline-offset: var(--focus-offset); }
+.th-table { border: var(--border-w) solid var(--rule); border-radius: var(--radius); background: var(--surface); }
+.th-head, .th-main { display: grid; grid-template-columns: 1.05fr 1.55fr 0.5fr 1.45fr 0.95fr 0.85fr 0.45fr; gap: 10px; align-items: center; padding: 10px 14px; }
+.th-head { font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-soft); border-bottom: var(--border-w) solid var(--rule); background: var(--surface-sunk); }
+.th-row { border-top: var(--border-w-hair) solid var(--rule-soft); padding-bottom: 10px; transition: opacity var(--dur) var(--ease), background-color var(--dur-fast) var(--ease); }
+.th-head + .th-row { border-top: 0; }
 .th-row.highlight { box-shadow: inset var(--border-w-stripe) 0 0 var(--accent); background: var(--surface-sunk); }
-.th-row.closed .th-main { color: var(--ink-soft); }
+/* A closed thread dims in place, like an acknowledged finding. */
+.th-row.closed { opacity: 0.6; }
 .th-main { font-size: 13.5px; padding-bottom: 4px; }
 .th-provider { font-weight: 600; }
-.th-endpoint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.th-endpoint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.th-evidence { font-family: var(--f-mono); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.th-status { font-family: var(--f-mono); font-size: 11.5px; letter-spacing: 0.02em; }
 /* `attention` is a turn state (fix reported, replied while closed), not a finding
    severity: the accent carries it, and the status text is the label. */
 .th-status.attention { color: var(--accent-ink); font-weight: 600; }
-.th-activity, .th-last { color: var(--ink-soft); font-size: 13px; white-space: nowrap; }
-.th-opens { font-variant-numeric: tabular-nums; }
+.th-activity, .th-last { color: var(--ink-soft); font-family: var(--f-mono); font-size: 12.5px; white-space: nowrap; }
+.th-opens { font-family: var(--f-mono); font-size: 12.5px; font-variant-numeric: tabular-nums; }
 /* Line 2: link facts beside the one action, full row width. */
 .th-linkline { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 0 14px; }
 .th-linkfacts { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; min-width: 0; }
@@ -194,7 +201,9 @@ watch(
 .th-knock { font-size: 12.5px; color: var(--ink-soft); }
 .th-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-left: auto; }
 .th-truncated { color: var(--ink-soft); font-size: 13px; margin: 8px 0 0; }
-.error { color: var(--sev-breaking); margin: 6px 14px 0; font-size: 13px; }
+/* The unreachable-relay line: the load error, red ink behind a red rule. */
+.error { color: var(--sev-breaking-ink); margin: 6px 14px 0; font-size: 13px; padding-left: 10px; border-left: var(--border-w-stripe) solid var(--sev-breaking); }
+.th-table + .error, .th-workspace + .error, .th-readonly + .error { margin-left: 0; }
 /* The blocked-tab note is prose with a link in it: body ink behind an accent
    rule, so the underlined link is the only accent-coloured text in the line. */
 .th-note { color: var(--ink); margin: 6px 14px 0; padding-left: 10px; border-left: var(--border-w-stripe) solid var(--accent); font-size: 13px; }
