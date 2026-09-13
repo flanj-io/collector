@@ -66,7 +66,7 @@ function stubFetch(findings: unknown[]) {
 
 beforeEach(() => {
   localStorage.clear();
-  window.location.hash = '#contract';
+  window.location.hash = '#contracts';
   vi.useFakeTimers();
 });
 
