@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Connect panel (v0.1a): registers this collector with the Flanj network —
+// Connect panel (v0.1a): registers this collector with the control plane —
 // org name + a contact email the control plane confirms with one click. Shown
 // on the Settings tab and inline in the Flag sheet. Local data viewing is never
 // gated on it; only creating a thread link is.
@@ -189,9 +189,11 @@ function cancelEdit() {
 
 <template>
   <div class="connect" :class="{ inline }">
+    <!-- Copy (content fundamentals): no "we", "the other side" rather than
+         "your vendor", and no network vocabulary. -->
     <template v-if="!inline">
-      <h3 class="connect-title">Connect to Flanj network</h3>
-      <p class="connect-sub">We turn a detection into something you can act on with your vendor. Required to create thread links. Viewing your own traffic and findings never needs it.</p>
+      <h3 class="connect-title">Connect to Flanj</h3>
+      <p class="connect-sub">A detection becomes a thread the other side can act on. Required to create thread links; viewing your own traffic and findings never needs it.</p>
     </template>
 
     <!-- Edge-registration disclosure (v1 phase 2): what Connecting causes, said
@@ -201,21 +203,44 @@ function cancelEdit() {
       {{ disclosure.text }}
     </p>
 
-    <!-- connected -->
+    <!-- connected: the kit's k/v grid (mono eyebrow, mono value in a hairline
+         frame) — facts an operator can scan, not a sentence. `confirmed` is a
+         green-bolt suffix on the contact; the collector address shows the
+         Add address affordance inline while it is missing. -->
     <div v-if="status === 'connected' && !editing" class="connect-state ok">
-      <p class="connect-line">
-        Connected as <strong>{{ state?.consumer_display_name }}</strong> · <strong>{{ state?.contact_email }}</strong> confirmed
-        <span v-if="state?.contact_display_name && state?.contact_display_name !== state?.consumer_display_name" class="dim">
-          · replies as {{ state?.contact_display_name }}
-        </span>
-      </p>
+      <p class="connect-line">Connected</p>
+      <dl class="connect-facts">
+        <div class="connect-field">
+          <dt class="k">Organization</dt>
+          <dd class="v">{{ state?.consumer_display_name }}</dd>
+        </div>
+        <div class="connect-field">
+          <dt class="k">Contact</dt>
+          <dd class="v">
+            <span class="v-main">{{ state?.contact_email }}</span>
+            <span class="v-mark ok"><svg class="hx sm tone-ok" aria-hidden="true" focusable="false"><use href="#hxbolt" /></svg>confirmed</span>
+            <span v-if="state?.contact_display_name && state?.contact_display_name !== state?.consumer_display_name" class="dim">
+              · replies as {{ state?.contact_display_name }}
+            </span>
+          </dd>
+        </div>
+        <div class="connect-field">
+          <dt class="k">Collector address</dt>
+          <dd class="v">
+            <span v-if="state?.local_ui_url" class="v-main">{{ state?.local_ui_url }}</span>
+            <template v-else>
+              <span class="dim">not set</span>
+              <button v-if="showAddressNudge" type="button" class="btn small" @click="addAddress">Add address</button>
+            </template>
+          </dd>
+        </div>
+      </dl>
       <div class="connect-actions">
         <button type="button" class="btn ghost" @click="changeEmail">Change contact</button>
       </div>
       <p v-if="showAddressNudge" class="connect-nudge">
         <span>Reply notification emails can link straight back to the thread here. Add this collector's address to turn that on.</span>
         <span class="connect-nudge-actions">
-          <button type="button" class="btn small" @click="addAddress">Add address</button>
           <button type="button" class="btn ghost small" aria-label="Dismiss" @click="emit('dismiss-address-nudge')">Dismiss</button>
         </span>
       </p>
@@ -228,7 +253,7 @@ function cancelEdit() {
         Waiting on <strong>{{ state?.contact_email }}</strong> to confirm — but the last confirmation mail did not go out.
       </p>
       <p v-else class="connect-line">
-        Check your inbox — we sent "Confirm your Flanj contact" to <strong>{{ state?.contact_email }}</strong>. The link works once, for 72 hours.
+        Check your inbox — "Confirm your Flanj contact" went to <strong>{{ state?.contact_email }}</strong>. The link works once, for 72 hours.
       </p>
       <p v-if="notice.kind === 'sent' && notice.text" class="connect-note">{{ notice.text }}</p>
       <p v-else-if="notice.kind === 'failed'" class="error" role="alert">{{ notice.text }}</p>
@@ -292,6 +317,16 @@ function cancelEdit() {
 /* A mail that never left is a failure, not a "waiting" state — the rule must not say otherwise. */
 .connect-state.pending.mail-failed { border-left-color: var(--sev-breaking); }
 .connect-line { margin: 0; }
+/* The kit's k/v grid: mono eyebrow, mono value in a hairline frame. */
+.connect-facts { margin: 10px 0 0; }
+.connect-field { display: grid; grid-template-columns: 130px 1fr; gap: 10px; align-items: center; margin: 0 0 8px; }
+.connect-field .k { font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); margin: 0; }
+.connect-field .v { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0; min-width: 0; font-family: var(--f-mono); font-size: 12.5px; border: var(--border-w-hair) solid var(--rule); background: var(--surface); padding: 6px 10px; color: var(--ink); }
+.connect-field .v-main { overflow-wrap: anywhere; }
+/* `confirmed` is a reached state: green ink beside a green bolt. */
+.connect-field .v-mark { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; }
+.connect-field .v-mark.ok { color: var(--ok-ink); }
+.connect-field .hx { width: 10px; height: 10px; }
 .connect-note { margin: 6px 0 0; color: var(--ok-ink); font-size: 13px; }
 .connect-note.muted { color: var(--ink-soft); }
 .connect-nudge { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 10px 0 0; padding-top: 10px; border-top: var(--border-w-hair) solid var(--rule); color: var(--ink-soft); font-size: 13.5px; }
@@ -314,4 +349,7 @@ function cancelEdit() {
 .connect-foot { margin: 3px 0 0; font-size: 12px; color: var(--ink-soft); }
 .dim { color: var(--ink-soft); font-weight: 400; text-transform: none; letter-spacing: 0; }
 .error { color: var(--sev-breaking-ink); margin: 0; font-size: 13.5px; }
+@media (max-width: 720px) {
+  .connect-field { grid-template-columns: 1fr; gap: 4px; }
+}
 </style>
