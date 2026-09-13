@@ -2918,6 +2918,8 @@ pre.body { background: var(--surface); border: var(--border-w) solid var(--rule)
   .tr-row .c-call { grid-area: call; flex-wrap: wrap; }
   .tr-row .route { white-space: normal; overflow: visible; text-overflow: clip; word-break: break-word; }
   .tr-row .c-peer { grid-area: peer; }
+  /* The host is an identity: it wraps rather than ellipsizes beside the time. */
+  .tr-row .peer-host { white-space: normal; overflow: visible; text-overflow: clip; word-break: break-all; }
   .tr-row .c-when { grid-area: when; font-size: 11.5px; }
   .tr-row .c-status { grid-area: status; }
   .tr-row .c-corr { grid-area: corr; }
