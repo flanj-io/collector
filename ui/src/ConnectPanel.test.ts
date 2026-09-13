@@ -2,7 +2,7 @@
 //
 // The Connect panel's pending state, asserted on the real component. The defect (2026-09-07,
 // reproduced on sqlite, postgres and tiered): after the very FIRST Connect the panel printed the
-// deck's "Check your inbox — we sent …" line AND "Sent again to …" — a resend that never happened
+// deck's "Check your inbox — … went to …" line AND "Sent again to …" — a resend that never happened
 // (Mailpit held exactly one mail). One string served both the Connect button and Resend.
 // connect-mail.test.ts pins the wording per branch; THIS file pins that the two call sites reach
 // the helper with the right flag — a call site passing the wrong one is invisible to a pure test.
@@ -102,7 +102,7 @@ describe('Connect panel: the first send says "Check your inbox" and nothing more
     await submitForm(w, EMAIL);
     expect(posts).toHaveLength(1);
     let text = pendingText(w);
-    expect(text).toContain(`Check your inbox — we sent "Confirm your Flanj contact" to ${EMAIL}. The link works once, for 72 hours.`);
+    expect(text).toContain(`Check your inbox — "Confirm your Flanj contact" went to ${EMAIL}. The link works once, for 72 hours.`);
     expect(text, 'a first send is not a resend').not.toContain('Sent again');
     expect(w.find('.connect-note').exists(), 'no extra note under the standing line on a first send').toBe(false);
     expect(button(w, 'Resend').attributes('disabled')).toBeUndefined();
@@ -124,7 +124,7 @@ describe('Connect panel: the first send says "Check your inbox" and nothing more
     expect(posts).toHaveLength(3);
     expect(posts[2].contact_email).toBe(NEW_EMAIL);
     text = pendingText(w);
-    expect(text).toContain(`we sent "Confirm your Flanj contact" to ${NEW_EMAIL}`);
+    expect(text).toContain(`"Confirm your Flanj contact" went to ${NEW_EMAIL}`);
     expect(text, 'the first send to a new address is not a resend').not.toContain('Sent again');
   });
 

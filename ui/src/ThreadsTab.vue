@@ -178,11 +178,18 @@ watch(
 .th-table { border: var(--border-w) solid var(--rule); border-radius: var(--radius); background: var(--surface); }
 .th-head, .th-main { display: grid; grid-template-columns: 1.05fr 1.55fr 0.5fr 1.45fr 0.95fr 0.85fr 0.45fr; gap: 10px; align-items: center; padding: 10px 14px; }
 .th-head { font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-soft); border-bottom: var(--border-w) solid var(--rule); background: var(--surface-sunk); }
-.th-row { border-top: var(--border-w-hair) solid var(--rule-soft); padding-bottom: 10px; transition: opacity var(--dur) var(--ease), background-color var(--dur-fast) var(--ease); }
+.th-row { border-top: var(--border-w-hair) solid var(--rule-soft); padding-bottom: 10px; transition: background-color var(--dur-fast) var(--ease); }
 .th-head + .th-row { border-top: 0; }
 .th-row.highlight { box-shadow: inset var(--border-w-stripe) 0 0 var(--accent); background: var(--surface-sunk); }
-/* A closed thread dims in place, like an acknowledged finding. */
-.th-row.closed { opacity: 0.6; }
+/* A closed thread dims in place, like an acknowledged finding — with the
+   palette, never opacity: the kit's `opacity: .6` put the row's 12–13px facts
+   at 2.9:1. Facts drop to --ink-soft, the provider loses its weight; the
+   accent status (`Closed · new reply`) keeps its own -ink role, which reads
+   at full strength. */
+.th-row.closed .th-provider { font-weight: 400; }
+.th-row.closed .th-provider, .th-row.closed .th-endpoint, .th-row.closed .th-evidence,
+.th-row.closed .th-opens, .th-row.closed .th-status { color: var(--ink-soft); }
+.th-row.closed .th-status.attention { color: var(--accent-ink); }
 .th-main { font-size: 13.5px; padding-bottom: 4px; }
 .th-provider { font-weight: 600; }
 .th-endpoint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
@@ -210,9 +217,22 @@ watch(
 .th-note a { color: var(--accent-ink); text-decoration: underline; }
 .empty { color: var(--ink-soft); display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .mono { font-family: var(--f-mono); }
+/* Phone width: the head goes, so each fact carries its own label inline —
+   a bare `×0` with its header removed was a number with no denominator. The
+   provider and endpoint take a line each; the counts and times wrap after. */
 @media (max-width: 800px) {
   .th-head { display: none; }
-  .th-main { grid-template-columns: 1fr 1fr; }
+  .th-main { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; }
+  .th-provider, .th-endpoint { flex: 1 1 100%; }
+  .th-endpoint { white-space: normal; overflow: visible; text-overflow: clip; word-break: break-word; }
+  .th-evidence::before, .th-status::before, .th-activity::before, .th-last::before, .th-opens::before {
+    font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); margin-right: 5px;
+  }
+  .th-evidence::before { content: 'evidence'; }
+  .th-status::before { content: 'status'; }
+  .th-activity::before { content: 'activity'; }
+  .th-last::before { content: 'last reply'; }
+  .th-opens::before { content: 'opened'; }
   .th-actions { margin-left: 0; }
 }
 </style>

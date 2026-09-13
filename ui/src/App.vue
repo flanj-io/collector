@@ -34,7 +34,9 @@ import {
   findingBelongsToContract,
   contractsByHost,
   edgeContractLine,
+  humanize,
   isEvidenceFor,
+  providerNameForFinding,
   rollCall,
   uncoveredHeading,
   uncoveredProviders,
@@ -68,6 +70,9 @@ import {
   defChangeDetail,
   defChangeNoCallSub,
   definitionClass,
+  descriptionChipLabel,
+  descriptionChipTitle,
+  descriptionCountTitle,
   informationalChipLabel,
   informationalChipTitle,
   informationalCountTitle,
@@ -125,6 +130,7 @@ import {
   type CoverageVerdict
 } from './coverage';
 import { headlineFor } from './headline';
+import { isoStamp } from './time';
 import type { Correlation, Finding, FlagResult, Health, RedactedCall } from './types';
 
 interface Edge {
@@ -385,13 +391,18 @@ function goToSettings() {
 }
 
 // Provider name shown on the sheet and sent on the flag: the configured
-// provider_display_name for the observed integration, else a humanized id
-// (the same rule the relay applies server-side).
+// provider_display_name for the observed integration, else the SDK's
+// integration id humanized (the same rule the relay applies server-side) —
+// except a version-diff, whose id is the CONTRACT's host-derived key and
+// resolves through the Edges panel's name for that host (contracts.ts
+// providerNameForFinding; QA 2026-09-14).
 function providerNameFor(f: Finding): string {
-  if (health.value?.provider_display_name && (!health.value.integration || f.integration === health.value.integration)) {
-    return health.value.provider_display_name;
-  }
-  return humanize(f.integration) || f.integration || 'the provider';
+  return providerNameForFinding(f, {
+    providerDisplayName: health.value?.provider_display_name,
+    healthIntegration: health.value?.integration,
+    contracts: contracts.value,
+    edges: edges.value
+  });
 }
 
 function openSheet(f: Finding) {
@@ -816,14 +827,6 @@ function fmtRPM(rpm?: number): string {
   return rpm >= 10 ? String(Math.round(rpm)) : rpm.toFixed(1).replace(/\.0$/, '');
 }
 
-function humanize(id: string): string {
-  return id
-    .split(/[-_]+/)
-    .filter(Boolean)
-    .map((w) => w[0].toUpperCase() + w.slice(1))
-    .join(' ');
-}
-
 function specHref(s: SpecInfo): string {
   return '/api/contracts/spec?integration=' + encodeURIComponent(s.integration);
 }
@@ -1151,6 +1154,14 @@ const contractBreakingCount = computed(() => contractTabRows.value.filter((f) =>
 const contractInfoCount = computed(
   () => contractTabRows.value.filter((f) => !isBreakingFinding(f) && !isAcked(f)).length
 );
+// Every un-acked informational row is a DESCRIPTION change: the pill keeps its
+// class and its count (e2e reads `.tab-count.warn`) but wears the steel
+// outline, not the copper fill — a wording change is not a warning.
+const contractDescOnly = computed(
+  () =>
+    contractInfoCount.value > 0 &&
+    contractTabRows.value.every((f) => isBreakingFinding(f) || isAcked(f) || definitionClass(f) === 'DESCRIPTION')
+);
 
 // Per-card chip counts — the same taxonomy as the tab pills, so the sum of
 // card chips always equals the pills.
@@ -1160,10 +1171,18 @@ function cardBreakingCount(p: ContractCard): number {
 function cardInfoCount(p: ContractCard): number {
   return p.findings.filter((f) => !isBreakingFinding(f) && !isAcked(f)).length;
 }
-function cardInfoTitle(p: ContractCard): string {
-  const info = p.findings.filter((f) => !isBreakingFinding(f) && !isAcked(f));
-  const description = info.filter((f) => definitionClass(f) === 'DESCRIPTION').length;
-  return informationalChipTitle(info.length - description, description);
+// The card splits its informational chip by class — copper `N NON-BREAKING`
+// for schema changes, steel `N DESCRIPTION` for wording — so each class wears
+// one vocabulary from the tab through the card to the row badge. Their sum is
+// still the tab pill's number.
+function cardNonBreakingCount(p: ContractCard): number {
+  return p.findings.filter((f) => !isBreakingFinding(f) && !isAcked(f) && definitionClass(f) !== 'DESCRIPTION').length;
+}
+function cardDescriptionCount(p: ContractCard): number {
+  return p.findings.filter((f) => !isBreakingFinding(f) && !isAcked(f) && definitionClass(f) === 'DESCRIPTION').length;
+}
+function cardNonBreakingTitle(p: ContractCard): string {
+  return informationalChipTitle(cardNonBreakingCount(p), 0);
 }
 
 // ─── Local acknowledge (qfix-2026-08-25) ─────────────────────────────────
@@ -1368,16 +1387,15 @@ function prettyBody(raw: string): string {
   }
 }
 
+// One timestamp format on the surface (src/time.ts): the captured column and
+// a finding's snapshot labels used to render the same instant two ways.
 function humanTime(iso: string): string {
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return iso;
-  return d.toLocaleString(undefined, {
-    month: 'short',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit'
-  });
+  return isoStamp(iso);
+}
+/** The two snapshot instants of a definition_change, in the surface format. */
+function snapshotStamps(detail?: string): { from: string; to: string } {
+  const t = snapshotTimes(detail);
+  return { from: isoStamp(t.from), to: isoStamp(t.to) };
 }
 
 function toggle(id: string) {
@@ -1519,7 +1537,7 @@ watch(tab, (t) => {
         Contracts
         <!-- red = act (breaking) · copper = review (informational, un-acked) -->
         <span v-if="contractBreakingCount" class="tab-count bad" :title="breakingCountTitle(contractBreakingCount)">{{ contractBreakingCount }}</span>
-        <span v-if="contractInfoCount" class="tab-count warn" :title="informationalCountTitle(contractInfoCount)">{{ contractInfoCount }}</span>
+        <span v-if="contractInfoCount" class="tab-count warn" :class="{ desc: contractDescOnly }" :title="contractDescOnly ? descriptionCountTitle(contractInfoCount) : informationalCountTitle(contractInfoCount)">{{ contractInfoCount }}</span>
       </button>
       <button role="tab" :aria-selected="tab === 'threads'" :class="{ active: tab === 'threads' }" @click="setTab('threads')">
         Threads
@@ -1564,7 +1582,8 @@ watch(tab, (t) => {
         <svg class="hx" :class="toneClass(m.headline.tone)" aria-hidden="true" focusable="false"><use href="#hxbolt" /></svg>
         <!-- The deck's sentence stays whole (`Server: … You: …`): its clause is
              pinned lowercase by e2e headline-fresh, so it is the one line that
-             keeps its pivot. -->
+             keeps its pivot. A description-only change names itself in the
+             clause but never takes the drift tone (ui/src/mcp.ts). -->
         <div class="hl-you">
           <span class="mcp-badge" :title="MCP_BADGE_TOOLTIP">MCP</span>
           <strong>{{ m.headline.text }}</strong>
@@ -1602,15 +1621,21 @@ watch(tab, (t) => {
             </h3>
             <p v-if="inboundEdges.length === 0" class="empty small">No inbound edges.</p>
             <div v-else class="edge-table">
+              <!-- The evidence the kit's table carries: calls in the window, drifted
+                   calls (red mono when any), last seen. The observed rate rides as a
+                   muted suffix on the call count and only when it is non-zero — a
+                   column of `0 /min` made a live install look dead. -->
               <div class="edge-head">
-                <span>peer host</span><span>observed RPM</span>
+                <span>peer host</span><span>calls</span><span>drift</span><span>last seen</span>
               </div>
               <div v-for="e in inboundEdges" :key="'i-' + e.peer_host" class="edge-row" :class="{ drift: e.drift_count > 0 }">
                 <span class="peer mono">
                   {{ e.peer_host }}
                   <span v-if="mcpHosts.has(e.peer_host)" class="mcp-badge" :title="MCP_BADGE_TOOLTIP">{{ mcpBadgeLabel(e.class) }}</span>
                 </span>
-                <span class="num">{{ fmtRPM(e.rpm) }}<span class="unit">/min</span></span>
+                <span class="num calls">{{ e.call_count }}<span v-if="e.rpm" class="unit">· {{ fmtRPM(e.rpm) }}/min</span></span>
+                <span class="num drift-n" :class="{ some: e.drift_count > 0 }">{{ e.drift_count }}</span>
+                <span class="num seen">{{ timeAgo(e.last_seen) }}</span>
               </div>
             </div>
           </div>
@@ -1627,7 +1652,7 @@ watch(tab, (t) => {
             <p v-if="outboundEdges.length === 0" class="empty small">No outbound edges.</p>
             <div v-else class="edge-table">
               <div class="edge-head named">
-                <span>provider</span><span>observed RPM</span><span></span>
+                <span>provider</span><span>calls</span><span>drift</span><span>last seen</span><span></span>
               </div>
               <!-- A NAME renders OVER the host, never instead of it — the registrable domain
                    stays visible (it is the identity; the name is decoration). An UNNAMED row
@@ -1665,7 +1690,9 @@ watch(tab, (t) => {
                       </button>
                     </span>
                   </span>
-                  <span class="num">{{ fmtRPM(e.rpm) }}<span class="unit">/min</span></span>
+                  <span class="num calls">{{ e.call_count }}<span v-if="e.rpm" class="unit">· {{ fmtRPM(e.rpm) }}/min</span></span>
+                  <span class="num drift-n" :class="{ some: e.drift_count > 0 }">{{ e.drift_count }}</span>
+                  <span class="num seen">{{ timeAgo(e.last_seen) }}</span>
                   <span class="edge-actions">
                     <!-- v1 phase 4. It sits FIRST because it is the only action
                          on this row that reaches the other org; Rename is
@@ -1788,7 +1815,9 @@ watch(tab, (t) => {
               <span v-if="cardOverCap(p)" class="tag warn">{{ CONTRACT_OVER_CAP_TAG }}</span>
               <!-- Tier-split chips — same taxonomy as the tab pills, so the sums always agree. -->
               <span v-if="cardBreakingCount(p)" class="tag drift">{{ breakingChipLabel(cardBreakingCount(p)) }}</span>
-              <span v-if="cardInfoCount(p)" class="tag warn" :title="cardInfoTitle(p)">{{ informationalChipLabel(cardInfoCount(p)) }}</span>
+              <span v-if="cardNonBreakingCount(p)" class="tag warn" :title="cardNonBreakingTitle(p)">{{ informationalChipLabel(cardNonBreakingCount(p)) }}</span>
+              <!-- A wording change is not a warning: steel outline, the row badge's own word. -->
+              <span v-if="cardDescriptionCount(p)" class="tag desc" :title="descriptionChipTitle(cardDescriptionCount(p))">{{ descriptionChipLabel(cardDescriptionCount(p)) }}</span>
               <span
                 v-if="!cardBreakingCount(p) && !cardInfoCount(p) && p.spec && cardValidatedCalls(p)"
                 class="tag ok"
@@ -1867,8 +1896,8 @@ watch(tab, (t) => {
           <article v-for="f in p.findings" :id="'finding-' + f.id" :key="f.id" class="finding nested" :class="{ acked: isAcked(f), highlight: f.id === highlightFindingId }">
             <div class="finding-head">
               <!-- definition_change rows carry the classifier's class badge (deck §3):
-                   BREAKING red filled · NON-BREAKING amber filled · DESCRIPTION amber outline —
-                   each badge matches the tab pill that counts it. -->
+                   BREAKING red · NON-BREAKING copper · DESCRIPTION steel — each
+                   badge matches the tab pill and the card chip that count it. -->
               <span
                 v-if="f.kind === 'definition_change'"
                 class="badge"
@@ -1891,14 +1920,16 @@ watch(tab, (t) => {
             <!-- definition_change: their tools/list at T1 vs at T2 (deck §3).
                  DESCRIPTION rows render the diff PLAIN — a wording change is
                  not a severity diff. -->
+            <!-- The snapshot labels carry a digest and a timestamp — machine
+                 identifiers, so `.snap` keeps the eyebrow's case (no uppercase). -->
             <div v-if="f.kind === 'definition_change'" class="drift-row two" :class="{ plain: definitionClass(f) === 'DESCRIPTION' }">
               <div class="col">
-                <div class="k">{{ beforeColLabel(f.spec_version_from || '', snapshotTimes(f.detail).from) }}</div>
+                <div class="k snap">{{ beforeColLabel(f.spec_version_from || '', snapshotStamps(f.detail).from) }}</div>
                 <div class="v expected">{{ f.expected }}</div>
               </div>
               <div class="arrow">≠</div>
               <div class="col">
-                <div class="k">{{ afterColLabel(f.spec_version_to || '', snapshotTimes(f.detail).to) }}</div>
+                <div class="k snap">{{ afterColLabel(f.spec_version_to || '', snapshotStamps(f.detail).to) }}</div>
                 <div class="v actual">{{ f.actual }}</div>
               </div>
             </div>
@@ -1906,8 +1937,10 @@ watch(tab, (t) => {
                  `expected`/`actual` already ARE the two versions, so only the
                  labels change — neither side is "live", and there is no
                  location, because the change is in the documents. The `detail`
-                 paragraph below names the field the rule fired on. -->
-            <div v-else-if="f.kind === 'version-diff'" class="drift-row two">
+                 paragraph below names the field the rule fired on. Plain ink on
+                 both sides: neither document is a verdict, and green is spent
+                 on reached verdicts only. -->
+            <div v-else-if="f.kind === 'version-diff'" class="drift-row two plain">
               <div class="col">
                 <div class="k">replaced</div>
                 <div class="v expected">{{ f.expected }}</div>
@@ -1934,7 +1967,7 @@ watch(tab, (t) => {
               </div>
             </div>
             <p class="detail" v-if="f.kind === 'definition_change'">
-              {{ defChangeDetail(snapshotTimes(f.detail).from, snapshotTimes(f.detail).to, providerNameFor(f)) }}
+              {{ defChangeDetail(snapshotStamps(f.detail).from, snapshotStamps(f.detail).to, providerNameFor(f)) }}
             </p>
             <p class="detail" v-else-if="f.detail">{{ f.detail }}</p>
 
@@ -2209,12 +2242,20 @@ watch(tab, (t) => {
           </p>
 
           <template v-for="c in filteredCalls" :key="c.id">
+            <!-- A row that opens the call's detail is a control: in the tab
+                 order, a button to assistive tech, Enter / Space toggle it like
+                 the click does, and it draws the token focus ring. -->
             <div
               class="tr-row"
               :class="{ drift: isDrifted(c), open: expanded[c.id] }"
+              role="button"
+              tabindex="0"
+              :aria-expanded="!!expanded[c.id]"
               @click="toggle(c.id)"
+              @keydown.enter.prevent="toggle(c.id)"
+              @keydown.space.prevent="toggle(c.id)"
             >
-              <span class="c-when">
+              <span class="c-when" :title="c.captured_at">
                 <span class="chev">{{ expanded[c.id] ? '▾' : '▸' }}</span>
                 {{ humanTime(c.captured_at) }}
               </span>
@@ -2468,6 +2509,9 @@ code { font-family: var(--f-mono); }
 .tab-count { font: 500 10px/1.4 var(--f-mono); letter-spacing: 0; text-transform: none; padding: 1px 6px; min-width: 20px; text-align: center; border: var(--border-w-hair) solid var(--rule); border-radius: var(--radius); color: var(--ink-soft); background: var(--surface); }
 .tab-count.bad { background: var(--sev-breaking); border-color: var(--sev-breaking); color: var(--sev-breaking-contrast); }
 .tab-count.warn { background: var(--sev-warning); border-color: var(--sev-warning); color: var(--sev-warning-contrast); }
+/* Every row in the count is a DESCRIPTION change: the steel outline the row
+   badge wears, not the warning fill — a wording change is not a warning. */
+.tab-count.warn.desc { background: var(--surface); border-color: var(--ink-soft); color: var(--ink-soft); }
 .tab-dot { width: 8px; height: 8px; border-radius: var(--radius); background: var(--accent); display: inline-block; }
 .tab-dot.disconnected { background: var(--ink-soft); }
 
@@ -2529,7 +2573,7 @@ h2 small { font: 400 12.5px/1.5 var(--f-sans); letter-spacing: 0.04em; text-tran
    the two declarations for their own controls (src/tokens.test.ts lists them;
    the uploader's live in ContractUploader.vue). */
 .btn:focus-visible, .tabs button:focus-visible, .seg button:focus-visible, .pill-btn:focus-visible,
-.live-btn:focus-visible, .pending-bar:focus-visible, .tr-search:focus-visible, .tr-select:focus-visible,
+.live-btn:focus-visible, .pending-bar:focus-visible, .tr-search:focus-visible, .tr-select:focus-visible, .tr-row:focus-visible,
 .tr-clear:focus-visible, .tr-chk input:focus-visible, .doc-link:focus-visible, .edge-contract-link:focus-visible,
 .pill-link:focus-visible, .uncovered-toggle:focus-visible, .edge-rename-input:focus-visible, .edge-suggest input:focus-visible {
   outline: var(--focus-ring); outline-offset: var(--focus-offset);
@@ -2545,7 +2589,8 @@ h2 small { font: 400 12.5px/1.5 var(--f-sans); letter-spacing: 0.04em; text-tran
 .connect-banner.info { border-color: var(--rule); color: var(--ink-soft); }
 
 /* Traffic toolbar: a framed band — search + facet filters + the live control.
-   Sticky, so the filters stay in reach while the tail scrolls. */
+   Sticky, so the filters stay in reach while the tail scrolls (wide layouts
+   only — at phone width it is a third of the viewport, so it scrolls away). */
 .tr-toolbar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 12px; padding: 10px 12px; border: var(--border-w) solid var(--rule); border-radius: var(--radius); background: var(--surface); }
 .tr-search { flex: 1 1 220px; min-width: 160px; background: var(--surface); border: var(--border-w) solid var(--rule); border-radius: var(--radius); color: var(--ink); font: inherit; font-size: 13px; padding: 7px 10px; transition: border-color var(--dur-fast) var(--ease); }
 .tr-search::placeholder { color: var(--ink-soft); }
@@ -2585,8 +2630,10 @@ h2 small { font: 400 12.5px/1.5 var(--f-sans); letter-spacing: 0.04em; text-tran
 .tr-row.open { background: var(--surface-sunk); }
 .tr-row.drift { box-shadow: inset var(--border-w-stripe) 0 0 var(--sev-breaking); }
 .chev { color: var(--ink-soft); display: inline-block; width: 16px; }
-.c-when { color: var(--ink-soft); white-space: nowrap; font-family: var(--f-mono); font-size: 12.5px; }
-.c-call { display: flex; align-items: center; gap: 8px; min-width: 0; }
+/* Per-cell rules are scoped to ROWS: the head's cells share the same class
+   names and must keep the head's one register (mono 10.5px, --ink-soft). */
+.tr-row .c-when { color: var(--ink-soft); white-space: nowrap; font-family: var(--f-mono); font-size: 12.5px; }
+.tr-row .c-call { display: flex; align-items: center; gap: 8px; min-width: 0; }
 /* Method chips are NEUTRAL mono micro-labels. They used to borrow the palette —
    POST green, GET accent, DELETE the severity red — which put a `breaking` red
    on a DELETE that was behaving perfectly. The verb is the distinguisher; the
@@ -2596,20 +2643,22 @@ h2 small { font: 400 12.5px/1.5 var(--f-sans); letter-spacing: 0.04em; text-tran
 .route { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .status-code { font-family: var(--f-mono); font-size: 13px; }
 .status-code.err { color: var(--sev-breaking-ink); }
-.c-corr { display: flex; flex-direction: column; font-size: 12px; color: var(--ink); min-width: 0; }
-.c-corr span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.c-corr .dim { color: var(--ink-soft); }
+.tr-row .c-corr { display: flex; flex-direction: column; font-size: 12px; color: var(--ink); min-width: 0; }
+.tr-row .c-corr span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tr-row .c-corr .dim { color: var(--ink-soft); }
 /* Contract marks: `conforming` is the only green — a reached verdict. `drifted`
    is the red fill, `not checked` / `internal` the muted outline. */
 .tag { display: inline-block; white-space: nowrap; font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; padding: 2px 7px; border: var(--border-w-hair) solid var(--rule); border-radius: var(--radius); color: var(--ink-soft); }
 .tag.ok { color: var(--ok-ink); border-color: var(--ok); }
 .tag.drift { background: var(--sev-breaking); border-color: var(--sev-breaking); color: var(--sev-breaking-contrast); }
 .tag.warn { background: var(--sev-warning); border-color: var(--sev-warning); color: var(--sev-warning-contrast); }
+/* `N DESCRIPTION`: the row badge's steel outline — one vocabulary per class. */
+.tag.desc { color: var(--ink-soft); border-color: var(--ink-soft); }
 .tag.none { color: var(--ink-soft); border-color: var(--rule); }
 
 /* Traffic counterparty cell. Direction is a fact, not a verdict: `out` is the
    accent, `in` is muted ink, and the uppercase label tells them apart. */
-.c-peer { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.tr-row .c-peer { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .dir-chip { font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; border: var(--border-w-hair) solid currentColor; border-radius: var(--radius); padding: 1px 6px; flex: none; }
 .dir-chip.out { color: var(--accent-ink); }
 .dir-chip.in { color: var(--ink-soft); }
@@ -2618,7 +2667,9 @@ h2 small { font: 400 12.5px/1.5 var(--f-sans); letter-spacing: 0.04em; text-tran
 /* Expanded call: headers and bodies on the sunk surface, framed. */
 .tr-detail { border-top: var(--border-w-hair) solid var(--rule-soft); background: var(--surface-sunk); padding: 14px 14px 18px; }
 .meta-line { color: var(--ink-soft); font-size: 12.5px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
-.meta-line .dim { opacity: 0.5; }
+/* Dimming is done with the palette, never opacity: --ink-soft keeps its
+   contrast on the sunk surface, a half-opacity --ink-soft did not (2.2:1). */
+.meta-line .dim { color: var(--ink-soft); }
 /* `redacted · patterns` is a fact about the row, stated in body ink at weight —
    not a warning, and not a link. */
 .redacted-tag { color: var(--ink); font-weight: 600; }
@@ -2664,9 +2715,19 @@ pre.body { background: var(--surface); border: var(--border-w) solid var(--rule)
    ×N calls) → expected ≠ actual ≠ location in mono cells → detail →
    correlation → actions. Acknowledged rows dim in place; evidence is never
    hidden. */
-.finding { background: var(--surface); border: var(--border-w) solid var(--rule); border-radius: var(--radius); margin-bottom: 14px; transition: opacity var(--dur) var(--ease); }
+.finding { background: var(--surface); border: var(--border-w) solid var(--rule); border-radius: var(--radius); margin-bottom: 14px; transition: border-color var(--dur) var(--ease), color var(--dur) var(--ease); }
 .finding.nested { margin: 12px 0 0; }
-.finding.acked { opacity: 0.55; }
+/* Acknowledged: dimmed IN PLACE with the palette, never with opacity — the
+   kit's `opacity: .55` put 12–13px evidence at 2.6:1, which hides it for
+   low-vision readers while promising it is never hidden. Text drops to
+   --ink-soft, the frame to --rule-soft, the chip and its bolts to steel; every
+   pair stays at or above 4.5:1 in both schemes. */
+.finding.acked { border-color: var(--rule-soft); }
+.finding.acked .finding-head, .finding.acked .drift-row, .finding.acked .col { border-color: var(--rule-soft); }
+.finding.acked .endpoint, .finding.acked .v, .finding.acked .v.expected, .finding.acked .v.actual,
+.finding.acked .detail, .finding.acked .corr code { color: var(--ink-soft); }
+.finding.acked .badge { color: var(--ink-soft); border-color: var(--rule); }
+.finding.acked .badge .hx { color: var(--ink-soft); --l: var(--sev-info-bolt); }
 /* The #contracts/<finding_id> deep-link target — same accent rule as the
    Threads tab's highlighted row. */
 .finding.highlight { box-shadow: inset var(--border-w-stripe-lg) 0 0 var(--accent); }
@@ -2694,6 +2755,9 @@ pre.body { background: var(--surface); border: var(--border-w) solid var(--rule)
 .col { padding: 12px 18px; border-right: var(--border-w-hair) solid var(--rule-soft); min-width: 0; }
 .col:last-child { border-right: 0; }
 .col .k { font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); }
+/* A label carrying a digest and a timestamp is a machine identifier: the
+   eyebrow's register, but its case and tracking are left alone. */
+.col .k.snap { text-transform: none; letter-spacing: 0.02em; }
 .col .v { margin-top: 4px; font-family: var(--f-mono); font-size: 13px; word-break: break-word; }
 .v.expected { color: var(--ok-ink); }
 .v.actual { color: var(--sev-breaking-ink); }
@@ -2720,8 +2784,10 @@ pre.body { background: var(--surface); border: var(--border-w) solid var(--rule)
 .tool-tag.partial { color: var(--ink-soft); border-color: var(--rule); }
 .tool-note { color: var(--ink-soft); font-size: 12.5px; margin: 4px 0 0; }
 
-/* Edges overview: two framed groups, each a framed table. */
-.edge-groups { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+/* Edges overview: two framed groups stacked, each a framed table — the
+   inbound / outbound split is a group rule, not two half-width boxes that
+   squeezed every name and number. */
+.edge-groups { display: grid; grid-template-columns: 1fr; gap: 14px; }
 .edge-group { background: var(--surface); border: var(--border-w) solid var(--rule); border-radius: var(--radius); padding: 14px 16px 18px; }
 .edge-title { font-size: 13.5px; font-weight: 600; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .edge-title small { color: var(--ink-soft); font-weight: 400; font-size: 12.5px; }
@@ -2729,7 +2795,7 @@ pre.body { background: var(--surface); border: var(--border-w) solid var(--rule)
 .dir-badge.out { color: var(--accent-ink); }
 .dir-badge.in { color: var(--ink-soft); }
 .edge-table { border: var(--border-w) solid var(--rule); border-radius: var(--radius); background: var(--surface); }
-.edge-head, .edge-row { display: grid; grid-template-columns: 2.4fr 1fr; gap: 8px; align-items: center; padding: 10px 14px; }
+.edge-head, .edge-row { display: grid; grid-template-columns: minmax(0, 2.4fr) max-content max-content max-content; gap: 14px; align-items: center; padding: 10px 14px; }
 .edge-head { font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-soft); background: var(--surface-sunk); border-bottom: var(--border-w) solid var(--rule); }
 /* The column labels never wrap ("OBSERVED RPM" used to become the tallest thing
    in the header row). */
@@ -2741,7 +2807,7 @@ pre.body { background: var(--surface); border: var(--border-w) solid var(--rule)
 .edge-row .peer { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
 /* v1p1 edge naming: outbound rows carry name-over-host + actions. The name cell
    gets a real floor — a fractional track collapsed it to ~59px at every width. */
-.edge-head.named, .edge-row.named { grid-template-columns: minmax(144px, 1fr) max-content auto; }
+.edge-head.named, .edge-row.named { grid-template-columns: minmax(144px, 1fr) max-content max-content max-content auto; }
 .edge-name-cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .edge-name-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .edge-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -2773,8 +2839,13 @@ pre.body { background: var(--surface); border: var(--border-w) solid var(--rule)
 .edge-suggest input { margin-top: 2px; accent-color: var(--ink); }
 .edge-rename-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .edge-name-note { margin: 0; padding: 6px 14px; font-size: 12px; color: var(--ink-soft); border-top: var(--border-w-hair) solid var(--rule-soft); }
-.edge-row .num { text-align: right; font-family: var(--f-mono); font-size: 12.5px; font-variant-numeric: tabular-nums; }
-.edge-row .unit { color: var(--ink-soft); font-size: 11px; margin-left: 2px; }
+.edge-row .num { text-align: right; font-family: var(--f-mono); font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.edge-row .unit { color: var(--ink-soft); font-size: 11px; margin-left: 4px; }
+/* Drifted calls: a number in red mono when there are any, muted at zero —
+   the count is the label. Last seen rides the muted register. */
+.edge-row .drift-n { color: var(--ink-soft); }
+.edge-row .drift-n.some { color: var(--sev-breaking-ink); font-weight: 600; }
+.edge-row .seen { color: var(--ink-soft); }
 
 /* Providers with no contract — rows, not cards. Collapsed by default. */
 .uncovered h2 { margin-bottom: 6px; }
@@ -2818,12 +2889,6 @@ pre.body { background: var(--surface); border: var(--border-w) solid var(--rule)
 /* The footer band: two mono micro-labels. */
 .foot { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 10px 18px; border-top: var(--border-w) solid var(--rule); background: var(--surface); font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-soft); }
 
-/* The two edge tables need the full width well before the phone breakpoint —
-   side by side they squeeze the name cell to a few characters. */
-@media (max-width: 1024px) {
-  .edge-groups { grid-template-columns: 1fr; }
-}
-
 @media (max-width: 760px) {
   .settings-grid { grid-template-columns: 1fr; }
   .drift-row, .drift-row.two { grid-template-columns: 1fr; }
@@ -2838,10 +2903,28 @@ pre.body { background: var(--surface); border: var(--border-w) solid var(--rule)
   .tabs button { padding: 10px 10px; }
   .panel { padding: 16px 12px 20px; }
   .banner, .theme-flip-banner { margin-left: 12px; margin-right: 12px; }
+  /* The toolbar is a third of a phone viewport: it scrolls with the page. */
+  .tr-toolbar { position: static; }
   .tr-head { display: none; }
-  .tr-row { grid-template-columns: 1fr 1fr; grid-auto-rows: min-content; }
+  /* Each call is a stacked card: the route on its own line, whole (it is the
+     cell that matters, so it wraps rather than ellipsizes); direction, host,
+     captured time and status on the second; correlation and the contract
+     chip on the third. Nothing sits in an unlabeled cell beside a stranger. */
+  .tr-row {
+    grid-template-columns: minmax(0, 1fr) max-content max-content;
+    grid-template-areas: "call call call" "peer when status" "corr corr mark";
+    gap: 6px 10px;
+  }
+  .tr-row .c-call { grid-area: call; flex-wrap: wrap; }
+  .tr-row .route { white-space: normal; overflow: visible; text-overflow: clip; word-break: break-word; }
+  .tr-row .c-peer { grid-area: peer; }
+  .tr-row .c-when { grid-area: when; font-size: 11.5px; }
+  .tr-row .c-status { grid-area: status; }
+  .tr-row .c-corr { grid-area: corr; }
+  .tr-row .c-mark { grid-area: mark; justify-self: end; }
   .reqres { grid-template-columns: 1fr; }
-  .edge-head.named, .edge-row.named { grid-template-columns: minmax(0, 1fr) max-content; }
+  .edge-head, .edge-row { gap: 10px; }
+  .edge-head.named, .edge-row.named { grid-template-columns: minmax(0, 1fr) max-content max-content max-content; }
   .edge-row.named .edge-actions { grid-column: 1 / -1; justify-content: flex-start; }
 }
 

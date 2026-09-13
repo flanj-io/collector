@@ -22,6 +22,9 @@ import {
   informationalChipLabel,
   informationalChipTitle,
   informationalCountTitle,
+  descriptionChipLabel,
+  descriptionChipTitle,
+  descriptionCountTitle,
   isAckable,
   isAcked,
   isBreakingFinding,
@@ -228,14 +231,28 @@ describe('deck §2 — health', () => {
   // qfix2-2026-08-26 (§7 risk 3): a description change left the Local notices
   // band when it became flaggable. If the headline had no clause for it, a
   // server whose ONLY drift is a wording change would say "no drift detected"
-  // in green here while the Contracts tab showed an amber row with a primary
-  // `Flag this` — and the finding would appear nowhere on Overview at all.
-  it('description-only server is never green', () => {
+  // here while the Contracts tab showed a row with a primary `Flag this` — and
+  // the finding would appear nowhere on Overview at all. So the WORDS name it.
+  // UX review 2026-09-14: the TONE, however, is never `drift` — the same
+  // finding is chipped DESCRIPTION (steel) on the tab and the row, and a red
+  // headline over a wording change was a false alarm the row then retracted.
+  it('description-only server names the change and is never red', () => {
     const h = mcpHeadline(server, [descChange()], t, 3);
-    expect(h.tone).toBe('drift');
+    expect(h.tone).toBe('ok');
     expect(h.text).toBe(
       'Server: acme-mcp v1.4.0. You: definition change on get_balance — description only, no schema change.'
     );
+    // …and never green either while nothing has been validated: the tone is
+    // the verdict the calls earned, the clause is the change.
+    const cold = mcpHeadline(server, [descChange()], t, 0);
+    expect(cold.tone).toBe('neutral');
+    expect(cold.text).toBe(h.text);
+    // A wording change is chipped DESCRIPTION everywhere it is counted — the
+    // tab's steel title and the card's steel chip use the row badge's word.
+    expect(descriptionCountTitle(1)).toBe('1 description change — wording only, non-breaking — acknowledge to clear');
+    expect(descriptionCountTitle(2)).toBe('2 description changes — wording only, non-breaking — acknowledge to clear');
+    expect(descriptionChipLabel(1)).toBe('1 DESCRIPTION');
+    expect(descriptionChipTitle(2)).toBe('2 description changes — wording only');
   });
 
   it('a breaking definition change still outranks a description one', () => {
@@ -267,7 +284,11 @@ describe('deck §2 — health', () => {
     // and a definition change never had a call. Neither may fall to neutral.
     expect(mcpHeadline(server, [finding({})], t, 0).tone).toBe('drift');
     expect(mcpHeadline(server, [defChange()], t, 0).tone).toBe('drift');
-    expect(mcpHeadline(server, [descChange()], t, 0).tone).toBe('drift');
+    // A description change is named, but it is not drift: with nothing
+    // validated the line is neutral and still says what changed.
+    const desc = mcpHeadline(server, [descChange()], t, 0);
+    expect(desc.tone).toBe('neutral');
+    expect(desc.text).toContain('description only, no schema change');
   });
 
   it('the three tones are distinct states, never a boolean in disguise', () => {

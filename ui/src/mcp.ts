@@ -133,6 +133,17 @@ export function informationalCountTitle(n: number): string {
   return `${n} non-breaking — acknowledge to clear`;
 }
 
+/**
+ * The same tab pill when EVERY un-acked informational row is a DESCRIPTION
+ * change: `1 description change — wording only, non-breaking — acknowledge to
+ * clear`. The pill then wears the steel outline instead of the copper fill —
+ * one wording change must never read as a warning (UX review 2026-09-14) —
+ * and the title says so before it repeats the shared tail.
+ */
+export function descriptionCountTitle(n: number): string {
+  return `${n} description change${n === 1 ? '' : 's'} — wording only, non-breaking — acknowledge to clear`;
+}
+
 /** Red card chip: `1 BREAKING`. */
 export function breakingChipLabel(n: number): string {
   return `${n} BREAKING`;
@@ -141,6 +152,17 @@ export function breakingChipLabel(n: number): string {
 /** Amber card chip: `2 NON-BREAKING`. */
 export function informationalChipLabel(n: number): string {
   return `${n} NON-BREAKING`;
+}
+
+/** Steel card chip: `1 DESCRIPTION` — the row badge's own word, so the card,
+ *  the tab and the row all call a wording change the same thing. */
+export function descriptionChipLabel(n: number): string {
+  return `${n} DESCRIPTION`;
+}
+
+/** Steel card chip title: `1 description change — wording only`. */
+export function descriptionChipTitle(n: number): string {
+  return `${n} description change${n === 1 ? '' : 's'} — wording only`;
 }
 
 /** Amber card chip title: `1 non-breaking change · 1 description change`. */
@@ -211,11 +233,15 @@ export interface McpHeadline {
  * changes OUT of the Overview "Local notices" band (they are flaggable now, and
  * that band promises nothing in it can be flagged). Without a clause here a
  * server whose only drift is a wording change would report "no drift detected"
- * in GREEN on Overview while the Contracts tab showed an amber row with a
- * primary `Flag this` — the tab and the headline contradicting each other
- * (ux-design-v2 §7 risk 3: that band must never render green). Description
- * drift is not an alarm, so the line says plainly what did and did not change;
- * it is simply not `ok`.
+ * while the Contracts tab listed a row with a primary `Flag this` — the tab and
+ * the headline contradicting each other (ux-design-v2 §7 risk 3). So the line
+ * names the wording change. Its TONE, though, is not `drift` (UX review
+ * 2026-09-14): a description change is chipped `DESCRIPTION` on the row and
+ * the tab, and the kit's own detail copy says wording is not a severity claim —
+ * a red bolt and a red rule over it were a false alarm the row then retracted.
+ * The clause rides the verdict the validated calls earned: `ok` when this
+ * server has validated at least one call, `neutral` when it has validated
+ * none. The words carry the change; the tone carries the verdict.
  */
 export function mcpHeadline(
   s: McpServerRef,
@@ -246,7 +272,10 @@ export function mcpHeadline(
   const described = findings.filter((f) => f.kind === 'definition_change' && definitionClass(f) === 'DESCRIPTION');
   if (described.length > 0) {
     const tools = Array.from(new Set(described.map((f) => f.endpoint))).join(', ');
-    return { text: serverLead(s) + `definition change on ${tools} — description only, no schema change.`, tone: 'drift' };
+    return {
+      text: serverLead(s) + `definition change on ${tools} — description only, no schema change.`,
+      tone: validatedCalls > 0 ? 'ok' : 'neutral'
+    };
   }
   if (validatedCalls <= 0) {
     return { text: serverLead(s) + NOTHING_VALIDATED_YET_CLAUSE, tone: 'neutral' };
