@@ -2545,9 +2545,10 @@ code { font-family: var(--font-mono); }
 .prov-origin { color: var(--ink-soft); font-weight: 400; }
 .prov-nospec { color: var(--ink-soft); font-size: 0.88rem; margin: 0.6rem 0 0; }
 /* The document-cap line. Same slot and same size as .prov-nospec — it is the
-   same kind of sentence — in the amber TEXT role rather than the muted one,
-   because this one names something the operator can act on. --sev-warning, not
-   --sev-warning-edge: the fill is for chips, and --accent is never semantic. */
+   same kind of sentence — but it stays on the warning tier: an over-cap
+   document is a finding-class condition the operator acts on. Its own text is
+   the label, and it takes the tier's edge rule as well as the ink role so it
+   survives sharing a hue with the accent (copper is both, by design). */
 .prov-oversize { color: var(--sev-warning-ink); font-size: 0.88rem; margin: 0.6rem 0 0; padding-left: 0.6rem; border-left: 3px solid var(--sev-warning-edge); }
 .prov-integration { color: var(--ink-soft); font-size: 0.78rem; }
 .finding.nested { background: var(--surface-sunk); margin: 0.75rem 0 0; }
