@@ -402,3 +402,52 @@ function onHostEdited() {
     <button v-if="!preview" type="button" class="btn ghost small" @click="emit('cancel')">Cancel</button>
   </div>
 </template>
+
+<style scoped>
+/* Moved verbatim out of App.vue's global block (2026-09-13): the uploader used
+   to be styled from there and carried no style of its own. Layout and component
+   rules only — every colour, rule width and radius is a token (src/tokens.css). */
+/* Rendered inline on whichever row opened it — there is one mutation, so only
+   one can be open at a time. */
+.uploader { border: 1px dashed var(--rule); border-radius: var(--radius); padding: 0.7rem; margin-top: 0.5rem; background: var(--surface-sunk); }
+.uploader-host { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.8rem; color: var(--ink-soft); margin-bottom: 0.6rem; }
+.uploader-host input {
+  padding: 0.35rem 0.5rem; border: 1px solid var(--rule); border-radius: var(--radius);
+  background: var(--surface); color: var(--ink); font-size: 0.85rem; max-width: 22rem;
+}
+.dropzone {
+  border: 1px dashed var(--rule); border-radius: var(--radius); padding: 1.1rem 0.8rem;
+  text-align: center; background: var(--surface);
+}
+.dropzone.dragging { border-color: var(--accent); background: var(--surface-sunk); }
+.dz-prompt { margin: 0 0 0.15rem; font-size: 0.88rem; }
+.dz-formats { margin: 0 0 0.6rem; font-size: 0.78rem; color: var(--ink-soft); }
+/* The privacy line sits AT the picker, where the document is chosen — the one
+   moment the operator is deciding whether to hand over a vendor's document. */
+.uploader-privacy { margin: 0.55rem 0 0; font-size: 0.78rem; color: var(--ink); }
+.uploader-note { margin: 0.2rem 0 0; font-size: 0.78rem; color: var(--ink-soft); }
+.uploader-error { margin: 0.5rem 0 0; font-size: 0.82rem; color: var(--sev-breaking); }
+.uploader-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.7rem; }
+.confirm-facts { display: grid; gap: 0.25rem; margin: 0 0 0.5rem; }
+.confirm-facts > div { display: flex; gap: 0.5rem; font-size: 0.85rem; }
+.confirm-facts dt { color: var(--ink-soft); min-width: 6rem; }
+.confirm-facts dd { margin: 0; }
+/* The binding checklist. A `servers:` mismatch used to render in body ink —
+   "warn, never block" means warn VISIBLY, and that was a whisper. Warnings get
+   the warning colour and a marker; the button still says go. */
+.binding-checks { list-style: none; margin: 0 0 0.5rem; padding: 0.5rem 0.6rem; display: grid; gap: 0.3rem; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--rule); }
+.binding-checks.warned { border-color: var(--sev-warning-edge); background: var(--sev-warning-wash); }
+.binding-checks li { display: flex; gap: 0.45rem; align-items: flex-start; font-size: 0.8rem; line-height: 1.45; color: var(--ink-soft); }
+.binding-checks li.warn { color: var(--ink); }
+.binding-checks .chk { flex: none; width: 1em; text-align: center; font-weight: 700; color: var(--ink-soft); }
+.binding-checks li.warn .chk { color: var(--sev-warning-ink); }
+.confirm-host { margin: 0.1rem 0 0.6rem; }
+.confirm-host input:disabled { opacity: 0.7; cursor: not-allowed; }
+.host-hint, .host-locked { font-size: 0.72rem; color: var(--ink-soft); }
+.host-awaiting { font-size: 0.75rem; color: var(--ink); }
+.uploader-host.awaiting input { border-color: var(--accent); }
+.confirm-timing { margin: 0 0 0.4rem; font-size: 0.78rem; color: var(--ink-soft); }
+.host-hint code { font-size: 0.95em; }
+.btn.warn { border-color: var(--sev-warning-ink); }
+.uploader-host input:focus-visible, .dropzone:focus-visible { outline: var(--focus-ring); outline-offset: var(--focus-offset); }
+</style>
