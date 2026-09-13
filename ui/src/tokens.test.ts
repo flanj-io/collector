@@ -31,7 +31,7 @@ describe('design tokens', () => {
   });
 
   it('tokens.css carries the full triad in both schemes', () => {
-    for (const scheme of [':root {', '[data-theme="dark"] {']) {
+    for (const scheme of [':root {', '[data-flanj-theme="dark"] {']) {
       expect(tokens).toContain(scheme);
     }
     for (const t of ['--sev-breaking', '--sev-warning', '--sev-info']) {
@@ -87,7 +87,7 @@ describe('design tokens', () => {
     // applied by script, so a dark-OS visitor never sees a dark flash.
     const html = readFileSync(join(src, '..', 'index.html'), 'utf8');
     expect(html).toMatch(/<html lang="en" data-theme="light">/);
-    expect(tokens).toContain(':root:not([data-theme="light"])');
+    expect(tokens).toContain(':root:not([data-flanj-theme="light"])');
   });
 
   it('the pending family names itself as non-canonical and points at its fork', () => {
