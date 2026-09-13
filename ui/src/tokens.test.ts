@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { createHash } from 'node:crypto';
 
 /**
  * The token layer is only a design system for as long as nobody re-introduces a
@@ -19,6 +20,32 @@ const sfcs = readdirSync(src).filter((f) => f.endsWith('.vue'));
 const read = (f: string) => readFileSync(join(src, f), 'utf8');
 const styleOf = (f: string) => read(f).slice(read(f).indexOf('<style'));
 
+const CANONICAL_BANNER = '/* Flanj design tokens — CANONICAL SOURCE.';
+
+/** Every `--name:` declared (not merely read through var()) in a stylesheet. */
+function customPropertyNames(css: string): Set<string> {
+  const stripped = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  return new Set([...stripped.matchAll(/(?:^|[{;])\s*(--[\w-]+)\s*:/g)].map((m) => m[1]));
+}
+
+/** Names a surface declares that the canonical file also defines. */
+export function collidingDeclarations(css: string, canonical: Set<string>): string[] {
+  return [...customPropertyNames(css)].filter((n) => canonical.has(n)).sort();
+}
+
+/** docs/design/tokens.css when the docs vault sits somewhere above this repo. */
+function findVaultTokens(): string | null {
+  let dir = src;
+  for (let i = 0; i < 10; i++) {
+    const candidate = join(dir, 'docs', 'design', 'tokens.css');
+    if (existsSync(candidate)) return candidate;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
 describe('design tokens', () => {
   const tokens = read('tokens.css');
 
@@ -27,7 +54,7 @@ describe('design tokens', () => {
     expect(tokens).toContain('Canonical source lives in the docs vault');
     // The canonical file's own banner must survive the copy — its absence means
     // somebody hand-wrote a palette into this file instead of re-vendoring.
-    expect(tokens).toContain('/* Flanj design tokens — CANONICAL SOURCE.');
+    expect(tokens).toContain(CANONICAL_BANNER);
   });
 
   it('tokens.css carries the full triad in both schemes', () => {
@@ -73,9 +100,14 @@ describe('design tokens', () => {
         ['warning', '--sev-warning'],
         ['info', '--sev-info']
       ] as const) {
-        const rule = style.match(new RegExp(`\\.badge\\.${cls} \\{[^}]*\\}`));
-        if (rule) expect(rule[0], `.badge.${cls}`).toContain(`var(${fam})`);
-        if (rule) expect(rule[0], `.badge.${cls}`).not.toContain('var(--accent)');
+        const rule = style.match(new RegExp(`\\.badge\\.${cls}\\s*\\{[^}]*\\}`));
+        // The badges live in App.vue. There the rule MUST be found — an
+        // `if (rule)` here used to turn a reformatted selector into a silent
+        // pass, which is the opposite of a guard.
+        if (f === 'App.vue') expect(rule, `.badge.${cls} rule missing from App.vue`).not.toBeNull();
+        if (!rule) continue;
+        expect(rule[0], `.badge.${cls}`).toContain(`var(${fam})`);
+        expect(rule[0], `.badge.${cls}`).not.toContain('var(--accent)');
       }
     }
   });
@@ -112,6 +144,42 @@ describe('design tokens', () => {
       const off = style.match(/[^{}]*:focus\s*\{[^}]*outline:\s*none[^}]*\}/g) ?? [];
       expect(off, `outline switched off on :focus in ${f}`).toEqual([]);
     }
+  });
+
+  it('no surface rule declares a custom property the canonical file already defines', () => {
+    // peek.css once declared `--ok-ink: #1f6d3a` on the same :root as the
+    // vendored file and, loaded second, silently shadowed the canonical value.
+    // Any name the vault defines belongs to the vault: a surface may READ it
+    // and may declare its own names, never redeclare one of these.
+    const canonical = customPropertyNames(tokens);
+    expect(canonical.has('--ok-ink')).toBe(true);
+    // The scanner must bite before it is trusted: peek's exact declaration.
+    expect(collidingDeclarations(':root { --ok-ink: #1f6d3a; --peek-only: 1px; }', canonical)).toEqual(['--ok-ink']);
+    expect(collidingDeclarations('.x { color: var(--ok-ink); --peek-only: 1px; }', canonical)).toEqual([]);
+    const surfaces = [
+      ...sfcs.map((f) => [f, styleOf(f)] as const),
+      ...readdirSync(src)
+        .filter((f) => f.endsWith('.css') && f !== 'tokens.css')
+        .map((f) => [f, read(f)] as const)
+    ];
+    for (const [f, css] of surfaces) {
+      expect(collidingDeclarations(css, canonical), `${f} redeclares canonical tokens`).toEqual([]);
+    }
+  });
+
+  it('the vendored body below the header is the vault file, byte for byte', () => {
+    const body = tokens.slice(tokens.indexOf(CANONICAL_BANNER));
+    // The digest of the vault file as vendored. It changes only on a deliberate
+    // re-vendor, which is the one place this line is edited; anywhere else, a
+    // changed digest means somebody hand-edited the palette here.
+    expect(createHash('sha256').update(body).digest('hex')).toBe(
+      '45515ff6d45f7e7e31269b4ca001ae62811c309d9a6d16c12a106cb968657ffe'
+    );
+    // Where the docs vault is checked out beside this repo (the workspace
+    // layout), compare the bytes directly as well — CI has no vault, so the
+    // digest above is what it enforces.
+    const vault = findVaultTokens();
+    if (vault) expect(body).toBe(readFileSync(vault, 'utf8'));
   });
 
   it('the green quarantine is gone — --ok is canonical and nothing references --verified*', () => {
