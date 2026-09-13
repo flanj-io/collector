@@ -1481,7 +1481,7 @@ watch(tab, (t) => {
       <div class="meta" v-if="health">
         <!-- Org identity only — never the integration slug (it scopes a spec,
              not this org; it lives on the Overview headline + its Contracts card). -->
-        <span v-if="orgPillName" class="pill" title="Your organization — shown to the provider on every thread.">{{ orgPillName }}</span>
+        <span v-if="orgPillName" class="pill pill-name" title="Your organization — shown to the provider on every thread.">{{ orgPillName }}</span>
         <span v-if="!health.cp_configured" class="pill warn">control plane not configured</span>
         <!-- Connected: the pill is the one door out to the control plane. The
              LABEL stays the status ("Connected") — a status indicator that hides
@@ -2482,6 +2482,10 @@ code { font-family: var(--f-mono); }
 /* Attention states (not configured, pending) are the accent, outlined and
    labelled — the warning tier belongs to findings only. */
 .pill.warn { color: var(--accent-ink); border-color: var(--accent-ink); }
+/* A pill that carries a NAME someone typed (the org pill) keeps that name's own
+   case: the uppercase mono treatment is for labels. "CustomerX" is how the
+   provider sees it on every thread, and e2e reads it verbatim. */
+.pill-name { text-transform: none; letter-spacing: 0.02em; }
 /* Connected is a reached state: green, with the green bolt leading it. */
 .pill.ok { color: var(--ok-ink); border-color: var(--ok); }
 .pill-btn { cursor: pointer; transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease); }
