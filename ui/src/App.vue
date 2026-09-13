@@ -2907,21 +2907,24 @@ pre.body { background: var(--surface); border: var(--border-w) solid var(--rule)
   .tr-toolbar { position: static; }
   .tr-head { display: none; }
   /* Each call is a stacked card: the route on its own line, whole (it is the
-     cell that matters, so it wraps rather than ellipsizes); direction, host,
-     captured time and status on the second; correlation and the contract
-     chip on the third. Nothing sits in an unlabeled cell beside a stranger. */
+     cell that matters, so it wraps rather than ellipsizes); direction, host
+     and status on the second; captured time (muted) and the contract chip on
+     the third; correlation on its own line. Two columns only — a third
+     max-content column (the time beside the status) squeezed the host to
+     30px and wrapped it per character. Nothing sits in an unlabeled cell
+     beside a stranger. */
   .tr-row {
-    grid-template-columns: minmax(0, 1fr) max-content max-content;
-    grid-template-areas: "call call call" "peer when status" "corr corr mark";
+    grid-template-columns: minmax(0, 1fr) max-content;
+    grid-template-areas: "call call" "peer status" "when mark" "corr corr";
     gap: 6px 10px;
   }
   .tr-row .c-call { grid-area: call; flex-wrap: wrap; }
   .tr-row .route { white-space: normal; overflow: visible; text-overflow: clip; word-break: break-word; }
   .tr-row .c-peer { grid-area: peer; }
-  /* The host is an identity: it wraps rather than ellipsizes beside the time. */
-  .tr-row .peer-host { white-space: normal; overflow: visible; text-overflow: clip; word-break: break-all; }
+  /* The host is an identity: it wraps at natural breaks rather than ellipsizing. */
+  .tr-row .peer-host { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
   .tr-row .c-when { grid-area: when; font-size: 11.5px; }
-  .tr-row .c-status { grid-area: status; }
+  .tr-row .c-status { grid-area: status; justify-self: end; }
   .tr-row .c-corr { grid-area: corr; }
   .tr-row .c-mark { grid-area: mark; justify-self: end; }
   .reqres { grid-template-columns: 1fr; }
