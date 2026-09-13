@@ -144,6 +144,19 @@ describe('design tokens', () => {
       const off = style.match(/[^{}]*:focus\s*\{[^}]*outline:\s*none[^}]*\}/g) ?? [];
       expect(off, `outline switched off on :focus in ${f}`).toEqual([]);
     }
+    // A ring drawn at a 2px offset lies outside the control's box, so a parent
+    // that clips its overflow erases it while every assertion above stays
+    // green — the Appearance segmented control shipped exactly that way once
+    // (`.seg { overflow: hidden }`, the buttons' :focus-visible ring invisible
+    // in both themes). The wrapper rules of the grouped controls must not clip.
+    // happy-dom cannot paint, so the rendered ring on the segment is verified
+    // by screenshot (scratchpad shots/wave-a-collector/seg-focus-*.png).
+    const wrappers = ['.seg', '.tabs'];
+    const clipped = wrappers.filter((w) => {
+      const rule = all.match(new RegExp(`(^|[\\s}])${w.replace('.', '\\.')}\\s*\\{[^}]*\\}`, 'm'));
+      return rule !== null && /overflow(-x|-y)?\s*:\s*(hidden|clip)/.test(rule[0]);
+    });
+    expect(clipped, 'grouped-control wrappers that would clip the offset focus ring').toEqual([]);
   });
 
   it('no surface rule declares a custom property the canonical file already defines', () => {

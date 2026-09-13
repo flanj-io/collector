@@ -2740,7 +2740,9 @@ pre.body { background: var(--surface-sunk); border: 1px solid var(--rule); borde
 .theme-field { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
 .theme-label { font-size: 0.88rem; font-weight: 600; }
 .theme-help { color: var(--ink-soft); font-size: 0.82rem; }
-.seg { display: inline-flex; border: 1px solid var(--rule); border-radius: var(--radius); overflow: hidden; }
+/* No overflow clip on the wrapper: the buttons' focus ring sits 2px outside
+   their box, and radius is 0, so a clip would erase the ring and round nothing. */
+.seg { display: inline-flex; border: 1px solid var(--rule); border-radius: var(--radius); }
 .seg button { background: var(--surface); border: 0; border-left: 1px solid var(--rule); color: var(--ink-soft); font: inherit; font-size: 0.85rem; font-weight: 600; padding: 0.35rem 0.85rem; cursor: pointer; }
 .seg button:first-child { border-left: 0; }
 .seg button:hover { color: var(--ink); }
