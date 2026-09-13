@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
@@ -90,12 +90,16 @@ describe('design tokens', () => {
     expect(tokens).toContain(':root:not([data-flanj-theme="light"])');
   });
 
-  it('the pending family names itself as non-canonical and points at its fork', () => {
-    const pending = read('tokens-pending.css');
-    expect(pending.startsWith('/* NOT CANONICAL')).toBe(true);
-    expect(pending).toContain('This file exists to be deleted.');
-    // Only the verified family may live here — anything else belongs in the vault.
-    const declared = [...pending.matchAll(/^\s*(--[\w-]+):/gm)].map((m) => m[1]);
-    expect([...new Set(declared)].sort()).toEqual(['--verified', '--verified-contrast', '--verified-ink']);
+  it('the green quarantine is gone — --ok is canonical and nothing references --verified*', () => {
+    // tokens-pending.css held a `--verified*` family while the canonical set had
+    // no positive colour. Blueprint ships `--ok*`; the file was deleted on
+    // re-vendor and must not come back, nor may any surface rule still point at
+    // the retired names (an unresolved var() renders as no colour at all).
+    expect(existsSync(join(src, 'tokens-pending.css'))).toBe(false);
+    expect(read('main.ts')).not.toContain('tokens-pending');
+    for (const f of sfcs) {
+      expect(read(f), `retired --verified* reference in ${f}`).not.toMatch(/--verified(?:-ink|-contrast)?\b/);
+    }
+    expect(tokens).toContain('--ok-ink:');
   });
 });

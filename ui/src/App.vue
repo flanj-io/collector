@@ -2305,11 +2305,17 @@ watch(tab, (t) => {
 
 <style>
 /* Palette: NONE of it lives here any more. `src/tokens.css` is the vendored copy
-   of the canonical Flanj token layer (docs/design/tokens.css) and is imported
-   ahead of this block in main.ts; `src/tokens-pending.css` carries the one
-   family the canonical set does not yet define (see its header). This file
-   holds layout and component rules only — a hex literal appearing below is a
-   bug, not a style choice.
+   of the canonical Flanj token layer (docs/design/tokens.css, Blueprint) and is
+   imported ahead of this block in main.ts. This file holds layout and component
+   rules only — a hex literal appearing below is a bug, not a style choice, and
+   so is a custom property whose name the canonical file already defines
+   (src/tokens.test.ts scans for both).
+
+   Green is the canonical --ok family and it is spent on REACHED VERDICTS only:
+   `conforming`, `No drift detected`, a Connected state, the expected side of a
+   drift row. A state that is merely positive-looking (a thread chip, the live
+   tail, an inbound direction) never borrows it, because `.headline.neutral`
+   below depends on green meaning "validated and clean" and nothing else.
 
    Theme (ux-design-v2 §3.3) is unchanged by the token adoption: LIGHT is the
    base, dark applies under [data-flanj-theme="dark"] ONLY, and there is no
@@ -2347,7 +2353,7 @@ body { margin: 0; background: var(--ground); color: var(--ink); font: 15px/1.5 v
 .hl-you { font-size: 1.15rem; }
 .hl-sub { color: var(--ink-soft); font-size: 0.85rem; margin-top: 0.3rem; }
 .headline.drift .hl-you strong { color: var(--sev-breaking); }
-.headline.ok .hl-you strong { color: var(--verified-ink); }
+.headline.ok .hl-you strong { color: var(--ok-ink); }
 /* Neutral: nothing has been validated yet. Deliberately uncoloured — the two
    coloured tones are verdicts, and this state has not reached one. */
 .headline.neutral .hl-you strong { color: var(--ink-soft); font-weight: 600; }
@@ -2381,7 +2387,7 @@ code { font-family: var(--font-mono); }
 .col { flex: 1; min-width: 140px; background: var(--surface-sunk); border: 1px solid var(--rule); border-radius: var(--radius); padding: 0.5rem 0.65rem; }
 .col .k { font-size: 0.72rem; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.04em; }
 .col .v { margin-top: 0.2rem; font-family: var(--font-mono); word-break: break-word; }
-.v.expected { color: var(--verified-ink); }
+.v.expected { color: var(--ok-ink); }
 .v.actual { color: var(--sev-breaking); }
 /* DESCRIPTION rows: a wording change is not a severity diff — plain ink. */
 .drift-row.plain .v.expected, .drift-row.plain .v.actual { color: var(--ink); }
@@ -2402,12 +2408,13 @@ code { font-family: var(--font-mono); }
 .btn.small { padding: 0.28rem 0.65rem; font-size: 0.8rem; }
 .btn.attention { color: var(--sev-warning-ink); border-color: var(--sev-warning-ink); }
 .btn:disabled { opacity: 0.6; cursor: default; }
-.chip { display: inline-flex; align-items: center; font-size: 0.8rem; font-weight: 600; color: var(--verified-ink); border: 1px solid var(--verified-ink); border-radius: var(--radius); padding: 0.15rem 0.6rem; }
+/* A thread chip is a state, not a verdict: neutral ink, and `attention` lifts it to the accent. */
+.chip { display: inline-flex; align-items: center; font-size: 0.8rem; font-weight: 600; color: var(--ink-soft); border: 1px solid var(--ink-soft); border-radius: var(--radius); padding: 0.15rem 0.6rem; }
 .chip.attention { color: var(--sev-warning-ink); border-color: var(--sev-warning-ink); }
 .hint-inline { color: var(--ink-soft); font-size: 0.82rem; }
 .small-err { font-size: 0.82rem; }
 .pill-btn { cursor: pointer; font: inherit; font-size: 0.8rem; }
-.pill.ok { color: var(--verified-ink); border-color: var(--verified-ink); }
+.pill.ok { color: var(--ok-ink); border-color: var(--ok-ink); }
 .tab-right { margin-left: auto; }
 .tab-dot { width: 8px; height: 8px; border-radius: var(--radius); background: var(--sev-warning); display: inline-block; }
 .tab-dot.disconnected { background: var(--ink-soft); }
@@ -2429,10 +2436,13 @@ code { font-family: var(--font-mono); }
 .tr-clear { background: transparent; border: 1px solid var(--rule); border-radius: var(--radius); color: var(--ink-soft); font: inherit; font-size: 0.8rem; padding: 0.3rem 0.6rem; cursor: pointer; }
 .tr-clear:hover { color: var(--ink); border-color: var(--ink-soft); }
 .tr-count { color: var(--ink-soft); font-size: 0.8rem; font-variant-numeric: tabular-nums; white-space: nowrap; margin-left: auto; }
-.live-btn { display: inline-flex; align-items: center; gap: 0.4rem; background: var(--surface); border: 1px solid var(--verified-ink); border-radius: var(--radius); color: var(--verified-ink); font: inherit; font-size: 0.8rem; font-weight: 700; padding: 0.3rem 0.75rem; cursor: pointer; white-space: nowrap; }
-.live-dot { width: 8px; height: 8px; border-radius: var(--radius); background: var(--verified); animation: live-pulse 1.6s ease-in-out infinite; }
-.live-btn.paused { border-color: var(--sev-warning-ink); color: var(--sev-warning-ink); }
-.live-btn.paused .live-dot { background: var(--sev-warning); animation: none; }
+/* Live / paused is a stream state, not a verdict and not a warning: the accent
+   carries `live` (pulsing dot), muted ink carries `paused`, and the label says
+   which — green is reserved for reached verdicts. */
+.live-btn { display: inline-flex; align-items: center; gap: 0.4rem; background: var(--surface); border: 1px solid var(--accent-ink); border-radius: var(--radius); color: var(--accent-ink); font: inherit; font-size: 0.8rem; font-weight: 700; padding: 0.3rem 0.75rem; cursor: pointer; white-space: nowrap; }
+.live-dot { width: 8px; height: 8px; border-radius: var(--radius); background: var(--accent); animation: live-pulse 1.6s ease-in-out infinite; }
+.live-btn.paused { border-color: var(--ink-soft); color: var(--ink-soft); }
+.live-btn.paused .live-dot { background: var(--ink-soft); animation: none; }
 @keyframes live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
 .pending-bar { display: block; width: 100%; background: var(--surface-sunk); border: 1px solid var(--accent-ink); border-radius: var(--radius); color: var(--accent-ink); font: inherit; font-size: 0.82rem; font-weight: 700; padding: 0.45rem 0.75rem; margin: 0 0 0.5rem; cursor: pointer; text-align: center; }
 .pending-bar:hover { background: var(--surface); }
@@ -2468,7 +2478,7 @@ code { font-family: var(--font-mono); }
 .c-corr span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .c-corr .dim { color: var(--ink-soft); }
 .tag { font-size: 0.72rem; font-weight: 700; padding: 0.12rem 0.5rem; border-radius: var(--radius); text-transform: uppercase; letter-spacing: 0.03em; }
-.tag.ok { color: var(--verified-ink); border: 1px solid var(--verified-ink); }
+.tag.ok { color: var(--ok-ink); border: 1px solid var(--ok-ink); }
 .tag.drift { background: var(--sev-breaking); color: var(--sev-breaking-contrast); }
 .tag.warn { background: var(--sev-warning); color: var(--sev-warning-contrast); }
 .tag.none { color: var(--ink-soft); border: 1px solid var(--rule); }
@@ -2477,7 +2487,9 @@ code { font-family: var(--font-mono); }
 .c-peer { display: flex; align-items: center; gap: 0.45rem; min-width: 0; }
 .dir-chip { font-size: 0.64rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; border-radius: var(--radius); padding: 0.08rem 0.35rem; flex: none; }
 .dir-chip.out { color: var(--accent-ink); border: 1px solid var(--accent-ink); }
-.dir-chip.in { color: var(--verified-ink); border: 1px solid var(--verified-ink); }
+/* Direction is a fact, not a verdict: `out` is the accent, `in` is muted ink, and
+   the uppercase label is what tells them apart — never green. */
+.dir-chip.in { color: var(--ink-soft); border: 1px solid var(--ink-soft); }
 .peer-host { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-size: 0.82rem; }
 /* Named row: the host demotes to the same under-line treatment the Edges panel
    gives it — still there, still selectable, just no longer the headline. An
@@ -2538,7 +2550,7 @@ pre.body { background: var(--surface-sunk); border: 1px solid var(--rule); borde
 .edge-title small { color: var(--ink-soft); font-weight: 400; }
 .dir-badge { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; padding: 0.15rem 0.5rem; border-radius: var(--radius); }
 .dir-badge.out { background: var(--accent); color: var(--accent-contrast); }
-.dir-badge.in { background: var(--verified); color: var(--verified-contrast); }
+.dir-badge.in { background: var(--steel); color: var(--ink); }
 .edge-table { border: 1px solid var(--rule); border-radius: var(--radius); overflow: hidden; }
 .edge-head, .edge-row { display: grid; grid-template-columns: 2.4fr 1fr; gap: 0.5rem; align-items: center; padding: 0.4rem 0.7rem; }
 .edge-head { color: var(--ink-soft); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; background: var(--surface-sunk); border-bottom: 1px solid var(--rule); }
@@ -2689,7 +2701,7 @@ pre.body { background: var(--surface-sunk); border: 1px solid var(--rule); borde
 .tool-row:first-child { border-top: 0; }
 .tool-line { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
 .tool-name { font-size: 0.85rem; }
-.tool-tag { font-size: 0.72rem; color: var(--verified-ink); border: 1px solid var(--verified-ink); border-radius: var(--radius); padding: 0.05rem 0.45rem; }
+.tool-tag { font-size: 0.72rem; color: var(--ok-ink); border: 1px solid var(--ok-ink); border-radius: var(--radius); padding: 0.05rem 0.45rem; }
 .tool-tag.partial { color: var(--ink-soft); border-color: var(--rule); }
 .tool-note { color: var(--ink-soft); font-size: 0.8rem; margin: 0.3rem 0 0; }
 

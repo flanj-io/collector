@@ -1,11 +1,10 @@
 import { createApp } from 'vue';
 
 // The canonical Flanj token layer, vendored from docs/design/tokens.css — imported
-// FIRST so every surface rule below it resolves against it. tokens-pending.css adds
-// the single family the canonical set does not define yet; its header says why and
-// how it goes away.
+// FIRST so every surface rule below it resolves against it. It is the only token
+// file: the Blueprint set carries the --ok family, so the pending quarantine that
+// used to sit beside it is gone.
 import './tokens.css';
-import './tokens-pending.css';
 
 import App from './App.vue';
 import { applyTheme, loadThemePref } from './theme';

@@ -282,12 +282,12 @@ function cancelEdit() {
 .connect-title { margin: 0; font-size: 1rem; }
 .connect-sub { margin: 0 0 0.5rem; color: var(--ink-soft); font-size: 0.9rem; }
 .connect-state { background: var(--surface-sunk); border: 1px solid var(--rule); border-radius: var(--radius); padding: 0.8rem 1rem; }
-.connect-state.ok { border-color: var(--verified-ink); }
+.connect-state.ok { border-color: var(--ok-ink); }
 .connect-state.pending { border-color: var(--sev-warning); }
 /* A mail that never left is a failure, not a "waiting" state — the border must not say otherwise. */
 .connect-state.pending.mail-failed { border-color: var(--sev-breaking); }
 .connect-line { margin: 0; }
-.connect-note { margin: 0.35rem 0 0; color: var(--verified-ink); font-size: 0.85rem; }
+.connect-note { margin: 0.35rem 0 0; color: var(--ok-ink); font-size: 0.85rem; }
 .connect-note.muted { color: var(--ink-soft); }
 .connect-nudge { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin: 0.6rem 0 0; padding-top: 0.6rem; border-top: 1px dashed var(--rule); color: var(--ink-soft); font-size: 0.88rem; }
 .connect-nudge-actions { display: flex; gap: 0.5rem; }
