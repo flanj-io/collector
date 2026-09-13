@@ -1,9 +1,19 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-flanj-theme="light">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Flanj Collector</title>
+    <style>
+      /* PLACEHOLDER page, so it cannot import ui/src/tokens.css: the three
+         literals below are the Blueprint light values of --ground, --ink and
+         --rule (docs/design/tokens.css), and nothing else is styled. */
+      body { margin: 0; background: #f7f9fb; color: #0f1720; font: 14px/1.5 "Space Grotesk", ui-sans-serif, system-ui, sans-serif; }
+      main { max-width: 640px; margin: 64px auto; padding: 20px 18px 24px; border: 2px solid #c9d2db; background: #ffffff; }
+      h1 { margin: 0 0 12px; font-size: 16px; letter-spacing: -0.01em; }
+      p { margin: 0 0 8px; }
+      code { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; }
+    </style>
   </head>
   <body>
     <!--
@@ -12,7 +22,7 @@
       exists so `go build`/`go:embed all:web/dist` succeeds in local development
       before the UI is built.
     -->
-    <main style="font-family: system-ui; max-width: 40rem; margin: 4rem auto; padding: 0 1rem">
+    <main>
       <h1>Flanj Collector</h1>
       <p>UI assets not built. Run the Vite build (see <code>ui/</code>) or use the Docker image.</p>
       <p>Read API: <code>/api/health</code>, <code>/api/calls</code>, <code>/api/findings</code>.</p>
