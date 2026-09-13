@@ -68,8 +68,29 @@ write carries `X-Flanj-UI: 1` + JSON (`src/api.ts`). Findings link to their sour
 
 ## Design tokens and theme
 
+The surface is the **Blueprint collector kit** (`docs/design/kits/collector` in the vault: a 2px
+`--rule` frame around a 24px grid-paper ground; sheet header with the inline mono mark, the text
+wordmark, `localhost:<port> · <version>` in mono, the org pill and a green-bolt Connected pill;
+mono uppercase tabs with a 2px ink underline over a copper hairline and square count chips;
+headline cards with a 6px left rule in their tone and a leading hex bolt, no "You:" prefix — the
+subline carries scope; findings as framed cards with `expected ≠ actual ≠ location` in mono cells;
+2px-outline buttons that lift under the hard offset shadow, primary = ink fill; a Light / Dark
+segmented control). The kit's classes are bound straight to the canonical tokens — its alias layer
+(`--bg`, `--panel`, `--cu` …) and font-name literals are not vendored. The hex bolt ships once, as
+the inline `<symbol id="hxbolt">` at the top of `App.vue`'s template; every bolt is
+`<svg class="hx [sm] tone-ok|tone-breaking|tone-warning|tone-accent|tone-info"><use href="#hxbolt"/>`
+and no bolt carries an inline style (a bolt is a mark, so it takes the bare family colour). The
+states the kit does not draw — the uploader, the question sheet, the validated stamp, the MCP
+headline and tool rows, the edge-registration and connect-disclosure panels, the theme-flip
+notice, the load-error and relay banners, the flag sheet's three branches, the Threads rows — are
+extrapolated in the same idiom. The MCP headline keeps the deck's whole `Server: … You: …` sentence
+(`src/mcp.ts`): e2e pins its lowercase clause, so it is the one line that keeps its pivot.
+
 Every colour, rule width, radius and focus ring comes from `src/tokens.css`; the SFC style blocks
-hold layout and component rules only. The rules `src/tokens.test.ts` enforces:
+hold layout and component rules only. Text takes the `-ink` role of its family, and text at or
+below 14px never uses `--ink-faint` (the muted text role is `--ink-soft`). Motion is the lift on
+hover and colour fades; `prefers-reduced-motion` keeps only the fades. The rules
+`src/tokens.test.ts` enforces:
 
 - the body below the preamble is the vault file byte for byte (a pinned sha256, plus a direct
   comparison when the docs vault is checked out above this repo) — change the vault copy, then
@@ -84,7 +105,9 @@ hold layout and component rules only. The rules `src/tokens.test.ts` enforces:
   the warning tier (`--sev-warning*`) is the same copper as `--accent` by design, so it renders only
   finding-tier badges, tags and counts that carry a label or an outline, and every other attention
   state uses `--accent*`;
-- every control draws `var(--focus-ring)` at `var(--focus-offset)` on `:focus-visible`.
+- every control draws `var(--focus-ring)` at `var(--focus-offset)` on `:focus-visible`;
+- exactly one `<symbol id="hxbolt">` across the SFC templates, and no template carries an inline
+  `style=` attribute.
 
 No webfont is loaded — the page makes no outbound request — so the Space Grotesk stack renders as
 `system-ui` and the mono stack as the platform monospace face. The mark in the topbar is
