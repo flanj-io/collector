@@ -2349,23 +2349,23 @@ body { margin: 0; background: var(--ground); color: var(--ink); font: 14px/1.5 v
 .brand-mark { width: 24px; height: 24px; flex: none; }
 .brand-product { color: var(--ink-soft); font-weight: 500; margin-left: 6px; }
 .meta { display: flex; gap: 8px; flex-wrap: wrap; }
-.pill { background: var(--surface-sunk); border: 1px solid var(--rule); color: var(--ink-soft); border-radius: var(--radius); padding: 2px 10px; font-size: 12.5px; }
+.pill { background: var(--surface-sunk); border: var(--border-w-hair) solid var(--rule); color: var(--ink-soft); border-radius: var(--radius); padding: 2px 10px; font-size: 12.5px; }
 /* Attention states (not configured, pending) are the accent, outlined and
    labelled — the warning tier belongs to findings only. */
 .pill.warn { color: var(--accent-ink); border-color: var(--accent-ink); }
 .banner { margin: 16px 0 0; }
 
 /* Tabs */
-.tabs { display: flex; gap: 4px; margin: 20px 0 8px; border-bottom: 1px solid var(--rule); }
-.tabs button { background: transparent; border: 0; border-bottom: 2px solid transparent; color: var(--ink-soft); font: inherit; font-weight: 600; padding: 8px 14px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; margin-bottom: -1px; }
+.tabs { display: flex; gap: 4px; margin: 20px 0 8px; border-bottom: var(--border-w-hair) solid var(--rule); }
+.tabs button { background: transparent; border: 0; border-bottom: var(--border-w) solid transparent; color: var(--ink-soft); font: inherit; font-weight: 600; padding: 8px 14px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; margin-bottom: -1px; }
 .tabs button:hover { color: var(--ink); }
 .tabs button.active { color: var(--ink); border-bottom-color: var(--accent-ink); }
-.tab-count { background: var(--surface-sunk); border: 1px solid var(--rule); color: var(--ink-soft); border-radius: var(--radius); font-size: 11px; font-weight: 700; padding: 0 6px; min-width: 20px; text-align: center; }
+.tab-count { background: var(--surface-sunk); border: var(--border-w-hair) solid var(--rule); color: var(--ink-soft); border-radius: var(--radius); font-size: 11px; font-weight: 700; padding: 0 6px; min-width: 20px; text-align: center; }
 .tab-count.bad { background: var(--sev-breaking); border-color: var(--sev-breaking); color: var(--sev-breaking-contrast); }
 .tab-count.warn { background: var(--sev-warning); border-color: var(--sev-warning); color: var(--sev-warning-contrast); }
 
 /* Health */
-.headline { margin: 16px 0; padding: 16px 18px; border-radius: var(--radius); border: 1px solid var(--rule); background: var(--surface); }
+.headline { margin: 16px 0; padding: 16px 18px; border-radius: var(--radius); border: var(--border-w-hair) solid var(--rule); background: var(--surface); }
 .headline.drift { border-color: var(--sev-breaking); background: var(--sev-breaking-wash); }
 .hl-you { font-size: 17px; }
 .hl-sub { color: var(--ink-soft); font-size: 13px; margin-top: 4px; }
@@ -2377,14 +2377,14 @@ body { margin: 0; background: var(--ground); color: var(--ink); font: 14px/1.5 v
 .hint { color: var(--ink-soft); font-size: 13.5px; margin-top: 16px; }
 
 /* Shared */
-h2 { font-size: 14px; margin: 20px 0 12px; border-bottom: 1px solid var(--rule); padding-bottom: 6px; }
+h2 { font-size: 14px; margin: 20px 0 12px; border-bottom: var(--border-w-hair) solid var(--rule); padding-bottom: 6px; }
 h2 small { color: var(--ink-soft); font-weight: 400; margin-left: 8px; }
 .empty { color: var(--ink-soft); }
 .mono { font-family: var(--f-mono); }
 code { font-family: var(--f-mono); }
 
 /* Contract findings */
-.finding { background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius); padding: 16px 18px; margin-bottom: 14px; }
+.finding { background: var(--surface); border: var(--border-w-hair) solid var(--rule); border-radius: var(--radius); padding: 16px 18px; margin-bottom: 14px; }
 .finding-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .badge { text-transform: uppercase; font-size: 11px; letter-spacing: 0.05em; padding: 2px 8px; border-radius: var(--radius); font-weight: 700; }
 .badge.breaking { background: var(--sev-breaking); color: var(--sev-breaking-contrast); }
@@ -2397,11 +2397,11 @@ code { font-family: var(--f-mono); }
    to in the canonical vocabulary is `warning` ("the wording an agent steers on
    changed"), and the outline keeps it distinguishable from a filled WARNING badge
    by shape as well as hue. */
-.badge.description { background: transparent; color: var(--sev-warning-ink); border: 1px solid var(--sev-warning-ink); }
+.badge.description { background: transparent; color: var(--sev-warning-ink); border: var(--border-w-hair) solid var(--sev-warning-ink); }
 .endpoint { font-weight: 600; }
 .rule { color: var(--ink-soft); font-family: var(--f-mono); font-size: 13px; }
 .drift-row { display: flex; align-items: stretch; gap: 12px; margin-top: 14px; flex-wrap: wrap; }
-.col { flex: 1; min-width: 140px; background: var(--surface-sunk); border: 1px solid var(--rule); border-radius: var(--radius); padding: 8px 10px; }
+.col { flex: 1; min-width: 140px; background: var(--surface-sunk); border: var(--border-w-hair) solid var(--rule); border-radius: var(--radius); padding: 8px 10px; }
 .col .k { font-size: 11px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.04em; }
 .col .v { margin-top: 3px; font-family: var(--f-mono); word-break: break-word; }
 .v.expected { color: var(--ok-ink); }
@@ -2410,13 +2410,13 @@ code { font-family: var(--f-mono); }
 .drift-row.plain .v.expected, .drift-row.plain .v.actual { color: var(--ink); }
 .arrow { align-self: center; color: var(--ink-soft); font-size: 16px; }
 .detail { color: var(--ink-soft); margin: 12px 0 0; }
-.corr { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--rule); }
+.corr { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 14px; padding-top: 12px; border-top: var(--border-w-hair) solid var(--rule); }
 .corr-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-soft); }
 .corr-k { font-size: 12.5px; color: var(--ink-soft); }
 .corr-k code { color: var(--accent-ink); background: var(--surface-sunk); padding: 2px 6px; border-radius: var(--radius); }
 .actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 14px; }
 /* Buttons (shared by the Connect panel, Flag sheet and Threads tab) */
-.btn { background: var(--surface-sunk); color: var(--ink); border: 1px solid var(--rule); border-radius: var(--radius); padding: 6px 14px; font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; }
+.btn { background: var(--surface-sunk); color: var(--ink); border: var(--border-w-hair) solid var(--rule); border-radius: var(--radius); padding: 6px 14px; font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; }
 .btn:hover { border-color: var(--ink-soft); }
 .btn.primary { background: var(--accent); color: var(--accent-contrast); border-color: var(--accent); }
 .btn.primary:hover { filter: brightness(1.08); }
@@ -2438,7 +2438,7 @@ code { font-family: var(--f-mono); }
   outline: var(--focus-ring); outline-offset: var(--focus-offset);
 }
 /* A thread chip is a state, not a verdict: neutral ink, and `attention` lifts it to the accent. */
-.chip { display: inline-flex; align-items: center; font-size: 12.5px; font-weight: 600; color: var(--ink-soft); border: 1px solid var(--ink-soft); border-radius: var(--radius); padding: 2px 10px; }
+.chip { display: inline-flex; align-items: center; font-size: 12.5px; font-weight: 600; color: var(--ink-soft); border: var(--border-w-hair) solid var(--ink-soft); border-radius: var(--radius); padding: 2px 10px; }
 .chip.attention { color: var(--accent-ink); border-color: var(--accent-ink); }
 .hint-inline { color: var(--ink-soft); font-size: 12.5px; }
 .small-err { font-size: 12.5px; }
@@ -2447,7 +2447,7 @@ code { font-family: var(--f-mono); }
 .tab-right { margin-left: auto; }
 .tab-dot { width: 8px; height: 8px; border-radius: var(--radius); background: var(--accent); display: inline-block; }
 .tab-dot.disconnected { background: var(--ink-soft); }
-.connect-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 12px 0 0; padding: 10px 14px; border: 1px solid var(--accent); border-radius: var(--radius); background: var(--surface); font-size: 13.5px; }
+.connect-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 12px 0 0; padding: 10px 14px; border: var(--border-w) solid var(--accent); border-radius: var(--radius); background: var(--surface); font-size: 13.5px; }
 .connect-banner-actions { display: flex; gap: 8px; }
 .connect-banner.info { border-color: var(--rule); color: var(--ink-soft); }
 /* The one-time theme-flip notice sits above the tab strip, not inside a tab. */
@@ -2456,29 +2456,29 @@ code { font-family: var(--f-mono); }
 
 /* Traffic toolbar: search + facet filters + live/pause control */
 .tr-toolbar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 0; background: var(--ground); }
-.tr-search { flex: 1 1 240px; min-width: 180px; background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius); color: var(--ink); font: inherit; font-size: 13.5px; padding: 6px 12px; }
+.tr-search { flex: 1 1 240px; min-width: 180px; background: var(--surface); border: var(--border-w) solid var(--rule); border-radius: var(--radius); color: var(--ink); font: inherit; font-size: 13.5px; padding: 6px 12px; }
 .tr-search::placeholder { color: var(--ink-soft); }
 .tr-search:focus, .tr-select:focus { border-color: var(--accent); }
-.tr-select { background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius); color: var(--ink); font: inherit; font-size: 12.5px; padding: 6px 8px; }
+.tr-select { background: var(--surface); border: var(--border-w) solid var(--rule); border-radius: var(--radius); color: var(--ink); font: inherit; font-size: 12.5px; padding: 6px 8px; }
 .tr-chk { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-soft); font-size: 12.5px; cursor: pointer; white-space: nowrap; user-select: none; }
 .tr-chk input { accent-color: var(--accent-ink); }
-.tr-clear { background: transparent; border: 1px solid var(--rule); border-radius: var(--radius); color: var(--ink-soft); font: inherit; font-size: 12.5px; padding: 4px 10px; cursor: pointer; }
+.tr-clear { background: transparent; border: var(--border-w) solid var(--rule); border-radius: var(--radius); color: var(--ink-soft); font: inherit; font-size: 12.5px; padding: 4px 10px; cursor: pointer; }
 .tr-clear:hover { color: var(--ink); border-color: var(--ink-soft); }
 .tr-count { color: var(--ink-soft); font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; margin-left: auto; }
 /* Live / paused is a stream state, not a verdict and not a warning: the accent
    carries `live` (pulsing dot), muted ink carries `paused`, and the label says
    which — green is reserved for reached verdicts. */
-.live-btn { display: inline-flex; align-items: center; gap: 6px; background: var(--surface); border: 1px solid var(--accent-ink); border-radius: var(--radius); color: var(--accent-ink); font: inherit; font-size: 12.5px; font-weight: 700; padding: 4px 12px; cursor: pointer; white-space: nowrap; }
+.live-btn { display: inline-flex; align-items: center; gap: 6px; background: var(--surface); border: var(--border-w-hair) solid var(--accent-ink); border-radius: var(--radius); color: var(--accent-ink); font: inherit; font-size: 12.5px; font-weight: 700; padding: 4px 12px; cursor: pointer; white-space: nowrap; }
 .live-dot { width: 8px; height: 8px; border-radius: var(--radius); background: var(--accent); animation: live-pulse 1.6s ease-in-out infinite; }
 .live-btn.paused { border-color: var(--ink-soft); color: var(--ink-soft); }
 .live-btn.paused .live-dot { background: var(--ink-soft); animation: none; }
 @keyframes live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
-.pending-bar { display: block; width: 100%; background: var(--surface-sunk); border: 1px solid var(--accent-ink); border-radius: var(--radius); color: var(--accent-ink); font: inherit; font-size: 12.5px; font-weight: 700; padding: 8px 12px; margin: 0 0 8px; cursor: pointer; text-align: center; }
+.pending-bar { display: block; width: 100%; background: var(--surface-sunk); border: var(--border-w) solid var(--accent-ink); border-radius: var(--radius); color: var(--accent-ink); font: inherit; font-size: 12.5px; font-weight: 700; padding: 8px 12px; margin: 0 0 8px; cursor: pointer; text-align: center; }
 .pending-bar:hover { background: var(--surface); }
 .tr-nomatch { display: flex; align-items: center; gap: 10px; margin: 0; padding: 16px; }
 
 /* Traffic table */
-.traffic { border: 1px solid var(--rule); border-radius: var(--radius); overflow: hidden; background: var(--surface); }
+.traffic { border: var(--border-w-hair) solid var(--rule); border-radius: var(--radius); overflow: hidden; background: var(--surface); }
 .tr-head, .tr-row {
   display: grid;
   grid-template-columns: 1.15fr 1.9fr 1.35fr 0.55fr 1.4fr 0.9fr;
@@ -2486,16 +2486,16 @@ code { font-family: var(--f-mono); }
   align-items: center;
   padding: 8px 14px;
 }
-.tr-head { color: var(--ink-soft); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--rule); background: var(--surface-sunk); }
-.tr-row { border-top: 1px solid var(--rule); cursor: pointer; font-size: 13.5px; }
+.tr-head { color: var(--ink-soft); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: var(--border-w) solid var(--rule); background: var(--surface-sunk); }
+.tr-row { border-top: var(--border-w-hair) solid var(--rule); cursor: pointer; font-size: 13.5px; }
 .tr-row:first-child { border-top: 0; }
 .tr-row:hover { background: var(--surface-sunk); }
 .tr-row.open { background: var(--surface-sunk); }
-.tr-row.drift { box-shadow: inset 3px 0 0 var(--sev-breaking); }
+.tr-row.drift { box-shadow: inset var(--border-w-stripe) 0 0 var(--sev-breaking); }
 .chev { color: var(--ink-soft); display: inline-block; width: 16px; }
 .c-when { color: var(--ink-soft); white-space: nowrap; }
 .c-call { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.method { font-weight: 700; font-size: 11px; padding: 2px 6px; border-radius: var(--radius); background: var(--surface-sunk); border: 1px solid var(--rule); color: var(--ink-soft); text-transform: uppercase; }
+.method { font-weight: 700; font-size: 11px; padding: 2px 6px; border-radius: var(--radius); background: var(--surface-sunk); border: var(--border-w-hair) solid var(--rule); color: var(--ink-soft); text-transform: uppercase; }
 /* Method chips are NEUTRAL. They used to borrow the palette — POST green, GET
    accent, DELETE the severity red — which put a `breaking` red on a DELETE that
    was behaving perfectly. Severity is its own triad and nothing else may spend
@@ -2507,34 +2507,34 @@ code { font-family: var(--f-mono); }
 .c-corr span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .c-corr .dim { color: var(--ink-soft); }
 .tag { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: var(--radius); text-transform: uppercase; letter-spacing: 0.03em; }
-.tag.ok { color: var(--ok-ink); border: 1px solid var(--ok-ink); }
+.tag.ok { color: var(--ok-ink); border: var(--border-w-hair) solid var(--ok-ink); }
 .tag.drift { background: var(--sev-breaking); color: var(--sev-breaking-contrast); }
 .tag.warn { background: var(--sev-warning); color: var(--sev-warning-contrast); }
-.tag.none { color: var(--ink-soft); border: 1px solid var(--rule); }
+.tag.none { color: var(--ink-soft); border: var(--border-w-hair) solid var(--rule); }
 
 /* Traffic counterparty cell */
 .c-peer { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .dir-chip { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; border-radius: var(--radius); padding: 1px 6px; flex: none; }
-.dir-chip.out { color: var(--accent-ink); border: 1px solid var(--accent-ink); }
+.dir-chip.out { color: var(--accent-ink); border: var(--border-w-hair) solid var(--accent-ink); }
 /* Direction is a fact, not a verdict: `out` is the accent, `in` is muted ink, and
    the uppercase label is what tells them apart — never green. */
-.dir-chip.in { color: var(--ink-soft); border: 1px solid var(--ink-soft); }
+.dir-chip.in { color: var(--ink-soft); border: var(--border-w-hair) solid var(--ink-soft); }
 .peer-host { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-size: 12.5px; }
 /* Named row: the host demotes to the same under-line treatment the Edges panel
    gives it — still there, still selectable, just no longer the headline. An
    UNNAMED row keeps the rule above untouched, i.e. renders exactly as before. */
 
 /* Contract cards (self + provider) */
-.provider { background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius); padding: 16px 18px; margin-bottom: 14px; }
+.provider { background: var(--surface); border: var(--border-w-hair) solid var(--rule); border-radius: var(--radius); padding: 16px 18px; margin-bottom: 14px; }
 .provider.self { border-color: var(--accent); }
 .prov-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .prov-name { font-weight: 700; font-size: 16px; }
 .prov-host { color: var(--ink-soft); font-size: 13px; }
-.fmt-badge { text-transform: uppercase; font-size: 10.5px; letter-spacing: 0.05em; font-weight: 700; color: var(--accent-ink); border: 1px solid var(--accent-ink); border-radius: var(--radius); padding: 2px 6px; }
+.fmt-badge { text-transform: uppercase; font-size: 10.5px; letter-spacing: 0.05em; font-weight: 700; color: var(--accent-ink); border: var(--border-w-hair) solid var(--accent-ink); border-radius: var(--radius); padding: 2px 6px; }
 .prov-ver { color: var(--ink-soft); font-family: var(--f-mono); font-size: 13px; }
 .prov-status { margin-left: auto; }
 .prov-links { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 10px; }
-.doc-link { color: var(--accent-ink); font-size: 13px; text-decoration: none; border: 1px solid var(--rule); border-radius: var(--radius); padding: 4px 12px; background: var(--surface-sunk); }
+.doc-link { color: var(--accent-ink); font-size: 13px; text-decoration: none; border: var(--border-w-hair) solid var(--rule); border-radius: var(--radius); padding: 4px 12px; background: var(--surface-sunk); }
 .doc-link:hover { border-color: var(--accent); }
 .prov-meta { color: var(--ink-soft); font-size: 12.5px; }
 /* The evidence count rides in the same muted channel as provenance — it is a
@@ -2550,16 +2550,16 @@ code { font-family: var(--f-mono); }
    document is a finding-class condition the operator acts on. Its own text is
    the label, and it takes the tier's edge rule as well as the ink role so it
    survives sharing a hue with the accent (copper is both, by design). */
-.prov-oversize { color: var(--sev-warning-ink); font-size: 13.5px; margin: 10px 0 0; padding-left: 10px; border-left: 3px solid var(--sev-warning-edge); }
+.prov-oversize { color: var(--sev-warning-ink); font-size: 13.5px; margin: 10px 0 0; padding-left: 10px; border-left: var(--border-w-stripe) solid var(--sev-warning-edge); }
 .prov-integration { color: var(--ink-soft); font-size: 12px; }
 .finding.nested { background: var(--surface-sunk); margin: 12px 0 0; }
 /* Acked rows: dimmed in place (matches the disabled idiom); evidence stays visible. */
 .finding.acked { opacity: 0.55; }
 /* The #contracts/<finding_id> deep-link target — same accent bar as the
    Threads tab's highlighted row. */
-.finding.highlight { box-shadow: inset 3px 0 0 var(--accent); }
+.finding.highlight { box-shadow: inset var(--border-w-stripe) 0 0 var(--accent); }
 
-.tr-detail { border-top: 1px dashed var(--rule); background: var(--ground); padding: 14px 14px 18px; }
+.tr-detail { border-top: var(--border-w-hair) solid var(--rule); background: var(--ground); padding: 14px 14px 18px; }
 .meta-line { color: var(--ink-soft); font-size: 12.5px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
 .meta-line .dim { opacity: 0.5; }
 /* `redacted · patterns` is a fact about the row, stated in body ink at weight —
@@ -2570,28 +2570,28 @@ code { font-family: var(--f-mono); }
 .rr-title { font-weight: 700; font-size: 13px; margin-bottom: 6px; }
 .rr-sub { color: var(--ink-soft); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; margin: 8px 0 4px; }
 .hdrs { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-.hdrs td { padding: 2px 6px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+.hdrs td { padding: 2px 6px; border-bottom: var(--border-w-hair) solid var(--rule); vertical-align: top; }
 .hk { color: var(--ink-soft); white-space: nowrap; width: 1%; }
 .hv { color: var(--ink); word-break: break-all; }
-pre.body { background: var(--surface-sunk); border: 1px solid var(--rule); border-radius: var(--radius); padding: 10px 12px; margin: 0; font-family: var(--f-mono); font-size: 12.5px; line-height: 1.45; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
+pre.body { background: var(--surface-sunk); border: var(--border-w) solid var(--rule); border-radius: var(--radius); padding: 10px 12px; margin: 0; font-family: var(--f-mono); font-size: 12.5px; line-height: 1.45; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
 
 /* Edges overview */
 .edge-groups { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 8px; }
-.edge-group { background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius); padding: 14px 16px 18px; }
+.edge-group { background: var(--surface); border: var(--border-w) solid var(--rule); border-radius: var(--radius); padding: 14px 16px 18px; }
 .edge-title { font-size: 14px; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .edge-title small { color: var(--ink-soft); font-weight: 400; }
 .dir-badge { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; padding: 2px 8px; border-radius: var(--radius); }
 .dir-badge.out { background: var(--accent); color: var(--accent-contrast); }
 .dir-badge.in { background: var(--steel); color: var(--ink); }
-.edge-table { border: 1px solid var(--rule); border-radius: var(--radius); overflow: hidden; }
+.edge-table { border: var(--border-w) solid var(--rule); border-radius: var(--radius); overflow: hidden; }
 .edge-head, .edge-row { display: grid; grid-template-columns: 2.4fr 1fr; gap: 8px; align-items: center; padding: 6px 12px; }
-.edge-head { color: var(--ink-soft); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; background: var(--surface-sunk); border-bottom: 1px solid var(--rule); }
+.edge-head { color: var(--ink-soft); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; background: var(--surface-sunk); border-bottom: var(--border-w) solid var(--rule); }
 /* "OBSERVED RPM" wrapped to two lines at narrow widths and became the tallest
    thing in the header row — the column labels never wrap. */
 .edge-head span { white-space: nowrap; }
-.edge-row { border-top: 1px solid var(--rule); font-size: 13px; }
+.edge-row { border-top: var(--border-w-hair) solid var(--rule); font-size: 13px; }
 .edge-row:first-child { border-top: 0; }
-.edge-row.drift { box-shadow: inset 3px 0 0 var(--sev-breaking); }
+.edge-row.drift { box-shadow: inset var(--border-w-stripe) 0 0 var(--sev-breaking); }
 .edge-row .peer { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .edge-row .role { color: var(--ink-soft); }
 /* v1p1 edge naming: outbound rows carry name-over-host + actions. */
@@ -2640,8 +2640,8 @@ pre.body { background: var(--surface-sunk); border: 1px solid var(--rule); borde
 }
 .uncovered-toggle .chev { display: inline-block; transition: transform 120ms ease-out; color: var(--ink-soft); font-size: 0.8em; }
 .uncovered-toggle .chev.open { transform: rotate(90deg); }
-.uncovered-rows { border: 1px solid var(--rule); border-radius: var(--radius); overflow: hidden; }
-.uncovered-row { padding: 8px 12px; border-bottom: 1px solid var(--rule); }
+.uncovered-rows { border: var(--border-w) solid var(--rule); border-radius: var(--radius); overflow: hidden; }
+.uncovered-row { padding: 8px 12px; border-bottom: var(--border-w-hair) solid var(--rule); }
 .uncovered-row:last-child { border-bottom: 0; }
 .uncovered-row.highlight { background: var(--surface-sunk); }
 .uncovered-line { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
@@ -2651,7 +2651,7 @@ pre.body { background: var(--surface-sunk); border: 1px solid var(--rule); borde
 /* The after-state: what happens NEXT, said once, above the cards. */
 .upload-notice {
   margin: 0 0 12px; padding: 8px 12px; font-size: 13px;
-  border-left: 3px solid var(--accent); background: var(--surface-sunk); color: var(--ink);
+  border-left: var(--border-w-stripe) solid var(--accent); background: var(--surface-sunk); color: var(--ink);
 }
 .upload-notice.error { border-left-color: var(--sev-breaking); }
 
@@ -2663,36 +2663,36 @@ pre.body { background: var(--surface-sunk); border: 1px solid var(--rule); borde
 .pill-link:hover { text-decoration: underline; }
 .pill-out { font-size: 0.85em; opacity: 0.75; }
 .edge-actions { display: flex; gap: 6px; justify-content: flex-end; }
-.edge-rename { border-top: 1px dashed var(--rule); background: var(--surface-sunk); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
-.edge-rename-input { width: 100%; max-width: 416px; padding: 6px 8px; border: 1px solid var(--rule); border-radius: var(--radius); background: var(--surface); color: var(--ink); font-size: 13px; }
+.edge-rename { border-top: var(--border-w-hair) solid var(--rule); background: var(--surface-sunk); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.edge-rename-input { width: 100%; max-width: 416px; padding: 6px 8px; border: var(--border-w) solid var(--rule); border-radius: var(--radius); background: var(--surface); color: var(--ink); font-size: 13px; }
 .edge-suggest { display: flex; align-items: flex-start; gap: 6px; font-size: 12px; color: var(--ink-soft); }
 .edge-suggest input { margin-top: 2px; }
 .edge-rename-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.edge-name-note { margin: 0; padding: 6px 12px; font-size: 12px; color: var(--ink-soft); border-top: 1px dashed var(--rule); }
+.edge-name-note { margin: 0; padding: 6px 12px; font-size: 12px; color: var(--ink-soft); border-top: var(--border-w-hair) solid var(--rule); }
 .edge-row .num { text-align: right; font-variant-numeric: tabular-nums; }
 .edge-row .unit { color: var(--ink-soft); font-size: 11px; margin-left: 2px; }
 .empty.small { font-size: 13px; }
 /* The occurrence count is a number, not a severity: accent, outlined. */
-.occ { font-size: 11px; color: var(--accent-ink); font-weight: 700; border: 1px solid var(--accent-ink); border-radius: var(--radius); padding: 1px 8px; }
+.occ { font-size: 11px; color: var(--accent-ink); font-weight: 700; border: var(--border-w-hair) solid var(--accent-ink); border-radius: var(--radius); padding: 1px 8px; }
 .occ.single { color: var(--ink-soft); border-color: var(--rule); font-weight: 500; }
 
 /* ─── MCP surfaces (v0.5) ─── */
-.mcp-badge { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--accent-ink); border: 1px solid var(--accent-ink); border-radius: var(--radius); padding: 1px 6px; margin-left: 6px; vertical-align: middle; white-space: nowrap; }
+.mcp-badge { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--accent-ink); border: var(--border-w-hair) solid var(--accent-ink); border-radius: var(--radius); padding: 1px 6px; margin-left: 6px; vertical-align: middle; white-space: nowrap; }
 .mcp-headline { margin-top: -6px; }
 .mcp-headline .hl-you { font-size: 14px; display: flex; align-items: center; gap: 8px; }
 .mcp-headline .mcp-badge { margin-left: 0; }
-.local-notices { margin: 16px 0; padding: 14px 18px; border-radius: var(--radius); border: 1px dashed var(--rule); background: var(--surface); }
+.local-notices { margin: 16px 0; padding: 14px 18px; border-radius: var(--radius); border: var(--border-w) solid var(--rule); background: var(--surface); }
 .ln-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .ln-title { font-weight: 700; font-size: 13.5px; }
 .ln-sub { color: var(--ink-soft); font-size: 12.5px; }
 .ln-list { margin: 8px 0 0; padding-left: 18px; }
 .ln-item { color: var(--ink-soft); font-size: 13.5px; margin-top: 4px; }
-.tool-rows { margin-top: 10px; border: 1px solid var(--rule); border-radius: var(--radius); overflow: hidden; }
-.tool-row { padding: 6px 12px; border-top: 1px solid var(--rule); }
+.tool-rows { margin-top: 10px; border: var(--border-w) solid var(--rule); border-radius: var(--radius); overflow: hidden; }
+.tool-row { padding: 6px 12px; border-top: var(--border-w-hair) solid var(--rule); }
 .tool-row:first-child { border-top: 0; }
 .tool-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .tool-name { font-size: 13px; }
-.tool-tag { font-size: 11px; color: var(--ok-ink); border: 1px solid var(--ok-ink); border-radius: var(--radius); padding: 1px 8px; }
+.tool-tag { font-size: 11px; color: var(--ok-ink); border: var(--border-w-hair) solid var(--ok-ink); border-radius: var(--radius); padding: 1px 8px; }
 .tool-tag.partial { color: var(--ink-soft); border-color: var(--rule); }
 .tool-note { color: var(--ink-soft); font-size: 12.5px; margin: 4px 0 0; }
 
@@ -2702,8 +2702,8 @@ pre.body { background: var(--surface-sunk); border: 1px solid var(--rule); borde
 .theme-help { color: var(--ink-soft); font-size: 12.5px; }
 /* No overflow clip on the wrapper: the buttons' focus ring sits 2px outside
    their box, and radius is 0, so a clip would erase the ring and round nothing. */
-.seg { display: inline-flex; border: 1px solid var(--rule); border-radius: var(--radius); }
-.seg button { background: var(--surface); border: 0; border-left: 1px solid var(--rule); color: var(--ink-soft); font: inherit; font-size: 13px; font-weight: 600; padding: 6px 14px; cursor: pointer; }
+.seg { display: inline-flex; border: var(--border-w-hair) solid var(--rule); border-radius: var(--radius); }
+.seg button { background: var(--surface); border: 0; border-left: var(--border-w) solid var(--rule); color: var(--ink-soft); font: inherit; font-size: 13px; font-weight: 600; padding: 6px 14px; cursor: pointer; }
 .seg button:first-child { border-left: 0; }
 .seg button:hover { color: var(--ink); }
 /* The pressed segment is ink-filled so it never reads as a primary button or a

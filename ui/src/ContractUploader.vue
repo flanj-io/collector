@@ -409,14 +409,14 @@ function onHostEdited() {
    rules only — every colour, rule width and radius is a token (src/tokens.css). */
 /* Rendered inline on whichever row opened it — there is one mutation, so only
    one can be open at a time. */
-.uploader { border: 1px dashed var(--rule); border-radius: var(--radius); padding: 12px; margin-top: 8px; background: var(--surface-sunk); }
+.uploader { border: var(--border-w) solid var(--rule); border-radius: var(--radius); padding: 12px; margin-top: 8px; background: var(--surface-sunk); }
 .uploader-host { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--ink-soft); margin-bottom: 10px; }
 .uploader-host input {
-  padding: 6px 8px; border: 1px solid var(--rule); border-radius: var(--radius);
+  padding: 6px 8px; border: var(--border-w) solid var(--rule); border-radius: var(--radius);
   background: var(--surface); color: var(--ink); font-size: 13px; max-width: 352px;
 }
 .dropzone {
-  border: 1px dashed var(--rule); border-radius: var(--radius); padding: 18px 12px;
+  border: var(--border-w) dashed var(--rule); border-radius: var(--radius); padding: 18px 12px;
   text-align: center; background: var(--surface);
 }
 .dropzone.dragging { border-color: var(--accent); background: var(--surface-sunk); }
@@ -435,7 +435,7 @@ function onHostEdited() {
 /* The binding checklist. A `servers:` mismatch used to render in body ink —
    "warn, never block" means warn VISIBLY, and that was a whisper. Warnings get
    the warning colour and a marker; the button still says go. */
-.binding-checks { list-style: none; margin: 0 0 8px; padding: 8px 10px; display: grid; gap: 4px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--rule); }
+.binding-checks { list-style: none; margin: 0 0 8px; padding: 8px 10px; display: grid; gap: 4px; border-radius: var(--radius); background: var(--surface); border: var(--border-w-hair) solid var(--rule); }
 .binding-checks.warned { border-color: var(--sev-warning-edge); background: var(--sev-warning-wash); }
 .binding-checks li { display: flex; gap: 8px; align-items: flex-start; font-size: 12.5px; line-height: 1.45; color: var(--ink-soft); }
 .binding-checks li.warn { color: var(--ink); }
