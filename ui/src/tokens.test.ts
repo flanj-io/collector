@@ -195,6 +195,30 @@ describe('design tokens', () => {
     if (vault) expect(body).toBe(readFileSync(vault, 'utf8'));
   });
 
+  it('the hex bolt is one inline symbol per document, and no bolt tone is an inline style', () => {
+    // Blueprint port rule: the bolt ships ONCE as <symbol id="hxbolt"> and every
+    // use is a class-toned <use>. A second symbol duplicates an id; an inline
+    // style="color:…;--l:…" on a bolt (the kit's own idiom) is a palette
+    // literal the tokens cannot reach. Comments are stripped first — both the
+    // template and this file's own prose mention the symbol by name.
+    const templateOf = (f: string) => {
+      const src = read(f);
+      const start = src.indexOf('<template>');
+      const end = src.lastIndexOf('</template>');
+      return start < 0 ? '' : src.slice(start, end).replace(/<!--[\s\S]*?-->/g, '');
+    };
+    const templates = sfcs.map((f) => [f, templateOf(f)] as const);
+    const symbols = templates.reduce((n, [, t]) => n + (t.match(/<symbol id="hxbolt"/g) ?? []).length, 0);
+    expect(symbols, 'exactly one <symbol id="hxbolt"> across the SFC templates').toBe(1);
+    const uses = templates.reduce((n, [, t]) => n + (t.match(/<use href="#hxbolt"/g) ?? []).length, 0);
+    expect(uses).toBeGreaterThan(0);
+    for (const [f, t] of templates) {
+      expect(t.match(/\sstyle="/g), `inline style attribute in ${f}'s template`).toBeNull();
+    }
+    // The scanner must bite before it is trusted: the kit's own bolt markup.
+    expect('<svg class="hx" style="color:var(--red)"><use href="#hxbolt"/></svg>'.match(/\sstyle="/g)).not.toBeNull();
+  });
+
   it('the green quarantine is gone — --ok is canonical and nothing references --verified*', () => {
     // tokens-pending.css held a `--verified*` family while the canonical set had
     // no positive colour. Blueprint ships `--ok*`; the file was deleted on
