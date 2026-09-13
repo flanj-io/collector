@@ -2425,6 +2425,17 @@ code { font-family: var(--font-mono); }
 .btn.small { padding: 0.28rem 0.65rem; font-size: 0.8rem; }
 .btn.attention { color: var(--accent-ink); border-color: var(--accent-ink); }
 .btn:disabled { opacity: 0.6; cursor: default; }
+/* Focus: one ring for every control, from the token layer — the 2px ink outline
+   at 2px offset. :focus-visible only, so a mouse click on a button draws
+   nothing while keyboard focus always does; text fields draw it on every focus,
+   which is what :focus-visible means for editable elements. Scoped SFCs repeat
+   the two declarations for their own controls (src/tokens.test.ts lists them). */
+.btn:focus-visible, .tabs button:focus-visible, .seg button:focus-visible, .pill-btn:focus-visible,
+.live-btn:focus-visible, .pending-bar:focus-visible, .tr-search:focus-visible, .tr-select:focus-visible,
+.tr-clear:focus-visible, .tr-chk input:focus-visible, .doc-link:focus-visible, .edge-contract-link:focus-visible,
+.uploader-host input:focus-visible, .dropzone:focus-visible, .pill-link:focus-visible {
+  outline: var(--focus-ring); outline-offset: var(--focus-offset);
+}
 /* A thread chip is a state, not a verdict: neutral ink, and `attention` lifts it to the accent. */
 .chip { display: inline-flex; align-items: center; font-size: 0.8rem; font-weight: 600; color: var(--ink-soft); border: 1px solid var(--ink-soft); border-radius: var(--radius); padding: 0.15rem 0.6rem; }
 .chip.attention { color: var(--accent-ink); border-color: var(--accent-ink); }
@@ -2446,7 +2457,7 @@ code { font-family: var(--font-mono); }
 .tr-toolbar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; padding: 0.6rem 0; background: var(--ground); }
 .tr-search { flex: 1 1 240px; min-width: 180px; background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius); color: var(--ink); font: inherit; font-size: 0.88rem; padding: 0.4rem 0.7rem; }
 .tr-search::placeholder { color: var(--ink-soft); }
-.tr-search:focus, .tr-select:focus { outline: none; border-color: var(--accent); }
+.tr-search:focus, .tr-select:focus { border-color: var(--accent); }
 .tr-select { background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius); color: var(--ink); font: inherit; font-size: 0.82rem; padding: 0.38rem 0.5rem; }
 .tr-chk { display: inline-flex; align-items: center; gap: 0.35rem; color: var(--ink-soft); font-size: 0.82rem; cursor: pointer; white-space: nowrap; user-select: none; }
 .tr-chk input { accent-color: var(--accent-ink); }

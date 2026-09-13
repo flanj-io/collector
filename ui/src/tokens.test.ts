@@ -90,6 +90,30 @@ describe('design tokens', () => {
     expect(tokens).toContain(':root:not([data-flanj-theme="light"])');
   });
 
+  it('every control draws the token focus ring on :focus-visible', () => {
+    // Only .edge-contract-link had a :focus-visible rule before Blueprint; a
+    // keyboard user tabbing through the rest saw the browser default or, on the
+    // inputs, `outline: none`. Each control class must reference the ring
+    // tokens from a :focus-visible selector, and no rule may switch the outline
+    // off on plain :focus any more.
+    const styles = Object.fromEntries(sfcs.map((f) => [f, styleOf(f)]));
+    const all = Object.values(styles).join('\n');
+    const ringRules = all.match(/[^{}]*:focus-visible[^{]*\{[^}]*\}/g) ?? [];
+    const hasRing = (cls: string) =>
+      ringRules.some((r) => r.includes(`${cls}:focus-visible`) && r.includes('var(--focus-ring)') && r.includes('var(--focus-offset)'));
+    const controls = [
+      '.btn', '.tabs button', '.seg button', '.pill-btn', '.live-btn', '.pending-bar',
+      '.tr-search', '.tr-select', '.tr-clear', '.tr-chk input', '.doc-link',
+      '.edge-contract-link', '.uploader-host input', '.dropzone',
+      '.field input', 'textarea', '.link-input', '.disclosure'
+    ];
+    expect(controls.filter((c) => !hasRing(c)), 'controls without the token focus ring').toEqual([]);
+    for (const [f, style] of Object.entries(styles)) {
+      const off = style.match(/[^{}]*:focus\s*\{[^}]*outline:\s*none[^}]*\}/g) ?? [];
+      expect(off, `outline switched off on :focus in ${f}`).toEqual([]);
+    }
+  });
+
   it('the green quarantine is gone — --ok is canonical and nothing references --verified*', () => {
     // tokens-pending.css held a `--verified*` family while the canonical set had
     // no positive colour. Blueprint ships `--ok*`; the file was deleted on

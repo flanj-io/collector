@@ -303,7 +303,8 @@ function cancelEdit() {
 .field-label { font-size: 0.82rem; font-weight: 600; }
 .field-help { font-size: 0.78rem; color: var(--ink-soft); }
 .field input { background: var(--ground); border: 1px solid var(--rule); border-radius: var(--radius); color: var(--ink); font: inherit; font-size: 0.92rem; padding: 0.45rem 0.65rem; }
-.field input:focus { outline: none; border-color: var(--accent); }
+.field input:focus { border-color: var(--accent); }
+.field input:focus-visible { outline: var(--focus-ring); outline-offset: var(--focus-offset); }
 .connect-actions { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; margin-top: 0.4rem; }
 .connect-foot { margin: 0.2rem 0 0; font-size: 0.78rem; color: var(--ink-soft); }
 .dim { color: var(--ink-soft); font-weight: 400; }

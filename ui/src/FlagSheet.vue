@@ -464,7 +464,8 @@ watch(result, (r) => {
 .field { display: flex; flex-direction: column; gap: 0.25rem; }
 .field-label { font-size: 0.82rem; font-weight: 600; }
 textarea { background: var(--ground); border: 1px solid var(--rule); border-radius: var(--radius); color: var(--ink); font: inherit; font-size: 0.92rem; padding: 0.5rem 0.65rem; resize: vertical; }
-textarea:focus { outline: none; border-color: var(--accent); }
+textarea:focus { border-color: var(--accent); }
+textarea:focus-visible, .link-input:focus-visible, .disclosure:focus-visible { outline: var(--focus-ring); outline-offset: var(--focus-offset); }
 .sheet-actions { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
 .link-input { width: 100%; background: var(--ground); border: 1px solid var(--accent); border-radius: var(--radius); color: var(--ink); font-size: 0.88rem; padding: 0.5rem 0.65rem; }
 /* Cautions in the sheet are prose, not findings: body ink behind an accent rule
