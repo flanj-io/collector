@@ -294,7 +294,16 @@ describe('cannotListThreads (gate on the 412 the relay would answer)', () => {
 });
 
 // thread-domain-gate (2026-09-14): the "Open to" field's parser and copy.
-import { domainsSentence, gatedShareWarning, parseOpenTo } from './threads';
+import { domainsSentence, gatedShareWarning, openToInvalidNote, OPEN_TO_NOTE_ENTRY_MAX, parseOpenTo } from './threads';
+
+describe('openToInvalidNote (QA 2026-09-14: a pasted 16 KB entry ran out of the sheet)', () => {
+  it('names a short entry whole, and shortens a long one', () => {
+    expect(openToInvalidNote('dana@acme.test')).toBe('"dana@acme.test" is not a domain — write each like acme.com, with no @, path or port.');
+    const note = openToInvalidNote(`${'x'.repeat(16_000)}.test`);
+    expect(note).toContain(`"${'x'.repeat(OPEN_TO_NOTE_ENTRY_MAX)}…" is not a domain`);
+    expect(note.length).toBeLessThan(OPEN_TO_NOTE_ENTRY_MAX + 100);
+  });
+});
 
 describe('parseOpenTo', () => {
   it('splits on commas and whitespace, normalizes and de-duplicates', () => {
@@ -320,7 +329,7 @@ describe('the gated share warning', () => {
     expect(one).toContain('read the redacted evidence and reply');
     expect(one).toContain('Nobody else can read it');
     expect(one).not.toContain('Anyone with this link');
-    expect(gatedShareWarning(['acme.test', 'globex.test'], 'Acme', 'message')).toContain('@acme.test or globex.test address');
+    expect(gatedShareWarning(['acme.test', 'globex.test'], 'Acme', 'message')).toContain('People with an @acme.test or @globex.test address');
     expect(gatedShareWarning(['a.test', 'b.test', 'c.test'], 'Acme', 'message')).toContain('read your message and reply');
   });
   it('domainsSentence joins with commas and a final or', () => {

@@ -118,6 +118,16 @@ describe('there is no silent default', () => {
     expect(calls).toHaveLength(0);
   });
 
+  it('a pasted 16 KB entry is refused with a SHORT sentence — the guard never repeats the whole paste (QA 2026-09-14)', async () => {
+    stubFetch([]);
+    const w = await open();
+    await openTo(w).setValue(`${'x'.repeat(16_000)}.test`);
+    expect(createButton(w).attributes('disabled')).toBeDefined();
+    const guard = w.find('.open-to-guard').text();
+    expect(guard).toContain('is not a domain');
+    expect(guard.length).toBeLessThan(200);
+  });
+
   it('a non-domain is refused before the click, naming the entry', async () => {
     stubFetch([]);
     const w = await open();

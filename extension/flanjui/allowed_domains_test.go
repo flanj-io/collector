@@ -56,7 +56,8 @@ func TestFlagRefusesAMissingOrEmptyOpenTo(t *testing.T) {
 		{"blank entries", map[string]any{"finding_id": "fnd_1", "allowed_domains": []string{" ", "@"}}, "allowed_domains_empty"},
 		{"not a domain", map[string]any{"finding_id": "fnd_1", "allowed_domains": []string{"https://acme.test/x"}}, "invalid_domain"},
 		{"an address", map[string]any{"finding_id": "fnd_1", "allowed_domains": []string{"dana@acme.test"}}, "invalid_domain"},
-		{"not a list", map[string]any{"finding_id": "fnd_1", "allowed_domains": "acme.test"}, "invalid_domain"},
+		{"not a list", map[string]any{"finding_id": "fnd_1", "allowed_domains": "acme.test"}, "bad_request"},
+		{"a list of non-strings", map[string]any{"finding_id": "fnd_1", "allowed_domains": []int{42}}, "bad_request"},
 	}
 	for _, c := range cases {
 		before := r.cp.flagCalls

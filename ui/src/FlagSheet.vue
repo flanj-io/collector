@@ -571,7 +571,7 @@ textarea:focus-visible, .open-to:focus-visible, .check input:focus-visible, .lin
 .paste-preview { font-size: 12.5px; color: var(--ink-soft); }
 .paste-preview summary { cursor: pointer; }
 .paste { margin: 6px 0 0; word-break: break-all; font-size: 12.5px; background: var(--surface-sunk); border: var(--border-w) solid var(--rule); border-radius: var(--radius); padding: 8px 10px; }
-.guard { margin: 0; color: var(--ink-soft); font-size: 13.5px; }
+.guard { margin: 0; color: var(--ink-soft); font-size: 13.5px; overflow-wrap: anywhere; }
 .error { color: var(--sev-breaking-ink); margin: 0; font-size: 13.5px; }
 .mono { font-family: var(--f-mono); }
 </style>

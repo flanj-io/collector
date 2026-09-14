@@ -420,8 +420,11 @@ export function openToTooMany(): string {
 export function openToPrefillNote(domain: string): string {
   return `Prefilled from the Flanj directory — ${domain} is a verified claim. Edit it if their email domain is different.`;
 }
+/** Entries longer than this are shortened in the guard: a pasted log must not become one unbroken line. */
+export const OPEN_TO_NOTE_ENTRY_MAX = 48;
 export function openToInvalidNote(entry: string): string {
-  return `"${entry}" is not a domain — write each like acme.com, with no @, path or port.`;
+  const shown = entry.length > OPEN_TO_NOTE_ENTRY_MAX ? `${entry.slice(0, OPEN_TO_NOTE_ENTRY_MAX)}…` : entry;
+  return `"${shown}" is not a domain — write each like acme.com, with no @, path or port.`;
 }
 
 /** A bare domain: labels of letters, digits and hyphens, at least one dot. */
@@ -458,5 +461,6 @@ export function domainsSentence(domains: string[]): string {
  */
 export function gatedShareWarning(domains: string[], provider: string, what: 'evidence' | 'message'): string {
   const reads = what === 'evidence' ? 'read the redacted evidence and reply' : 'read your message and reply';
-  return `People with an @${domainsSentence(domains)} address can open this link — they confirm it once, then ${reads}. Nobody else can read it. Paste it where you already talk to ${provider}'s team. It lasts 30 days and extends with each reply.`;
+  // Every domain carries its own @ — "@a or b" read as one address at a plus a bare word (QA 2026-09-14).
+  return `People with an ${domainsSentence(domains.map((d) => `@${d}`))} address can open this link — they confirm it once, then ${reads}. Nobody else can read it. Paste it where you already talk to ${provider}'s team. It lasts 30 days and extends with each reply.`;
 }

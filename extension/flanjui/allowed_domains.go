@@ -48,7 +48,8 @@ func allowedDomainsOf(raw json.RawMessage) (domains []string, code, msg string) 
 	}
 	var list []string
 	if err := json.Unmarshal(trimmed, &list); err != nil {
-		return nil, "invalid_domain", msgOpenToNotAList
+		// Not a list at all: the same code the control plane answers (CONTRACTS-CP §5.4).
+		return nil, "bad_request", msgOpenToNotAList
 	}
 	seen := map[string]bool{}
 	out := []string{}
