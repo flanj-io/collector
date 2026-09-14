@@ -13,6 +13,7 @@ import type { ConnectState } from './threads';
 
 const CONNECTED: ConnectState = {
   status: 'connected',
+  collector_name: 'prod-eu',
   consumer_display_name: 'CustomerX',
   contact_email: 'maya@customerx.example',
   contact_display_name: 'Maya',
@@ -33,12 +34,16 @@ function facts(w: VueWrapper): Record<string, string> {
 }
 
 describe('Connect card, connected', () => {
-  it('renders the kit’s k/v grid: organization, contact with a confirmed mark, collector address', () => {
+  it('renders the kit’s k/v grid: collector name with Rename, organization, contact with a confirmed mark, collector address', () => {
     wrapper = mount(ConnectPanel, { props: { state: { ...CONNECTED, local_ui_url: 'http://localhost:5535' } } });
     const w = wrapper;
     expect(w.find('.connect-state.ok').exists()).toBe(true);
     const f = facts(w);
-    expect(Object.keys(f)).toEqual(['Organization', 'Contact', 'Collector address']);
+    expect(Object.keys(f)).toEqual(['Collector name', 'Organization', 'Contact', 'Collector address']);
+    // The name is the deployment's identity in the workspace (2026-09-14) — first, with its rename.
+    expect(f['Collector name']).toContain('prod-eu');
+    const nameField = w.findAll('.connect-field').find((x) => x.find('.k').text() === 'Collector name')!;
+    expect(nameField.find('button').text()).toBe('Rename');
     expect(f.Organization).toBe('CustomerX');
     expect(f.Contact).toContain('maya@customerx.example');
     expect(f.Contact).toContain('confirmed');

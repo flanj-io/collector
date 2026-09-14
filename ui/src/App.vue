@@ -397,9 +397,10 @@ function goToSettings() {
 // resolves through the Edges panel's name for that host (contracts.ts
 // providerNameForFinding; QA 2026-09-14).
 function providerNameFor(f: Finding): string {
+  // No `healthIntegration` scope any more: the config slug is gone (2026-09-14), so a configured
+  // provider_display_name applies to any REST finding — the same rule the relay applies server-side.
   return providerNameForFinding(f, {
     providerDisplayName: health.value?.provider_display_name,
-    healthIntegration: health.value?.integration,
     contracts: contracts.value,
     edges: edges.value
   });
@@ -1223,10 +1224,13 @@ const sheetCall = computed(() =>
 const headline = computed(() =>
   headlineFor({
     liveFindings: liveFindings.value,
-    calls: calls.value.map((c) => ({ transport: c.transport, integration: c.integration, validated: isValidated(c) })),
-    integration: health.value?.integration
+    calls: calls.value.map((c) => ({ transport: c.transport, integration: c.integration, validated: isValidated(c) }))
   })
 );
+// The headline's scope line names THIS DEPLOYMENT — its collector name, the CP's copy — once it is
+// Connected. It replaced "on integration <slug>", which named a REST integration from static config
+// (2026-09-14): the name is an identity the operator chose, never a claim about traffic.
+const collectorName = computed(() => connect.value?.collector_name || health.value?.collector_name || '');
 
 // ─── Edge naming (v1p1): the inline rename editor ─────────────────────────
 // One editor at a time; all transitions live in edge-names.ts (vitest-covered).
@@ -1582,11 +1586,10 @@ watch(tab, (t) => {
           <div class="hl-you">
             <strong>{{ headline.you }}</strong>
           </div>
-          <!-- Pre-traffic honesty: no integration observed on a REST edge yet →
-               the fragment is simply absent (no replacement copy). An MCP edge
-               alone does not count — the slug is a REST integration's name, and
-               the MCP server has its own line below (ui/src/headline.ts). -->
-          <div v-if="headline.integration" class="hl-sub">observed here, on integration <code>{{ headline.integration }}</code></div>
+          <!-- The scope line names this deployment by its collector name once
+               Connected (2026-09-14) — an identity the operator chose, so it
+               may render pre-traffic. Absent until then: no fallback slug. -->
+          <div v-if="collectorName" class="hl-sub">observed here, by collector <code>{{ collectorName }}</code></div>
         </div>
       </section>
 

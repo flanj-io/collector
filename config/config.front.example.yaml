@@ -47,11 +47,10 @@ processors:
   # spec-less front is a legitimate configuration — but on a tiered
   # deployment it is almost always a mistake.
   flanjdrift:
-    integration_id: acme-payments
+    # integration_id / self_integration_id: REMOVED (CONTRACTS §8, 2026-09-14).
     store_pod_endpoint: ${env:FLANJ_STORE_SPEC_ENDPOINT:-http://flanj-store:5337}
     store_pod_token: ${env:FLANJ_SPEC_TOKEN} # must match the store pod's flanjstore.spec_token
     # self_spec_path: /etc/flanj/self-spec.yaml
-    # self_integration_id: self
 
 exporters:
   # Forward to the store pod. Plain HTTP inside the cluster (ClusterIP service);

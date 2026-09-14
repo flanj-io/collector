@@ -34,7 +34,8 @@ type stubCP struct {
 	// totalCalls counts EVERY request that reached this stub, on any route.
 	totalCalls       int
 	registerCalls    int
-	registerAuths    []string // Authorization header of every register call, in order
+	registerAuths    []string // Authorization header of every register call, in order ("" = none sent)
+	collectorName    string   // the CP's copy of the name (2026-09-14): what register stored, what `me` reports
 	flagCalls        int
 	state            map[string]string // thread id -> open|closed
 	replaceCalls     int
@@ -156,17 +157,39 @@ func newStubCP(t *testing.T) *stubCP {
 		email, _ := b["contact_email"].(string)
 		s.lastRegisterBody = b
 		s.registerCalls++
+		// The name as the CP stores it (2026-09-14): the one sent, cleaned the way the CP
+		// cleans it (whitespace collapsed) — so the relay is seen keeping the CP's copy.
+		if name, _ := b["collector_name"].(string); name != "" {
+			s.collectorName = strings.Join(strings.Fields(name), " ")
+		}
+		named := func(body map[string]any) map[string]any {
+			body["collector_name"] = s.collectorName
+			body["collector_name_derived"] = false
+			return body
+		}
 		switch auth {
+		case "":
+			// The open door (2026-09-14): no credential = a NEW collector, and only that.
+			if s.deployToken != "" {
+				jsonOut(w, 401, map[string]string{"error": "unauthorized", "message": "this stub expects a token"})
+				return
+			}
+			if s.registerCalls == 1 {
+				s.contactEmail = email
+				mailOut(w, 201, named(map[string]any{"collector_id": "c1", "collector_public_id": "pub_c1", "collector_key": s.collectorKey, "contact_status": "pending"}))
+				return
+			}
+			jsonOut(w, 409, map[string]string{"error": "collector_name_taken", "message": "Another collector in this workspace is already named \"" + s.collectorName + "\" — choose a different name."})
 		case "Bearer " + s.deployToken:
 			// The CP has ONE deploy token: it cannot tell deployments apart by it.
 			if s.registerCalls == 1 {
 				s.contactEmail = email
-				mailOut(w, 201, map[string]any{"collector_id": "c1", "collector_public_id": "pub_c1", "collector_key": s.collectorKey, "contact_status": "pending"})
+				mailOut(w, 201, named(map[string]any{"collector_id": "c1", "collector_public_id": "pub_c1", "collector_key": s.collectorKey, "contact_status": "pending"}))
 				return
 			}
 			if email == s.contactEmail {
 				// same email → idempotent replay; the key is returned once, never again
-				mailOut(w, 200, map[string]any{"collector_id": "c1", "collector_public_id": "pub_c1", "contact_status": s.contactStatus})
+				mailOut(w, 200, named(map[string]any{"collector_id": "c1", "collector_public_id": "pub_c1", "contact_status": s.contactStatus}))
 				return
 			}
 			// a different email with only the deploy token = a NEW collector (CONTRACTS-CP §5.1) —
@@ -177,7 +200,7 @@ func newStubCP(t *testing.T) *stubCP {
 			if email != s.contactEmail {
 				s.contactEmail, s.contactStatus = email, "pending"
 			}
-			mailOut(w, 200, map[string]any{"collector_id": "c1", "collector_public_id": "pub_c1", "contact_status": s.contactStatus})
+			mailOut(w, 200, named(map[string]any{"collector_id": "c1", "collector_public_id": "pub_c1", "contact_status": s.contactStatus}))
 		default:
 			jsonOut(w, 401, map[string]string{"error": "unauthorized", "message": "bad bearer"})
 		}
@@ -205,7 +228,7 @@ func newStubCP(t *testing.T) *stubCP {
 			confirmedAt = "2026-08-23T10:05:00Z"
 			confirmedEmail = s.confirmedEmail
 		}
-		jsonOut(w, 200, map[string]any{"collector_id": "c1", "collector_public_id": "pub_c1", "consumer_display_name": "Acme Consumer Ltd",
+		jsonOut(w, 200, map[string]any{"collector_id": "c1", "collector_public_id": "pub_c1", "collector_name": s.collectorName, "consumer_display_name": "Acme Consumer Ltd",
 			"contact_email": s.contactEmail, "contact_display_name": "Dana", "contact_status": s.contactStatus, "confirmed_contact_email": confirmedEmail,
 			"registered_at": "2026-08-23T10:00:00Z", "confirmed_at": confirmedAt})
 	})
@@ -535,7 +558,7 @@ func TestConnectThenFlagLoop(t *testing.T) {
 	}
 
 	// 3. Connect → 202 pending; key persisted in the store; never in the body
-	resp, out, raw := r.do(t, http.MethodPost, "/api/connect", map[string]string{"consumer_display_name": "Acme Consumer Ltd", "contact_email": "ops@acme.test", "contact_display_name": "Dana", "local_ui_url": "http://localhost:5335"})
+	resp, out, raw := r.do(t, http.MethodPost, "/api/connect", map[string]string{"consumer_display_name": "Acme Consumer Ltd", "collector_name": "prod-eu", "contact_email": "ops@acme.test", "contact_display_name": "Dana", "local_ui_url": "http://localhost:5335"})
 	if resp.StatusCode != 202 || out["status"] != "pending" || out["contact_email"] != "ops@acme.test" || out["collector_public_id"] != "pub_c1" {
 		t.Fatalf("connect: %d %s", resp.StatusCode, raw)
 	}
@@ -560,7 +583,7 @@ func TestConnectThenFlagLoop(t *testing.T) {
 	}
 
 	// 5. resend: same email → replay, same key kept, still pending
-	resp, out, _ = r.do(t, http.MethodPost, "/api/connect", map[string]string{"consumer_display_name": "Acme Consumer Ltd", "contact_email": "ops@acme.test"})
+	resp, out, _ = r.do(t, http.MethodPost, "/api/connect", map[string]string{"consumer_display_name": "Acme Consumer Ltd", "collector_name": "prod-eu", "contact_email": "ops@acme.test"})
 	if resp.StatusCode != 202 || out["status"] != "pending" || r.cp.registerCalls != 2 {
 		t.Fatalf("resend: %d %v calls=%d", resp.StatusCode, out, r.cp.registerCalls)
 	}
@@ -587,7 +610,7 @@ func TestConnectThenFlagLoop(t *testing.T) {
 		t.Errorf("confirmed status not persisted")
 	}
 	// re-POST once connected → 200 connected
-	resp, out, _ = r.do(t, http.MethodPost, "/api/connect", map[string]string{"consumer_display_name": "Acme Consumer Ltd", "contact_email": "ops@acme.test"})
+	resp, out, _ = r.do(t, http.MethodPost, "/api/connect", map[string]string{"consumer_display_name": "Acme Consumer Ltd", "collector_name": "prod-eu", "contact_email": "ops@acme.test"})
 	if resp.StatusCode != 200 || out["status"] != "connected" {
 		t.Errorf("re-POST when connected: %d %v", resp.StatusCode, out)
 	}
@@ -704,11 +727,11 @@ func TestConnectThenFlagLoop(t *testing.T) {
 func TestConnectValidation(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
-	resp, out, _ := r.do(t, http.MethodPost, "/api/connect", map[string]string{"consumer_display_name": "", "contact_email": "x@y.z"})
+	resp, out, _ := r.do(t, http.MethodPost, "/api/connect", map[string]string{"consumer_display_name": "", "collector_name": "prod-eu", "contact_email": "x@y.z"})
 	if resp.StatusCode != 400 || out["error"] != "missing_fields" {
 		t.Errorf("missing org: %d %v", resp.StatusCode, out)
 	}
-	resp, out, _ = r.do(t, http.MethodPost, "/api/connect", map[string]string{"consumer_display_name": "Acme", "contact_email": "not-an-email"})
+	resp, out, _ = r.do(t, http.MethodPost, "/api/connect", map[string]string{"consumer_display_name": "Acme", "collector_name": "prod-eu", "contact_email": "not-an-email"})
 	if resp.StatusCode != 400 || out["error"] != "invalid_email" {
 		t.Errorf("bad email: %d %v", resp.StatusCode, out)
 	}
@@ -730,7 +753,7 @@ func TestCPUnreachable(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
 	r.cp.srv.Close() // CP down
-	resp, out, _ := r.do(t, http.MethodPost, "/api/connect", map[string]string{"consumer_display_name": "Acme", "contact_email": "ops@acme.test"})
+	resp, out, _ := r.do(t, http.MethodPost, "/api/connect", map[string]string{"consumer_display_name": "Acme", "collector_name": "prod-eu", "contact_email": "ops@acme.test"})
 	if resp.StatusCode != 502 || out["error"] != "cp_unreachable" || out["message"] != msgCPUnreachableSend {
 		t.Errorf("connect unreachable: %d %v", resp.StatusCode, out)
 	}
@@ -1089,7 +1112,7 @@ func TestConnectReplayWithoutKey(t *testing.T) {
 	r.cp.registerCalls = 1 // next register = replay without the key
 	r.cp.contactEmail = "ops@acme.test"
 	r.cp.mu.Unlock()
-	resp, out, _ := r.do(t, http.MethodPost, "/api/connect", map[string]string{"consumer_display_name": "Acme", "contact_email": "ops@acme.test"})
+	resp, out, _ := r.do(t, http.MethodPost, "/api/connect", map[string]string{"consumer_display_name": "Acme", "collector_name": "prod-eu", "contact_email": "ops@acme.test"})
 	if resp.StatusCode != 409 || out["error"] != "key_missing" {
 		t.Fatalf("replay without key: %d %v", resp.StatusCode, out)
 	}
@@ -1111,7 +1134,7 @@ func TestChangeContactKeepsKeyAndThreads(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
 	// Connect + confirm ops@acme.test
-	resp, out, _ := r.do(t, http.MethodPost, "/api/connect", map[string]string{"consumer_display_name": "Acme Consumer Ltd", "contact_email": "ops@acme.test"})
+	resp, out, _ := r.do(t, http.MethodPost, "/api/connect", map[string]string{"consumer_display_name": "Acme Consumer Ltd", "collector_name": "prod-eu", "contact_email": "ops@acme.test"})
 	if resp.StatusCode != 202 {
 		t.Fatalf("connect: %d %v", resp.StatusCode, out)
 	}
@@ -1127,7 +1150,7 @@ func TestChangeContactKeepsKeyAndThreads(t *testing.T) {
 	}
 
 	// Change contact → register with the key; key unchanged; new contact pending; old one still confirmed
-	resp, out, raw := r.do(t, http.MethodPost, "/api/connect", map[string]string{"consumer_display_name": "Acme Consumer Ltd", "contact_email": "new@acme.test", "contact_display_name": "Sam"})
+	resp, out, raw := r.do(t, http.MethodPost, "/api/connect", map[string]string{"consumer_display_name": "Acme Consumer Ltd", "collector_name": "prod-eu", "contact_email": "new@acme.test", "contact_display_name": "Sam"})
 	if resp.StatusCode != 202 || out["status"] != "pending" || out["contact_email"] != "new@acme.test" || out["confirmed_contact_email"] != "ops@acme.test" {
 		t.Fatalf("change contact: %d %s", resp.StatusCode, raw)
 	}
@@ -1162,7 +1185,7 @@ func TestChangeContactKeepsKeyAndThreads(t *testing.T) {
 	}
 
 	// Resend for the pending new contact → key again, same email, still pending
-	resp, out, _ = r.do(t, http.MethodPost, "/api/connect", map[string]string{"consumer_display_name": "Acme Consumer Ltd", "contact_email": "new@acme.test"})
+	resp, out, _ = r.do(t, http.MethodPost, "/api/connect", map[string]string{"consumer_display_name": "Acme Consumer Ltd", "collector_name": "prod-eu", "contact_email": "new@acme.test"})
 	if resp.StatusCode != 202 || out["status"] != "pending" || r.cp.registerAuths[2] != "Bearer "+r.cp.collectorKey {
 		t.Errorf("resend: %d %v auths=%v", resp.StatusCode, out, r.cp.registerAuths)
 	}
@@ -1200,7 +1223,7 @@ func TestConnectedAddressUpdate(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
 	// Connect without an address + confirm
-	resp, out, _ := r.do(t, http.MethodPost, "/api/connect", map[string]string{"consumer_display_name": "Acme Consumer Ltd", "contact_email": "ops@acme.test"})
+	resp, out, _ := r.do(t, http.MethodPost, "/api/connect", map[string]string{"consumer_display_name": "Acme Consumer Ltd", "collector_name": "prod-eu", "contact_email": "ops@acme.test"})
 	if resp.StatusCode != 202 {
 		t.Fatalf("connect: %d %v", resp.StatusCode, out)
 	}
@@ -1216,7 +1239,7 @@ func TestConnectedAddressUpdate(t *testing.T) {
 	}
 
 	// Add the address: same contact + local_ui_url → 200 connected, key bearer
-	resp, out, raw := r.do(t, http.MethodPost, "/api/connect", map[string]string{"consumer_display_name": "Acme Consumer Ltd", "contact_email": "ops@acme.test", "local_ui_url": "http://collector.internal:5335"})
+	resp, out, raw := r.do(t, http.MethodPost, "/api/connect", map[string]string{"consumer_display_name": "Acme Consumer Ltd", "collector_name": "prod-eu", "contact_email": "ops@acme.test", "local_ui_url": "http://collector.internal:5335"})
 	if resp.StatusCode != 200 || out["status"] != "connected" || out["local_ui_url"] != "http://collector.internal:5335" {
 		t.Fatalf("address update: %d %s", resp.StatusCode, raw)
 	}
@@ -1393,7 +1416,7 @@ func TestConnectRedactsDisplayNames(t *testing.T) {
 	r.start(t)
 	const pan = "4242424242424242"
 	resp, out, raw := r.do(t, http.MethodPost, "/api/connect", map[string]string{
-		"consumer_display_name": "Acme " + pan + " Ltd", "contact_email": "ops@acme.test", "contact_display_name": "Dana " + pan})
+		"consumer_display_name": "Acme " + pan + " Ltd", "collector_name": "prod-eu " + pan, "contact_email": "ops@acme.test", "contact_display_name": "Dana " + pan})
 	if resp.StatusCode != 202 {
 		t.Fatalf("connect: %d %s", resp.StatusCode, raw)
 	}
@@ -2167,6 +2190,7 @@ func TestConnectRelaysTheConfirmationMailOutcome(t *testing.T) {
 
 			resp, out, raw := r.do(t, http.MethodPost, "/api/connect", map[string]string{
 				"consumer_display_name": "Acme Consumer Ltd",
+				"collector_name":        "prod-eu",
 				"contact_email":         "ops@acme.test",
 			})
 			if resp.StatusCode != 202 {

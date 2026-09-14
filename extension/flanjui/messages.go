@@ -23,23 +23,24 @@ const (
 	msgCPUnreachableFlag   = "Couldn't reach the control plane — nothing was created or shared."
 	msgCPUnreachableSend   = "Couldn't reach the control plane — nothing was sent."
 	msgCPUnreachable       = "Couldn't reach the control plane."
-	msgCPNotConfigured     = "The control plane is not configured on this collector (set cp_base_url and cp_deploy_token)."
+	msgCPNotConfigured     = "The control plane is not configured on this collector (set cp_base_url)."
 	// The OTHER shape of "not configured": cp_base_url IS set, but to a name
 	// reserved for documentation, so no host was ever going to answer it. Saying
 	// "couldn't reach" there sends the operator to debug a network that is not the
 	// problem. Reached by anyone who copied config.example.yaml and kept its
 	// cp_base_url; the image itself no longer bakes one (issue #55).
-	msgCPPlaceholderHost = "This collector's cp_base_url is an example address that can never exist — set it to your control plane, then Connect again."
-	msgStoreUnavailable  = "The local store is not available."
-	msgPostOnly          = "POST only."
-	msgUIHeaderRequired  = "This action is only available from the collector UI."
-	msgJSONRequired      = "Send a JSON body (Content-Type: application/json)."
-	msgForeignOrigin     = "This action is only available from the collector's own page."
-	msgInvalidJSON       = "The request body is not valid JSON."
-	msgRequestTooLarge   = "The request body is too large for this action."
-	msgConnectFields     = "Your organization and a contact email are required."
-	msgInvalidEmail      = "Enter a valid email."
-	msgFindingRequired   = "finding_id is required."
+	msgCPPlaceholderHost   = "This collector's cp_base_url is an example address that can never exist — set it to your control plane, then Connect again."
+	msgStoreUnavailable    = "The local store is not available."
+	msgPostOnly            = "POST only."
+	msgUIHeaderRequired    = "This action is only available from the collector UI."
+	msgJSONRequired        = "Send a JSON body (Content-Type: application/json)."
+	msgForeignOrigin       = "This action is only available from the collector's own page."
+	msgInvalidJSON         = "The request body is not valid JSON."
+	msgRequestTooLarge     = "The request body is too large for this action."
+	msgConnectFields       = "Your organization and a contact email are required."
+	msgConnectNameRequired = "Give this collector a name — it identifies this deployment in your Flanj workspace."
+	msgInvalidEmail        = "Enter a valid email."
+	msgFindingRequired     = "finding_id is required."
 
 	// Contract upload. Uploaded contracts stay on this collector — no string
 	// here may suggest otherwise, and no code path on that route reaches the
@@ -75,7 +76,7 @@ const (
 	msgCallEvicted    = "The failing call is no longer in the local store (it was evicted from the rolling window)."
 	msgThreadNotFound = "No thread with that id was created from this collector."
 	msgWrongOrigin    = "This thread was created by another collector key — it can only be changed from there."
-	msgKeyMissing     = "The control plane already knows this collector, but this store never received its key. Set a new cp_deploy_token and Connect again."
+	msgKeyMissing     = "The control plane already knows this collector, but this store never received its key. Connect again under a different collector name, or set a new cp_deploy_token."
 	// Edge naming (v1 phase 1).
 	msgEdgeHostRequired = "host is required."
 	msgEdgeNotFound     = "No outbound edge with that host has been discovered."

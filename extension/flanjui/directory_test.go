@@ -232,15 +232,24 @@ func TestHealthZeroTrafficHonesty(t *testing.T) {
 			t.Errorf("zero-traffic health carries %q: %s", k, raw)
 		}
 	}
+	// The deployment's NAME is an identity the operator chose, not a discovery: it may render
+	// pre-traffic — and it is empty, not absent, until Connect (2026-09-14).
+	if name, present := out["collector_name"]; !present || name != "" {
+		t.Errorf("health must carry an empty collector_name before Connect: %v", out["collector_name"])
+	}
 	if out["consumer_display_name"] != "Cfg Consumer" {
 		t.Errorf("consumer_display_name (the installer's own name) must still render: %v", out["consumer_display_name"])
 	}
 
-	// One external OUTBOUND edge → both fields emit.
+	// One external OUTBOUND edge → the provider name emits. The `integration` slug never does
+	// any more: the config key it came from is gone (CONTRACTS §8, 2026-09-14).
 	seedOutboundEdge(r, "api.zzguava.dev")
 	_, out, _ = r.do(t, http.MethodGet, "/api/health", nil)
-	if out["integration"] != "acme-payments" || out["provider_display_name"] != "Acme Payments" {
+	if out["provider_display_name"] != "Acme Payments" {
 		t.Errorf("post-traffic health = %v", out)
+	}
+	if _, present := out["integration"]; present {
+		t.Errorf("health must not emit the retired integration slug: %v", out["integration"])
 	}
 
 	// An INBOUND-only or internal edge is not a provider observation.
@@ -253,7 +262,7 @@ func TestHealthZeroTrafficHonesty(t *testing.T) {
 		model.Edge{PeerHost: "10.0.0.5", Direction: "client", Class: "internal"})
 	r2.st.mu.Unlock()
 	_, out, _ = r2.do(t, http.MethodGet, "/api/health", nil)
-	if _, present := out["integration"]; present {
+	if _, present := out["provider_display_name"]; present {
 		t.Errorf("inbound/internal edges alone must not emit the provider fields: %v", out)
 	}
 
@@ -264,7 +273,7 @@ func TestHealthZeroTrafficHonesty(t *testing.T) {
 	_ = r3.st.InsertFinding(model.Finding{SchemaVersion: 1, ID: "fnd_z", Kind: model.KindLiveVsSpec, Severity: model.SeverityBreaking,
 		Integration: "acme-payments", Endpoint: "POST /v1/charges", Expected: "integer", Actual: "string", Rule: "type", DetectedAt: "2026-08-30T10:00:01Z"})
 	_, out, _ = r3.do(t, http.MethodGet, "/api/health", nil)
-	if out["integration"] != "acme-payments" || out["provider_display_name"] != "Acme Payments" {
+	if out["provider_display_name"] != "Acme Payments" {
 		t.Errorf("a finding must unlock the provider fields: %v", out)
 	}
 }

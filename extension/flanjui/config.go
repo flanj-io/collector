@@ -10,7 +10,12 @@ type Config struct {
 	// UIEndpoint is the localhost bind for the UI server. MUST be a loopback
 	// address — the collector is outbound-only and nothing serves off-host.
 	UIEndpoint string `mapstructure:"ui_endpoint"`
-	// IntegrationID labels flags raised from this collector.
+	// IntegrationID is DEPRECATED and IGNORED (removed from CONTRACTS §8,
+	// 2026-09-14): the deployment's identity is its collector NAME, given in
+	// the Connect panel and stored on the control plane, and the Overview
+	// names that. The key stays decodable so a config that still carries it
+	// boots — with a one-line warning naming it — instead of failing on an
+	// unknown key.
 	IntegrationID string `mapstructure:"integration_id"`
 	// ConsumerDisplayName is the "shared by <name>" identity on the peek screen.
 	ConsumerDisplayName string `mapstructure:"consumer_display_name"`
@@ -39,7 +44,12 @@ type Config struct {
 	// honest, where a dead link is not (dashboardURL in connect.go). Neither
 	// URL is ever logged.
 	CPPublicURL string `mapstructure:"cp_public_url"`
-	// CPDeployToken is the static Bearer token (the only outbound auth).
+	// CPDeployToken is OPTIONAL (2026-09-14): a deploy token — an operator's
+	// or a per-account one — presented on the FIRST Connect only. With it
+	// empty the first Connect goes out with no credential at all, which the
+	// control plane accepts for a new collector; the contact's confirmation
+	// click is the consent, and the per-deployment collector key the CP
+	// returns authorizes everything after. Never logged.
 	CPDeployToken string `mapstructure:"cp_deploy_token"`
 	// FindingSync enables the periodic shape-only findings sync to the control
 	// plane (POST /api/v1/findings — CONTRACTS §5/§8). ON by default (the

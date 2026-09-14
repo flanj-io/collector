@@ -45,7 +45,8 @@ extensions:
   # localhost UI + read API + POST /api/flag -> control plane.
   flanjui:
     ui_endpoint: 127.0.0.1:5335 # loopback only — the collector is outbound-only
-    integration_id: acme-payments
+    # integration_id: REMOVED (CONTRACTS §8, 2026-09-14). The deployment's identity is its collector
+    # NAME, given in the Connect panel; a config that still carries the key boots with a warning.
     consumer_display_name: Acme Consumer Ltd
     provider_display_name: Acme Payments # the fallback provider name sent ON A FLAG, so a thread names the provider when the UI does not.
     #                                     It does NOT name an edge: edge names come from the UI rename, the uploaded contract's title, or the
@@ -59,7 +60,10 @@ extensions:
     #                                     non-public (loopback, private IP, single-label, .local/.internal/.svc/.test…); otherwise
     #                                     the pill stays a Settings button rather than becoming a dead link. Validated at boot
     #                                     (absolute http(s) URL, no credentials). Never logged.
-    cp_deploy_token: ${env:CP_DEPLOY_TOKEN} # used once, for Connect (register); the per-deployment collector key it returns lives in the store
+    # cp_deploy_token: ${env:CP_DEPLOY_TOKEN} # OPTIONAL (2026-09-14) — Connect needs no token: a new collector registers with no
+    #                                         # credential and the contact's confirmation click is the consent. Set it only to
+    #                                         # present an operator's or per-account deploy token; the per-deployment collector
+    #                                         # key the CP returns lives in the store either way and is never logged
     finding_sync: true # default true — periodic shape-only findings sync to the control plane (id/signature/kind/severity/endpoint/rule/counts/timestamps; expected/actual/detail never leave this collector); false disables that sync only — the display-name refresh below has its own switch
     directory_sync: true # default true — periodic display-name refresh on the same tick: a keyed, ETag-conditional fetch of the directory name table, so discovered edges show human names. Your edges are not sent — nothing about what this collector talks to leaves in this request, and a name is never looked up per miss. false disables the refresh only; the names baked into the image still resolve offline, as does any table already pulled (turning it off stops future fetches, it does not clear one fetched earlier)
     edge_sync: true # default true — periodic EDGE REGISTRATION to the control plane on the same tick: for each EXTERNAL edge this collector has discovered, its registrable domain (eTLD+1, computed here), the direction (outbound/inbound) and first/last seen. Nothing else — no calls, no bodies, no payloads, no call counts. INTERNAL edges never leave. Requires Connect (nothing is sent before it); false disables the registration only, findings and the name refresh are unaffected. The Connect panel states this before you Connect
@@ -86,13 +90,13 @@ processors:
   # Keep the processor in the pipeline even with nothing uploaded: it stamps
   # flanj.call.id, which capture and edge discovery depend on.
   flanjdrift:
-    integration_id: acme-payments # OPTIONAL — read by the UI extension
+    # integration_id / self_integration_id: REMOVED (CONTRACTS §8, 2026-09-14) — a finding's integration is the
+    # one the SDK stamped on the call; self-spec findings are always labelled `self`.
     # The contract YOU publish as a provider: validates your INBOUND responses so
     # providers see their own drift, not just their dependencies'. Still config —
     # it is one document per deployment, not one per vendor.
     # self_spec_path: /etc/flanj/self-spec.yaml # OPTIONAL — empty disables self validation
     #                                               # (mount your own spec; the image bakes none)
-    # self_integration_id: self # optional — labels self findings (default "self"; must differ from integration_id)
 
 exporters:
   # Discovers the flanjstore extension via the collector host — nothing here

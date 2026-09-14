@@ -114,17 +114,23 @@ func (e *uiExtension) handleHealth(w http.ResponseWriter, r *http.Request) {
 	calls, findings, _ := st.Counts()
 	// Connect status from the store only (no CP call on the health poll).
 	connect := "disconnected"
+	collectorName := ""
 	if cs, err := loadConnect(st); err == nil {
 		connect = cs.status()
+		collectorName = cs.CollectorName
 	}
 	out := map[string]any{
-		"status":            "ok",
-		"window_rows":       rows,
-		"window_bytes":      bytes,
-		"calls":             calls,
-		"findings":          findings,
-		"cp_configured":     e.cp != nil,
-		"connect_status":    connect,
+		"status":         "ok",
+		"window_rows":    rows,
+		"window_bytes":   bytes,
+		"calls":          calls,
+		"findings":       findings,
+		"cp_configured":  e.cp != nil,
+		"connect_status": connect,
+		// The deployment's NAME (2026-09-14) — what the Overview headline names
+		// and what the dashboard lists. Empty until Connect; it replaced the
+		// static `integration` slug, which named a REST integration from config.
+		"collector_name":    collectorName,
 		"collector_version": collectorVersion,
 		// Did this collector hold data before the light-default upgrade? The
 		// second of the two gates on the one-time theme-flip notice
@@ -140,12 +146,11 @@ func (e *uiExtension) handleHealth(w http.ResponseWriter, r *http.Request) {
 		// oversized document is read in-process, bound, and validating.
 		"serves_fronts": e.servesFronts(),
 	}
-	// Pre-traffic honesty (v1 phase 1): `integration` and
-	// `provider_display_name` describe a DISCOVERY, so they emit only once at
-	// least one external outbound edge (or a finding) exists — never from bare
-	// config at zero traffic.
+	// Pre-traffic honesty (v1 phase 1): `provider_display_name` describes a
+	// DISCOVERY, so it emits only once at least one external outbound edge (or
+	// a finding) exists — never from bare config at zero traffic. (The
+	// `integration` slug that rode beside it is gone with the config key.)
 	if hasObservedProvider(st, findings) {
-		out["integration"] = e.cfg.IntegrationID
 		out["provider_display_name"] = e.cfg.ProviderDisplayName
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -672,9 +677,6 @@ func (e *uiExtension) handleFlag(w http.ResponseWriter, r *http.Request) {
 			integration = call.Integration
 		}
 		providerName = humanizeIntegration(integration)
-	}
-	if providerName == "" {
-		providerName = humanizeIntegration(e.cfg.IntegrationID)
 	}
 	req := promote.Build(promote.Input{
 		ConsumerDisplayName: consumerName,

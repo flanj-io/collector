@@ -2,7 +2,6 @@
 specToken:
   value: ci-eval-token-not-a-real-secret
 integration:
-  id: acme-payments
   consumerDisplayName: Acme Consumer Ltd
 collector:
   replicas: 2

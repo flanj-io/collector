@@ -81,7 +81,7 @@ Desktop it is not equivalent, so use the sidecar. In Kubernetes it is `kubectl p
 helm install flanj oci://registry-1.docker.io/flanj/flanj-collector \
   --namespace flanj --create-namespace \
   --set specToken.value="$(openssl rand -hex 32)" \
-  --set integration.id=acme-payments
+  --set integration.consumerDisplayName='Acme Consumer Ltd'
 ```
 
 That is the tiered shape: N stateless front collectors and one store pod, which is where the UI and the
@@ -111,10 +111,12 @@ floor on arrival.
 the image knows who installed it, so it claims nothing. Traffic capture, drift detection, edge discovery and
 the UI all work on the first run with no configuration at all — looking around without connecting is the
 point. **Connect** is the one thing that needs you first, and until it has a control plane it says so:
-`The control plane is not configured on this collector (set cp_base_url and cp_deploy_token).`
+`The control plane is not configured on this collector (set cp_base_url).`
 
-Copy `config/config.example.yaml`, which documents every key, set `integration_id`,
-`consumer_display_name`, `cp_base_url` and `cp_deploy_token`, and mount it over the baked path:
+Copy `config/config.example.yaml`, which documents every key, set `consumer_display_name` and
+`cp_base_url`, and mount it over the baked path. No token is needed to Connect: the panel asks for a
+collector name and a contact email, and the contact's confirmation click is what adds the collector
+to their Flanj workspace (`cp_deploy_token` is optional — for an operator's or per-account token):
 
 ```bash
 docker run -d --name flanj \

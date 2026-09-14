@@ -173,13 +173,28 @@ describe('the Overview headline', () => {
     expect(hl.text()).toContain('Nothing validated yet');
     expect(hl.text()).not.toContain('No drift detected');
     // Blueprint: no "You:" prefix on the REST headline — the subline carries
-    // scope ("observed here, on integration …").
+    // scope. Since 2026-09-14 that scope is the DEPLOYMENT's collector name, an
+    // identity the operator chose at Connect — never an integration slug from
+    // static config. Disconnected here, so no subline at all: no fallback slug.
     expect(hl.text()).not.toContain('You:');
-    expect(hl.text()).toContain('observed here, on integration acme-payments');
+    expect(hl.text()).not.toContain('on integration');
+    expect(hl.text()).not.toContain('observed here');
     // Neither verdict tone — this install has not reached one.
     expect(hl.classes()).toContain('neutral');
     expect(hl.classes()).not.toContain('ok');
     expect(hl.classes()).not.toContain('drift');
+  });
+
+  it('once Connected, the subline names this deployment by its collector name — the CP’s copy', async () => {
+    OK_BODIES['/api/connect'] = { status: 'connected', collector_name: 'prod-eu', consumer_display_name: 'CustomerX', contact_email: 'maya@customerx.example', confirmed_contact_email: 'maya@customerx.example', cp_configured: true };
+    try {
+      const w = await mountApp();
+      const hl = w.find('.headline');
+      expect(hl.text()).toContain('observed here, by collector prod-eu');
+      expect(hl.text()).not.toContain('on integration');
+    } finally {
+      OK_BODIES['/api/connect'] = { status: 'disconnected' };
+    }
   });
 
   it('says No drift detected once a call has actually been validated', async () => {
@@ -337,9 +352,9 @@ describe('the Overview headline spends evidence only on its own edge', () => {
     expect(rest.text()).not.toContain('No drift detected');
     expect(rest.classes()).toContain('neutral');
     expect(rest.classes()).not.toContain('ok');
-    // acme WAS observed on a REST edge, so the fragment names it — under the
-    // neutral line, where it is true.
-    expect(rest.text()).toContain('on integration acme-payments');
+    // No integration scope rides the line any more (2026-09-14): the subline
+    // names the collector once Connected, which this stub is not.
+    expect(rest.text()).not.toContain('on integration');
 
     // The MCP server's evidence lands on ITS line, which has earned its all-clear.
     const mcp = w.find('.mcp-headline');

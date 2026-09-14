@@ -2,7 +2,6 @@
 specToken:
   value: ci-small-prod-token-not-a-real-secret
 integration:
-  id: acme-payments
   consumerDisplayName: Acme Consumer Ltd
   providerDisplayName: Acme Payments
 controlPlane:

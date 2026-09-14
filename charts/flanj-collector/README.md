@@ -22,7 +22,6 @@ One `helm install` gives you the tiered shape:
 helm install flanj oci://registry-1.docker.io/flanj/flanj-collector \
   --namespace flanj --create-namespace \
   --set specToken.value="$(openssl rand -hex 32)" \
-  --set integration.id=acme-payments \
   --set integration.consumerDisplayName='Acme Consumer Ltd'
 ```
 
@@ -110,11 +109,10 @@ Full list with comments: [`values.yaml`](values.yaml). The ones that matter:
 |---|---|---|
 | `image.repository` / `image.tag` | `flanj/collector` / chart `appVersion` | |
 | `specToken.value` / `.existingSecret` | — | **required** (see above) |
-| `integration.id` | `""` | labels flags and findings |
 | `integration.consumerDisplayName` | `""` | "shared by <name>" on the peek screen |
 | `controlPlane.baseUrl` | `""` | unset = fully local: captures and detects, cannot create thread links |
 | `controlPlane.publicUrl` | `""` | the origin **your browser** can open; set it whenever `baseUrl` is an in-cluster name |
-| `controlPlane.deployToken.value` | `""` | used once, to Connect |
+| `controlPlane.deployToken.value` | `""` | optional (2026-09-14): an operator's or per-account deploy token, used once at Connect when set; Connect needs none |
 | `collector.replicas` | `2` | the fronts — the tier you scale |
 | `collector.autoscaling.*` | off | HPA on cpu/memory; fronts are stateless |
 | `store.backend` | `sqlite` | `sqlite` \| `postgres` |
@@ -130,7 +128,7 @@ Full list with comments: [`values.yaml`](values.yaml). The ones that matter:
 The chart renders both role configs from your values and mounts them at
 `/etc/flanj/chart/{front,store}.yaml`. It does not use the image's baked
 `/etc/flanj/front.yaml` / `store.yaml` — those carry example identity
-(`integration_id: acme-payments`) and the example store Service name, where the
+(`consumer_display_name: Acme Consumer Ltd`) and the example store Service name, where the
 rendered ones carry yours and the Services this release actually created. The
 baked files stay in the image, readable, as the annotated originals.
 

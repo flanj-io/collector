@@ -619,12 +619,16 @@ export function providerNameForFinding(
   f: { kind: string; integration: string; peer_host?: string },
   ctx: {
     providerDisplayName?: string;
-    healthIntegration?: string;
     contracts: readonly ContractSpec[];
     edges: readonly ProviderEdge[];
   }
 ): string {
-  if (ctx.providerDisplayName && (!ctx.healthIntegration || f.integration === ctx.healthIntegration)) {
+  // The configured `provider_display_name` is a REST provider's name — the v0 one-provider shape —
+  // and it names ONLY a call-evidenced REST finding. Never an MCP server, which names itself through
+  // its tools/list (`New thread with Acme Tools`, pinned by e2e), and never a version diff, which
+  // resolves through its contract below. Until 2026-09-14 the scope was the config `integration_id`
+  // (the name applied to findings under that slug alone); with the key gone, the KIND is the scope.
+  if (ctx.providerDisplayName && f.kind === 'live-vs-spec') {
     return ctx.providerDisplayName;
   }
   if (f.kind === 'version-diff') {

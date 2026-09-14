@@ -46,9 +46,14 @@ API + the flag action.
   the deck's copy (`messages.go`). Tokens, handoffs and the collector key never
   reach a log line.
   - `GET|POST /api/connect` (`connect.go`) — **Connect**: `POST {consumer_display_name,
-    contact_email, contact_display_name?, local_ui_url?}` registers the deployment
-    with the CP (`register`, Bearer `cp_deploy_token` — used ONLY for the first
-    Connect of a deployment), persists the once-returned **collector key** +
+    collector_name, contact_email, contact_display_name?, local_ui_url?}` registers the
+    deployment with the CP (`register` — since 2026-09-14 with NO credential when
+    `cp_deploy_token` is unset, the open door; with the token when set, on the first
+    Connect only). `collector_name` is MANDATORY (`400 collector_name_required`): the
+    deployment's identity in the workspace, unique there and changeable — a later POST
+    with a different name and the stored key is a RENAME on the CP (no mail), and the
+    relay keeps the CP's copy (`connect.collector_name`, refreshed from `me`, so a
+    dashboard rename reaches the panel). Persists the once-returned **collector key** +
     contact in the store settings KV (`connect.*`, per deployment, shared by
     every pod; never returned to the UI) → `202 {status:"pending", …}` (`200`
     when already connected). Display names pass the redaction floor
@@ -235,12 +240,15 @@ collector is outbound-only; nothing serves off-host.
 - `web/dist/index.html` — committed **placeholder**; the real SPA overwrites it
   at Docker build time (only the placeholder is tracked; `web/dist/assets/` is
   gitignored).
-- `config.go` — frozen keys `ui_endpoint`, `integration_id`,
-  `consumer_display_name`, `provider_display_name`, `cp_base_url`, `cp_public_url`
-  (optional, browser-facing — validated at boot: absolute http(s), no
-  credentials), `cp_deploy_token`, and the three independently gated sync
-  switches `finding_sync` / `directory_sync` / `edge_sync` (all default true —
-  CONTRACTS §8).
+- `config.go` — frozen keys `ui_endpoint`, `consumer_display_name`,
+  `provider_display_name`, `cp_base_url`, `cp_public_url` (optional,
+  browser-facing — validated at boot: absolute http(s), no credentials),
+  `cp_deploy_token` (OPTIONAL since 2026-09-14 — Connect needs no token), and
+  the three independently gated sync switches `finding_sync` / `directory_sync`
+  / `edge_sync` (all default true — CONTRACTS §8). `integration_id` is
+  DEPRECATED and ignored (removed from §8 2026-09-14; decoded so an old config
+  boots, with a warning): the deployment's identity is its collector NAME, and
+  `/api/health` carries `collector_name` where the `integration` slug was.
 - `sync.go` — ONE 15s ticker, THREE independently gated legs. `edges.go` is the
   third (v1 phase 2): **edge registration**, `POST /api/v1/edges/sync` with the
   collector key. It lists the store's EXTERNAL edges and hands them to
