@@ -82,7 +82,7 @@ write carries `X-Flanj-UI: 1` + JSON (`src/api.ts`). Findings link to their sour
 ## Design tokens and theme
 
 The surface is the **Blueprint collector kit** (`docs/design/kits/collector` in the vault: a 2px
-`--rule` frame around a 24px grid-paper ground; sheet header with the inline mono mark, the text
+`--rule` frame around a 24px grid-paper ground; sheet header with the inline colour mark, the text
 wordmark, `localhost:<port> · <version>` in mono, the org pill and a green-bolt Connected pill;
 mono uppercase tabs with a 2px ink underline over a copper hairline and square count chips;
 headline cards with a 6px left rule in their tone and a leading hex bolt, no "You:" prefix — the
@@ -145,7 +145,11 @@ hover and colour fades; `prefers-reduced-motion` keeps only the fades. The rules
 
 No webfont is loaded — the page makes no outbound request — so the Space Grotesk stack renders as
 `system-ui` and the mono stack as the platform monospace face. The mark in the topbar is
-`docs/design/flanj-mark-mono.svg` inlined in `currentColor`; the wordmark is text.
+`docs/design/flanj-mark.svg` — the colour mark — inlined: the pipes and the outline bind
+`--logo-steel` / `--logo-outline` by class so they switch with the scheme, and the F/J threads
+reference one `#brandcu` copper gradient in the shared defs holder beside `#hxbolt`, its three
+stops the asset's own hex as `stop-color` attributes (no token for the copper yet). The wordmark
+is text. `brand-mark.test.ts` guards that structure.
 
 ## Develop
 

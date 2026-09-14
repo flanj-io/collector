@@ -1464,14 +1464,34 @@ watch(tab, (t) => {
         <polygon class="hx-outer" points="22,12 17,20.7 7,20.7 2,12 7,3.3 17,3.3" stroke-width="1.5" />
         <polygon class="hx-inner" points="16.5,12 14.25,15.9 9.75,15.9 7.5,12 9.75,8.1 14.25,8.1" stroke-width="1.5" />
       </symbol>
+      <!-- The copper thread of the brand mark, defined ONCE per document here
+           and referenced by url(#brandcu) from every instance of the mark. The
+           three stops are docs/design/flanj-mark.svg's own values, identical in
+           light and dark — the copper has no token yet (an upstream Claude
+           Design ask is filed), so they stay as stop-color attributes on the
+           asset's stops, never in a style block. -->
+      <defs>
+        <linearGradient id="brandcu" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#e0b077" />
+          <stop offset="0.55" stop-color="#a86b2d" />
+          <stop offset="1" stop-color="#7d4e1f" />
+        </linearGradient>
+      </defs>
     </svg>
     <header class="topbar">
-      <!-- The mark is docs/design/flanj-mark-mono.svg inlined (currentColor, so it
-           themes with the ink); the wordmark is text, never an image. -->
+      <!-- The mark is docs/design/flanj-mark.svg inlined — the COLOUR mark (the
+           kits show it; the mono variant was a wrong vault rule). The pipes and
+           the outline under the threads bind var(--logo-steel) and
+           var(--logo-outline) by class in the style block, so they switch with
+           the scheme like the dark file does; the F and J threads take the
+           copper gradient defined once in the hx-defs holder above. No path
+           carries an inline style. The wordmark is text, never an image. -->
       <div class="brand">
         <svg class="brand-mark" viewBox="0 0 512 512" fill="none" aria-hidden="true" focusable="false">
-          <path d="M15 376.5H106M106 376.5V346.5H166.5M106 376.5V407H166.5M166.5 346.5V407M166.5 346.5V286H106V226H166.5V165.5M166.5 407V435.5H227V256.25V77H166.5V105.5M15 136H106M106 136V165.5H166.5M106 136V105.5H166.5M166.5 165.5V105.5M498 136H407M407 136V165.5H346.5M407 136V105.5H346.5M346.5 165.5V105.5M346.5 165.5V226H407V286H346.5V346.5M346.5 105.5V77H286V136M498 376.5H407M407 376.5V346.5H346.5M407 376.5V407H346.5M346.5 346.5V407M346.5 407V435.5H286V376.5M286 136H227M286 136V376.5M286 376.5H227" stroke="currentColor" stroke-width="15" stroke-linecap="round" stroke-linejoin="round" />
-          <path d="M198.5 407.5V256M317 41H198.5V256M198.5 256H133M316.5 104.5V256M198 471H316.5V256M316.5 256H382" stroke="currentColor" stroke-width="26" stroke-linecap="round" stroke-linejoin="round" />
+          <path class="brand-pipes" d="M15 376.5H106M106 376.5V346.5H166.5M106 376.5V407H166.5M166.5 346.5V407M166.5 346.5V286H106V226H166.5V165.5M166.5 407V435.5H227V256.25V77H166.5V105.5M15 136H106M106 136V165.5H166.5M106 136V105.5H166.5M166.5 165.5V105.5M498 136H407M407 136V165.5H346.5M407 136V105.5H346.5M346.5 165.5V105.5M346.5 165.5V226H407V286H346.5V346.5M346.5 105.5V77H286V136M498 376.5H407M407 376.5V346.5H346.5M407 376.5V407H346.5M346.5 346.5V407M346.5 407V435.5H286V376.5M286 136H227M286 136V376.5M286 376.5H227" stroke-width="15" stroke-linecap="round" stroke-linejoin="round" />
+          <path class="brand-outline" d="M198.5 407.5V256M317 41H198.5V256M198.5 256H133M316.5 104.5V256M198 471H316.5V256M316.5 256H382" stroke-width="26" stroke-linecap="round" stroke-linejoin="round" />
+          <path d="M198.5 407.5V256M317 41H198.5V256M198.5 256H133" stroke="url(#brandcu)" stroke-width="18" stroke-linecap="round" stroke-linejoin="round" />
+          <path d="M316.5 104.5V256M198 471H316.5V256M316.5 256H382" stroke="url(#brandcu)" stroke-width="18" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
         <span class="brand-name">Flanj</span><span class="brand-product">Collector</span>
         <!-- Where this UI is served from and which build serves it — the sheet's
@@ -2469,11 +2489,18 @@ code { font-family: var(--f-mono); }
 .hx.tone-accent { color: var(--accent); --l: var(--accent-bolt); }
 .hx.tone-info { color: var(--sev-info); --l: var(--sev-info-bolt); }
 
-/* Sheet header: inline mono mark + wordmark + product, the address line in
+/* Sheet header: inline colour mark + wordmark + product, the address line in
    mono, then the org pill and the connect pill. */
 .topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 12px 18px; border-bottom: var(--border-w) solid var(--rule); background: var(--surface); }
 .brand { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; font-weight: 700; letter-spacing: -0.01em; font-size: 16px; color: var(--ink); }
 .brand-mark { width: 30px; height: 30px; flex: none; }
+/* The colour mark's two token-bound strokes: the pipes in steel, the outline
+   under the copper threads in the outline ink. Both tokens switch under
+   [data-flanj-theme="dark"] (docs/design/flanj-mark-dark.svg differs from the
+   light file in exactly these two colours). The threads are attribute-coloured
+   in the template — see the #brandcu gradient in the hx-defs holder. */
+.brand-pipes { stroke: var(--logo-steel); }
+.brand-outline { stroke: var(--logo-outline); }
 .brand-product { color: var(--ink-soft); font-weight: 500; }
 .brand-addr { font-family: var(--f-mono); font-size: 11px; font-weight: 400; letter-spacing: 0.06em; color: var(--ink-soft); margin-left: 8px; padding-left: 12px; border-left: var(--border-w-hair) solid var(--rule); }
 .meta { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
