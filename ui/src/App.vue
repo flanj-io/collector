@@ -2217,7 +2217,9 @@ watch(tab, (t) => {
               :title="streamPaused ? 'Resume live updates' : 'Pause live updates'"
               @click="togglePause"
             >
-              <span class="live-dot"></span>
+              <!-- The live light is the hex bolt (green = live, the design's one status light),
+                   never a flat hexagon: the socket dims to ink when the stream is paused. -->
+              <svg class="hx sm live-dot" :class="streamPaused ? '' : 'tone-ok'" aria-hidden="true" focusable="false"><use href="#hxbolt" /></svg>
               {{ streamPaused ? (manualPause ? 'Paused' : 'Paused — inspecting') : 'Live' }}
             </button>
           </div>
@@ -2609,9 +2611,9 @@ h2 small { font: 400 12.5px/1.5 var(--f-sans); letter-spacing: 0.04em; text-tran
    carries `live` (a pulsing hex), muted ink carries `paused`, and the label
    says which — green is reserved for reached verdicts. */
 .live-btn { display: inline-flex; align-items: center; gap: 8px; background: var(--surface); border: var(--border-w) solid var(--accent-ink); border-radius: var(--radius); color: var(--accent-ink); font: 600 11px/1.5 var(--f-mono); letter-spacing: 0.1em; text-transform: uppercase; padding: 6px 11px; cursor: pointer; white-space: nowrap; transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease); }
-.live-dot { width: 8px; height: 8px; background: var(--accent); clip-path: polygon(25% 0, 75% 0, 100% 50%, 75% 100%, 25% 100%, 0 50%); animation: live-pulse 1.6s ease-in-out infinite; }
+.live-dot { animation: live-pulse 1.6s ease-in-out infinite; }
 .live-btn.paused { border-color: var(--ink-soft); color: var(--ink-soft); }
-.live-btn.paused .live-dot { background: var(--ink-soft); animation: none; }
+.live-btn.paused .live-dot { color: var(--ink-soft); --l: var(--surface-sunk); animation: none; }
 @keyframes live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.2; } }
 .pending-bar { display: block; width: 100%; background: var(--surface); border: var(--border-w) solid var(--accent-ink); border-radius: var(--radius); color: var(--accent-ink); font: 600 12.5px/1.5 var(--f-sans); padding: 8px 12px; margin: 0 0 12px; cursor: pointer; text-align: center; transition: transform var(--dur) var(--ease-lift), box-shadow var(--dur) var(--ease-lift); }
 .pending-bar:hover { transform: var(--lift); box-shadow: var(--shadow-lift-soft); }
