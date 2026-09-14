@@ -1,12 +1,12 @@
 apiVersion: v2
 name: flanj-collector
 description: >-
-  The Flanj Collector in its tiered shape — N stateless front collectors
+  The Flanj collector in its tiered shape — N stateless front collectors
   forwarding to one store pod that owns the window and serves the local UI.
 type: application
 
 # Chart version. Bump on every chart change (SemVer).
-version: 0.1.0
+version: 0.1.1
 
 # The collector image tag this chart is written against; `image.tag` defaults to
 # it, so this is the tag a plain `helm install` pulls. It MUST name a tag that
@@ -17,7 +17,10 @@ version: 0.1.0
 # of the image can also render a config the image refuses to load.
 appVersion: "v0.1.0"
 
-home: https://github.com/flanj-io/collector
+home: https://flanj.io
+# Rendered by chart browsers; an absolute raw URL because the chart is served
+# from an OCI registry, not from this tree.
+icon: https://raw.githubusercontent.com/flanj-io/collector/main/docs/brand/flanj-mark.svg
 sources:
   - https://github.com/flanj-io/collector
 keywords:

@@ -1,10 +1,9 @@
-# Security Policy
+# Security policy
 
-## Reporting a Vulnerability
+## Reporting a vulnerability
 
-We take the security of Flanj seriously — this project sits in the path of real API traffic
-that routinely carries sensitive and regulated data, and its whole reason for being is to keep that data
-from leaking.
+This project sits in the path of real API traffic that routinely carries sensitive and regulated data,
+and its whole reason for being is to keep that data from leaving the environment it was captured in.
 
 **Please do not report security vulnerabilities through public GitHub issues.**
 
@@ -23,11 +22,12 @@ Please include:
 
 We will acknowledge your report within **3 business days** and aim to provide a
 remediation timeline within **10 business days**. We ask that you give us a
-reasonable window to release a fix before any public disclosure, and we're happy
+reasonable window to release a fix before any public disclosure, and we are happy
 to credit you in the advisory unless you prefer to remain anonymous.
 
-## Scope — a note on redaction
+## Scope: a note on redaction
 
-Because this project captures request/response bodies, **any path by which raw
-PAN/PII can reach storage or the wire unredacted is a security issue** and is
-in scope. If you find a redaction bypass, please report it privately as above.
+Because this project captures request and response bodies, **any path by which
+raw personal, financial or otherwise regulated data can reach storage or the
+wire unredacted is a security issue** and is in scope. If you find a redaction
+bypass, please report it privately as above.
