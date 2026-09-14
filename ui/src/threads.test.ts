@@ -292,3 +292,41 @@ describe('cannotListThreads (gate on the 412 the relay would answer)', () => {
     expect(THREADS_NOT_CONNECTED_NOTICE.length).toBeGreaterThan(0);
   });
 });
+
+// thread-domain-gate (2026-09-14): the "Open to" field's parser and copy.
+import { domainsSentence, gatedShareWarning, parseOpenTo } from './threads';
+
+describe('parseOpenTo', () => {
+  it('splits on commas and whitespace, normalizes and de-duplicates', () => {
+    expect(parseOpenTo(' Acme-Payments.test, @acme-payments.test; globex.test. \n corp.example')).toEqual({
+      domains: ['acme-payments.test', 'globex.test', 'corp.example'],
+      invalid: null
+    });
+  });
+  it('names the first entry that is not a bare domain', () => {
+    expect(parseOpenTo('acme.test, https://globex.test/x')).toEqual({ domains: ['acme.test'], invalid: 'https://globex.test/x' });
+    expect(parseOpenTo('dana@acme.test').invalid).toBe('dana@acme.test');
+    expect(parseOpenTo('localhost').invalid).toBe('localhost');
+  });
+  it('an empty field is an empty list, not an error', () => {
+    expect(parseOpenTo('   ')).toEqual({ domains: [], invalid: null });
+  });
+});
+
+describe('the gated share warning', () => {
+  it('names the domains, says nobody else can read it, and never says "Anyone with this link"', () => {
+    const one = gatedShareWarning(['acme.test'], 'Acme', 'evidence');
+    expect(one).toContain('People with an @acme.test address can open this link');
+    expect(one).toContain('read the redacted evidence and reply');
+    expect(one).toContain('Nobody else can read it');
+    expect(one).not.toContain('Anyone with this link');
+    expect(gatedShareWarning(['acme.test', 'globex.test'], 'Acme', 'message')).toContain('@acme.test or globex.test address');
+    expect(gatedShareWarning(['a.test', 'b.test', 'c.test'], 'Acme', 'message')).toContain('read your message and reply');
+  });
+  it('domainsSentence joins with commas and a final or', () => {
+    expect(domainsSentence([])).toBe('');
+    expect(domainsSentence(['a.test'])).toBe('a.test');
+    expect(domainsSentence(['a.test', 'b.test'])).toBe('a.test or b.test');
+    expect(domainsSentence(['a.test', 'b.test', 'c.test'])).toBe('a.test, b.test or c.test');
+  });
+});

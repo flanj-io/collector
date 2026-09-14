@@ -89,6 +89,13 @@ const (
 	// the message, so an empty one is refused HERE — the operator sees it in the
 	// sheet rather than as a control-plane round-trip that answers 400.
 	msgEdgeThreadMessageRequired = "Write your question first — a thread started from an edge carries no evidence, only what you say."
+	// Who may open the thread (thread-domain-gate, 2026-09-14). The sheet refuses
+	// these before the click; the relay refuses them again for any other caller.
+	msgOpenToRequired = "Choose who can open the thread — one or more email domains, or Anyone with the link."
+	msgOpenToEmpty    = "Name at least one domain, or choose Anyone with the link."
+	msgOpenToInvalid  = "One of the domains is not a domain name — write each like acme.com, with no @, path or port."
+	msgOpenToNotAList = "allowed_domains must be a list of domains, or null for Anyone with the link."
+	msgOpenToTooMany  = "A thread can be open to at most 20 domains."
 )
 
 // msgNameSuggestRefused is the OTHER partial-success copy: the local save

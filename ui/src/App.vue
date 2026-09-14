@@ -2398,6 +2398,7 @@ watch(tab, (t) => {
       :finding="sheetFinding"
       :correlation="correlationFor(sheetFinding)"
       :call="sheetCall"
+      :provider-host="sheetFinding.peer_host || sheetCall?.peer_host || null"
       :provider="providerNameFor(sheetFinding)"
       :consumer="consumerName"
       :connect="connect"

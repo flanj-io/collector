@@ -75,6 +75,8 @@ async function openFlag(): Promise<VueWrapper> {
 }
 
 const createButton = (w: VueWrapper) => w.findAll('button').find((b) => b.text().startsWith('Create thread') || b.text() === 'Creating…')!;
+/** The "Open to" field (thread-domain-gate): required on every sheet, so each create fills it. */
+const openTo = (w: VueWrapper) => w.find('input.open-to');
 
 beforeEach(() => {
   localStorage.clear();
@@ -116,6 +118,7 @@ describe('the question sheet claims no evidence it does not have', () => {
     const w = await openQuestion();
     vi.stubGlobal('fetch', fakeFetch());
     await w.find('textarea').setValue('Are you versioning /v1/refunds?');
+    await openTo(w).setValue('globex.test');
     await createButton(w).trigger('click');
     await flush(w);
 
@@ -129,6 +132,7 @@ describe('the question sheet claims no evidence it does not have', () => {
     const w = await openQuestion();
     vi.stubGlobal('fetch', fakeFetch());
     await w.find('textarea').setValue('Are you versioning /v1/refunds?');
+    await openTo(w).setValue('globex.test');
     await createButton(w).trigger('click');
     await flush(w);
 
@@ -153,6 +157,8 @@ describe('the message is the whole thread, so it is required', () => {
     const w = await openQuestion();
     const fetchSpy = vi.fn();
     vi.stubGlobal('fetch', fetchSpy);
+    // The Open to field is the OTHER precondition; satisfied here so the message is the one under test.
+    await openTo(w).setValue('globex.test');
 
     expect(createButton(w).attributes('disabled')).toBeDefined();
     expect(w.text()).toContain(QUESTION_MESSAGE_REQUIRED);
@@ -173,6 +179,7 @@ describe('the message is the whole thread, so it is required', () => {
     vi.stubGlobal('fetch', fakeFetch(calls));
 
     await w.find('textarea').setValue('Are you versioning /v1/refunds?');
+    await openTo(w).setValue('globex.test');
     await createButton(w).trigger('click');
     await flush(w);
 
@@ -193,6 +200,8 @@ describe('the flag sheet is unchanged', () => {
     expect(w.find('.evidence').text()).toContain('Evidence (1):');
     expect(w.find('.field-label').text()).toBe('Message (optional)');
     expect((w.find('textarea').element as HTMLTextAreaElement).value.length).toBeGreaterThan(0);
+    // Since thread-domain-gate the ONE precondition a flag has is the Open to field, never the message.
+    await openTo(w).setValue('acme-payments.test');
     expect(createButton(w).attributes('disabled')).toBeUndefined();
     expect(w.text()).not.toContain(QUESTION_MESSAGE_REQUIRED);
 
@@ -207,14 +216,18 @@ describe('the flag sheet is unchanged', () => {
 
   it('an EMPTY message is still allowed on a flag — the evidence carries it', async () => {
     const w = await openFlag();
+    await openTo(w).setValue('acme-payments.test');
     await w.find('textarea').setValue('');
     expect(createButton(w).attributes('disabled')).toBeUndefined();
   });
 });
 
-/** A relay that answers every POST with a created thread. */
+/** A relay that answers every POST with a created thread, and the Open to hint GET with "not claimed". */
 function fakeFetch(record?: Array<{ url: string; body: Record<string, unknown> }>) {
   return vi.fn(async (url: string, init?: RequestInit) => {
+    if (init?.method !== 'POST') {
+      return { ok: true, status: 200, text: async () => JSON.stringify({ host: 'api.globex.test', domain: 'globex.test', name: null, tier: null, claimed: false }) } as unknown as Response;
+    }
     record?.push({ url, body: JSON.parse(String(init?.body ?? '{}')) });
     return {
       ok: true,

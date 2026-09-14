@@ -30,10 +30,10 @@ func TestEdgeThreadCreatesMessageOnlyThread(t *testing.T) {
 	r := connectedRig(t)
 	seedOutboundEdge(r, "api.globex.test")
 
-	resp, out, raw := r.do(t, http.MethodPost, "/api/edges/thread", map[string]string{
+	resp, out, raw := r.do(t, http.MethodPost, "/api/edges/thread", map[string]any{
 		"host":       "api.globex.test",
 		"message":    "Are you versioning /v1/refunds this quarter?",
-		"request_id": "req-1",
+		"request_id": "req-1", "allowed_domains": []string{"globex.test"},
 	})
 	if resp.StatusCode != 201 && resp.StatusCode != 200 {
 		t.Fatalf("POST /api/edges/thread: %d %s", resp.StatusCode, raw)
@@ -71,8 +71,8 @@ func TestEdgeThreadIdempotency(t *testing.T) {
 	r := connectedRig(t)
 	seedOutboundEdge(r, "api.globex.test")
 	send := func(requestID string) map[string]any {
-		_, out, _ := r.do(t, http.MethodPost, "/api/edges/thread", map[string]string{
-			"host": "api.globex.test", "message": "ping", "request_id": requestID,
+		_, out, _ := r.do(t, http.MethodPost, "/api/edges/thread", map[string]any{
+			"host": "api.globex.test", "message": "ping", "request_id": requestID, "allowed_domains": []string{"globex.test"},
 		})
 		return out
 	}
@@ -99,8 +99,8 @@ func TestEdgeThreadRefusesBlankMessage(t *testing.T) {
 	r := connectedRig(t)
 	seedOutboundEdge(r, "api.globex.test")
 
-	resp, out, _ := r.do(t, http.MethodPost, "/api/edges/thread", map[string]string{
-		"host": "api.globex.test", "message": "   ", "request_id": "req-1",
+	resp, out, _ := r.do(t, http.MethodPost, "/api/edges/thread", map[string]any{
+		"host": "api.globex.test", "message": "   ", "request_id": "req-1", "allowed_domains": []string{"globex.test"},
 	})
 	if resp.StatusCode != 400 || out["error"] != "missing_fields" {
 		t.Errorf("blank message = %d %v, want 400 missing_fields", resp.StatusCode, out)
@@ -121,8 +121,8 @@ func TestEdgeThreadRefusesUnknownAndInboundEdges(t *testing.T) {
 	r.st.mu.Unlock()
 
 	for _, host := range []string{"api.nowhere.test", "in.caller.test"} {
-		resp, out, _ := r.do(t, http.MethodPost, "/api/edges/thread", map[string]string{
-			"host": host, "message": "hello", "request_id": "req-1",
+		resp, out, _ := r.do(t, http.MethodPost, "/api/edges/thread", map[string]any{
+			"host": host, "message": "hello", "request_id": "req-1", "allowed_domains": []string{"globex.test"},
 		})
 		if resp.StatusCode != 404 || out["error"] != "edge_not_found" {
 			t.Errorf("host %q = %d %v, want 404 edge_not_found", host, resp.StatusCode, out)
@@ -140,8 +140,8 @@ func TestEdgeThreadIsConnectGatedIdentically(t *testing.T) {
 	r.start(t)
 	seedOutboundEdge(r, "api.globex.test")
 
-	resp, out, _ := r.do(t, http.MethodPost, "/api/edges/thread", map[string]string{
-		"host": "api.globex.test", "message": "hello", "request_id": "req-1",
+	resp, out, _ := r.do(t, http.MethodPost, "/api/edges/thread", map[string]any{
+		"host": "api.globex.test", "message": "hello", "request_id": "req-1", "allowed_domains": []string{"globex.test"},
 	})
 	if resp.StatusCode != http.StatusPreconditionFailed || out["error"] != "not_connected" {
 		t.Errorf("un-Connected = %d %v, want 412 not_connected", resp.StatusCode, out)
@@ -153,8 +153,8 @@ func TestEdgeThreadIsConnectGatedIdentically(t *testing.T) {
 	r.cp.mu.Lock()
 	r.cp.contactEmail, r.cp.contactStatus, r.cp.confirmedEmail = "ops@acme.test", "pending", ""
 	r.cp.mu.Unlock()
-	resp, out, _ = r.do(t, http.MethodPost, "/api/edges/thread", map[string]string{
-		"host": "api.globex.test", "message": "hello", "request_id": "req-1",
+	resp, out, _ = r.do(t, http.MethodPost, "/api/edges/thread", map[string]any{
+		"host": "api.globex.test", "message": "hello", "request_id": "req-1", "allowed_domains": []string{"globex.test"},
 	})
 	if resp.StatusCode != http.StatusPreconditionFailed || out["error"] != "contact_unconfirmed" {
 		t.Errorf("unconfirmed contact = %d %v, want 412 contact_unconfirmed", resp.StatusCode, out)
@@ -171,10 +171,10 @@ func TestEdgeThreadRedactsTheMessage(t *testing.T) {
 	r := connectedRig(t)
 	seedOutboundEdge(r, "api.globex.test")
 
-	r.do(t, http.MethodPost, "/api/edges/thread", map[string]string{
+	r.do(t, http.MethodPost, "/api/edges/thread", map[string]any{
 		"host":       "api.globex.test",
 		"message":    "Is this card still on file? 4111111111111111",
-		"request_id": "req-1",
+		"request_id": "req-1", "allowed_domains": []string{"globex.test"},
 	})
 	if msg, _ := r.cp.lastFlagBody["message"].(string); strings.Contains(msg, "4111111111111111") {
 		t.Errorf("the PAN reached the control plane: %q", msg)
@@ -188,8 +188,8 @@ func TestEdgeThreadPersistsTheLink(t *testing.T) {
 	r := connectedRig(t)
 	seedOutboundEdge(r, "api.globex.test")
 
-	_, out, _ := r.do(t, http.MethodPost, "/api/edges/thread", map[string]string{
-		"host": "api.globex.test", "message": "hello", "request_id": "req-1",
+	_, out, _ := r.do(t, http.MethodPost, "/api/edges/thread", map[string]any{
+		"host": "api.globex.test", "message": "hello", "request_id": "req-1", "allowed_domains": []string{"globex.test"},
 	})
 	threadID, _ := out["thread_id"].(string)
 	parked, ok, err := r.st.GetSetting(settingThreadLinkPrefix + threadID)

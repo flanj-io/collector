@@ -396,3 +396,67 @@ export function findingIdFromHash(hash: string): string | null {
     return null;
   }
 }
+
+// ─── Who may open the thread (thread-domain-gate, 2026-09-14) ─────────────
+// The sheet's "Open to" field. A thread is shared with the email domains the
+// operator names — a reader confirms an address at one of them before the
+// control plane shows them anything — or, as an EXPLICIT choice, with anyone
+// who holds the link. There is no silent default: the relay refuses a create
+// that says neither, and so does this sheet, before the click.
+
+export const OPEN_TO_LABEL = 'Open to';
+export const OPEN_TO_PLACEHOLDER = 'their-company.com';
+/** Under the field while it is empty or being typed. */
+export const OPEN_TO_HELP = 'Email domains, comma-separated. People with an address there confirm it once to open the thread; nobody else can read it.';
+/** The explicit opt-out, worded so it cannot be mistaken for the default. */
+export const OPEN_TO_ANYONE_LABEL = 'Anyone with the link — not recommended';
+/** Create thread is inert while the field says nothing and the box is unticked. */
+export const OPEN_TO_REQUIRED = 'Name at least one domain, or choose Anyone with the link.';
+export const OPEN_TO_MAX = 20;
+export function openToTooMany(): string {
+  return `A thread can be open to at most ${OPEN_TO_MAX} domains.`;
+}
+/** Under the field when the directory prefilled it: says WHY it is trusted. */
+export function openToPrefillNote(domain: string): string {
+  return `Prefilled from the Flanj directory — ${domain} is a verified claim. Edit it if their email domain is different.`;
+}
+export function openToInvalidNote(entry: string): string {
+  return `"${entry}" is not a domain — write each like acme.com, with no @, path or port.`;
+}
+
+/** A bare domain: labels of letters, digits and hyphens, at least one dot. */
+const DOMAIN_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+
+/**
+ * Parse what the operator typed: split on commas, whitespace and semicolons,
+ * trim, lower-case, drop a leading `@` and a trailing `.`, de-duplicate. The
+ * first entry that is not a bare domain is reported so the guard can name it.
+ * The relay and the control plane normalize the same way; this is what lets
+ * the sheet refuse before the click.
+ */
+export function parseOpenTo(text: string): { domains: string[]; invalid: string | null } {
+  const domains: string[] = [];
+  for (const raw of text.split(/[\s,;]+/)) {
+    const d = raw.trim().toLowerCase().replace(/^@+/, '').replace(/\.+$/, '');
+    if (!d) continue;
+    if (d.length > 253 || !DOMAIN_RE.test(d)) return { domains, invalid: raw.trim() };
+    if (!domains.includes(d)) domains.push(d);
+  }
+  return { domains, invalid: null };
+}
+
+/** `acme.test` · `acme.test or globex.test` · `acme.test, globex.test or corp.test` */
+export function domainsSentence(domains: string[]): string {
+  if (domains.length <= 1) return domains[0] ?? '';
+  return `${domains.slice(0, -1).join(', ')} or ${domains[domains.length - 1]}`;
+}
+
+/**
+ * The success-state warning for a GATED thread. The open-link variants promise
+ * "Anyone with this link can read…", which is exactly what the operator chose
+ * against; this one says who can, and that nobody else can.
+ */
+export function gatedShareWarning(domains: string[], provider: string, what: 'evidence' | 'message'): string {
+  const reads = what === 'evidence' ? 'read the redacted evidence and reply' : 'read your message and reply';
+  return `People with an @${domainsSentence(domains)} address can open this link — they confirm it once, then ${reads}. Nobody else can read it. Paste it where you already talk to ${provider}'s team. It lasts 30 days and extends with each reply.`;
+}

@@ -153,11 +153,15 @@ describe('the flag sheet is the modal it claims to be', () => {
   });
 
   it('keeps focus inside while a create is in flight (the disclosure toggle is the one live control)', async () => {
-    // A POST that never answers keeps `busy` set: textarea + both buttons are
-    // disabled, so the trap has a single control to wrap onto — itself.
+    // A POST that never answers keeps `busy` set: textarea, the Open to field,
+    // its toggle and both buttons are disabled, so the trap has a single control
+    // to wrap onto — itself. The Open to field is filled first: since
+    // thread-domain-gate Create thread is inert until it says who may open the
+    // thread, and an inert click would never reach the in-flight state.
     vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
     page();
     const w = await open();
+    await w.get('input.open-to').setValue('acme-payments.test');
     await w.get('button.primary').trigger('click');
     expect(controls()).toHaveLength(1);
     const toggle = controls()[0];

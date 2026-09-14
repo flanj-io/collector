@@ -156,6 +156,8 @@ describe('the edge row can start a thread', () => {
 
     const sheet = w.find('[role="dialog"]');
     await sheet.find('textarea').setValue('Are you versioning /v1/refunds this quarter?');
+    // thread-domain-gate: who may open it is required input (no claimed directory entry here).
+    await sheet.find('input.open-to').setValue('globex.test');
     const create = sheet.findAll('button').find((b) => b.text() === 'Create thread')!;
     await create.trigger('click');
     await settle(w);
@@ -166,6 +168,7 @@ describe('the edge row can start a thread', () => {
     expect(edgePosts).toHaveLength(1);
     expect(edgePosts[0].body.host).toBe('api.globex.test');
     expect(edgePosts[0].body.message).toContain('/v1/refunds');
+    expect(edgePosts[0].body.allowed_domains).toEqual(['globex.test']);
   });
 
   it('closes cleanly, so the next row opens its own sheet rather than the stale one', async () => {

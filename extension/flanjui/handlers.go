@@ -32,6 +32,9 @@ func (e *uiExtension) routes() http.Handler {
 	// directory suggestion needs a Connected one, and its failure never fails
 	// the save).
 	mux.HandleFunc("/api/edges/name", e.handleEdgeName)
+	// The sheet's "Open to" prefill (thread-domain-gate): is this host's
+	// registrable domain a CLAIMED directory entry? Read-only, local table only.
+	mux.HandleFunc("/api/directory/hint", e.handleDirectoryHint)
 	mux.HandleFunc("/api/calls", e.handleCalls)
 	mux.HandleFunc("/api/findings", e.handleFindings)
 	// Local acknowledge (never a relay route — guarded WITHOUT the CP check).
@@ -543,6 +546,10 @@ type flagRequestBody struct {
 	FindingID           string `json:"finding_id"`
 	ProviderDisplayName string `json:"provider_display_name"`
 	Message             string `json:"message"`
+	// AllowedDomains is the sheet's "Open to" choice, REQUIRED: a list of email
+	// domains, or JSON null for "Anyone with the link". Kept raw so an absent
+	// field and an explicit null stay distinguishable — see allowedDomainsOf.
+	AllowedDomains json.RawMessage `json:"allowed_domains"`
 }
 
 // humanizeIntegration turns an integration id into a human display name
@@ -678,12 +685,21 @@ func (e *uiExtension) handleFlag(w http.ResponseWriter, r *http.Request) {
 		}
 		providerName = humanizeIntegration(integration)
 	}
+	// Who may open the thread — the last local check before anything leaves.
+	// Refused HERE so the operator reads it in the sheet; the CP refuses the
+	// same shapes independently.
+	allowedDomains, refuseCode, refuseMsg := allowedDomainsOf(body.AllowedDomains)
+	if refuseCode != "" {
+		writeErr(w, http.StatusBadRequest, refuseCode, refuseMsg)
+		return
+	}
 	req := promote.Build(promote.Input{
 		ConsumerDisplayName: consumerName,
 		ProviderDisplayName: providerName,
 		Message:             body.Message,
 		Call:                call,
 		Finding:             finding,
+		AllowedDomains:      allowedDomains,
 	})
 
 	resp, code, err := cli.Post(r.Context(), req)
@@ -750,6 +766,8 @@ type edgeThreadRequestBody struct {
 	Host      string `json:"host"`
 	Message   string `json:"message"`
 	RequestID string `json:"request_id"`
+	// AllowedDomains: the sheet's "Open to" choice, REQUIRED — see flagRequestBody.
+	AllowedDomains json.RawMessage `json:"allowed_domains"`
 }
 
 // handleEdgeThread = Start a thread from an edge row (v1 phase 4, CONTRACTS §5):
@@ -824,12 +842,19 @@ func (e *uiExtension) handleEdgeThread(w http.ResponseWriter, r *http.Request) {
 	names := e.newNameResolver(st)
 	providerName, _ := names.resolve(target.PeerHost, domain)
 
+	// Who may open the thread — the same rule, in the same place, as the flag path.
+	allowedDomains, refuseCode, refuseMsg := allowedDomainsOf(body.AllowedDomains)
+	if refuseCode != "" {
+		writeErr(w, http.StatusBadRequest, refuseCode, refuseMsg)
+		return
+	}
 	req := promote.BuildQuestion(promote.QuestionInput{
 		IdempotencyKey:      edgeThreadIdempotencyKey(body.RequestID, target.PeerHost),
 		ConsumerDisplayName: consumerName,
 		ProviderDisplayName: providerName,
 		ProviderHost:        target.PeerHost,
 		Message:             body.Message,
+		AllowedDomains:      allowedDomains,
 	})
 
 	resp, code, err := cli.Post(r.Context(), req)
@@ -888,6 +913,40 @@ func edgeThreadIdempotencyKey(requestID, host string) string {
 		}
 	}
 	return "edge_" + host + "_" + id
+}
+
+// handleDirectoryHint answers the sheet's "Open to" prefill question for one
+// host: its registrable domain, and whether the local directory table holds a
+// CLAIMED entry for it (D5 domain proof — someone at that domain proved they
+// control it, which is what makes prefilling it as the share domain honest; a
+// curated name is a Flanj-reviewed label and proves nothing about a mailbox).
+// A pure read of the seed + the last pulled table — the directory is never
+// queried per request, and nothing about this collector leaves.
+func (e *uiExtension) handleDirectoryHint(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET only.")
+		return
+	}
+	host := strings.TrimSpace(r.URL.Query().Get("host"))
+	domain := edge.RegistrableDomain(host)
+	if host == "" || domain == "" {
+		writeErr(w, http.StatusBadRequest, "missing_fields", msgEdgeHostRequired)
+		return
+	}
+	st := e.storeOrError(w)
+	if st == nil {
+		return
+	}
+	entry, ok := loadDirectory(st)[domain]
+	out := map[string]any{"host": host, "domain": domain, "name": nil, "tier": nil, "claimed": false}
+	if ok {
+		out["name"] = entry.Name
+		out["tier"] = entry.Tier
+		out["claimed"] = entry.Tier == "claimed"
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, out)
 }
 
 // contactUnconfirmedMessage is the deck's 412 line, naming the pending address.

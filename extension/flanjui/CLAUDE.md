@@ -80,7 +80,7 @@ API + the flag action.
     collector's requests go (docker DNS, a k8s Service), not where a laptop
     can (launch-week item 8, 2026-09-07). Absent → the SPA keeps the pill a
     Settings button.
-  - `POST /api/flag {finding_id, message?, provider_display_name?}` — **Create
+  - `POST /api/flag {finding_id, allowed_domains, message?, provider_display_name?}` — **Create
     thread**: `403 {error: not_flaggable}` for LOCAL-ONLY finding kinds
     (`model.Finding.Flaggable()` — `stale_client`, and only `stale_client`): the
     evidence rule is enforced server-side in the relay, never just by UI
@@ -115,7 +115,22 @@ API + the flag action.
     in place on re-flag and the KV has no delete, so a superseded pointer
     survives and must resolve to "no local record", never to the new thread.
     No email field; nothing is emailed.
-  - `POST /api/edges/thread {host, message, request_id}` — **Start a thread**
+    **`allowed_domains` — REQUIRED since 2026-09-14 (thread-domain-gate):** who
+    may open the thread, a list of email domains or JSON null for "Anyone with
+    the link". Absent is `400 missing_fields`: the CP reads an absent field as
+    anyone, but only for collectors that predate it, and this relay never leans
+    on that. An unusable list is `400 allowed_domains_empty`, an entry that is not
+    a bare domain `400 invalid_domain`. `allowed_domains.go` normalizes it (trim,
+    lower-case, strip `@` and a trailing dot, dedupe) after the Connect gate and
+    the finding lookup, and `promote.FlagRequest.AllowedDomains` always puts it
+    on the wire — no `omitempty`, so null means the operator chose it.
+  - `GET /api/directory/hint?host=<host>` — the Flag sheet's **Open to**
+    prefill (2026-09-14): `{host, domain, name, tier, claimed}` for the host's
+    registrable domain, read from the LOCAL directory table (seed + last pull).
+    `claimed` is true only for a `claimed` entry — a D5 domain proof, the one
+    thing that makes a domain honestly someone's email domain; a curated name
+    prefills nothing. GET only, `no-store`, nothing leaves the deployment.
+  - `POST /api/edges/thread {host, message, request_id, allowed_domains}` — **Start a thread**
     from an EDGE row (v1 phase 4): a MESSAGE-ONLY thread. Same Connect gate as
     the flag, from the same helper (`requireConnectedForThread`) so the two
     doors answer with the same 412s. Outbound rows only (`404 edge_not_found`
