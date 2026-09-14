@@ -193,9 +193,14 @@ export interface McpServerRef {
 }
 
 /**
- * `Server: <name> v<version> · <origin>. You: `
+ * `Server: <name> v<version> · <origin> — `
  *
- * The origin goes after the version and before the `. You: ` pivot, so all four
+ * One sentence, one subject: the server, then what your calls showed after the
+ * dash. The old pivot was `. You: ` — a second subject that read as a stray
+ * label on the Overview (Idan, 2026-09-14); the e2e reads pin only the
+ * lowercase clause and the `Server: <name> v<version>` opening, so the pivot
+ * is the one part free to change. The origin goes after the version and before
+ * the pivot, so all four
  * headline branches inherit it from here and none needs editing — and so this
  * surface can never drift from the Contracts card, which builds its heading the
  * same way.
@@ -203,7 +208,7 @@ export interface McpServerRef {
 function serverLead(s: McpServerRef): string {
   const version = s.version ? ' v' + s.version : '';
   const origin = s.origin ? ' · ' + s.origin : '';
-  return `Server: ${s.name}${version}${origin}. You: `;
+  return `Server: ${s.name}${version}${origin} — `;
 }
 
 /** One MCP server's Overview health line, and its tone — three of them, like
