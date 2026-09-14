@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { createHash } from 'node:crypto';
 
 /**
  * The token layer is only a design system for as long as nobody re-introduces a
@@ -19,6 +20,32 @@ const sfcs = readdirSync(src).filter((f) => f.endsWith('.vue'));
 const read = (f: string) => readFileSync(join(src, f), 'utf8');
 const styleOf = (f: string) => read(f).slice(read(f).indexOf('<style'));
 
+const CANONICAL_BANNER = '/* Flanj design tokens — CANONICAL SOURCE.';
+
+/** Every `--name:` declared (not merely read through var()) in a stylesheet. */
+function customPropertyNames(css: string): Set<string> {
+  const stripped = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  return new Set([...stripped.matchAll(/(?:^|[{;])\s*(--[\w-]+)\s*:/g)].map((m) => m[1]));
+}
+
+/** Names a surface declares that the canonical file also defines. */
+export function collidingDeclarations(css: string, canonical: Set<string>): string[] {
+  return [...customPropertyNames(css)].filter((n) => canonical.has(n)).sort();
+}
+
+/** docs/design/tokens.css when the docs vault sits somewhere above this repo. */
+function findVaultTokens(): string | null {
+  let dir = src;
+  for (let i = 0; i < 10; i++) {
+    const candidate = join(dir, 'docs', 'design', 'tokens.css');
+    if (existsSync(candidate)) return candidate;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
 describe('design tokens', () => {
   const tokens = read('tokens.css');
 
@@ -27,11 +54,11 @@ describe('design tokens', () => {
     expect(tokens).toContain('Canonical source lives in the docs vault');
     // The canonical file's own banner must survive the copy — its absence means
     // somebody hand-wrote a palette into this file instead of re-vendoring.
-    expect(tokens).toContain('/* Flanj design tokens — CANONICAL SOURCE.');
+    expect(tokens).toContain(CANONICAL_BANNER);
   });
 
   it('tokens.css carries the full triad in both schemes', () => {
-    for (const scheme of [':root {', '[data-theme="dark"] {']) {
+    for (const scheme of [':root {', '[data-flanj-theme="dark"] {']) {
       expect(tokens).toContain(scheme);
     }
     for (const t of ['--sev-breaking', '--sev-warning', '--sev-info']) {
@@ -73,9 +100,14 @@ describe('design tokens', () => {
         ['warning', '--sev-warning'],
         ['info', '--sev-info']
       ] as const) {
-        const rule = style.match(new RegExp(`\\.badge\\.${cls} \\{[^}]*\\}`));
-        if (rule) expect(rule[0], `.badge.${cls}`).toContain(`var(${fam})`);
-        if (rule) expect(rule[0], `.badge.${cls}`).not.toContain('var(--accent)');
+        const rule = style.match(new RegExp(`\\.badge\\.${cls}\\s*\\{[^}]*\\}`));
+        // The badges live in App.vue. There the rule MUST be found — an
+        // `if (rule)` here used to turn a reformatted selector into a silent
+        // pass, which is the opposite of a guard.
+        if (f === 'App.vue') expect(rule, `.badge.${cls} rule missing from App.vue`).not.toBeNull();
+        if (!rule) continue;
+        expect(rule[0], `.badge.${cls}`).toContain(`var(${fam})`);
+        expect(rule[0], `.badge.${cls}`).not.toContain('var(--accent)');
       }
     }
   });
@@ -83,19 +115,96 @@ describe('design tokens', () => {
   it('first paint is light for everyone — the OS never decides here', () => {
     // tokens.css ships a prefers-color-scheme block for surfaces whose toggle is
     // optional. The collector opts out the way that file documents: a stamped
-    // data-theme="light" on <html>, present in the served HTML rather than
+    // data-flanj-theme="light" on <html>, present in the served HTML rather than
     // applied by script, so a dark-OS visitor never sees a dark flash.
     const html = readFileSync(join(src, '..', 'index.html'), 'utf8');
-    expect(html).toMatch(/<html lang="en" data-theme="light">/);
-    expect(tokens).toContain(':root:not([data-theme="light"])');
+    expect(html).toMatch(/<html lang="en" data-flanj-theme="light">/);
+    expect(tokens).toContain(':root:not([data-flanj-theme="light"])');
   });
 
-  it('the pending family names itself as non-canonical and points at its fork', () => {
-    const pending = read('tokens-pending.css');
-    expect(pending.startsWith('/* NOT CANONICAL')).toBe(true);
-    expect(pending).toContain('This file exists to be deleted.');
-    // Only the verified family may live here — anything else belongs in the vault.
-    const declared = [...pending.matchAll(/^\s*(--[\w-]+):/gm)].map((m) => m[1]);
-    expect([...new Set(declared)].sort()).toEqual(['--verified', '--verified-contrast', '--verified-ink']);
+  it('every control draws the token focus ring on :focus-visible', () => {
+    // Only .edge-contract-link had a :focus-visible rule before Blueprint; a
+    // keyboard user tabbing through the rest saw the browser default or, on the
+    // inputs, `outline: none`. Each control class must reference the ring
+    // tokens from a :focus-visible selector, and no rule may switch the outline
+    // off on plain :focus any more.
+    const styles = Object.fromEntries(sfcs.map((f) => [f, styleOf(f)]));
+    const all = Object.values(styles).join('\n');
+    const ringRules = all.match(/[^{}]*:focus-visible[^{]*\{[^}]*\}/g) ?? [];
+    const hasRing = (cls: string) =>
+      ringRules.some((r) => r.includes(`${cls}:focus-visible`) && r.includes('var(--focus-ring)') && r.includes('var(--focus-offset)'));
+    const controls = [
+      '.btn', '.tabs button', '.seg button', '.pill-btn', '.live-btn', '.pending-bar',
+      '.tr-search', '.tr-select', '.tr-clear', '.tr-chk input', '.doc-link',
+      '.edge-contract-link', '.uploader-host input', '.dropzone',
+      '.field input', 'textarea', '.link-input', '.disclosure'
+    ];
+    expect(controls.filter((c) => !hasRing(c)), 'controls without the token focus ring').toEqual([]);
+    for (const [f, style] of Object.entries(styles)) {
+      const off = style.match(/[^{}]*:focus\s*\{[^}]*outline:\s*none[^}]*\}/g) ?? [];
+      expect(off, `outline switched off on :focus in ${f}`).toEqual([]);
+    }
+    // A ring drawn at a 2px offset lies outside the control's box, so a parent
+    // that clips its overflow erases it while every assertion above stays
+    // green — the Appearance segmented control shipped exactly that way once
+    // (`.seg { overflow: hidden }`, the buttons' :focus-visible ring invisible
+    // in both themes). The wrapper rules of the grouped controls must not clip.
+    // happy-dom cannot paint, so the rendered ring on the segment is verified
+    // by screenshot (scratchpad shots/wave-a-collector/seg-focus-*.png).
+    const wrappers = ['.seg', '.tabs'];
+    const clipped = wrappers.filter((w) => {
+      const rule = all.match(new RegExp(`(^|[\\s}])${w.replace('.', '\\.')}\\s*\\{[^}]*\\}`, 'm'));
+      return rule !== null && /overflow(-x|-y)?\s*:\s*(hidden|clip)/.test(rule[0]);
+    });
+    expect(clipped, 'grouped-control wrappers that would clip the offset focus ring').toEqual([]);
+  });
+
+  it('no surface rule declares a custom property the canonical file already defines', () => {
+    // peek.css once declared `--ok-ink: #1f6d3a` on the same :root as the
+    // vendored file and, loaded second, silently shadowed the canonical value.
+    // Any name the vault defines belongs to the vault: a surface may READ it
+    // and may declare its own names, never redeclare one of these.
+    const canonical = customPropertyNames(tokens);
+    expect(canonical.has('--ok-ink')).toBe(true);
+    // The scanner must bite before it is trusted: peek's exact declaration.
+    expect(collidingDeclarations(':root { --ok-ink: #1f6d3a; --peek-only: 1px; }', canonical)).toEqual(['--ok-ink']);
+    expect(collidingDeclarations('.x { color: var(--ok-ink); --peek-only: 1px; }', canonical)).toEqual([]);
+    const surfaces = [
+      ...sfcs.map((f) => [f, styleOf(f)] as const),
+      ...readdirSync(src)
+        .filter((f) => f.endsWith('.css') && f !== 'tokens.css')
+        .map((f) => [f, read(f)] as const)
+    ];
+    for (const [f, css] of surfaces) {
+      expect(collidingDeclarations(css, canonical), `${f} redeclares canonical tokens`).toEqual([]);
+    }
+  });
+
+  it('the vendored body below the header is the vault file, byte for byte', () => {
+    const body = tokens.slice(tokens.indexOf(CANONICAL_BANNER));
+    // The digest of the vault file as vendored. It changes only on a deliberate
+    // re-vendor, which is the one place this line is edited; anywhere else, a
+    // changed digest means somebody hand-edited the palette here.
+    expect(createHash('sha256').update(body).digest('hex')).toBe(
+      '45515ff6d45f7e7e31269b4ca001ae62811c309d9a6d16c12a106cb968657ffe'
+    );
+    // Where the docs vault is checked out beside this repo (the workspace
+    // layout), compare the bytes directly as well — CI has no vault, so the
+    // digest above is what it enforces.
+    const vault = findVaultTokens();
+    if (vault) expect(body).toBe(readFileSync(vault, 'utf8'));
+  });
+
+  it('the green quarantine is gone — --ok is canonical and nothing references --verified*', () => {
+    // tokens-pending.css held a `--verified*` family while the canonical set had
+    // no positive colour. Blueprint ships `--ok*`; the file was deleted on
+    // re-vendor and must not come back, nor may any surface rule still point at
+    // the retired names (an unresolved var() renders as no colour at all).
+    expect(existsSync(join(src, 'tokens-pending.css'))).toBe(false);
+    expect(read('main.ts')).not.toContain('tokens-pending');
+    for (const f of sfcs) {
+      expect(read(f), `retired --verified* reference in ${f}`).not.toMatch(/--verified(?:-ink|-contrast)?\b/);
+    }
+    expect(tokens).toContain('--ok-ink:');
   });
 });

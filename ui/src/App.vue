@@ -476,7 +476,7 @@ const expanded = ref<Record<string, boolean>>({});
 // ─── Appearance (Settings): Light / Dark, default LIGHT ───────────────────
 // ux-design-v2 §3: the collector matches the thread page — light by default,
 // dark opt-in, NO System option. Persisted as `flanj.theme` and applied as
-// data-theme on <html>; the dark palette lives under [data-theme="dark"] only
+// data-flanj-theme on <html>; the dark palette lives under [data-flanj-theme="dark"] only
 // and the prefers-color-scheme media query is gone from the stylesheet.
 const themePref = ref<ThemePref>(loadThemePref());
 function setTheme(pref: ThemePref) {
@@ -1413,7 +1413,15 @@ watch(tab, (t) => {
 <template>
   <div class="page">
     <header class="topbar">
-      <div class="brand">Flanj<span>Collector</span></div>
+      <!-- The mark is docs/design/flanj-mark-mono.svg inlined (currentColor, so it
+           themes with the ink); the wordmark is text, never an image. -->
+      <div class="brand">
+        <svg class="brand-mark" viewBox="0 0 512 512" fill="none" aria-hidden="true" focusable="false">
+          <path d="M15 376.5H106M106 376.5V346.5H166.5M106 376.5V407H166.5M166.5 346.5V407M166.5 346.5V286H106V226H166.5V165.5M166.5 407V435.5H227V256.25V77H166.5V105.5M15 136H106M106 136V165.5H166.5M106 136V105.5H166.5M166.5 165.5V105.5M498 136H407M407 136V165.5H346.5M407 136V105.5H346.5M346.5 165.5V105.5M346.5 165.5V226H407V286H346.5V346.5M346.5 105.5V77H286V136M498 376.5H407M407 376.5V346.5H346.5M407 376.5V407H346.5M346.5 346.5V407M346.5 407V435.5H286V376.5M286 136H227M286 136V376.5M286 376.5H227" stroke="currentColor" stroke-width="15" stroke-linecap="round" stroke-linejoin="round" />
+          <path d="M198.5 407.5V256M317 41H198.5V256M198.5 256H133M316.5 104.5V256M198 471H316.5V256M316.5 256H382" stroke="currentColor" stroke-width="26" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        <span class="brand-name">Flanj</span><span class="brand-product">Collector</span>
+      </div>
       <div class="meta" v-if="health">
         <!-- Org identity only — never the integration slug (it scopes a spec,
              not this org; it lives on the Overview headline + its Contracts card). -->
@@ -1471,7 +1479,7 @@ watch(tab, (t) => {
       </button>
       <button role="tab" :aria-selected="tab === 'contract'" :class="{ active: tab === 'contract' }" @click="setTab('contract')">
         Contracts
-        <!-- red = act (breaking) · amber = review (informational, un-acked) -->
+        <!-- red = act (breaking) · copper = review (informational, un-acked) -->
         <span v-if="contractBreakingCount" class="tab-count bad" :title="breakingCountTitle(contractBreakingCount)">{{ contractBreakingCount }}</span>
         <span v-if="contractInfoCount" class="tab-count warn" :title="informationalCountTitle(contractInfoCount)">{{ contractInfoCount }}</span>
       </button>
@@ -2305,31 +2313,46 @@ watch(tab, (t) => {
 
 <style>
 /* Palette: NONE of it lives here any more. `src/tokens.css` is the vendored copy
-   of the canonical Flanj token layer (docs/design/tokens.css) and is imported
-   ahead of this block in main.ts; `src/tokens-pending.css` carries the one
-   family the canonical set does not yet define (see its header). This file
-   holds layout and component rules only — a hex literal appearing below is a
-   bug, not a style choice.
+   of the canonical Flanj token layer (docs/design/tokens.css, Blueprint) and is
+   imported ahead of this block in main.ts. This file holds layout and component
+   rules only — a hex literal appearing below is a bug, not a style choice, and
+   so is a custom property whose name the canonical file already defines
+   (src/tokens.test.ts scans for both).
+
+   Green is the canonical --ok family and it is spent on REACHED VERDICTS only:
+   `conforming`, `No drift detected`, a Connected state, the expected side of a
+   drift row. A state that is merely positive-looking (a thread chip, the live
+   tail, an inbound direction) never borrows it, because `.headline.neutral`
+   below depends on green meaning "validated and clean" and nothing else.
 
    Theme (ux-design-v2 §3.3) is unchanged by the token adoption: LIGHT is the
-   base, dark applies under [data-theme="dark"] ONLY, and there is no
+   base, dark applies under [data-flanj-theme="dark"] ONLY, and there is no
    OS-following state. tokens.css does ship a `prefers-color-scheme` block for
-   surfaces whose toggle is optional — index.html stamps data-theme="light" on
+   surfaces whose toggle is optional — index.html stamps data-flanj-theme="light" on
    <html> so it never fires here, exactly the escape hatch tokens.css documents.
 
    Severity is the product-fixed triad and nothing else may borrow it:
-   --sev-breaking (red) / --sev-warning (yellow) / --sev-info (neutral), each
-   paired with its own -wash / -contrast / -edge role. --accent is NEVER
-   semantic. Corners are square (--radius: 0) as a brand decision. */
+   --sev-breaking (red) / --sev-warning (copper) / --sev-info (neutral), each
+   paired with its own -wash / -bolt / -contrast / -edge role. --accent is NEVER
+   semantic. Blueprint makes the warning tier the SAME copper as the accent on
+   purpose, so hue alone can no longer say "warning": every --sev-warning* use
+   below is a finding-tier renderer that carries a label or an outline (badge,
+   tag, tab count, binding checklist, over-cap line), and every attention state
+   that is not a finding (pending pill, connect banner, occurrence count, thread
+   chip, fix-reported status) uses --accent* instead. Corners are square
+   (--radius: 0) as a brand decision. */
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--ground); color: var(--ink); font: 15px/1.5 var(--font-sans); }
 .page { max-width: 1040px; margin: 0 auto; padding: 1.5rem 1.25rem 4rem; }
 .topbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
-.brand { font-weight: 700; letter-spacing: -0.02em; font-size: 1.2rem; }
-.brand span { color: var(--ink-soft); font-weight: 500; margin-left: 0.35rem; }
+.brand { display: inline-flex; align-items: center; gap: 0.5rem; font-weight: 700; letter-spacing: -0.02em; font-size: 1.2rem; color: var(--ink); }
+.brand-mark { width: 24px; height: 24px; flex: none; }
+.brand-product { color: var(--ink-soft); font-weight: 500; margin-left: 0.35rem; }
 .meta { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 .pill { background: var(--surface-sunk); border: 1px solid var(--rule); color: var(--ink-soft); border-radius: var(--radius); padding: 0.15rem 0.6rem; font-size: 0.8rem; }
-.pill.warn { color: var(--sev-warning-ink); border-color: var(--sev-warning-ink); }
+/* Attention states (not configured, pending) are the accent, outlined and
+   labelled — the warning tier belongs to findings only. */
+.pill.warn { color: var(--accent-ink); border-color: var(--accent-ink); }
 .banner { margin: 1rem 0 0; }
 
 /* Tabs */
@@ -2347,7 +2370,7 @@ body { margin: 0; background: var(--ground); color: var(--ink); font: 15px/1.5 v
 .hl-you { font-size: 1.15rem; }
 .hl-sub { color: var(--ink-soft); font-size: 0.85rem; margin-top: 0.3rem; }
 .headline.drift .hl-you strong { color: var(--sev-breaking); }
-.headline.ok .hl-you strong { color: var(--verified-ink); }
+.headline.ok .hl-you strong { color: var(--ok-ink); }
 /* Neutral: nothing has been validated yet. Deliberately uncoloured — the two
    coloured tones are verdicts, and this state has not reached one. */
 .headline.neutral .hl-you strong { color: var(--ink-soft); font-weight: 600; }
@@ -2381,7 +2404,7 @@ code { font-family: var(--font-mono); }
 .col { flex: 1; min-width: 140px; background: var(--surface-sunk); border: 1px solid var(--rule); border-radius: var(--radius); padding: 0.5rem 0.65rem; }
 .col .k { font-size: 0.72rem; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.04em; }
 .col .v { margin-top: 0.2rem; font-family: var(--font-mono); word-break: break-word; }
-.v.expected { color: var(--verified-ink); }
+.v.expected { color: var(--ok-ink); }
 .v.actual { color: var(--sev-breaking); }
 /* DESCRIPTION rows: a wording change is not a severity diff — plain ink. */
 .drift-row.plain .v.expected, .drift-row.plain .v.actual { color: var(--ink); }
@@ -2400,18 +2423,30 @@ code { font-family: var(--font-mono); }
 .btn.ghost { background: transparent; color: var(--ink-soft); }
 .btn.ghost:hover { color: var(--ink); }
 .btn.small { padding: 0.28rem 0.65rem; font-size: 0.8rem; }
-.btn.attention { color: var(--sev-warning-ink); border-color: var(--sev-warning-ink); }
+.btn.attention { color: var(--accent-ink); border-color: var(--accent-ink); }
 .btn:disabled { opacity: 0.6; cursor: default; }
-.chip { display: inline-flex; align-items: center; font-size: 0.8rem; font-weight: 600; color: var(--verified-ink); border: 1px solid var(--verified-ink); border-radius: var(--radius); padding: 0.15rem 0.6rem; }
-.chip.attention { color: var(--sev-warning-ink); border-color: var(--sev-warning-ink); }
+/* Focus: one ring for every control, from the token layer — the 2px ink outline
+   at 2px offset. :focus-visible only, so a mouse click on a button draws
+   nothing while keyboard focus always does; text fields draw it on every focus,
+   which is what :focus-visible means for editable elements. Scoped SFCs repeat
+   the two declarations for their own controls (src/tokens.test.ts lists them). */
+.btn:focus-visible, .tabs button:focus-visible, .seg button:focus-visible, .pill-btn:focus-visible,
+.live-btn:focus-visible, .pending-bar:focus-visible, .tr-search:focus-visible, .tr-select:focus-visible,
+.tr-clear:focus-visible, .tr-chk input:focus-visible, .doc-link:focus-visible, .edge-contract-link:focus-visible,
+.uploader-host input:focus-visible, .dropzone:focus-visible, .pill-link:focus-visible {
+  outline: var(--focus-ring); outline-offset: var(--focus-offset);
+}
+/* A thread chip is a state, not a verdict: neutral ink, and `attention` lifts it to the accent. */
+.chip { display: inline-flex; align-items: center; font-size: 0.8rem; font-weight: 600; color: var(--ink-soft); border: 1px solid var(--ink-soft); border-radius: var(--radius); padding: 0.15rem 0.6rem; }
+.chip.attention { color: var(--accent-ink); border-color: var(--accent-ink); }
 .hint-inline { color: var(--ink-soft); font-size: 0.82rem; }
 .small-err { font-size: 0.82rem; }
 .pill-btn { cursor: pointer; font: inherit; font-size: 0.8rem; }
-.pill.ok { color: var(--verified-ink); border-color: var(--verified-ink); }
+.pill.ok { color: var(--ok-ink); border-color: var(--ok-ink); }
 .tab-right { margin-left: auto; }
-.tab-dot { width: 8px; height: 8px; border-radius: var(--radius); background: var(--sev-warning); display: inline-block; }
+.tab-dot { width: 8px; height: 8px; border-radius: var(--radius); background: var(--accent); display: inline-block; }
 .tab-dot.disconnected { background: var(--ink-soft); }
-.connect-banner { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin: 0.75rem 0 0; padding: 0.6rem 0.9rem; border: 1px solid var(--sev-warning); border-radius: var(--radius); background: var(--surface); font-size: 0.88rem; }
+.connect-banner { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin: 0.75rem 0 0; padding: 0.6rem 0.9rem; border: 1px solid var(--accent); border-radius: var(--radius); background: var(--surface); font-size: 0.88rem; }
 .connect-banner-actions { display: flex; gap: 0.5rem; }
 .connect-banner.info { border-color: var(--rule); color: var(--ink-soft); }
 /* The one-time theme-flip notice sits above the tab strip, not inside a tab. */
@@ -2422,17 +2457,20 @@ code { font-family: var(--font-mono); }
 .tr-toolbar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; padding: 0.6rem 0; background: var(--ground); }
 .tr-search { flex: 1 1 240px; min-width: 180px; background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius); color: var(--ink); font: inherit; font-size: 0.88rem; padding: 0.4rem 0.7rem; }
 .tr-search::placeholder { color: var(--ink-soft); }
-.tr-search:focus, .tr-select:focus { outline: none; border-color: var(--accent); }
+.tr-search:focus, .tr-select:focus { border-color: var(--accent); }
 .tr-select { background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius); color: var(--ink); font: inherit; font-size: 0.82rem; padding: 0.38rem 0.5rem; }
 .tr-chk { display: inline-flex; align-items: center; gap: 0.35rem; color: var(--ink-soft); font-size: 0.82rem; cursor: pointer; white-space: nowrap; user-select: none; }
 .tr-chk input { accent-color: var(--accent-ink); }
 .tr-clear { background: transparent; border: 1px solid var(--rule); border-radius: var(--radius); color: var(--ink-soft); font: inherit; font-size: 0.8rem; padding: 0.3rem 0.6rem; cursor: pointer; }
 .tr-clear:hover { color: var(--ink); border-color: var(--ink-soft); }
 .tr-count { color: var(--ink-soft); font-size: 0.8rem; font-variant-numeric: tabular-nums; white-space: nowrap; margin-left: auto; }
-.live-btn { display: inline-flex; align-items: center; gap: 0.4rem; background: var(--surface); border: 1px solid var(--verified-ink); border-radius: var(--radius); color: var(--verified-ink); font: inherit; font-size: 0.8rem; font-weight: 700; padding: 0.3rem 0.75rem; cursor: pointer; white-space: nowrap; }
-.live-dot { width: 8px; height: 8px; border-radius: var(--radius); background: var(--verified); animation: live-pulse 1.6s ease-in-out infinite; }
-.live-btn.paused { border-color: var(--sev-warning-ink); color: var(--sev-warning-ink); }
-.live-btn.paused .live-dot { background: var(--sev-warning); animation: none; }
+/* Live / paused is a stream state, not a verdict and not a warning: the accent
+   carries `live` (pulsing dot), muted ink carries `paused`, and the label says
+   which — green is reserved for reached verdicts. */
+.live-btn { display: inline-flex; align-items: center; gap: 0.4rem; background: var(--surface); border: 1px solid var(--accent-ink); border-radius: var(--radius); color: var(--accent-ink); font: inherit; font-size: 0.8rem; font-weight: 700; padding: 0.3rem 0.75rem; cursor: pointer; white-space: nowrap; }
+.live-dot { width: 8px; height: 8px; border-radius: var(--radius); background: var(--accent); animation: live-pulse 1.6s ease-in-out infinite; }
+.live-btn.paused { border-color: var(--ink-soft); color: var(--ink-soft); }
+.live-btn.paused .live-dot { background: var(--ink-soft); animation: none; }
 @keyframes live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
 .pending-bar { display: block; width: 100%; background: var(--surface-sunk); border: 1px solid var(--accent-ink); border-radius: var(--radius); color: var(--accent-ink); font: inherit; font-size: 0.82rem; font-weight: 700; padding: 0.45rem 0.75rem; margin: 0 0 0.5rem; cursor: pointer; text-align: center; }
 .pending-bar:hover { background: var(--surface); }
@@ -2464,11 +2502,11 @@ code { font-family: var(--font-mono); }
 .route { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .status-code { font-family: var(--font-mono); }
 .status-code.err { color: var(--sev-breaking); }
-.c-corr { display: flex; flex-direction: column; font-size: 0.78rem; color: var(--accent-ink); min-width: 0; }
+.c-corr { display: flex; flex-direction: column; font-size: 0.78rem; color: var(--ink); min-width: 0; }
 .c-corr span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .c-corr .dim { color: var(--ink-soft); }
 .tag { font-size: 0.72rem; font-weight: 700; padding: 0.12rem 0.5rem; border-radius: var(--radius); text-transform: uppercase; letter-spacing: 0.03em; }
-.tag.ok { color: var(--verified-ink); border: 1px solid var(--verified-ink); }
+.tag.ok { color: var(--ok-ink); border: 1px solid var(--ok-ink); }
 .tag.drift { background: var(--sev-breaking); color: var(--sev-breaking-contrast); }
 .tag.warn { background: var(--sev-warning); color: var(--sev-warning-contrast); }
 .tag.none { color: var(--ink-soft); border: 1px solid var(--rule); }
@@ -2477,7 +2515,9 @@ code { font-family: var(--font-mono); }
 .c-peer { display: flex; align-items: center; gap: 0.45rem; min-width: 0; }
 .dir-chip { font-size: 0.64rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; border-radius: var(--radius); padding: 0.08rem 0.35rem; flex: none; }
 .dir-chip.out { color: var(--accent-ink); border: 1px solid var(--accent-ink); }
-.dir-chip.in { color: var(--verified-ink); border: 1px solid var(--verified-ink); }
+/* Direction is a fact, not a verdict: `out` is the accent, `in` is muted ink, and
+   the uppercase label is what tells them apart — never green. */
+.dir-chip.in { color: var(--ink-soft); border: 1px solid var(--ink-soft); }
 .peer-host { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-size: 0.82rem; }
 /* Named row: the host demotes to the same under-line treatment the Edges panel
    gives it — still there, still selectable, just no longer the headline. An
@@ -2505,10 +2545,11 @@ code { font-family: var(--font-mono); }
 .prov-origin { color: var(--ink-soft); font-weight: 400; }
 .prov-nospec { color: var(--ink-soft); font-size: 0.88rem; margin: 0.6rem 0 0; }
 /* The document-cap line. Same slot and same size as .prov-nospec — it is the
-   same kind of sentence — in the amber TEXT role rather than the muted one,
-   because this one names something the operator can act on. --sev-warning, not
-   --sev-warning-edge: the fill is for chips, and --accent is never semantic. */
-.prov-oversize { color: var(--sev-warning-ink); font-size: 0.88rem; margin: 0.6rem 0 0; }
+   same kind of sentence — but it stays on the warning tier: an over-cap
+   document is a finding-class condition the operator acts on. Its own text is
+   the label, and it takes the tier's edge rule as well as the ink role so it
+   survives sharing a hue with the accent (copper is both, by design). */
+.prov-oversize { color: var(--sev-warning-ink); font-size: 0.88rem; margin: 0.6rem 0 0; padding-left: 0.6rem; border-left: 3px solid var(--sev-warning-edge); }
 .prov-integration { color: var(--ink-soft); font-size: 0.78rem; }
 .finding.nested { background: var(--surface-sunk); margin: 0.75rem 0 0; }
 /* Acked rows: dimmed in place (matches the disabled idiom); evidence stays visible. */
@@ -2520,7 +2561,9 @@ code { font-family: var(--font-mono); }
 .tr-detail { border-top: 1px dashed var(--rule); background: var(--ground); padding: 0.85rem 0.9rem 1.1rem; }
 .meta-line { color: var(--ink-soft); font-size: 0.82rem; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.75rem; }
 .meta-line .dim { opacity: 0.5; }
-.redacted-tag { color: var(--sev-warning-ink); }
+/* `redacted · patterns` is a fact about the row, stated in body ink at weight —
+   not a warning, and not a link. */
+.redacted-tag { color: var(--ink); font-weight: 600; }
 .reqres { display: grid; grid-template-columns: 1fr 1fr; gap: 0.85rem; }
 .rr-col { min-width: 0; }
 .rr-title { font-weight: 700; font-size: 0.85rem; margin-bottom: 0.4rem; }
@@ -2538,7 +2581,7 @@ pre.body { background: var(--surface-sunk); border: 1px solid var(--rule); borde
 .edge-title small { color: var(--ink-soft); font-weight: 400; }
 .dir-badge { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; padding: 0.15rem 0.5rem; border-radius: var(--radius); }
 .dir-badge.out { background: var(--accent); color: var(--accent-contrast); }
-.dir-badge.in { background: var(--verified); color: var(--verified-contrast); }
+.dir-badge.in { background: var(--steel); color: var(--ink); }
 .edge-table { border: 1px solid var(--rule); border-radius: var(--radius); overflow: hidden; }
 .edge-head, .edge-row { display: grid; grid-template-columns: 2.4fr 1fr; gap: 0.5rem; align-items: center; padding: 0.4rem 0.7rem; }
 .edge-head { color: var(--ink-soft); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; background: var(--surface-sunk); border-bottom: 1px solid var(--rule); }
@@ -2670,7 +2713,8 @@ pre.body { background: var(--surface-sunk); border: 1px solid var(--rule); borde
 .edge-row .num { text-align: right; font-variant-numeric: tabular-nums; }
 .edge-row .unit { color: var(--ink-soft); font-size: 0.72rem; margin-left: 0.12rem; }
 .empty.small { font-size: 0.85rem; }
-.occ { font-size: 0.72rem; color: var(--sev-warning-ink); font-weight: 700; border: 1px solid var(--sev-warning-ink); border-radius: var(--radius); padding: 0.05rem 0.45rem; }
+/* The occurrence count is a number, not a severity: accent, outlined. */
+.occ { font-size: 0.72rem; color: var(--accent-ink); font-weight: 700; border: 1px solid var(--accent-ink); border-radius: var(--radius); padding: 0.05rem 0.45rem; }
 .occ.single { color: var(--ink-soft); border-color: var(--rule); font-weight: 500; }
 
 /* ─── MCP surfaces (v0.5) ─── */
@@ -2689,7 +2733,7 @@ pre.body { background: var(--surface-sunk); border: 1px solid var(--rule); borde
 .tool-row:first-child { border-top: 0; }
 .tool-line { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
 .tool-name { font-size: 0.85rem; }
-.tool-tag { font-size: 0.72rem; color: var(--verified-ink); border: 1px solid var(--verified-ink); border-radius: var(--radius); padding: 0.05rem 0.45rem; }
+.tool-tag { font-size: 0.72rem; color: var(--ok-ink); border: 1px solid var(--ok-ink); border-radius: var(--radius); padding: 0.05rem 0.45rem; }
 .tool-tag.partial { color: var(--ink-soft); border-color: var(--rule); }
 .tool-note { color: var(--ink-soft); font-size: 0.8rem; margin: 0.3rem 0 0; }
 
@@ -2697,11 +2741,15 @@ pre.body { background: var(--surface-sunk); border: 1px solid var(--rule); borde
 .theme-field { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
 .theme-label { font-size: 0.88rem; font-weight: 600; }
 .theme-help { color: var(--ink-soft); font-size: 0.82rem; }
-.seg { display: inline-flex; border: 1px solid var(--rule); border-radius: var(--radius); overflow: hidden; }
+/* No overflow clip on the wrapper: the buttons' focus ring sits 2px outside
+   their box, and radius is 0, so a clip would erase the ring and round nothing. */
+.seg { display: inline-flex; border: 1px solid var(--rule); border-radius: var(--radius); }
 .seg button { background: var(--surface); border: 0; border-left: 1px solid var(--rule); color: var(--ink-soft); font: inherit; font-size: 0.85rem; font-weight: 600; padding: 0.35rem 0.85rem; cursor: pointer; }
 .seg button:first-child { border-left: 0; }
 .seg button:hover { color: var(--ink); }
-.seg button.active { background: var(--accent); color: var(--accent-contrast); }
+/* The pressed segment is ink-filled so it never reads as a primary button or a
+   warning chip — all three used to share the copper. */
+.seg button.active { background: var(--ink); color: var(--surface); }
 
 /* The two edge tables need the full width well before the phone breakpoint —
    side by side they squeeze the name cell to a few characters. */

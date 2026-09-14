@@ -3,136 +3,203 @@
    generated from docs/design/tokens.json. Same discipline as CONTRACTS.md: change
    the vault copy, then re-vendor. Bundled by Vite into the single stylesheet the
    collector serves through go:embed, so the local UI stays self-contained.
+   Everything below the canonical banner is the vault file byte for byte;
+   src/tokens.test.ts pins its digest and, where the vault is checked out beside
+   this repo, compares the two files directly.
 
    Webfonts are deliberately not imported here, and the collector loads NONE: it is
    a local-first tool served from a laptop, and a Google Fonts link would be an
-   outbound request from a page that otherwise makes none. Every stack below is
-   therefore exercised in its no-webfont form — a hard constraint, not a fallback.
+   outbound request from a page that otherwise makes none. The Space Grotesk stack
+   below therefore renders as system-ui here by design, and the IBM Plex Mono stack
+   as the platform monospace face — every stack is exercised in its no-webfont form,
+   a hard constraint, not a fallback.
 
    The `prefers-color-scheme` block below never fires here: index.html stamps
-   data-theme="light" on <html>, and the collector's theme ruling (ux-design-v2 §3,
-   light default, dark opt-in, no System state) governs. See src/theme.ts. */
+   data-flanj-theme="light" on <html>, and the collector's theme ruling (ux-design-v2
+   §3, light default, dark opt-in, no System state) governs. See src/theme.ts. */
 
-/* Flanj design tokens — CANONICAL SOURCE.
-   Generated from tokens.json; exported from the Flanj Design System project in
+/* Flanj design tokens — CANONICAL SOURCE. **Blueprint direction, locked 2026-09-09.**
+   Generated from tokens.json; pulled from the Flanj Design System project in
    Claude Design (project 185ce19f-45dd-4ed0-a18e-78972c4ee077, styles.css +
-   tokens/*.css) on 2026-08-31.
+   tokens/*.css) on 2026-09-12.
 
    New surfaces consume this file VERBATIM rather than redefining values.
    Surfaces that vendor a copy must carry a "vendored from docs/design/tokens.css
    — do not edit here" header, the same discipline as CONTRACTS.md.
 
-   Webfonts are deliberately NOT imported here. IBM Plex is loaded per surface as
-   a single stylesheet link; every stack in this file must render acceptably with
-   no webfont loaded — a hard constraint from the drift page, which is emitted by
-   a Go template with no build step and may ship without font files. */
+   Webfonts are deliberately NOT imported here. Space Grotesk + IBM Plex Mono are
+   loaded per surface as a single stylesheet link; every stack below must render
+   acceptably with no webfont loaded — a hard constraint from the drift page,
+   which is emitted by a Go template with no build step.
+
+   ── WHAT CHANGED vs the 2026-08-31 export (breaking for existing surfaces) ──
+   1. THEME ATTRIBUTE RENAMED: [data-theme] -> [data-flanj-theme]. A surface that
+      still stamps data-theme will silently stop switching.
+   2. TYPEFACE REPLACED: IBM Plex Serif/Sans -> Space Grotesk for display AND
+      body. No serif remains in the system; --f-serif is kept as an ALIAS onto
+      the display face so shipped templates keep resolving.
+   3. WARNING IS COPPER, not yellow, and is now the SAME hue as --accent (user
+      decision 2026-09-09). Severity must therefore never rely on hue alone —
+      chip, bolt and label carry it.
+   4. New families: --ok-* (green), --*-bolt (hex-bolt outer fill), --steel,
+      --grid-line, --logo-steel, --logo-outline.
+   5. Rules got heavier: --border-w 1px -> 2px, plus --border-w-hair 1.5px.
+      Motion is now allowed (lift/draw/reveal/spin) where it used to be near-nil.
+
+   Known inconsistency in the upstream system: tokens.json says layout.wrap-max
+   = 1200px while tokens/spacing.css emits 1120px. The CSS is the generated form
+   surfaces actually consume, so 1120px is carried here. Worth resolving upstream. */
 
 /* ── Color ──────────────────────────────────────────────────────────────────
-   Light is the base scheme. Dark ships under [data-theme="dark"] (explicit
+   Light is the base scheme. Dark ships under [data-flanj-theme="dark"] (explicit
    toggle, collector convention: storage key `flanj.theme`, light default) and
    under prefers-color-scheme for pages whose toggle is optional or absent.
-   Rule: --accent is never semantic. Severity is its own triad and the red tier
-   is named `breaking`, never `error`. Severity never rides on hue alone. */
+   Copper is the accent AND the warning tier — they share a hue on purpose. The
+   red tier is named `breaking`, never `error`. Each family has:
+   bare = solid · -ink = text on wash · -wash = tinted bg · -bolt = hex-bolt
+   outer fill · -contrast = text on the solid. */
 :root {
-  --ground: #f7f8fa;
+  --ground: #f7f9fb;
   --surface: #ffffff;
-  --surface-sunk: #eef1f5;
-  --ink: #10151c;
-  --ink-soft: #48545f;
-  --ink-faint: #76828d;
-  --rule: #dde3ea;
-  --rule-soft: #eaeef3;
+  --surface-sunk: #eef2f5;
+  --ink: #0f1720;
+  --ink-soft: #4a5661;
+  --ink-faint: #6b7784;
+  --rule: #c9d2db;
+  --rule-soft: #dfe5eb;
+  --grid-line: #dfe5eb;
   --accent: #9d6428;
   --accent-ink: #7d4e1f;
-  --accent-wash: #f4e9dd;
+  --accent-wash: #fbf5ec;
+  --accent-bolt: #ecc48f;
   --accent-contrast: #ffffff;
+  --ok: #2f7a5a;
+  --ok-ink: #25604a;
+  --ok-wash: #e4f1ea;
+  --ok-bolt: #d6eadf;
+  --ok-contrast: #ffffff;
   --sev-breaking: #b03a43;
   --sev-breaking-ink: #8c2a32;
   --sev-breaking-wash: #f8e6e8;
+  --sev-breaking-bolt: #f3d3d5;
   --sev-breaking-contrast: #ffffff;
-  --sev-warning: #8a6f0a;
-  --sev-warning-ink: #6f5807;
-  --sev-warning-edge: #d1ac1f;
-  --sev-warning-wash: #faf3d9;
+  --sev-warning: #9d6428;
+  --sev-warning-ink: #7d4e1f;
+  --sev-warning-edge: #9d6428;
+  --sev-warning-wash: #fbf5ec;
+  --sev-warning-bolt: #ecc48f;
   --sev-warning-contrast: #ffffff;
-  --sev-info: #5c6873;
-  --sev-info-ink: #48545f;
-  --sev-info-wash: #eef1f5;
+  --sev-info: #6b7784;
+  --sev-info-ink: #4a5661;
+  --sev-info-wash: #eef2f5;
+  --sev-info-bolt: #dfe5eb;
   --sev-info-contrast: #ffffff;
+  --steel: #e3e8ed;
+  --logo-steel: #1f2933;
+  --logo-outline: #0f1720;
   color-scheme: light;
 }
 
-[data-theme="dark"] {
-  --ground: #0e1116;
-  --surface: #151a21;
-  --surface-sunk: #1b222b;
-  --ink: #e7ecf1;
-  --ink-soft: #a3aeba;
-  --ink-faint: #78838f;
-  --rule: #262f3a;
-  --rule-soft: #1f2731;
+[data-flanj-theme="dark"] {
+  --ground: #0f1720;
+  --surface: #151d26;
+  --surface-sunk: #1b2530;
+  --ink: #e6ebf0;
+  --ink-soft: #b5bfc9;
+  --ink-faint: #8b97a7;
+  --rule: #2c3742;
+  --rule-soft: #1f2a35;
+  --grid-line: #1a232d;
   --accent: #d49c5e;
   --accent-ink: #e6bc8a;
   --accent-wash: #2e2214;
+  --accent-bolt: #7a5426;
   --accent-contrast: #2a1809;
+  --ok: #5fbf93;
+  --ok-ink: #8fd6b4;
+  --ok-wash: #16302a;
+  --ok-bolt: #274e3e;
+  --ok-contrast: #04231a;
   --sev-breaking: #e06e7a;
   --sev-breaking-ink: #efa0a8;
   --sev-breaking-wash: #341d20;
+  --sev-breaking-bolt: #5e2a30;
   --sev-breaking-contrast: #2b0d12;
-  --sev-warning: #e0bd3f;
-  --sev-warning-ink: #edd27a;
-  --sev-warning-edge: #9c8419;
-  --sev-warning-wash: #2f2810;
-  --sev-warning-contrast: #291f04;
-  --sev-info: #8d99a5;
-  --sev-info-ink: #a3aeba;
-  --sev-info-wash: #1b222b;
-  --sev-info-contrast: #10151c;
+  --sev-warning: #d49c5e;
+  --sev-warning-ink: #e6bc8a;
+  --sev-warning-edge: #d49c5e;
+  --sev-warning-wash: #2e2214;
+  --sev-warning-bolt: #7a5426;
+  --sev-warning-contrast: #2a1809;
+  --sev-info: #8b97a7;
+  --sev-info-ink: #b5bfc9;
+  --sev-info-wash: #1b2530;
+  --sev-info-bolt: #3a4754;
+  --sev-info-contrast: #0f1720;
+  --steel: #2c3742;
+  --logo-steel: #9aa6b2;
+  --logo-outline: #f7f9fb;
   color-scheme: dark;
 }
 
-/* Auto-dark. Values mirror [data-theme="dark"] above exactly — keep in sync.
-   A stamped data-theme="light" still wins, so a surface may layer an explicit
-   toggle on top of this without the two fighting. */
+/* Auto-dark. Values mirror [data-flanj-theme="dark"] above exactly — keep in
+   sync. A stamped data-flanj-theme="light" still wins, so a surface may layer an
+   explicit toggle on top of this without the two fighting. */
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --ground: #0e1116;
-    --surface: #151a21;
-    --surface-sunk: #1b222b;
-    --ink: #e7ecf1;
-    --ink-soft: #a3aeba;
-    --ink-faint: #78838f;
-    --rule: #262f3a;
-    --rule-soft: #1f2731;
+  :root:not([data-flanj-theme="light"]) {
+    --ground: #0f1720;
+    --surface: #151d26;
+    --surface-sunk: #1b2530;
+    --ink: #e6ebf0;
+    --ink-soft: #b5bfc9;
+    --ink-faint: #8b97a7;
+    --rule: #2c3742;
+    --rule-soft: #1f2a35;
+    --grid-line: #1a232d;
     --accent: #d49c5e;
     --accent-ink: #e6bc8a;
     --accent-wash: #2e2214;
+    --accent-bolt: #7a5426;
     --accent-contrast: #2a1809;
+    --ok: #5fbf93;
+    --ok-ink: #8fd6b4;
+    --ok-wash: #16302a;
+    --ok-bolt: #274e3e;
+    --ok-contrast: #04231a;
     --sev-breaking: #e06e7a;
     --sev-breaking-ink: #efa0a8;
     --sev-breaking-wash: #341d20;
+    --sev-breaking-bolt: #5e2a30;
     --sev-breaking-contrast: #2b0d12;
-    --sev-warning: #e0bd3f;
-    --sev-warning-ink: #edd27a;
-    --sev-warning-edge: #9c8419;
-    --sev-warning-wash: #2f2810;
-    --sev-warning-contrast: #291f04;
-    --sev-info: #8d99a5;
-    --sev-info-ink: #a3aeba;
-    --sev-info-wash: #1b222b;
-    --sev-info-contrast: #10151c;
+    --sev-warning: #d49c5e;
+    --sev-warning-ink: #e6bc8a;
+    --sev-warning-edge: #d49c5e;
+    --sev-warning-wash: #2e2214;
+    --sev-warning-bolt: #7a5426;
+    --sev-warning-contrast: #2a1809;
+    --sev-info: #8b97a7;
+    --sev-info-ink: #b5bfc9;
+    --sev-info-wash: #1b2530;
+    --sev-info-bolt: #3a4754;
+    --sev-info-contrast: #0f1720;
+    --steel: #2c3742;
+    --logo-steel: #9aa6b2;
+    --logo-outline: #f7f9fb;
     color-scheme: dark;
   }
 }
 
 /* ── Type ───────────────────────────────────────────────────────────────────
-   Serif = display headings only; Sans = body; Mono = data, meta, labels, code.
-   Stacks must render acceptably with no webfont loaded. --f-* are the aliases
-   already shipped in production templates; keep both spellings. */
+   Space Grotesk for display AND body (one geometric grotesk, 400–700); IBM Plex
+   Mono for data, meta, labels, code and every uppercase micro-label. Stacks must
+   render acceptably with no webfont loaded. --f-* are the aliases already shipped
+   in production templates; --f-serif now points at the display face, because no
+   serif remains in the system. */
 :root {
-  --font-display: "IBM Plex Serif", Georgia, "Times New Roman", serif;
-  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: "Space Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-sans: "Space Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --f-display: var(--font-display);
   --f-serif: var(--font-display);
   --f-sans: var(--font-sans);
   --f-mono: var(--font-mono);
@@ -142,21 +209,22 @@
   --text-base: 16px;
   --text-lg: 18px;
   --text-xl: 22px;
-  --text-2xl: 28px;
-  --text-3xl: 34px;
-  --text-display: clamp(32px, 5vw, 46px);
-  --leading-tight: 1.1;
+  --text-2xl: 30px;
+  --text-3xl: 40px;
+  --text-display: clamp(36px, 4.5vw, 54px);
+  --leading-tight: 1.04;
   --leading-snug: 1.3;
-  --leading-normal: 1.55;
+  --leading-normal: 1.6;
   --leading-loose: 1.75;
-  --tracking-display: -0.015em;
-  --tracking-heading: -0.01em;
+  --tracking-display: -0.025em;
+  --tracking-heading: -0.015em;
   --tracking-num: -0.02em;
   --tracking-caps: 0.1em;
-  --tracking-eyebrow: 0.14em;
+  --tracking-eyebrow: 0.12em;
   --weight-regular: 400;
   --weight-medium: 500;
   --weight-semibold: 600;
+  --weight-bold: 700;
 }
 
 /* ── Spacing + layout ───────────────────────────────────────────────────────
@@ -180,24 +248,41 @@
 }
 
 /* ── Shape + depth ──────────────────────────────────────────────────────────
-   Corners are square — radius 0 is a brand decision, not an omission. Depth
-   comes from 1px rules and surface steps (ground -> surface -> surface-sunk);
-   the single overlay shadow exists for sheets/dialogs only. Severity stripes
-   are 3px left borders. */
+   Corners are square — radius 0 is a brand decision, not an omission. Rules are
+   heavier than the first direction: 2px structural (frames, section rules, table
+   borders, button outlines), 1.5px hairline (row separators, chip outlines, bolt
+   outlines). Depth comes from rules and surface steps; the only shadow is the
+   hard offset under a lifted button (no blur), plus one overlay shadow for
+   sheets/dialogs. The severity accent on a row is a 4–6px left rule. */
 :root {
-  --border-w: 1px;
-  --border-w-stripe: 3px;
+  --border-w: 2px;
+  --border-w-hair: 1.5px;
+  --border-w-stripe: 4px;
+  --border-w-stripe-lg: 6px;
   --radius: 0px;
-  --focus-ring: 2px solid var(--accent);
-  --focus-offset: 1px;
-  --shadow-overlay: 0 16px 48px -12px rgba(16, 21, 28, 0.35);
+  --focus-ring: 2px solid var(--ink);
+  --focus-offset: 2px;
+  --shadow-lift: 4px 4px 0 var(--ink);
+  --shadow-lift-soft: 4px 4px 0 var(--rule);
+  --shadow-overlay: 0 16px 48px -12px rgba(15, 23, 32, 0.35);
+  --grid-size: 48px;
+  --grid-size-dense: 24px;
 }
 
 /* ── Motion ─────────────────────────────────────────────────────────────────
-   Essentially none: color/border fades only, ease-out, nothing moves, nothing
-   bounces. Respect prefers-reduced-motion by default. */
+   Mechanical: things lift, draw, rotate, reveal — nothing bounces, nothing
+   blurs. --dur-fast: color/border; --dur: lift + hover; --dur-reveal: scroll-in
+   fade; --dur-draw: stroke draw-in on load; --dur-spin: the slow bolt-ring
+   rotation. Respect prefers-reduced-motion: drop spin/draw/reveal, keep colour
+   fades. */
 :root {
-  --dur-fast: 120ms;
+  --dur-fast: 150ms;
   --dur: 200ms;
+  --dur-reveal: 600ms;
+  --dur-draw: 1600ms;
+  --dur-spin: 60s;
   --ease: cubic-bezier(0.2, 0, 0, 1);
+  --ease-lift: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-draw: cubic-bezier(0.4, 0, 0.2, 1);
+  --lift: translate(-1px, -1px);
 }

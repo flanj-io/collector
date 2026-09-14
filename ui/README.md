@@ -74,6 +74,34 @@ write carries `X-Flanj-UI: 1` + JSON (`src/api.ts`). Findings link to their sour
 - `src/mcp.ts` — the v0.5 MCP pure helpers (verbatim deck copy: badges, headlines, local notices,
   tool rows, traffic facets, flag-sheet lines; `snapshotTimes` parses the definition_change detail
   tail — its regex is pinned by a collector Go test, `internal/drift`) with `src/mcp.test.ts`.
+- `src/tokens.css` — the Flanj token layer, **vendored** from `docs/design/tokens.css` (Blueprint,
+  locked 2026-09-09) below a do-not-edit preamble; `src/theme.ts` — the Light / Dark preference
+  (storage key `flanj.theme`, stamped as `data-flanj-theme` on `<html>`); `public/favicon.svg` —
+  `docs/design/favicon.svg` verbatim, copied into `dist/` by Vite.
+
+## Design tokens and theme
+
+Every colour, rule width, radius and focus ring comes from `src/tokens.css`; the SFC style blocks
+hold layout and component rules only. The rules `src/tokens.test.ts` enforces:
+
+- the body below the preamble is the vault file byte for byte (a pinned sha256, plus a direct
+  comparison when the docs vault is checked out above this repo) — change the vault copy, then
+  re-vendor and update the digest;
+- no SFC or ui CSS declares a custom property whose name the canonical file also defines, and no
+  hex or rgb literal lives in an SFC;
+- the theme attribute is `data-flanj-theme` (never `data-theme`): `index.html` stamps
+  `data-flanj-theme="light"` in the served markup so the first paint is light for everyone, and
+  `src/theme-wired.test.ts` mounts the app, clicks the Appearance control and reads the attribute
+  off `<html>`;
+- green (`--ok*`) is spent on reached verdicts only (`conforming`, `No drift detected`, Connected);
+  the warning tier (`--sev-warning*`) is the same copper as `--accent` by design, so it renders only
+  finding-tier badges, tags and counts that carry a label or an outline, and every other attention
+  state uses `--accent*`;
+- every control draws `var(--focus-ring)` at `var(--focus-offset)` on `:focus-visible`.
+
+No webfont is loaded — the page makes no outbound request — so the Space Grotesk stack renders as
+`system-ui` and the mono stack as the platform monospace face. The mark in the topbar is
+`docs/design/flanj-mark-mono.svg` inlined in `currentColor`; the wordmark is text.
 
 ## Develop
 

@@ -6,7 +6,13 @@ API + the flag action.
 ## Role
 
 - Serves the built SPA (`go:embed all:web/dist`) — the Dockerfile's node stage
-  copies `ui/dist` over `web/dist` before the Go build.
+  copies `ui/dist` over `web/dist` before the Go build. The fallback rule
+  (`spaHandlerFS`, pinned by `spa_test.go`): a present file is served as
+  itself (`index.html`, the hashed assets, `favicon.svg`); an unknown
+  extension-less path is a client route and gets `index.html`; an unknown
+  path whose last segment has a file extension (`/favicon.ico`, a stale
+  bundle) is a plain 404 — it used to be `index.html` at 200, which handed
+  the browser an HTML document as its tab icon.
 - Read API: `GET /api/health | /api/edges | /api/calls | /api/findings | /api/contracts`.
   `GET /api/edges` returns the auto-discovered **external** edges (inbound +
   outbound), each carrying an observed `rpm` (calls over the trailing minute);

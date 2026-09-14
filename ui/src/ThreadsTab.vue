@@ -181,20 +181,24 @@ watch(
 .th-main { font-size: 0.9rem; padding-bottom: 0.25rem; }
 .th-provider { font-weight: 600; }
 .th-endpoint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.th-status.attention { color: var(--sev-warning-ink); font-weight: 600; }
+/* `attention` is a turn state (fix reported, replied while closed), not a finding
+   severity: the accent carries it, and the status text is the label. */
+.th-status.attention { color: var(--accent-ink); font-weight: 600; }
 .th-activity, .th-last { color: var(--ink-soft); font-size: 0.85rem; white-space: nowrap; }
 .th-opens { font-variant-numeric: tabular-nums; }
 /* Line 2: link facts beside the one action, full row width. */
 .th-linkline { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; padding: 0 0.9rem; }
 .th-linkfacts { display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap; min-width: 0; }
 .th-link { font-size: 0.82rem; color: var(--ink-soft); white-space: nowrap; }
-.th-link.attention { color: var(--sev-warning-ink); }
+.th-link.attention { color: var(--accent-ink); }
 .th-knock { font-size: 0.82rem; color: var(--ink-soft); }
 .th-actions { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-left: auto; }
 .th-truncated { color: var(--ink-soft); font-size: 0.85rem; margin: 0.5rem 0 0; }
 .error { color: var(--sev-breaking); margin: 0.4rem 0.9rem 0; font-size: 0.85rem; }
-.th-note { color: var(--sev-warning-ink); margin: 0.4rem 0.9rem 0; font-size: 0.85rem; }
-.th-note a { color: var(--accent-ink); }
+/* The blocked-tab note is prose with a link in it: body ink behind an accent
+   rule, so the underlined link is the only accent-coloured text in the line. */
+.th-note { color: var(--ink); margin: 0.4rem 0.9rem 0; padding-left: 0.6rem; border-left: 3px solid var(--accent); font-size: 0.85rem; }
+.th-note a { color: var(--accent-ink); text-decoration: underline; }
 .empty { color: var(--ink-soft); display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
 .mono { font-family: var(--font-mono); }
 @media (max-width: 800px) {

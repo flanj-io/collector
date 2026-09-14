@@ -5,8 +5,8 @@
 // user a dark first paint and quietly reintroduce System).
 //
 // Storage mirrors the thread page's `flanj.peek.theme` exactly: the same key
-// `flanj.theme`, values 'light' | 'dark', KEY ABSENT = light. `data-theme` is
-// always stamped on <html> — the dark palette lives under [data-theme="dark"]
+// `flanj.theme`, values 'light' | 'dark', KEY ABSENT = light. `data-flanj-theme` is
+// always stamped on <html> — the dark palette lives under [data-flanj-theme="dark"]
 // only.
 //
 // Migration (§3.4), which spares anyone who chose:
@@ -29,7 +29,7 @@ export function normalizeTheme(v: string | null | undefined): ThemePref {
   return v === 'dark' ? 'dark' : 'light';
 }
 
-/** The `data-theme` value for a preference. Always an attribute now. */
+/** The `data-flanj-theme` value for a preference. Always an attribute now. */
 export function themeAttribute(pref: ThemePref): 'light' | 'dark' {
   return pref;
 }
@@ -38,9 +38,9 @@ interface ThemeRoot {
   setAttribute(name: string, value: string): void;
 }
 
-/** Stamp `data-theme` on the root element. */
+/** Stamp `data-flanj-theme` on the root element. */
 export function applyTheme(pref: ThemePref, root: ThemeRoot = document.documentElement): void {
-  root.setAttribute('data-theme', themeAttribute(pref));
+  root.setAttribute('data-flanj-theme', themeAttribute(pref));
 }
 
 interface ThemeStorage {
