@@ -166,44 +166,73 @@ watch(
 </template>
 
 <style scoped>
-.th-readonly { color: var(--ink-soft); font-size: 0.85rem; margin: -0.25rem 0 0.25rem; }
+/* Blueprint: a framed table with mono uppercase heads on the sunk surface,
+   hairline row separators, two-line rows (facts, then the link strip beside the
+   one action). Layout and component rules only — every colour is a token. */
+.th-readonly { color: var(--ink-soft); font-size: 13px; margin: -4px 0 4px; }
 /* The workspace link-out: an offer, not a prompt — same muted register as the
    read-only note above it, and it names no colour of its own. */
-.th-workspace { font-size: 0.85rem; margin: 0 0 0.75rem; }
+.th-workspace { font-size: 13px; margin: 0 0 12px; }
 .th-workspace a { color: var(--ink-soft); }
-.th-table { border: 1px solid var(--rule); border-radius: var(--radius); overflow: hidden; background: var(--surface); }
-.th-head, .th-main { display: grid; grid-template-columns: 1.05fr 1.55fr 0.5fr 1.45fr 0.95fr 0.85fr 0.45fr; gap: 0.6rem; align-items: center; padding: 0.55rem 0.9rem; }
-.th-head { color: var(--ink-soft); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--rule); background: var(--surface-sunk); }
-.th-row { border-top: 1px solid var(--rule); padding-bottom: 0.6rem; }
-.th-row:first-of-type { border-top: 0; }
-.th-row.highlight { box-shadow: inset 3px 0 0 var(--accent); background: var(--surface-sunk); }
-.th-row.closed .th-main { color: var(--ink-soft); }
-.th-main { font-size: 0.9rem; padding-bottom: 0.25rem; }
+.th-workspace a:focus-visible { outline: var(--focus-ring); outline-offset: var(--focus-offset); }
+.th-table { border: var(--border-w) solid var(--rule); border-radius: var(--radius); background: var(--surface); }
+.th-head, .th-main { display: grid; grid-template-columns: 1.05fr 1.55fr 0.5fr 1.45fr 0.95fr 0.85fr 0.45fr; gap: 10px; align-items: center; padding: 10px 14px; }
+.th-head { font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-soft); border-bottom: var(--border-w) solid var(--rule); background: var(--surface-sunk); }
+.th-row { border-top: var(--border-w-hair) solid var(--rule-soft); padding-bottom: 10px; transition: background-color var(--dur-fast) var(--ease); }
+.th-head + .th-row { border-top: 0; }
+.th-row.highlight { box-shadow: inset var(--border-w-stripe) 0 0 var(--accent); background: var(--surface-sunk); }
+/* A closed thread dims in place, like an acknowledged finding — with the
+   palette, never opacity: the kit's `opacity: .6` put the row's 12–13px facts
+   at 2.9:1. Facts drop to --ink-soft, the provider loses its weight; the
+   accent status (`Closed · new reply`) keeps its own -ink role, which reads
+   at full strength. */
+.th-row.closed .th-provider { font-weight: 400; }
+.th-row.closed .th-provider, .th-row.closed .th-endpoint, .th-row.closed .th-evidence,
+.th-row.closed .th-opens, .th-row.closed .th-status { color: var(--ink-soft); }
+.th-row.closed .th-status.attention { color: var(--accent-ink); }
+.th-main { font-size: 13.5px; padding-bottom: 4px; }
 .th-provider { font-weight: 600; }
-.th-endpoint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.th-endpoint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.th-evidence { font-family: var(--f-mono); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.th-status { font-family: var(--f-mono); font-size: 11.5px; letter-spacing: 0.02em; }
 /* `attention` is a turn state (fix reported, replied while closed), not a finding
    severity: the accent carries it, and the status text is the label. */
 .th-status.attention { color: var(--accent-ink); font-weight: 600; }
-.th-activity, .th-last { color: var(--ink-soft); font-size: 0.85rem; white-space: nowrap; }
-.th-opens { font-variant-numeric: tabular-nums; }
+.th-activity, .th-last { color: var(--ink-soft); font-family: var(--f-mono); font-size: 12.5px; white-space: nowrap; }
+.th-opens { font-family: var(--f-mono); font-size: 12.5px; font-variant-numeric: tabular-nums; }
 /* Line 2: link facts beside the one action, full row width. */
-.th-linkline { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; padding: 0 0.9rem; }
-.th-linkfacts { display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap; min-width: 0; }
-.th-link { font-size: 0.82rem; color: var(--ink-soft); white-space: nowrap; }
+.th-linkline { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 0 14px; }
+.th-linkfacts { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.th-link { font-size: 12.5px; color: var(--ink-soft); white-space: nowrap; }
 .th-link.attention { color: var(--accent-ink); }
-.th-knock { font-size: 0.82rem; color: var(--ink-soft); }
-.th-actions { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-left: auto; }
-.th-truncated { color: var(--ink-soft); font-size: 0.85rem; margin: 0.5rem 0 0; }
-.error { color: var(--sev-breaking); margin: 0.4rem 0.9rem 0; font-size: 0.85rem; }
+.th-knock { font-size: 12.5px; color: var(--ink-soft); }
+.th-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+.th-truncated { color: var(--ink-soft); font-size: 13px; margin: 8px 0 0; }
+/* The unreachable-relay line: the load error, red ink behind a red rule. */
+.error { color: var(--sev-breaking-ink); margin: 6px 14px 0; font-size: 13px; padding-left: 10px; border-left: var(--border-w-stripe) solid var(--sev-breaking); }
+.th-table + .error, .th-workspace + .error, .th-readonly + .error { margin-left: 0; }
 /* The blocked-tab note is prose with a link in it: body ink behind an accent
    rule, so the underlined link is the only accent-coloured text in the line. */
-.th-note { color: var(--ink); margin: 0.4rem 0.9rem 0; padding-left: 0.6rem; border-left: 3px solid var(--accent); font-size: 0.85rem; }
+.th-note { color: var(--ink); margin: 6px 14px 0; padding-left: 10px; border-left: var(--border-w-stripe) solid var(--accent); font-size: 13px; }
 .th-note a { color: var(--accent-ink); text-decoration: underline; }
-.empty { color: var(--ink-soft); display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
-.mono { font-family: var(--font-mono); }
+.empty { color: var(--ink-soft); display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.mono { font-family: var(--f-mono); }
+/* Phone width: the head goes, so each fact carries its own label inline —
+   a bare `×0` with its header removed was a number with no denominator. The
+   provider and endpoint take a line each; the counts and times wrap after. */
 @media (max-width: 800px) {
   .th-head { display: none; }
-  .th-main { grid-template-columns: 1fr 1fr; }
+  .th-main { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; }
+  .th-provider, .th-endpoint { flex: 1 1 100%; }
+  .th-endpoint { white-space: normal; overflow: visible; text-overflow: clip; word-break: break-word; }
+  .th-evidence::before, .th-status::before, .th-activity::before, .th-last::before, .th-opens::before {
+    font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); margin-right: 5px;
+  }
+  .th-evidence::before { content: 'evidence'; }
+  .th-status::before { content: 'status'; }
+  .th-activity::before { content: 'activity'; }
+  .th-last::before { content: 'last reply'; }
+  .th-opens::before { content: 'opened'; }
   .th-actions { margin-left: 0; }
 }
 </style>

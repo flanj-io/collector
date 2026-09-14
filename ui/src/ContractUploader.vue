@@ -402,3 +402,61 @@ function onHostEdited() {
     <button v-if="!preview" type="button" class="btn ghost small" @click="emit('cancel')">Cancel</button>
   </div>
 </template>
+
+<style scoped>
+/* Blueprint: the uploader is a framed block on the sunk surface, rendered
+   inline on whichever row opened it (one mutation, so only one can be open).
+   Layout and component rules only — every colour, rule width and radius is a
+   token (src/tokens.css). Its focus-ring declarations live here, not in
+   App.vue (src/tokens.test.ts lists them). */
+.uploader { border: var(--border-w) solid var(--rule); border-radius: var(--radius); padding: 12px 14px; margin-top: 8px; background: var(--surface-sunk); }
+.uploader-host { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.uploader-host > span { font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); }
+.uploader-host input {
+  padding: 7px 10px; border: var(--border-w) solid var(--rule); border-radius: var(--radius);
+  background: var(--surface); color: var(--ink); font: inherit; font-size: 13px; max-width: 352px;
+  transition: border-color var(--dur-fast) var(--ease);
+}
+.uploader-host input:focus { border-color: var(--ink); }
+/* The drop zone keeps a dashed 2px frame: the dash is the affordance. */
+.dropzone {
+  border: var(--border-w) dashed var(--rule); border-radius: var(--radius); padding: 18px 12px;
+  text-align: center; background: var(--surface); transition: border-color var(--dur-fast) var(--ease), background-color var(--dur-fast) var(--ease);
+}
+.dropzone.dragging { border-color: var(--ink); background: var(--surface-sunk); }
+.dz-prompt { margin: 0 0 2px; font-size: 13.5px; }
+.dz-formats { margin: 0 0 10px; font-size: 12px; color: var(--ink-soft); }
+/* The privacy line sits AT the picker, where the document is chosen — the one
+   moment the operator is deciding whether to hand over a vendor's document. */
+.uploader-privacy { margin: 8px 0 0; font-size: 12px; color: var(--ink); }
+.uploader-note { margin: 3px 0 0; font-size: 12px; color: var(--ink-soft); }
+/* Errors (too large, unreadable, the relay's refusal): red ink behind a red rule. */
+.uploader-error { margin: 8px 0 0; font-size: 12.5px; color: var(--sev-breaking-ink); padding-left: 10px; border-left: var(--border-w-stripe) solid var(--sev-breaking); }
+.uploader-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.confirm-facts { display: grid; gap: 4px; margin: 0 0 8px; }
+.confirm-facts > div { display: flex; gap: 8px; align-items: baseline; font-size: 13px; }
+.confirm-facts dt { font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); min-width: 96px; }
+.confirm-facts dd { margin: 0; }
+/* The binding checklist. A `servers:` mismatch used to render in body ink —
+   "warn, never block" means warn VISIBLY, and that was a whisper. Warnings get
+   the warning tier's wash and edge rule plus a `!` marker; the button still
+   says go. The tier shares its hue with the accent, so the marker and the
+   text carry it, never the colour alone. */
+.binding-checks { list-style: none; margin: 0 0 8px; padding: 8px 10px; display: grid; gap: 4px; border-radius: var(--radius); background: var(--surface); border: var(--border-w-hair) solid var(--rule); }
+.binding-checks.warned { border-color: var(--sev-warning-edge); border-left: var(--border-w-stripe) solid var(--sev-warning-edge); background: var(--sev-warning-wash); }
+.binding-checks li { display: flex; gap: 8px; align-items: flex-start; font-size: 12.5px; line-height: 1.45; color: var(--ink-soft); }
+.binding-checks li.warn { color: var(--ink); }
+.binding-checks .chk { flex: none; width: 1em; text-align: center; font-family: var(--f-mono); font-weight: 700; color: var(--ink-soft); }
+.binding-checks li.warn .chk { color: var(--sev-warning-ink); }
+.confirm-host { margin: 2px 0 10px; }
+.confirm-host input:disabled { opacity: 0.7; cursor: not-allowed; }
+.host-hint, .host-locked { font-size: 11px; color: var(--ink-soft); }
+.host-awaiting { font-size: 12px; color: var(--ink); }
+.uploader-host.awaiting input { border-color: var(--accent); }
+.confirm-timing { margin: 0 0 6px; font-size: 12px; color: var(--ink-soft); }
+.host-hint code { font-size: 0.95em; }
+/* `Bind anyway` keeps the warning tier's outline: it is the one control that
+   proceeds past a warned checklist, and its label says so. */
+.btn.warn { border-color: var(--sev-warning-ink); color: var(--sev-warning-ink); }
+.uploader-host input:focus-visible, .dropzone:focus-visible { outline: var(--focus-ring); outline-offset: var(--focus-offset); }
+</style>

@@ -136,6 +136,8 @@ describe('design tokens', () => {
     const controls = [
       '.btn', '.tabs button', '.seg button', '.pill-btn', '.live-btn', '.pending-bar',
       '.tr-search', '.tr-select', '.tr-clear', '.tr-chk input', '.doc-link',
+      // A traffic row toggles the call's detail: it is a control (UX review 2026-09-14).
+      '.tr-row',
       '.edge-contract-link', '.uploader-host input', '.dropzone',
       '.field input', 'textarea', '.link-input', '.disclosure'
     ];
@@ -193,6 +195,66 @@ describe('design tokens', () => {
     // digest above is what it enforces.
     const vault = findVaultTokens();
     if (vault) expect(body).toBe(readFileSync(vault, 'utf8'));
+  });
+
+  it('the hex bolt is one inline symbol per document, and no bolt tone is an inline style', () => {
+    // Blueprint port rule: the bolt ships ONCE as <symbol id="hxbolt"> and every
+    // use is a class-toned <use>. A second symbol duplicates an id; an inline
+    // style="color:…;--l:…" on a bolt (the kit's own idiom) is a palette
+    // literal the tokens cannot reach. Comments are stripped first — both the
+    // template and this file's own prose mention the symbol by name.
+    const templateOf = (f: string) => {
+      const src = read(f);
+      const start = src.indexOf('<template>');
+      const end = src.lastIndexOf('</template>');
+      return start < 0 ? '' : src.slice(start, end).replace(/<!--[\s\S]*?-->/g, '');
+    };
+    const templates = sfcs.map((f) => [f, templateOf(f)] as const);
+    const symbols = templates.reduce((n, [, t]) => n + (t.match(/<symbol id="hxbolt"/g) ?? []).length, 0);
+    expect(symbols, 'exactly one <symbol id="hxbolt"> across the SFC templates').toBe(1);
+    const uses = templates.reduce((n, [, t]) => n + (t.match(/<use href="#hxbolt"/g) ?? []).length, 0);
+    expect(uses).toBeGreaterThan(0);
+    for (const [f, t] of templates) {
+      expect(t.match(/\sstyle="/g), `inline style attribute in ${f}'s template`).toBeNull();
+    }
+    // The scanner must bite before it is trusted: the kit's own bolt markup.
+    expect('<svg class="hx" style="color:var(--red)"><use href="#hxbolt"/></svg>'.match(/\sstyle="/g)).not.toBeNull();
+  });
+
+  it('dimmed states dim with the palette, never with opacity', () => {
+    // The kit dims an acknowledged finding (`.cx-find.acked { opacity: .55 }`)
+    // and a closed thread row (`.cx-th-row.closed { opacity: .6 }`); the port
+    // inherited both, plus its own `.meta-line .dim { opacity: .5 }`. At those
+    // opacities 12–13px --ink-soft text measured 2.2–2.9:1 (UX review
+    // 2026-09-14) — "evidence is never hidden" while hiding it from anyone
+    // with low vision. Dimming is a palette move (--ink-soft, --rule-soft,
+    // the steel chip); no rule whose selector names a dimmed state may set
+    // opacity. A disabled INPUT is not a dimmed state and is not matched.
+    const dimmed = /\.(acked|closed|dim)\b/;
+    for (const f of sfcs) {
+      const rules = styleOf(f).replace(/\/\*[\s\S]*?\*\//g, '').match(/[^{}]+\{[^}]*\}/g) ?? [];
+      const bad = rules.filter((r) => dimmed.test(r.slice(0, r.indexOf('{'))) && /(^|[\s;{])opacity\s*:/.test(r));
+      expect(bad, `opacity on a dimmed state in ${f}`).toEqual([]);
+    }
+    // The scanner must bite before it is trusted: the kit's own rule.
+    expect(/(^|[\s;{])opacity\s*:/.test('.cx-find.acked{opacity:.55}')).toBe(true);
+  });
+
+  it("the traffic head's cells keep the head's register: per-cell rules are scoped to rows", () => {
+    // `.c-when { font-size: 12.5px }` and `.c-corr { color: var(--ink) }` also
+    // matched the HEAD's spans (same class names), so CAPTURED rendered larger
+    // and CORRELATION in full ink while every other head was 10.5px --ink-soft
+    // (UX review 2026-09-14). Every rule that names a traffic cell class must
+    // be scoped under `.tr-row`.
+    const style = styleOf('App.vue').replace(/\/\*[\s\S]*?\*\//g, '');
+    const rules = style.match(/[^{}]+\{[^}]*\}/g) ?? [];
+    const cell = /\.c-(when|call|peer|status|corr|mark)\b/;
+    const unscoped = rules
+      .map((r) => r.slice(0, r.indexOf('{')).trim())
+      .filter((sel) => sel.split(',').some((part) => cell.test(part) && !/\.tr-row\b/.test(part)));
+    expect(unscoped, 'traffic cell rules that would also style the head').toEqual([]);
+    // The scanner must bite before it is trusted.
+    expect(cell.test('.c-when') && !/\.tr-row\b/.test('.c-when')).toBe(true);
   });
 
   it('the green quarantine is gone — --ok is canonical and nothing references --verified*', () => {

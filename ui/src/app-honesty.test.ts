@@ -172,6 +172,10 @@ describe('the Overview headline', () => {
     const hl = w.find('.headline');
     expect(hl.text()).toContain('Nothing validated yet');
     expect(hl.text()).not.toContain('No drift detected');
+    // Blueprint: no "You:" prefix on the REST headline — the subline carries
+    // scope ("observed here, on integration …").
+    expect(hl.text()).not.toContain('You:');
+    expect(hl.text()).toContain('observed here, on integration acme-payments');
     // Neither verdict tone — this install has not reached one.
     expect(hl.classes()).toContain('neutral');
     expect(hl.classes()).not.toContain('ok');

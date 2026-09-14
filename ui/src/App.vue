@@ -34,7 +34,9 @@ import {
   findingBelongsToContract,
   contractsByHost,
   edgeContractLine,
+  humanize,
   isEvidenceFor,
+  providerNameForFinding,
   rollCall,
   uncoveredHeading,
   uncoveredProviders,
@@ -68,6 +70,9 @@ import {
   defChangeDetail,
   defChangeNoCallSub,
   definitionClass,
+  descriptionChipLabel,
+  descriptionChipTitle,
+  descriptionCountTitle,
   informationalChipLabel,
   informationalChipTitle,
   informationalCountTitle,
@@ -125,6 +130,7 @@ import {
   type CoverageVerdict
 } from './coverage';
 import { headlineFor } from './headline';
+import { isoStamp } from './time';
 import type { Correlation, Finding, FlagResult, Health, RedactedCall } from './types';
 
 interface Edge {
@@ -250,6 +256,31 @@ const consumerName = computed(() => connect.value?.consumer_display_name || heal
 // or Connected, no pill renders. Never the integration slug (a spec-scoping
 // label, not an identity; it stays on the Overview headline + its Contracts card).
 const orgPillName = computed(() => connect.value?.consumer_display_name || health.value?.consumer_display_name || '');
+// The sheet header's address line: where THIS page is served from. Read once —
+// the origin cannot change under a mounted app.
+const uiHost = window.location.host;
+// Hex-bolt tones (Blueprint). A bolt is a mark, so the class binds the bare
+// family colour plus its -bolt ring: green only for a reached verdict, red for
+// drift, the accent for an attention state, steel for a neutral one.
+const pillTone = computed(() =>
+  connectStatus.value === 'connected' ? 'tone-ok' : connectStatus.value === 'pending' ? 'tone-accent' : 'tone-info'
+);
+function toneClass(tone: 'drift' | 'ok' | 'neutral'): string {
+  return tone === 'drift' ? 'tone-breaking' : tone === 'ok' ? 'tone-ok' : 'tone-info';
+}
+/** The bolt inside a severity chip follows the chip's tier; a DESCRIPTION
+ *  (wording) change and the info tier are both steel. */
+function badgeTone(f: Finding): string {
+  if (f.kind === 'definition_change') {
+    const c = definitionClass(f);
+    return c === 'BREAKING' ? 'tone-breaking' : c === 'NON-BREAKING' ? 'tone-warning' : 'tone-info';
+  }
+  return f.severity === 'breaking' ? 'tone-breaking' : f.severity === 'warning' ? 'tone-warning' : 'tone-info';
+}
+/** A thread chip lifts to the accent when the turn is ours to act on. */
+function chipAttention(row: ThreadRow): boolean {
+  return row.summary?.turn === 'fix_reported' || row.summary?.turn === 'replied_while_closed';
+}
 
 // One in-flight `GET /api/connect` at a time. loadThreads now waits on the
 // connect answer before deciding whether the list is askable at all, and mount
@@ -360,13 +391,18 @@ function goToSettings() {
 }
 
 // Provider name shown on the sheet and sent on the flag: the configured
-// provider_display_name for the observed integration, else a humanized id
-// (the same rule the relay applies server-side).
+// provider_display_name for the observed integration, else the SDK's
+// integration id humanized (the same rule the relay applies server-side) —
+// except a version-diff, whose id is the CONTRACT's host-derived key and
+// resolves through the Edges panel's name for that host (contracts.ts
+// providerNameForFinding; QA 2026-09-14).
 function providerNameFor(f: Finding): string {
-  if (health.value?.provider_display_name && (!health.value.integration || f.integration === health.value.integration)) {
-    return health.value.provider_display_name;
-  }
-  return humanize(f.integration) || f.integration || 'the provider';
+  return providerNameForFinding(f, {
+    providerDisplayName: health.value?.provider_display_name,
+    healthIntegration: health.value?.integration,
+    contracts: contracts.value,
+    edges: edges.value
+  });
 }
 
 function openSheet(f: Finding) {
@@ -791,14 +827,6 @@ function fmtRPM(rpm?: number): string {
   return rpm >= 10 ? String(Math.round(rpm)) : rpm.toFixed(1).replace(/\.0$/, '');
 }
 
-function humanize(id: string): string {
-  return id
-    .split(/[-_]+/)
-    .filter(Boolean)
-    .map((w) => w[0].toUpperCase() + w.slice(1))
-    .join(' ');
-}
-
 function specHref(s: SpecInfo): string {
   return '/api/contracts/spec?integration=' + encodeURIComponent(s.integration);
 }
@@ -1126,6 +1154,14 @@ const contractBreakingCount = computed(() => contractTabRows.value.filter((f) =>
 const contractInfoCount = computed(
   () => contractTabRows.value.filter((f) => !isBreakingFinding(f) && !isAcked(f)).length
 );
+// Every un-acked informational row is a DESCRIPTION change: the pill keeps its
+// class and its count (e2e reads `.tab-count.warn`) but wears the steel
+// outline, not the copper fill — a wording change is not a warning.
+const contractDescOnly = computed(
+  () =>
+    contractInfoCount.value > 0 &&
+    contractTabRows.value.every((f) => isBreakingFinding(f) || isAcked(f) || definitionClass(f) === 'DESCRIPTION')
+);
 
 // Per-card chip counts — the same taxonomy as the tab pills, so the sum of
 // card chips always equals the pills.
@@ -1135,10 +1171,18 @@ function cardBreakingCount(p: ContractCard): number {
 function cardInfoCount(p: ContractCard): number {
   return p.findings.filter((f) => !isBreakingFinding(f) && !isAcked(f)).length;
 }
-function cardInfoTitle(p: ContractCard): string {
-  const info = p.findings.filter((f) => !isBreakingFinding(f) && !isAcked(f));
-  const description = info.filter((f) => definitionClass(f) === 'DESCRIPTION').length;
-  return informationalChipTitle(info.length - description, description);
+// The card splits its informational chip by class — copper `N NON-BREAKING`
+// for schema changes, steel `N DESCRIPTION` for wording — so each class wears
+// one vocabulary from the tab through the card to the row badge. Their sum is
+// still the tab pill's number.
+function cardNonBreakingCount(p: ContractCard): number {
+  return p.findings.filter((f) => !isBreakingFinding(f) && !isAcked(f) && definitionClass(f) !== 'DESCRIPTION').length;
+}
+function cardDescriptionCount(p: ContractCard): number {
+  return p.findings.filter((f) => !isBreakingFinding(f) && !isAcked(f) && definitionClass(f) === 'DESCRIPTION').length;
+}
+function cardNonBreakingTitle(p: ContractCard): string {
+  return informationalChipTitle(cardNonBreakingCount(p), 0);
 }
 
 // ─── Local acknowledge (qfix-2026-08-25) ─────────────────────────────────
@@ -1343,16 +1387,15 @@ function prettyBody(raw: string): string {
   }
 }
 
+// One timestamp format on the surface (src/time.ts): the captured column and
+// a finding's snapshot labels used to render the same instant two ways.
 function humanTime(iso: string): string {
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return iso;
-  return d.toLocaleString(undefined, {
-    month: 'short',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit'
-  });
+  return isoStamp(iso);
+}
+/** The two snapshot instants of a definition_change, in the surface format. */
+function snapshotStamps(detail?: string): { from: string; to: string } {
+  const t = snapshotTimes(detail);
+  return { from: isoStamp(t.from), to: isoStamp(t.to) };
 }
 
 function toggle(id: string) {
@@ -1412,6 +1455,16 @@ watch(tab, (t) => {
 
 <template>
   <div class="page">
+    <!-- The hex bolt: ONE inline <symbol> per document. Every bolt on the page
+         is `<svg class="hx [sm] tone-*"><use href="#hxbolt"/></svg>`; the tone
+         class binds currentColor (inner hex) and --l (outer ring) to a token
+         family, so no bolt carries an inline style. -->
+    <svg class="hx-defs" aria-hidden="true" focusable="false">
+      <symbol id="hxbolt" viewBox="0 0 24 24">
+        <polygon class="hx-outer" points="22,12 17,20.7 7,20.7 2,12 7,3.3 17,3.3" stroke-width="1.5" />
+        <polygon class="hx-inner" points="16.5,12 14.25,15.9 9.75,15.9 7.5,12 9.75,8.1 14.25,8.1" stroke-width="1.5" />
+      </symbol>
+    </svg>
     <header class="topbar">
       <!-- The mark is docs/design/flanj-mark-mono.svg inlined (currentColor, so it
            themes with the ink); the wordmark is text, never an image. -->
@@ -1421,11 +1474,14 @@ watch(tab, (t) => {
           <path d="M198.5 407.5V256M317 41H198.5V256M198.5 256H133M316.5 104.5V256M198 471H316.5V256M316.5 256H382" stroke="currentColor" stroke-width="26" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
         <span class="brand-name">Flanj</span><span class="brand-product">Collector</span>
+        <!-- Where this UI is served from and which build serves it — the sheet's
+             own address line, in mono. -->
+        <span v-if="health?.collector_version" class="brand-addr">{{ uiHost }} · {{ health.collector_version }}</span>
       </div>
       <div class="meta" v-if="health">
         <!-- Org identity only — never the integration slug (it scopes a spec,
              not this org; it lives on the Overview headline + its Contracts card). -->
-        <span v-if="orgPillName" class="pill" title="Your organization — shown to the provider on every thread.">{{ orgPillName }}</span>
+        <span v-if="orgPillName" class="pill pill-name" title="Your organization — shown to the provider on every thread.">{{ orgPillName }}</span>
         <span v-if="!health.cp_configured" class="pill warn">control plane not configured</span>
         <!-- Connected: the pill is the one door out to the control plane. The
              LABEL stays the status ("Connected") — a status indicator that hides
@@ -1441,7 +1497,7 @@ watch(tab, (t) => {
           rel="noopener noreferrer"
           title="Go to your Flanj dashboard"
         >
-          {{ connectPill }}<span class="pill-out" aria-hidden="true">↗</span>
+          <svg class="hx sm tone-ok" aria-hidden="true" focusable="false"><use href="#hxbolt" /></svg>{{ connectPill }}<span class="pill-out" aria-hidden="true">↗</span>
         </a>
         <button
           v-else
@@ -1451,7 +1507,7 @@ watch(tab, (t) => {
           title="Connect settings"
           @click="setTab('settings')"
         >
-          {{ connectPill }}
+          <svg class="hx sm" :class="pillTone" aria-hidden="true" focusable="false"><use href="#hxbolt" /></svg>{{ connectPill }}
         </button>
       </div>
     </header>
@@ -1481,7 +1537,7 @@ watch(tab, (t) => {
         Contracts
         <!-- red = act (breaking) · copper = review (informational, un-acked) -->
         <span v-if="contractBreakingCount" class="tab-count bad" :title="breakingCountTitle(contractBreakingCount)">{{ contractBreakingCount }}</span>
-        <span v-if="contractInfoCount" class="tab-count warn" :title="informationalCountTitle(contractInfoCount)">{{ contractInfoCount }}</span>
+        <span v-if="contractInfoCount" class="tab-count warn" :class="{ desc: contractDescOnly }" :title="contractDescOnly ? descriptionCountTitle(contractInfoCount) : informationalCountTitle(contractInfoCount)">{{ contractInfoCount }}</span>
       </button>
       <button role="tab" :aria-selected="tab === 'threads'" :class="{ active: tab === 'threads' }" @click="setTab('threads')">
         Threads
@@ -1494,20 +1550,24 @@ watch(tab, (t) => {
     </nav>
 
     <!-- ───────────────────────── OVERVIEW ───────────────────────── -->
-    <div v-show="tab === 'overview'">
+    <div v-show="tab === 'overview'" class="panel">
       <!-- Three tones, not two: `neutral` is the install where nothing has been
            validated yet, and it must read as neither the green all-clear nor
            the red drift banner (ui/src/headline.ts). -->
       <section class="headline" :class="headline.tone">
-        <!-- Observed state only — the collector does not measure provider health. -->
-        <div class="hl-you">
-          You: <strong>{{ headline.you }}</strong>
+        <svg class="hx" :class="toneClass(headline.tone)" aria-hidden="true" focusable="false"><use href="#hxbolt" /></svg>
+        <div>
+          <!-- Observed state only — the collector does not measure provider
+               health. No "You:" prefix (Blueprint): the subline carries scope. -->
+          <div class="hl-you">
+            <strong>{{ headline.you }}</strong>
+          </div>
+          <!-- Pre-traffic honesty: no integration observed on a REST edge yet →
+               the fragment is simply absent (no replacement copy). An MCP edge
+               alone does not count — the slug is a REST integration's name, and
+               the MCP server has its own line below (ui/src/headline.ts). -->
+          <div v-if="headline.integration" class="hl-sub">observed here, on integration <code>{{ headline.integration }}</code></div>
         </div>
-        <!-- Pre-traffic honesty: no integration observed on a REST edge yet →
-             the fragment is simply absent (no replacement copy). An MCP edge
-             alone does not count — the slug is a REST integration's name, and
-             the MCP server has its own line below (ui/src/headline.ts). -->
-        <div v-if="headline.integration" class="hl-sub">on integration <code>{{ headline.integration }}</code></div>
       </section>
 
       <!-- MCP servers (v0.5): one headline per observed server (deck §2), on
@@ -1519,6 +1579,11 @@ watch(tab, (t) => {
         class="headline mcp-headline"
         :class="m.headline.tone"
       >
+        <svg class="hx" :class="toneClass(m.headline.tone)" aria-hidden="true" focusable="false"><use href="#hxbolt" /></svg>
+        <!-- The deck's sentence stays whole (`Server: … You: …`): its clause is
+             pinned lowercase by e2e headline-fresh, so it is the one line that
+             keeps its pivot. A description-only change names itself in the
+             clause but never takes the drift tone (ui/src/mcp.ts). -->
         <div class="hl-you">
           <span class="mcp-badge" :title="MCP_BADGE_TOOLTIP">MCP</span>
           <strong>{{ m.headline.text }}</strong>
@@ -1556,15 +1621,21 @@ watch(tab, (t) => {
             </h3>
             <p v-if="inboundEdges.length === 0" class="empty small">No inbound edges.</p>
             <div v-else class="edge-table">
+              <!-- The evidence the kit's table carries: calls in the window, drifted
+                   calls (red mono when any), last seen. The observed rate rides as a
+                   muted suffix on the call count and only when it is non-zero — a
+                   column of `0 /min` made a live install look dead. -->
               <div class="edge-head">
-                <span>peer host</span><span>observed RPM</span>
+                <span>peer host</span><span>calls</span><span>drift</span><span>last seen</span>
               </div>
               <div v-for="e in inboundEdges" :key="'i-' + e.peer_host" class="edge-row" :class="{ drift: e.drift_count > 0 }">
                 <span class="peer mono">
                   {{ e.peer_host }}
                   <span v-if="mcpHosts.has(e.peer_host)" class="mcp-badge" :title="MCP_BADGE_TOOLTIP">{{ mcpBadgeLabel(e.class) }}</span>
                 </span>
-                <span class="num">{{ fmtRPM(e.rpm) }}<span class="unit">/min</span></span>
+                <span class="num calls">{{ e.call_count }}<span v-if="e.rpm" class="unit">· {{ fmtRPM(e.rpm) }}/min</span></span>
+                <span class="num drift-n" :class="{ some: e.drift_count > 0 }">{{ e.drift_count }}</span>
+                <span class="num seen">{{ timeAgo(e.last_seen) }}</span>
               </div>
             </div>
           </div>
@@ -1581,7 +1652,7 @@ watch(tab, (t) => {
             <p v-if="outboundEdges.length === 0" class="empty small">No outbound edges.</p>
             <div v-else class="edge-table">
               <div class="edge-head named">
-                <span>provider</span><span>observed RPM</span><span></span>
+                <span>provider</span><span>calls</span><span>drift</span><span>last seen</span><span></span>
               </div>
               <!-- A NAME renders OVER the host, never instead of it — the registrable domain
                    stays visible (it is the identity; the name is decoration). An UNNAMED row
@@ -1619,7 +1690,9 @@ watch(tab, (t) => {
                       </button>
                     </span>
                   </span>
-                  <span class="num">{{ fmtRPM(e.rpm) }}<span class="unit">/min</span></span>
+                  <span class="num calls">{{ e.call_count }}<span v-if="e.rpm" class="unit">· {{ fmtRPM(e.rpm) }}/min</span></span>
+                  <span class="num drift-n" :class="{ some: e.drift_count > 0 }">{{ e.drift_count }}</span>
+                  <span class="num seen">{{ timeAgo(e.last_seen) }}</span>
                   <span class="edge-actions">
                     <!-- v1 phase 4. It sits FIRST because it is the only action
                          on this row that reaches the other org; Rename is
@@ -1688,7 +1761,7 @@ watch(tab, (t) => {
     </div>
 
     <!-- ───────────────────────── CONTRACTS ───────────────────────── -->
-    <div v-show="tab === 'contract'">
+    <div v-show="tab === 'contract'" class="panel">
       <div v-if="health?.cp_configured && connectStatus !== 'connected' && !connectBannerDismissed" class="connect-banner">
         <span>
           <strong>{{ connectStatus === 'pending' ? 'Confirm your contact' : 'Not connected' }}</strong> —
@@ -1742,7 +1815,9 @@ watch(tab, (t) => {
               <span v-if="cardOverCap(p)" class="tag warn">{{ CONTRACT_OVER_CAP_TAG }}</span>
               <!-- Tier-split chips — same taxonomy as the tab pills, so the sums always agree. -->
               <span v-if="cardBreakingCount(p)" class="tag drift">{{ breakingChipLabel(cardBreakingCount(p)) }}</span>
-              <span v-if="cardInfoCount(p)" class="tag warn" :title="cardInfoTitle(p)">{{ informationalChipLabel(cardInfoCount(p)) }}</span>
+              <span v-if="cardNonBreakingCount(p)" class="tag warn" :title="cardNonBreakingTitle(p)">{{ informationalChipLabel(cardNonBreakingCount(p)) }}</span>
+              <!-- A wording change is not a warning: steel outline, the row badge's own word. -->
+              <span v-if="cardDescriptionCount(p)" class="tag desc" :title="descriptionChipTitle(cardDescriptionCount(p))">{{ descriptionChipLabel(cardDescriptionCount(p)) }}</span>
               <span
                 v-if="!cardBreakingCount(p) && !cardInfoCount(p) && p.spec && cardValidatedCalls(p)"
                 class="tag ok"
@@ -1821,14 +1896,14 @@ watch(tab, (t) => {
           <article v-for="f in p.findings" :id="'finding-' + f.id" :key="f.id" class="finding nested" :class="{ acked: isAcked(f), highlight: f.id === highlightFindingId }">
             <div class="finding-head">
               <!-- definition_change rows carry the classifier's class badge (deck §3):
-                   BREAKING red filled · NON-BREAKING amber filled · DESCRIPTION amber outline —
-                   each badge matches the tab pill that counts it. -->
+                   BREAKING red · NON-BREAKING copper · DESCRIPTION steel — each
+                   badge matches the tab pill and the card chip that count it. -->
               <span
                 v-if="f.kind === 'definition_change'"
                 class="badge"
                 :class="{ breaking: definitionClass(f) === 'BREAKING', warning: definitionClass(f) === 'NON-BREAKING', description: definitionClass(f) === 'DESCRIPTION' }"
-              >{{ definitionClass(f) }}</span>
-              <span v-else class="badge" :class="f.severity">{{ f.severity }}</span>
+              ><svg class="hx sm" :class="badgeTone(f)" aria-hidden="true" focusable="false"><use href="#hxbolt" /></svg>{{ definitionClass(f) }}<svg class="hx sm" :class="badgeTone(f)" aria-hidden="true" focusable="false"><use href="#hxbolt" /></svg></span>
+              <span v-else class="badge" :class="f.severity"><svg class="hx sm" :class="badgeTone(f)" aria-hidden="true" focusable="false"><use href="#hxbolt" /></svg>{{ f.severity }}<svg class="hx sm" :class="badgeTone(f)" aria-hidden="true" focusable="false"><use href="#hxbolt" /></svg></span>
               <span class="endpoint">{{ f.endpoint }}</span>
               <span class="rule">{{ f.rule }}</span>
               <!-- Call counts belong to call-evidenced kinds only. A
@@ -1845,14 +1920,16 @@ watch(tab, (t) => {
             <!-- definition_change: their tools/list at T1 vs at T2 (deck §3).
                  DESCRIPTION rows render the diff PLAIN — a wording change is
                  not a severity diff. -->
-            <div v-if="f.kind === 'definition_change'" class="drift-row" :class="{ plain: definitionClass(f) === 'DESCRIPTION' }">
+            <!-- The snapshot labels carry a digest and a timestamp — machine
+                 identifiers, so `.snap` keeps the eyebrow's case (no uppercase). -->
+            <div v-if="f.kind === 'definition_change'" class="drift-row two" :class="{ plain: definitionClass(f) === 'DESCRIPTION' }">
               <div class="col">
-                <div class="k">{{ beforeColLabel(f.spec_version_from || '', snapshotTimes(f.detail).from) }}</div>
+                <div class="k snap">{{ beforeColLabel(f.spec_version_from || '', snapshotStamps(f.detail).from) }}</div>
                 <div class="v expected">{{ f.expected }}</div>
               </div>
               <div class="arrow">≠</div>
               <div class="col">
-                <div class="k">{{ afterColLabel(f.spec_version_to || '', snapshotTimes(f.detail).to) }}</div>
+                <div class="k snap">{{ afterColLabel(f.spec_version_to || '', snapshotStamps(f.detail).to) }}</div>
                 <div class="v actual">{{ f.actual }}</div>
               </div>
             </div>
@@ -1860,8 +1937,10 @@ watch(tab, (t) => {
                  `expected`/`actual` already ARE the two versions, so only the
                  labels change — neither side is "live", and there is no
                  location, because the change is in the documents. The `detail`
-                 paragraph below names the field the rule fired on. -->
-            <div v-else-if="f.kind === 'version-diff'" class="drift-row">
+                 paragraph below names the field the rule fired on. Plain ink on
+                 both sides: neither document is a verdict, and green is spent
+                 on reached verdicts only. -->
+            <div v-else-if="f.kind === 'version-diff'" class="drift-row two plain">
               <div class="col">
                 <div class="k">replaced</div>
                 <div class="v expected">{{ f.expected }}</div>
@@ -1888,7 +1967,7 @@ watch(tab, (t) => {
               </div>
             </div>
             <p class="detail" v-if="f.kind === 'definition_change'">
-              {{ defChangeDetail(snapshotTimes(f.detail).from, snapshotTimes(f.detail).to, providerNameFor(f)) }}
+              {{ defChangeDetail(snapshotStamps(f.detail).from, snapshotStamps(f.detail).to, providerNameFor(f)) }}
             </p>
             <p class="detail" v-else-if="f.detail">{{ f.detail }}</p>
 
@@ -1910,8 +1989,8 @@ watch(tab, (t) => {
 
             <div class="actions">
               <template v-if="threadsByFinding[f.id]">
-                <span class="chip" :class="{ attention: threadsByFinding[f.id].summary?.turn === 'fix_reported' || threadsByFinding[f.id].summary?.turn === 'replied_while_closed' }">
-                  {{ chipLabel(threadsByFinding[f.id]) }}
+                <span class="chip" :class="{ attention: chipAttention(threadsByFinding[f.id]) }">
+                  <svg class="hx sm" :class="chipAttention(threadsByFinding[f.id]) ? 'tone-accent' : 'tone-info'" aria-hidden="true" focusable="false"><use href="#hxbolt" /></svg>{{ chipLabel(threadsByFinding[f.id]) }}
                 </span>
                 <button type="button" class="btn small" :disabled="openingThread === threadsByFinding[f.id].thread_id" @click="openChipThread(threadsByFinding[f.id].thread_id)">
                   {{ openingThread === threadsByFinding[f.id].thread_id ? 'Opening…' : 'View thread' }}
@@ -2028,7 +2107,7 @@ watch(tab, (t) => {
     </div>
 
     <!-- ───────────────────────── THREADS ───────────────────────── -->
-    <div v-show="tab === 'threads'">
+    <div v-show="tab === 'threads'" class="panel">
       <div v-if="showAddressNudge" class="connect-banner info">
         <span>Reply notification emails can link straight back to the thread here. Add this collector's address to turn that on.</span>
         <span class="connect-banner-actions">
@@ -2050,7 +2129,7 @@ watch(tab, (t) => {
     </div>
 
     <!-- ───────────────────────── SETTINGS ───────────────────────── -->
-    <div v-show="tab === 'settings'">
+    <div v-show="tab === 'settings'" class="panel settings-grid">
       <section>
         <h2>Settings <small>this collector · {{ health?.collector_version }}</small></h2>
         <p v-if="health && !health.cp_configured" class="empty">
@@ -2084,7 +2163,7 @@ watch(tab, (t) => {
     </div>
 
     <!-- ───────────────────────── TRAFFIC ───────────────────────── -->
-    <div v-show="tab === 'traffic'">
+    <div v-show="tab === 'traffic'" class="panel">
       <section>
         <h2>
           Traffic <small>recent captured calls — redacted at source, read-only</small>
@@ -2163,12 +2242,20 @@ watch(tab, (t) => {
           </p>
 
           <template v-for="c in filteredCalls" :key="c.id">
+            <!-- A row that opens the call's detail is a control: in the tab
+                 order, a button to assistive tech, Enter / Space toggle it like
+                 the click does, and it draws the token focus ring. -->
             <div
               class="tr-row"
               :class="{ drift: isDrifted(c), open: expanded[c.id] }"
+              role="button"
+              tabindex="0"
+              :aria-expanded="!!expanded[c.id]"
               @click="toggle(c.id)"
+              @keydown.enter.prevent="toggle(c.id)"
+              @keydown.space.prevent="toggle(c.id)"
             >
-              <span class="c-when">
+              <span class="c-when" :title="c.captured_at">
                 <span class="chev">{{ expanded[c.id] ? '▾' : '▸' }}</span>
                 {{ humanTime(c.captured_at) }}
               </span>
@@ -2308,16 +2395,28 @@ watch(tab, (t) => {
       @created="onThreadCreated"
       @update:connect="onConnectUpdated"
     />
+    <footer class="foot">
+      <span>Flanj Collector · ELv2</span>
+      <span>Redacted at source · outbound only · UI on localhost</span>
+    </footer>
   </div>
 </template>
 
 <style>
-/* Palette: NONE of it lives here any more. `src/tokens.css` is the vendored copy
-   of the canonical Flanj token layer (docs/design/tokens.css, Blueprint) and is
-   imported ahead of this block in main.ts. This file holds layout and component
-   rules only — a hex literal appearing below is a bug, not a style choice, and
-   so is a custom property whose name the canonical file already defines
-   (src/tokens.test.ts scans for both).
+/* Blueprint collector kit (docs/design/kits/collector), bound straight to the
+   canonical tokens. Palette: NONE of it lives here. `src/tokens.css` is the
+   vendored copy of docs/design/tokens.css and is imported ahead of this block in
+   main.ts. This file holds layout and component rules only — a hex literal
+   below is a bug, and so is a custom property whose name the canonical file
+   already defines (src/tokens.test.ts scans for both). The kit's alias layer
+   (--bg, --panel, --cu …) and its font-name literals are dropped: every class
+   reads var(--ground), var(--surface), var(--accent), var(--f-mono) … directly.
+
+   The sheet: one 2px --rule frame around a 24px grid-paper ground. The header,
+   the tab strip and the footer are surface bands ruled off from the paper;
+   every panel, card and table sits on it in a 2px frame. Row separators, chip
+   outlines and cell dividers are the 1.5px hairline; the severity accent on a
+   row is a 4px inset stripe, on a headline card the 6px left rule.
 
    Green is the canonical --ok family and it is spent on REACHED VERDICTS only:
    `conforming`, `No drift detected`, a Connected state, the expected side of a
@@ -2325,441 +2424,524 @@ watch(tab, (t) => {
    tail, an inbound direction) never borrows it, because `.headline.neutral`
    below depends on green meaning "validated and clean" and nothing else.
 
-   Theme (ux-design-v2 §3.3) is unchanged by the token adoption: LIGHT is the
-   base, dark applies under [data-flanj-theme="dark"] ONLY, and there is no
-   OS-following state. tokens.css does ship a `prefers-color-scheme` block for
-   surfaces whose toggle is optional — index.html stamps data-flanj-theme="light" on
-   <html> so it never fires here, exactly the escape hatch tokens.css documents.
-
    Severity is the product-fixed triad and nothing else may borrow it:
-   --sev-breaking (red) / --sev-warning (copper) / --sev-info (neutral), each
-   paired with its own -wash / -bolt / -contrast / -edge role. --accent is NEVER
-   semantic. Blueprint makes the warning tier the SAME copper as the accent on
-   purpose, so hue alone can no longer say "warning": every --sev-warning* use
-   below is a finding-tier renderer that carries a label or an outline (badge,
-   tag, tab count, binding checklist, over-cap line), and every attention state
-   that is not a finding (pending pill, connect banner, occurrence count, thread
-   chip, fix-reported status) uses --accent* instead. Corners are square
-   (--radius: 0) as a brand decision. */
+   --sev-breaking (red) / --sev-warning (copper) / --sev-info (steel). Blueprint
+   makes the warning tier the SAME copper as the accent on purpose, so hue alone
+   can never say "warning": every --sev-warning* use below renders a finding
+   tier that carries a label or an outline (badge, tag, tab count, binding
+   checklist, over-cap line), and every attention state that is not a finding
+   (pending pill, connect banner, thread chip, fix-reported status) uses
+   --accent*. Text takes the -ink role of its family; text at or below 14px
+   never uses --ink-faint (the muted text role here is --ink-soft).
+
+   Theme (ux-design-v2 §3.3): LIGHT is the base, dark applies under
+   [data-flanj-theme="dark"] ONLY, and there is no OS-following state —
+   index.html stamps data-flanj-theme="light" so tokens.css's
+   prefers-color-scheme block never fires here. Corners are square (--radius:
+   0) as a brand decision. Motion is the lift on hover (--lift + the hard offset
+   shadow) and colour fades; prefers-reduced-motion keeps only the fades. */
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--ground); color: var(--ink); font: 15px/1.5 var(--font-sans); }
-.page { max-width: 1040px; margin: 0 auto; padding: 1.5rem 1.25rem 4rem; }
-.topbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
-.brand { display: inline-flex; align-items: center; gap: 0.5rem; font-weight: 700; letter-spacing: -0.02em; font-size: 1.2rem; color: var(--ink); }
-.brand-mark { width: 24px; height: 24px; flex: none; }
-.brand-product { color: var(--ink-soft); font-weight: 500; margin-left: 0.35rem; }
-.meta { display: flex; gap: 0.5rem; flex-wrap: wrap; }
-.pill { background: var(--surface-sunk); border: 1px solid var(--rule); color: var(--ink-soft); border-radius: var(--radius); padding: 0.15rem 0.6rem; font-size: 0.8rem; }
+html { background: var(--ground); }
+body { margin: 0; background: var(--ground); color: var(--ink); font: 14px/1.5 var(--f-sans); }
+.page {
+  max-width: 1140px; margin: 24px auto;
+  border: var(--border-w) solid var(--rule); border-radius: var(--radius);
+  color: var(--ink); background-color: var(--ground);
+  background-image: linear-gradient(var(--grid-line) 1px, transparent 1px), linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+  background-size: var(--grid-size-dense) var(--grid-size-dense);
+}
+.mono { font-family: var(--f-mono); }
+code { font-family: var(--f-mono); }
+
+/* The hex bolt. One inline <symbol id="hxbolt"> sits at the top of the
+   template; every use is `<svg class="hx [sm] tone-*"><use href="#hxbolt"/>`.
+   currentColor fills the inner hex, --l the outer ring, --stroke the outline;
+   the tone classes bind all three to a token family, so no bolt carries an
+   inline style. A bolt is a mark, not text, so it takes the bare family colour. */
+.hx-defs { position: absolute; width: 0; height: 0; overflow: hidden; }
+.hx { width: 14px; height: 14px; flex: none; overflow: visible; --stroke: var(--ink); --l: var(--sev-info-bolt); color: var(--sev-info); }
+.hx.sm { width: 9px; height: 9px; }
+.hx-outer { fill: var(--l); stroke: var(--stroke); }
+.hx-inner { fill: currentColor; stroke: var(--stroke); }
+.hx.tone-ok { color: var(--ok); --l: var(--ok-bolt); }
+.hx.tone-breaking { color: var(--sev-breaking); --l: var(--sev-breaking-bolt); }
+.hx.tone-warning { color: var(--sev-warning); --l: var(--sev-warning-bolt); }
+.hx.tone-accent { color: var(--accent); --l: var(--accent-bolt); }
+.hx.tone-info { color: var(--sev-info); --l: var(--sev-info-bolt); }
+
+/* Sheet header: inline mono mark + wordmark + product, the address line in
+   mono, then the org pill and the connect pill. */
+.topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 12px 18px; border-bottom: var(--border-w) solid var(--rule); background: var(--surface); }
+.brand { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; font-weight: 700; letter-spacing: -0.01em; font-size: 16px; color: var(--ink); }
+.brand-mark { width: 30px; height: 30px; flex: none; }
+.brand-product { color: var(--ink-soft); font-weight: 500; }
+.brand-addr { font-family: var(--f-mono); font-size: 11px; font-weight: 400; letter-spacing: 0.06em; color: var(--ink-soft); margin-left: 8px; padding-left: 12px; border-left: var(--border-w-hair) solid var(--rule); }
+.meta { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+/* Pills are mono micro-labels: uppercase at 10.5px, a hairline outline. */
+.pill { display: inline-flex; align-items: center; gap: 7px; font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.1em; text-transform: uppercase; padding: 4px 9px; border: var(--border-w-hair) solid var(--rule); border-radius: var(--radius); color: var(--ink-soft); background: var(--surface); }
 /* Attention states (not configured, pending) are the accent, outlined and
    labelled — the warning tier belongs to findings only. */
 .pill.warn { color: var(--accent-ink); border-color: var(--accent-ink); }
-.banner { margin: 1rem 0 0; }
+/* A pill that carries a NAME someone typed (the org pill) keeps that name's own
+   case: the uppercase mono treatment is for labels. "CustomerX" is how the
+   provider sees it on every thread, and e2e reads it verbatim. */
+.pill-name { text-transform: none; letter-spacing: 0.02em; }
+/* Connected is a reached state: green, with the green bolt leading it. */
+.pill.ok { color: var(--ok-ink); border-color: var(--ok); }
+.pill-btn { cursor: pointer; transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease); }
+.pill-btn:hover { color: var(--ink); }
+.pill-link { text-decoration: none; }
+.pill-link:hover { text-decoration: underline; }
+.pill-out { font-size: 0.9em; opacity: 0.75; }
 
-/* Tabs */
-.tabs { display: flex; gap: 0.25rem; margin: 1.35rem 0 0.5rem; border-bottom: 1px solid var(--rule); }
-.tabs button { background: transparent; border: 0; border-bottom: 2px solid transparent; color: var(--ink-soft); font: inherit; font-weight: 600; padding: 0.55rem 0.9rem; cursor: pointer; display: inline-flex; align-items: center; gap: 0.45rem; margin-bottom: -1px; }
+/* Banners that sit between the header and the tab strip. */
+.banner { margin: 12px 18px 0; padding: 10px 14px; border: var(--border-w) solid var(--sev-breaking); border-left-width: var(--border-w-stripe-lg); border-radius: var(--radius); background: var(--surface); font-size: 13.5px; }
+.error { color: var(--sev-breaking-ink); }
+/* The one-time theme-flip notice sits above the tab strip, not inside a tab. */
+.theme-flip-banner { margin: 12px 18px 0; }
+
+/* Tabs: mono uppercase on a surface band; the active tab draws a 2px ink
+   underline over the band's rule with the copper hairline just beneath it. */
+.tabs { display: flex; flex-wrap: wrap; margin: 0; padding: 0 18px; border-bottom: var(--border-w) solid var(--rule); background: var(--surface); }
+.tabs button { position: relative; background: none; border: 0; border-bottom: var(--border-w) solid transparent; margin-bottom: calc(-1 * var(--border-w)); cursor: pointer; font: 500 11.5px/1.5 var(--f-mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-soft); padding: 12px 16px; display: inline-flex; align-items: center; gap: 8px; transition: color var(--dur-fast) var(--ease); }
 .tabs button:hover { color: var(--ink); }
-.tabs button.active { color: var(--ink); border-bottom-color: var(--accent-ink); }
-.tab-count { background: var(--surface-sunk); border: 1px solid var(--rule); color: var(--ink-soft); border-radius: var(--radius); font-size: 0.72rem; font-weight: 700; padding: 0.02rem 0.4rem; min-width: 1.2rem; text-align: center; }
+.tabs button.active { color: var(--ink); border-bottom-color: var(--ink); }
+.tabs button.active::before { content: ''; position: absolute; left: 0; right: 0; bottom: calc(-1 * var(--border-w)); height: var(--border-w-hair); background: var(--accent); }
+.tab-right { margin-left: auto; }
+/* Square count chips: red = breaking (act), copper = review — each carries its
+   number, so the two filled chips never rely on hue alone. */
+.tab-count { font: 500 10px/1.4 var(--f-mono); letter-spacing: 0; text-transform: none; padding: 1px 6px; min-width: 20px; text-align: center; border: var(--border-w-hair) solid var(--rule); border-radius: var(--radius); color: var(--ink-soft); background: var(--surface); }
 .tab-count.bad { background: var(--sev-breaking); border-color: var(--sev-breaking); color: var(--sev-breaking-contrast); }
 .tab-count.warn { background: var(--sev-warning); border-color: var(--sev-warning); color: var(--sev-warning-contrast); }
+/* Every row in the count is a DESCRIPTION change: the steel outline the row
+   badge wears, not the warning fill — a wording change is not a warning. */
+.tab-count.warn.desc { background: var(--surface); border-color: var(--ink-soft); color: var(--ink-soft); }
+.tab-dot { width: 8px; height: 8px; border-radius: var(--radius); background: var(--accent); display: inline-block; }
+.tab-dot.disconnected { background: var(--ink-soft); }
 
-/* Health */
-.headline { margin: 1rem 0; padding: 1rem 1.15rem; border-radius: var(--radius); border: 1px solid var(--rule); background: var(--surface); }
-.headline.drift { border-color: var(--sev-breaking); background: var(--sev-breaking-wash); }
-.hl-you { font-size: 1.15rem; }
-.hl-sub { color: var(--ink-soft); font-size: 0.85rem; margin-top: 0.3rem; }
-.headline.drift .hl-you strong { color: var(--sev-breaking); }
-.headline.ok .hl-you strong { color: var(--ok-ink); }
-/* Neutral: nothing has been validated yet. Deliberately uncoloured — the two
-   coloured tones are verdicts, and this state has not reached one. */
-.headline.neutral .hl-you strong { color: var(--ink-soft); font-weight: 600; }
-.hint { color: var(--ink-soft); font-size: 0.88rem; margin-top: 1rem; }
-
-/* Shared */
-h2 { font-size: 1rem; margin: 1.25rem 0 0.75rem; border-bottom: 1px solid var(--rule); padding-bottom: 0.4rem; }
-h2 small { color: var(--ink-soft); font-weight: 400; margin-left: 0.5rem; }
+/* Panels and section headings. A heading is a mono eyebrow with its scope in
+   sentence-case sans beside it. */
+.panel { padding: 20px 18px 24px; }
+.panel > * + section:not(.headline) { margin-top: 22px; }
+h2 { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 12px; padding: 0; border: 0; font: 500 11px/1.5 var(--f-mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-soft); }
+h2 small { font: 400 12.5px/1.5 var(--f-sans); letter-spacing: 0.04em; text-transform: none; color: var(--ink-soft); margin: 0; }
 .empty { color: var(--ink-soft); }
-.mono { font-family: var(--font-mono); }
-code { font-family: var(--font-mono); }
+.empty.small { font-size: 13px; }
+.hint { color: var(--ink-soft); font-size: 12.5px; margin: 16px 0 0; }
+.hint-inline { color: var(--ink-soft); font-size: 12.5px; }
+.small-err { font-size: 12.5px; }
 
-/* Contract findings */
-.finding { background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius); padding: 1rem 1.1rem; margin-bottom: 0.9rem; }
-.finding-head { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
-.badge { text-transform: uppercase; font-size: 0.68rem; letter-spacing: 0.05em; padding: 0.15rem 0.45rem; border-radius: var(--radius); font-weight: 700; }
-.badge.breaking { background: var(--sev-breaking); color: var(--sev-breaking-contrast); }
-.badge.warning { background: var(--sev-warning); color: var(--sev-warning-contrast); }
-/* INFO is the neutral tier of the product-fixed triad. It used to be filled with
-   --accent; accent is never semantic, and a blue "info" badge sitting beside a red
-   and a yellow one read as a fourth severity. --sev-info IS the neutral tier. */
-.badge.info { background: var(--sev-info); color: var(--sev-info-contrast); }
-/* DESCRIPTION: amber OUTLINE, never a fill — the tier a description change maps
-   to in the canonical vocabulary is `warning` ("the wording an agent steers on
-   changed"), and the outline keeps it distinguishable from a filled WARNING badge
-   by shape as well as hue. */
-.badge.description { background: transparent; color: var(--sev-warning-ink); border: 1px solid var(--sev-warning-ink); }
-.endpoint { font-weight: 600; }
-.rule { color: var(--ink-soft); font-family: var(--font-mono); font-size: 0.85rem; }
-.drift-row { display: flex; align-items: stretch; gap: 0.75rem; margin-top: 0.85rem; flex-wrap: wrap; }
-.col { flex: 1; min-width: 140px; background: var(--surface-sunk); border: 1px solid var(--rule); border-radius: var(--radius); padding: 0.5rem 0.65rem; }
-.col .k { font-size: 0.72rem; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.04em; }
-.col .v { margin-top: 0.2rem; font-family: var(--font-mono); word-break: break-word; }
-.v.expected { color: var(--ok-ink); }
-.v.actual { color: var(--sev-breaking); }
-/* DESCRIPTION rows: a wording change is not a severity diff — plain ink. */
-.drift-row.plain .v.expected, .drift-row.plain .v.actual { color: var(--ink); }
-.arrow { align-self: center; color: var(--ink-soft); font-size: 1.2rem; }
-.detail { color: var(--ink-soft); margin: 0.75rem 0 0; }
-.corr { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; margin-top: 0.85rem; padding-top: 0.75rem; border-top: 1px dashed var(--rule); }
-.corr-title { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-soft); }
-.corr-k { font-size: 0.82rem; color: var(--ink-soft); }
-.corr-k code { color: var(--accent-ink); background: var(--surface-sunk); padding: 0.1rem 0.35rem; border-radius: var(--radius); }
-.actions { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.9rem; }
-/* Buttons (shared by the Connect panel, Flag sheet and Threads tab) */
-.btn { background: var(--surface-sunk); color: var(--ink); border: 1px solid var(--rule); border-radius: var(--radius); padding: 0.42rem 0.85rem; font: inherit; font-size: 0.88rem; font-weight: 600; cursor: pointer; }
-.btn:hover { border-color: var(--ink-soft); }
-.btn.primary { background: var(--accent); color: var(--accent-contrast); border-color: var(--accent); }
-.btn.primary:hover { filter: brightness(1.08); }
-.btn.ghost { background: transparent; color: var(--ink-soft); }
-.btn.ghost:hover { color: var(--ink); }
-.btn.small { padding: 0.28rem 0.65rem; font-size: 0.8rem; }
+/* Headline cards: a 6px left rule carries the tone, a bolt leads the line.
+   Three tones, not two — `neutral` is the install where nothing has been
+   validated yet, and it must read as neither the green all-clear nor the red
+   drift banner (ui/src/headline.ts). */
+.headline { display: grid; grid-template-columns: auto 1fr; gap: 16px; align-items: start; margin: 0 0 14px; padding: 16px 18px; border: var(--border-w) solid var(--rule); border-left-width: var(--border-w-stripe-lg); border-radius: var(--radius); background: var(--surface); }
+.headline.drift { border-left-color: var(--sev-breaking); }
+.headline.ok { border-left-color: var(--ok); }
+.headline.neutral { border-left-color: var(--rule); }
+.headline > .hx { margin-top: 6px; }
+.hl-you { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
+.headline.drift .hl-you strong { color: var(--sev-breaking-ink); }
+.headline.ok .hl-you strong { color: var(--ok-ink); }
+.headline.neutral .hl-you strong { color: var(--ink-soft); }
+.hl-sub { color: var(--ink-soft); font-size: 12.5px; margin-top: 4px; }
+.hl-sub code { background: var(--surface-sunk); padding: 1px 6px; }
+/* The MCP line is the deck's whole sentence, so it steps down one size. */
+.mcp-headline .hl-you { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 15px; }
+.mcp-headline .mcp-badge { margin-left: 0; }
+
+/* Local notices band (v0.5): visible to you only, never a flag control. */
+.local-notices { margin: 0 0 14px; padding: 14px 18px; border: var(--border-w) solid var(--rule); border-radius: var(--radius); background: var(--surface); }
+.ln-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.ln-title { font-weight: 700; font-size: 13.5px; }
+.ln-sub { color: var(--ink-soft); font-size: 12.5px; }
+.ln-list { margin: 8px 0 0; padding-left: 18px; }
+.ln-item { color: var(--ink-soft); font-size: 13.5px; margin-top: 4px; }
+
+/* Buttons (shared by the Connect panel, Flag sheet, uploader and Threads tab):
+   a 2px ink outline that lifts on hover under the hard offset shadow; primary
+   is the ink fill; ghost keeps the rule outline in muted ink. */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; background: var(--surface); color: var(--ink); border: var(--border-w) solid var(--ink); border-radius: var(--radius); padding: 6px 12px; font: 600 12.5px/1.5 var(--f-sans); cursor: pointer; transition: transform var(--dur) var(--ease-lift), box-shadow var(--dur) var(--ease-lift), color var(--dur-fast) var(--ease), background-color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease); }
+.btn:hover { transform: var(--lift); box-shadow: var(--shadow-lift); }
+.btn:active { transform: none; box-shadow: none; }
+.btn.primary { background: var(--ink); color: var(--ground); border-color: var(--ink); }
+.btn.ghost { border-color: var(--rule); color: var(--ink-soft); }
+.btn.ghost:hover { color: var(--ink); box-shadow: var(--shadow-lift-soft); }
+.btn.small { padding: 4px 10px; font-size: 12px; }
 .btn.attention { color: var(--accent-ink); border-color: var(--accent-ink); }
-.btn:disabled { opacity: 0.6; cursor: default; }
+.btn:disabled { opacity: 0.5; cursor: default; transform: none; box-shadow: none; }
 /* Focus: one ring for every control, from the token layer — the 2px ink outline
    at 2px offset. :focus-visible only, so a mouse click on a button draws
    nothing while keyboard focus always does; text fields draw it on every focus,
    which is what :focus-visible means for editable elements. Scoped SFCs repeat
-   the two declarations for their own controls (src/tokens.test.ts lists them). */
+   the two declarations for their own controls (src/tokens.test.ts lists them;
+   the uploader's live in ContractUploader.vue). */
 .btn:focus-visible, .tabs button:focus-visible, .seg button:focus-visible, .pill-btn:focus-visible,
-.live-btn:focus-visible, .pending-bar:focus-visible, .tr-search:focus-visible, .tr-select:focus-visible,
+.live-btn:focus-visible, .pending-bar:focus-visible, .tr-search:focus-visible, .tr-select:focus-visible, .tr-row:focus-visible,
 .tr-clear:focus-visible, .tr-chk input:focus-visible, .doc-link:focus-visible, .edge-contract-link:focus-visible,
-.uploader-host input:focus-visible, .dropzone:focus-visible, .pill-link:focus-visible {
+.pill-link:focus-visible, .uncovered-toggle:focus-visible, .edge-rename-input:focus-visible, .edge-suggest input:focus-visible {
   outline: var(--focus-ring); outline-offset: var(--focus-offset);
 }
-/* A thread chip is a state, not a verdict: neutral ink, and `attention` lifts it to the accent. */
-.chip { display: inline-flex; align-items: center; font-size: 0.8rem; font-weight: 600; color: var(--ink-soft); border: 1px solid var(--ink-soft); border-radius: var(--radius); padding: 0.15rem 0.6rem; }
+/* A thread chip is a state, not a verdict: muted ink with a steel bolt, and
+   `attention` lifts it to the accent. */
+.chip { display: inline-flex; align-items: center; gap: 8px; font: 500 11px/1.5 var(--f-mono); letter-spacing: 0.06em; color: var(--ink-soft); border: var(--border-w-hair) solid var(--ink-soft); border-radius: var(--radius); padding: 4px 9px; }
 .chip.attention { color: var(--accent-ink); border-color: var(--accent-ink); }
-.hint-inline { color: var(--ink-soft); font-size: 0.82rem; }
-.small-err { font-size: 0.82rem; }
-.pill-btn { cursor: pointer; font: inherit; font-size: 0.8rem; }
-.pill.ok { color: var(--ok-ink); border-color: var(--ok-ink); }
-.tab-right { margin-left: auto; }
-.tab-dot { width: 8px; height: 8px; border-radius: var(--radius); background: var(--accent); display: inline-block; }
-.tab-dot.disconnected { background: var(--ink-soft); }
-.connect-banner { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin: 0.75rem 0 0; padding: 0.6rem 0.9rem; border: 1px solid var(--accent); border-radius: var(--radius); background: var(--surface); font-size: 0.88rem; }
-.connect-banner-actions { display: flex; gap: 0.5rem; }
+/* Connect banners inside a panel: the accent frames an attention state; `info`
+   is a plain framed note. */
+.connect-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 0 0 12px; padding: 10px 14px; border: var(--border-w) solid var(--accent); border-left-width: var(--border-w-stripe-lg); border-radius: var(--radius); background: var(--surface); font-size: 13.5px; }
+.connect-banner-actions { display: flex; gap: 8px; }
 .connect-banner.info { border-color: var(--rule); color: var(--ink-soft); }
-/* The one-time theme-flip notice sits above the tab strip, not inside a tab. */
-.theme-flip-banner { margin-top: 1rem; }
-.error { color: var(--sev-breaking); }
 
-/* Traffic toolbar: search + facet filters + live/pause control */
-.tr-toolbar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; padding: 0.6rem 0; background: var(--ground); }
-.tr-search { flex: 1 1 240px; min-width: 180px; background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius); color: var(--ink); font: inherit; font-size: 0.88rem; padding: 0.4rem 0.7rem; }
+/* Traffic toolbar: a framed band — search + facet filters + the live control.
+   Sticky, so the filters stay in reach while the tail scrolls (wide layouts
+   only — at phone width it is a third of the viewport, so it scrolls away). */
+.tr-toolbar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 12px; padding: 10px 12px; border: var(--border-w) solid var(--rule); border-radius: var(--radius); background: var(--surface); }
+.tr-search { flex: 1 1 220px; min-width: 160px; background: var(--surface); border: var(--border-w) solid var(--rule); border-radius: var(--radius); color: var(--ink); font: inherit; font-size: 13px; padding: 7px 10px; transition: border-color var(--dur-fast) var(--ease); }
 .tr-search::placeholder { color: var(--ink-soft); }
-.tr-search:focus, .tr-select:focus { border-color: var(--accent); }
-.tr-select { background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius); color: var(--ink); font: inherit; font-size: 0.82rem; padding: 0.38rem 0.5rem; }
-.tr-chk { display: inline-flex; align-items: center; gap: 0.35rem; color: var(--ink-soft); font-size: 0.82rem; cursor: pointer; white-space: nowrap; user-select: none; }
-.tr-chk input { accent-color: var(--accent-ink); }
-.tr-clear { background: transparent; border: 1px solid var(--rule); border-radius: var(--radius); color: var(--ink-soft); font: inherit; font-size: 0.8rem; padding: 0.3rem 0.6rem; cursor: pointer; }
-.tr-clear:hover { color: var(--ink); border-color: var(--ink-soft); }
-.tr-count { color: var(--ink-soft); font-size: 0.8rem; font-variant-numeric: tabular-nums; white-space: nowrap; margin-left: auto; }
+.tr-search:focus, .tr-select:focus { border-color: var(--ink); }
+.tr-select { background: var(--surface); border: var(--border-w) solid var(--rule); border-radius: var(--radius); color: var(--ink); font: inherit; font-size: 12.5px; padding: 7px 8px; }
+.tr-chk { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-soft); font-size: 12.5px; cursor: pointer; white-space: nowrap; user-select: none; }
+.tr-chk input { accent-color: var(--ink); }
+.tr-clear { background: var(--surface); border: var(--border-w) solid var(--rule); border-radius: var(--radius); color: var(--ink-soft); font: 600 12px/1.5 var(--f-sans); padding: 4px 10px; cursor: pointer; transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease); }
+.tr-clear:hover { color: var(--ink); border-color: var(--ink); }
+.tr-count { font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.06em; color: var(--ink-soft); font-variant-numeric: tabular-nums; white-space: nowrap; margin-left: auto; }
 /* Live / paused is a stream state, not a verdict and not a warning: the accent
-   carries `live` (pulsing dot), muted ink carries `paused`, and the label says
-   which — green is reserved for reached verdicts. */
-.live-btn { display: inline-flex; align-items: center; gap: 0.4rem; background: var(--surface); border: 1px solid var(--accent-ink); border-radius: var(--radius); color: var(--accent-ink); font: inherit; font-size: 0.8rem; font-weight: 700; padding: 0.3rem 0.75rem; cursor: pointer; white-space: nowrap; }
-.live-dot { width: 8px; height: 8px; border-radius: var(--radius); background: var(--accent); animation: live-pulse 1.6s ease-in-out infinite; }
+   carries `live` (a pulsing hex), muted ink carries `paused`, and the label
+   says which — green is reserved for reached verdicts. */
+.live-btn { display: inline-flex; align-items: center; gap: 8px; background: var(--surface); border: var(--border-w) solid var(--accent-ink); border-radius: var(--radius); color: var(--accent-ink); font: 600 11px/1.5 var(--f-mono); letter-spacing: 0.1em; text-transform: uppercase; padding: 6px 11px; cursor: pointer; white-space: nowrap; transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease); }
+.live-dot { width: 8px; height: 8px; background: var(--accent); clip-path: polygon(25% 0, 75% 0, 100% 50%, 75% 100%, 25% 100%, 0 50%); animation: live-pulse 1.6s ease-in-out infinite; }
 .live-btn.paused { border-color: var(--ink-soft); color: var(--ink-soft); }
 .live-btn.paused .live-dot { background: var(--ink-soft); animation: none; }
-@keyframes live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
-.pending-bar { display: block; width: 100%; background: var(--surface-sunk); border: 1px solid var(--accent-ink); border-radius: var(--radius); color: var(--accent-ink); font: inherit; font-size: 0.82rem; font-weight: 700; padding: 0.45rem 0.75rem; margin: 0 0 0.5rem; cursor: pointer; text-align: center; }
-.pending-bar:hover { background: var(--surface); }
-.tr-nomatch { display: flex; align-items: center; gap: 0.6rem; margin: 0; padding: 1rem; }
+@keyframes live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.2; } }
+.pending-bar { display: block; width: 100%; background: var(--surface); border: var(--border-w) solid var(--accent-ink); border-radius: var(--radius); color: var(--accent-ink); font: 600 12.5px/1.5 var(--f-sans); padding: 8px 12px; margin: 0 0 12px; cursor: pointer; text-align: center; transition: transform var(--dur) var(--ease-lift), box-shadow var(--dur) var(--ease-lift); }
+.pending-bar:hover { transform: var(--lift); box-shadow: var(--shadow-lift-soft); }
+.tr-nomatch { display: flex; align-items: center; gap: 10px; margin: 0; padding: 16px 14px; }
 
-/* Traffic table */
-.traffic { border: 1px solid var(--rule); border-radius: var(--radius); overflow: hidden; background: var(--surface); }
+/* Traffic table: a framed table; mono uppercase heads on the sunk surface,
+   hairline row separators, the drift stripe inset on the row. */
+.traffic { border: var(--border-w) solid var(--rule); border-radius: var(--radius); background: var(--surface); }
 .tr-head, .tr-row {
   display: grid;
   grid-template-columns: 1.15fr 1.9fr 1.35fr 0.55fr 1.4fr 0.9fr;
-  gap: 0.65rem;
+  gap: 10px;
   align-items: center;
-  padding: 0.55rem 0.9rem;
+  padding: 10px 14px;
 }
-.tr-head { color: var(--ink-soft); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--rule); background: var(--surface-sunk); }
-.tr-row { border-top: 1px solid var(--rule); cursor: pointer; font-size: 0.9rem; }
-.tr-row:first-child { border-top: 0; }
+.tr-head { font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-soft); border-bottom: var(--border-w) solid var(--rule); background: var(--surface-sunk); }
+.tr-row { border-top: var(--border-w-hair) solid var(--rule-soft); cursor: pointer; font-size: 13.5px; transition: background-color var(--dur-fast) var(--ease); }
+.tr-head + .tr-row, .tr-head + .tr-nomatch + .tr-row { border-top: 0; }
 .tr-row:hover { background: var(--surface-sunk); }
 .tr-row.open { background: var(--surface-sunk); }
-.tr-row.drift { box-shadow: inset 3px 0 0 var(--sev-breaking); }
-.chev { color: var(--ink-soft); display: inline-block; width: 1rem; }
-.c-when { color: var(--ink-soft); white-space: nowrap; }
-.c-call { display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
-.method { font-weight: 700; font-size: 0.72rem; padding: 0.1rem 0.4rem; border-radius: var(--radius); background: var(--surface-sunk); border: 1px solid var(--rule); color: var(--ink-soft); text-transform: uppercase; }
-/* Method chips are NEUTRAL. They used to borrow the palette — POST green, GET
-   accent, DELETE the severity red — which put a `breaking` red on a DELETE that
-   was behaving perfectly. Severity is its own triad and nothing else may spend
-   it; the verb itself is the distinguisher, and it is already uppercase mono. */
-.route { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.status-code { font-family: var(--font-mono); }
-.status-code.err { color: var(--sev-breaking); }
-.c-corr { display: flex; flex-direction: column; font-size: 0.78rem; color: var(--ink); min-width: 0; }
-.c-corr span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.c-corr .dim { color: var(--ink-soft); }
-.tag { font-size: 0.72rem; font-weight: 700; padding: 0.12rem 0.5rem; border-radius: var(--radius); text-transform: uppercase; letter-spacing: 0.03em; }
-.tag.ok { color: var(--ok-ink); border: 1px solid var(--ok-ink); }
-.tag.drift { background: var(--sev-breaking); color: var(--sev-breaking-contrast); }
-.tag.warn { background: var(--sev-warning); color: var(--sev-warning-contrast); }
-.tag.none { color: var(--ink-soft); border: 1px solid var(--rule); }
+.tr-row.drift { box-shadow: inset var(--border-w-stripe) 0 0 var(--sev-breaking); }
+.chev { color: var(--ink-soft); display: inline-block; width: 16px; }
+/* Per-cell rules are scoped to ROWS: the head's cells share the same class
+   names and must keep the head's one register (mono 10.5px, --ink-soft). */
+.tr-row .c-when { color: var(--ink-soft); white-space: nowrap; font-family: var(--f-mono); font-size: 12.5px; }
+.tr-row .c-call { display: flex; align-items: center; gap: 8px; min-width: 0; }
+/* Method chips are NEUTRAL mono micro-labels. They used to borrow the palette —
+   POST green, GET accent, DELETE the severity red — which put a `breaking` red
+   on a DELETE that was behaving perfectly. The verb is the distinguisher; the
+   MCP TOOL chip takes the ink outline. */
+.method { font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; padding: 2px 7px; border: var(--border-w-hair) solid var(--rule); border-radius: var(--radius); color: var(--ink-soft); white-space: nowrap; }
+.method.tool { color: var(--ink); border-color: var(--ink); }
+.route { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.status-code { font-family: var(--f-mono); font-size: 13px; }
+.status-code.err { color: var(--sev-breaking-ink); }
+.tr-row .c-corr { display: flex; flex-direction: column; font-size: 12px; color: var(--ink); min-width: 0; }
+.tr-row .c-corr span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tr-row .c-corr .dim { color: var(--ink-soft); }
+/* Contract marks: `conforming` is the only green — a reached verdict. `drifted`
+   is the red fill, `not checked` / `internal` the muted outline. */
+.tag { display: inline-block; white-space: nowrap; font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; padding: 2px 7px; border: var(--border-w-hair) solid var(--rule); border-radius: var(--radius); color: var(--ink-soft); }
+.tag.ok { color: var(--ok-ink); border-color: var(--ok); }
+.tag.drift { background: var(--sev-breaking); border-color: var(--sev-breaking); color: var(--sev-breaking-contrast); }
+.tag.warn { background: var(--sev-warning); border-color: var(--sev-warning); color: var(--sev-warning-contrast); }
+/* `N DESCRIPTION`: the row badge's steel outline — one vocabulary per class. */
+.tag.desc { color: var(--ink-soft); border-color: var(--ink-soft); }
+.tag.none { color: var(--ink-soft); border-color: var(--rule); }
 
-/* Traffic counterparty cell */
-.c-peer { display: flex; align-items: center; gap: 0.45rem; min-width: 0; }
-.dir-chip { font-size: 0.64rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; border-radius: var(--radius); padding: 0.08rem 0.35rem; flex: none; }
-.dir-chip.out { color: var(--accent-ink); border: 1px solid var(--accent-ink); }
-/* Direction is a fact, not a verdict: `out` is the accent, `in` is muted ink, and
-   the uppercase label is what tells them apart — never green. */
-.dir-chip.in { color: var(--ink-soft); border: 1px solid var(--ink-soft); }
-.peer-host { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-size: 0.82rem; }
-/* Named row: the host demotes to the same under-line treatment the Edges panel
-   gives it — still there, still selectable, just no longer the headline. An
-   UNNAMED row keeps the rule above untouched, i.e. renders exactly as before. */
+/* Traffic counterparty cell. Direction is a fact, not a verdict: `out` is the
+   accent, `in` is muted ink, and the uppercase label tells them apart. */
+.tr-row .c-peer { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.dir-chip { font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; border: var(--border-w-hair) solid currentColor; border-radius: var(--radius); padding: 1px 6px; flex: none; }
+.dir-chip.out { color: var(--accent-ink); }
+.dir-chip.in { color: var(--ink-soft); }
+.peer-host { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-size: 12.5px; }
 
-/* Contract cards (self + provider) */
-.provider { background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius); padding: 1rem 1.1rem; margin-bottom: 0.9rem; }
-.provider.self { border-color: var(--accent); }
-.prov-head { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
-.prov-name { font-weight: 700; font-size: 1.02rem; }
-.prov-host { color: var(--ink-soft); font-size: 0.85rem; }
-.fmt-badge { text-transform: uppercase; font-size: 0.66rem; letter-spacing: 0.05em; font-weight: 700; color: var(--accent-ink); border: 1px solid var(--accent-ink); border-radius: var(--radius); padding: 0.1rem 0.4rem; }
-.prov-ver { color: var(--ink-soft); font-family: var(--font-mono); font-size: 0.85rem; }
-.prov-status { margin-left: auto; }
-.prov-links { display: flex; align-items: center; gap: 0.9rem; flex-wrap: wrap; margin-top: 0.65rem; }
-.doc-link { color: var(--accent-ink); font-size: 0.85rem; text-decoration: none; border: 1px solid var(--rule); border-radius: var(--radius); padding: 0.28rem 0.7rem; background: var(--surface-sunk); }
-.doc-link:hover { border-color: var(--accent); }
-.prov-meta { color: var(--ink-soft); font-size: 0.8rem; }
-/* The evidence count rides in the same muted channel as provenance — it is a
-   fact about this card, not a warning, and zero must not be dressed as one. */
-.prov-meta.evidence { margin-left: auto; }
-/* The origin sits IN the heading at the same size as the name, muted — the fact
-   that separates two servers sharing a name has to be where the eye already is,
-   not in a 0.78rem slug at the end of the row. */
-.prov-origin { color: var(--ink-soft); font-weight: 400; }
-.prov-nospec { color: var(--ink-soft); font-size: 0.88rem; margin: 0.6rem 0 0; }
-/* The document-cap line. Same slot and same size as .prov-nospec — it is the
-   same kind of sentence — but it stays on the warning tier: an over-cap
-   document is a finding-class condition the operator acts on. Its own text is
-   the label, and it takes the tier's edge rule as well as the ink role so it
-   survives sharing a hue with the accent (copper is both, by design). */
-.prov-oversize { color: var(--sev-warning-ink); font-size: 0.88rem; margin: 0.6rem 0 0; padding-left: 0.6rem; border-left: 3px solid var(--sev-warning-edge); }
-.prov-integration { color: var(--ink-soft); font-size: 0.78rem; }
-.finding.nested { background: var(--surface-sunk); margin: 0.75rem 0 0; }
-/* Acked rows: dimmed in place (matches the disabled idiom); evidence stays visible. */
-.finding.acked { opacity: 0.55; }
-/* The #contracts/<finding_id> deep-link target — same accent bar as the
-   Threads tab's highlighted row. */
-.finding.highlight { box-shadow: inset 3px 0 0 var(--accent); }
-
-.tr-detail { border-top: 1px dashed var(--rule); background: var(--ground); padding: 0.85rem 0.9rem 1.1rem; }
-.meta-line { color: var(--ink-soft); font-size: 0.82rem; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.75rem; }
-.meta-line .dim { opacity: 0.5; }
+/* Expanded call: headers and bodies on the sunk surface, framed. */
+.tr-detail { border-top: var(--border-w-hair) solid var(--rule-soft); background: var(--surface-sunk); padding: 14px 14px 18px; }
+.meta-line { color: var(--ink-soft); font-size: 12.5px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+/* Dimming is done with the palette, never opacity: --ink-soft keeps its
+   contrast on the sunk surface, a half-opacity --ink-soft did not (2.2:1). */
+.meta-line .dim { color: var(--ink-soft); }
 /* `redacted · patterns` is a fact about the row, stated in body ink at weight —
    not a warning, and not a link. */
 .redacted-tag { color: var(--ink); font-weight: 600; }
-.reqres { display: grid; grid-template-columns: 1fr 1fr; gap: 0.85rem; }
+.reqres { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .rr-col { min-width: 0; }
-.rr-title { font-weight: 700; font-size: 0.85rem; margin-bottom: 0.4rem; }
-.rr-sub { color: var(--ink-soft); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; margin: 0.55rem 0 0.25rem; }
-.hdrs { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
-.hdrs td { padding: 0.12rem 0.4rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+.rr-title { font-weight: 600; font-size: 13px; margin-bottom: 6px; }
+.rr-sub { font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); margin: 8px 0 4px; }
+.hdrs { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.hdrs td { padding: 2px 6px; border-bottom: var(--border-w-hair) solid var(--rule-soft); vertical-align: top; }
 .hk { color: var(--ink-soft); white-space: nowrap; width: 1%; }
 .hv { color: var(--ink); word-break: break-all; }
-pre.body { background: var(--surface-sunk); border: 1px solid var(--rule); border-radius: var(--radius); padding: 0.6rem 0.75rem; margin: 0; font-family: var(--font-mono); font-size: 0.8rem; line-height: 1.45; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
+pre.body { background: var(--surface); border: var(--border-w) solid var(--rule); border-radius: var(--radius); padding: 10px 12px; margin: 0; font-family: var(--f-mono); font-size: 12.5px; line-height: 1.45; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
 
-/* Edges overview */
-.edge-groups { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 0.5rem; }
-.edge-group { background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius); padding: 0.9rem 1rem 1.1rem; }
-.edge-title { font-size: 0.95rem; margin: 0 0 0.75rem; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
-.edge-title small { color: var(--ink-soft); font-weight: 400; }
-.dir-badge { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; padding: 0.15rem 0.5rem; border-radius: var(--radius); }
-.dir-badge.out { background: var(--accent); color: var(--accent-contrast); }
-.dir-badge.in { background: var(--steel); color: var(--ink); }
-.edge-table { border: 1px solid var(--rule); border-radius: var(--radius); overflow: hidden; }
-.edge-head, .edge-row { display: grid; grid-template-columns: 2.4fr 1fr; gap: 0.5rem; align-items: center; padding: 0.4rem 0.7rem; }
-.edge-head { color: var(--ink-soft); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; background: var(--surface-sunk); border-bottom: 1px solid var(--rule); }
-/* "OBSERVED RPM" wrapped to two lines at narrow widths and became the tallest
-   thing in the header row — the column labels never wrap. */
+/* Contract cards (self + provider): a framed card whose heading row carries the
+   name, origin, format chip, version and the verdict chips. */
+.provider { background: var(--surface); border: var(--border-w) solid var(--rule); border-radius: var(--radius); padding: 16px 18px; margin-bottom: 14px; }
+.provider.self { border-color: var(--accent); }
+.prov-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.prov-name { font-weight: 700; font-size: 16px; letter-spacing: -0.01em; }
+/* The origin sits IN the heading, muted — the fact that separates two servers
+   sharing a name has to be where the eye already is. */
+.prov-origin { color: var(--ink-soft); font-weight: 400; font-size: 13px; }
+.fmt-badge { font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent-ink); border: var(--border-w-hair) solid var(--accent-ink); border-radius: var(--radius); padding: 2px 7px; }
+.prov-ver { color: var(--ink-soft); font-family: var(--f-mono); font-size: 12px; }
+.prov-integration { color: var(--ink-soft); font-family: var(--f-mono); font-size: 12px; }
+.prov-status { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.prov-links { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
+.doc-link { color: var(--ink); font-size: 12px; font-weight: 600; text-decoration: none; border: var(--border-w) solid var(--rule); border-radius: var(--radius); padding: 4px 10px; background: var(--surface); transition: transform var(--dur) var(--ease-lift), box-shadow var(--dur) var(--ease-lift), border-color var(--dur-fast) var(--ease); }
+.doc-link:hover { transform: var(--lift); box-shadow: var(--shadow-lift-soft); border-color: var(--ink); }
+.prov-meta { color: var(--ink-soft); font-size: 12.5px; }
+/* The evidence count rides in the same muted channel as provenance — it is a
+   fact about this card, not a warning, and zero must not be dressed as one. */
+.prov-meta.evidence { margin-left: auto; font-family: var(--f-mono); font-size: 11.5px; letter-spacing: 0.02em; }
+.prov-nospec { color: var(--ink-soft); font-size: 13.5px; margin: 10px 0 0; }
+/* The document-cap line. Same slot and size as .prov-nospec — the same kind of
+   sentence — but it stays on the warning tier: an over-cap document is a
+   finding-class condition the operator acts on. Its own text is the label, and
+   it takes the tier's edge rule as well as the ink role so it survives sharing
+   a hue with the accent (copper is both, by design). */
+.prov-oversize { color: var(--sev-warning-ink); font-size: 13.5px; margin: 10px 0 0; padding-left: 10px; border-left: var(--border-w-stripe) solid var(--sev-warning-edge); }
+
+/* Findings: framed cards. Head row (bolted severity chip · endpoint · rule id ·
+   ×N calls) → expected ≠ actual ≠ location in mono cells → detail →
+   correlation → actions. Acknowledged rows dim in place; evidence is never
+   hidden. */
+.finding { background: var(--surface); border: var(--border-w) solid var(--rule); border-radius: var(--radius); margin-bottom: 14px; transition: border-color var(--dur) var(--ease), color var(--dur) var(--ease); }
+.finding.nested { margin: 12px 0 0; }
+/* Acknowledged: dimmed IN PLACE with the palette, never with opacity — the
+   kit's `opacity: .55` put 12–13px evidence at 2.6:1, which hides it for
+   low-vision readers while promising it is never hidden. Text drops to
+   --ink-soft, the frame to --rule-soft, the chip and its bolts to steel; every
+   pair stays at or above 4.5:1 in both schemes. */
+.finding.acked { border-color: var(--rule-soft); }
+.finding.acked .finding-head, .finding.acked .drift-row, .finding.acked .col { border-color: var(--rule-soft); }
+.finding.acked .endpoint, .finding.acked .v, .finding.acked .v.expected, .finding.acked .v.actual,
+.finding.acked .detail, .finding.acked .corr code { color: var(--ink-soft); }
+.finding.acked .badge { color: var(--ink-soft); border-color: var(--rule); }
+.finding.acked .badge .hx { color: var(--ink-soft); --l: var(--sev-info-bolt); }
+/* The #contracts/<finding_id> deep-link target — same accent rule as the
+   Threads tab's highlighted row. */
+.finding.highlight { box-shadow: inset var(--border-w-stripe-lg) 0 0 var(--accent); }
+.finding-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 14px 18px; border-bottom: var(--border-w-hair) solid var(--rule-soft); }
+/* The severity chip: mono uppercase between two bolts, a hairline outline in
+   the tier's bare colour, text in its -ink role. Each tier uses its own family
+   and the accent never carries one (src/tokens.test.ts pins all three). */
+.badge { display: inline-flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 104px; font: 600 10.5px/1 var(--f-mono); letter-spacing: 0.1em; text-transform: uppercase; padding: 4px 7px; border: var(--border-w-hair) solid currentColor; border-radius: var(--radius); }
+.badge.breaking { color: var(--sev-breaking-ink); border-color: var(--sev-breaking); }
+.badge.warning { color: var(--sev-warning-ink); border-color: var(--sev-warning); }
+/* INFO is the neutral tier of the product-fixed triad. It used to be filled with
+   --accent; accent is never semantic, and a blue "info" badge sitting beside a
+   red and a copper one read as a fourth severity. --sev-info IS the neutral tier. */
+.badge.info { color: var(--sev-info-ink); border-color: var(--sev-info); }
+/* DESCRIPTION: a wording change is not a severity claim — muted ink, steel
+   bolts, the same outline shape, so it is distinguishable from WARNING by
+   colour AND by label. */
+.badge.description { color: var(--ink-soft); border-color: var(--ink-soft); }
+.endpoint { font-weight: 600; }
+.rule { color: var(--ink-soft); font-family: var(--f-mono); font-size: 12px; }
+/* The occurrence count is a number in mono, not a severity. */
+.occ { color: var(--ink-soft); font-family: var(--f-mono); font-size: 12px; }
+.drift-row { display: grid; grid-template-columns: 1fr auto 1fr 1fr; border-bottom: var(--border-w-hair) solid var(--rule-soft); }
+.drift-row.two { grid-template-columns: 1fr auto 1fr; }
+.col { padding: 12px 18px; border-right: var(--border-w-hair) solid var(--rule-soft); min-width: 0; }
+.col:last-child { border-right: 0; }
+.col .k { font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); }
+/* A label carrying a digest and a timestamp is a machine identifier: the
+   eyebrow's register, but its case and tracking are left alone. */
+.col .k.snap { text-transform: none; letter-spacing: 0.02em; }
+.col .v { margin-top: 4px; font-family: var(--f-mono); font-size: 13px; word-break: break-word; }
+.v.expected { color: var(--ok-ink); }
+.v.actual { color: var(--sev-breaking-ink); }
+/* DESCRIPTION rows: a wording change is not a severity diff — plain ink. */
+.drift-row.plain .v.expected, .drift-row.plain .v.actual { color: var(--ink); }
+.arrow { display: flex; align-items: center; color: var(--ink-soft); font-size: 20px; padding: 0 14px; }
+.detail { color: var(--ink-soft); font-size: 13.5px; margin: 0; padding: 12px 18px; border-bottom: var(--border-w-hair) solid var(--rule-soft); }
+.corr { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 18px; border-bottom: var(--border-w-hair) solid var(--rule-soft); }
+.corr-title { font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); }
+.corr-k { font-size: 12.5px; color: var(--ink-soft); }
+.corr-k code { color: var(--ink); background: var(--surface-sunk); padding: 2px 6px; }
+.actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 18px; }
+
+/* MCP per-tool rows (v0.5): the server's tools ARE the contract surface. */
+.mcp-badge { font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent-ink); border: var(--border-w-hair) solid var(--accent-ink); border-radius: var(--radius); padding: 1px 6px; margin-left: 6px; vertical-align: middle; white-space: nowrap; }
+.tool-rows { margin-top: 12px; border: var(--border-w) solid var(--rule); border-radius: var(--radius); }
+.tool-row { padding: 8px 12px; border-top: var(--border-w-hair) solid var(--rule-soft); }
+.tool-row:first-child { border-top: 0; }
+.tool-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.tool-name { font-size: 13px; }
+/* `input + output contract` is a reached state of the tool's contract: green
+   outline; `input contract only` is the muted outline. */
+.tool-tag { font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.02em; color: var(--ok-ink); border: var(--border-w-hair) solid var(--ok); border-radius: var(--radius); padding: 1px 8px; }
+.tool-tag.partial { color: var(--ink-soft); border-color: var(--rule); }
+.tool-note { color: var(--ink-soft); font-size: 12.5px; margin: 4px 0 0; }
+
+/* Edges overview: two framed groups stacked, each a framed table — the
+   inbound / outbound split is a group rule, not two half-width boxes that
+   squeezed every name and number. */
+.edge-groups { display: grid; grid-template-columns: 1fr; gap: 14px; }
+.edge-group { background: var(--surface); border: var(--border-w) solid var(--rule); border-radius: var(--radius); padding: 14px 16px 18px; }
+.edge-title { font-size: 13.5px; font-weight: 600; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.edge-title small { color: var(--ink-soft); font-weight: 400; font-size: 12.5px; }
+.dir-badge { font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; padding: 2px 7px; border: var(--border-w-hair) solid currentColor; border-radius: var(--radius); }
+.dir-badge.out { color: var(--accent-ink); }
+.dir-badge.in { color: var(--ink-soft); }
+.edge-table { border: var(--border-w) solid var(--rule); border-radius: var(--radius); background: var(--surface); }
+.edge-head, .edge-row { display: grid; grid-template-columns: minmax(0, 2.4fr) max-content max-content max-content; gap: 14px; align-items: center; padding: 10px 14px; }
+.edge-head { font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-soft); background: var(--surface-sunk); border-bottom: var(--border-w) solid var(--rule); }
+/* The column labels never wrap ("OBSERVED RPM" used to become the tallest thing
+   in the header row). */
 .edge-head span { white-space: nowrap; }
-.edge-row { border-top: 1px solid var(--rule); font-size: 0.85rem; }
-.edge-row:first-child { border-top: 0; }
-.edge-row.drift { box-shadow: inset 3px 0 0 var(--sev-breaking); }
-.edge-row .peer { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.edge-row .role { color: var(--ink-soft); }
-/* v1p1 edge naming: outbound rows carry name-over-host + actions. */
-/* The name cell gets a real floor: a fractional track collapsed it to ~59px at
-   every width, truncating a saved name to "Acme …" (a single clipped letter at
-   900px). minmax(9rem, 1fr) + max-content RPM keeps the name readable. */
-.edge-head.named, .edge-row.named { grid-template-columns: minmax(9rem, 1fr) max-content auto; }
-.edge-name-cell { display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; }
-.edge-name-line { display: flex; align-items: center; gap: 0.4rem; min-width: 0; }
+.edge-row { border-top: var(--border-w-hair) solid var(--rule-soft); font-size: 13.5px; transition: background-color var(--dur-fast) var(--ease); }
+.edge-head + .edge-row { border-top: 0; }
+.edge-row:hover { background: var(--surface-sunk); }
+.edge-row.drift { box-shadow: inset var(--border-w-stripe) 0 0 var(--sev-breaking); }
+.edge-row .peer { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+/* v1p1 edge naming: outbound rows carry name-over-host + actions. The name cell
+   gets a real floor — a fractional track collapsed it to ~59px at every width. */
+.edge-head.named, .edge-row.named { grid-template-columns: minmax(144px, 1fr) max-content max-content max-content auto; }
+.edge-name-cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.edge-name-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .edge-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* An unnamed row IS its host: same mono treatment the named row's host line gets, so the two
-   row shapes read as one column and nothing looks like a mangled name. */
-.edge-name.unnamed { color: var(--ink); font-weight: 400; font-family: var(--font-mono); font-size: 0.82rem; }
-.edge-host { color: var(--ink-soft); font-size: 0.75rem; }
+/* An unnamed row IS its host: the same mono treatment the named row's host line
+   gets, so the two row shapes read as one column. */
+.edge-name.unnamed { color: var(--ink); font-weight: 400; font-family: var(--f-mono); font-size: 12.5px; }
+.edge-host { color: var(--ink-soft); font-size: 12px; }
 /* Contract coverage on an outbound row: the SAME muted text channel as
-   .edge-host, one line below it. Not the badge lane and not the actions cell —
-   the cell is `auto` inside minmax(9rem,1fr) max-content auto, a user-named row
-   already carries two buttons, and a third is untested at 900px. A text link
-   dodges the width fight entirely and does strictly more than a chip would. */
-.edge-contract { font-size: 0.75rem; line-height: 1.35; }
+   .edge-host, one line below it — a text link, not a chip, so it is present
+   when you look at a row and invisible when you scan the column. */
+.edge-contract { font-size: 12px; line-height: 1.35; }
 .edge-contract-link {
   background: none; border: 0; padding: 0; margin: 0;
   font: inherit; color: var(--ink-soft); cursor: pointer;
-  text-align: left; text-decoration: none;
+  text-align: left; text-decoration: none; transition: color var(--dur-fast) var(--ease);
 }
 .edge-contract-link:hover, .edge-contract-link:focus-visible { color: var(--ink); text-decoration: underline; }
-/* `Add contract` stays in the SAME muted channel as everything else on this
-   line — no accent, no fill, no border. Rendered at 30 real rows it was
-   accent-coloured, and 27 blue links marching down the column was the `auto`
-   wall verbatim: louder than the chip this design exists to avoid, and it
-   inverted the signal, since the three covered rows read quieter than the
-   uncovered ones. Muted, it is present when you look at a row and invisible
-   when you scan the column, which is the whole point of putting it here rather
-   than in the badge lane. The dotted underline is what marks it as a control
-   without spending colour on it. */
+/* `Add contract` stays muted: rendered at 30 rows an accent link marched down
+   the column louder than the chip this design avoids. The dotted underline
+   marks it as a control without spending colour on it. */
 .edge-contract-link.add { border-bottom: 1px dotted var(--rule); }
 .edge-contract-link.add:hover, .edge-contract-link.add:focus-visible { border-bottom-color: currentColor; text-decoration: none; }
-/* The roll call: one line under the group heading, above the rows. */
-.edge-rollcall { margin: -0.15rem 0 0.55rem; font-size: 0.8rem; color: var(--ink-soft); }
+.edge-rollcall { margin: -2px 0 8px; font-size: 12.5px; color: var(--ink-soft); }
+.edge-actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
+.edge-rename { border-top: var(--border-w-hair) solid var(--rule-soft); background: var(--surface-sunk); padding: 10px 14px; display: flex; flex-direction: column; gap: 8px; }
+.edge-rename-input { width: 100%; max-width: 416px; padding: 6px 8px; border: var(--border-w) solid var(--rule); border-radius: var(--radius); background: var(--surface); color: var(--ink); font: inherit; font-size: 13px; }
+.edge-rename-input:focus { border-color: var(--ink); }
+.edge-suggest { display: flex; align-items: flex-start; gap: 6px; font-size: 12px; color: var(--ink-soft); }
+.edge-suggest input { margin-top: 2px; accent-color: var(--ink); }
+.edge-rename-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.edge-name-note { margin: 0; padding: 6px 14px; font-size: 12px; color: var(--ink-soft); border-top: var(--border-w-hair) solid var(--rule-soft); }
+.edge-row .num { text-align: right; font-family: var(--f-mono); font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.edge-row .unit { color: var(--ink-soft); font-size: 11px; margin-left: 4px; }
+/* Drifted calls: a number in red mono when there are any, muted at zero —
+   the count is the label. Last seen rides the muted register. */
+.edge-row .drift-n { color: var(--ink-soft); }
+.edge-row .drift-n.some { color: var(--sev-breaking-ink); font-weight: 600; }
+.edge-row .seen { color: var(--ink-soft); }
 
 /* Providers with no contract — rows, not cards. Collapsed by default. */
-.uncovered h2 { margin-bottom: 0.4rem; }
+.uncovered h2 { margin-bottom: 6px; }
 .uncovered-toggle {
-  background: none; border: 0; padding: 0; font: inherit; color: inherit;
-  cursor: pointer; display: inline-flex; align-items: center; gap: 0.4rem;
+  background: none; border: 0; padding: 0; font: inherit; color: inherit; letter-spacing: inherit; text-transform: inherit;
+  cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
 }
-.uncovered-toggle .chev { display: inline-block; transition: transform 120ms ease-out; color: var(--ink-soft); font-size: 0.8em; }
+.uncovered-toggle .chev { display: inline-block; transition: transform var(--dur-fast) var(--ease); color: var(--ink-soft); font-size: 0.9em; width: auto; }
 .uncovered-toggle .chev.open { transform: rotate(90deg); }
-.uncovered-rows { border: 1px solid var(--rule); border-radius: var(--radius); overflow: hidden; }
-.uncovered-row { padding: 0.55rem 0.7rem; border-bottom: 1px solid var(--rule); }
+.uncovered-rows { border: var(--border-w) solid var(--rule); border-radius: var(--radius); background: var(--surface); }
+.uncovered-row { padding: 8px 14px; border-bottom: var(--border-w-hair) solid var(--rule-soft); }
 .uncovered-row:last-child { border-bottom: 0; }
-.uncovered-row.highlight { background: var(--surface-sunk); }
-.uncovered-line { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; }
-.uncovered-host { font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.uncovered-lede { margin: 0 0 0.5rem; font-size: 0.82rem; color: var(--ink-soft); }
+.uncovered-row.highlight { background: var(--surface-sunk); box-shadow: inset var(--border-w-stripe) 0 0 var(--accent); }
+.uncovered-line { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.uncovered-host { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.uncovered-lede { margin: 0 0 8px; font-size: 12.5px; color: var(--ink-soft); }
 
 /* The after-state: what happens NEXT, said once, above the cards. */
 .upload-notice {
-  margin: 0 0 0.8rem; padding: 0.5rem 0.7rem; font-size: 0.85rem;
-  border-left: 3px solid var(--accent); background: var(--surface-sunk); color: var(--ink);
+  margin: 0 0 12px; padding: 8px 12px; font-size: 13px;
+  border: var(--border-w) solid var(--rule); border-left: var(--border-w-stripe-lg) solid var(--accent); background: var(--surface); color: var(--ink);
 }
 .upload-notice.error { border-left-color: var(--sev-breaking); }
+.pretraffic h2 { margin-bottom: 8px; }
 
-/* The uploader. Rendered inline on whichever row opened it — there is one
-   mutation, so only one can be open at a time. */
-.uploader { border: 1px dashed var(--rule); border-radius: var(--radius); padding: 0.7rem; margin-top: 0.5rem; background: var(--surface-sunk); }
-.uploader-host { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.8rem; color: var(--ink-soft); margin-bottom: 0.6rem; }
-.uploader-host input {
-  padding: 0.35rem 0.5rem; border: 1px solid var(--rule); border-radius: var(--radius);
-  background: var(--surface); color: var(--ink); font-size: 0.85rem; max-width: 22rem;
-}
-.dropzone {
-  border: 1px dashed var(--rule); border-radius: var(--radius); padding: 1.1rem 0.8rem;
-  text-align: center; background: var(--surface);
-}
-.dropzone.dragging { border-color: var(--accent); background: var(--surface-sunk); }
-.dz-prompt { margin: 0 0 0.15rem; font-size: 0.88rem; }
-.dz-formats { margin: 0 0 0.6rem; font-size: 0.78rem; color: var(--ink-soft); }
-/* The privacy line sits AT the picker, where the document is chosen — the one
-   moment the operator is deciding whether to hand over a vendor's document. */
-.uploader-privacy { margin: 0.55rem 0 0; font-size: 0.78rem; color: var(--ink); }
-.uploader-note { margin: 0.2rem 0 0; font-size: 0.78rem; color: var(--ink-soft); }
-.uploader-error { margin: 0.5rem 0 0; font-size: 0.82rem; color: var(--sev-breaking); }
-.uploader-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.7rem; }
-.confirm-facts { display: grid; gap: 0.25rem; margin: 0 0 0.5rem; }
-.confirm-facts > div { display: flex; gap: 0.5rem; font-size: 0.85rem; }
-.confirm-facts dt { color: var(--ink-soft); min-width: 6rem; }
-.confirm-facts dd { margin: 0; }
-/* The binding checklist. A `servers:` mismatch used to render in body ink —
-   "warn, never block" means warn VISIBLY, and that was a whisper. Warnings get
-   the warning colour and a marker; the button still says go. */
-.binding-checks { list-style: none; margin: 0 0 0.5rem; padding: 0.5rem 0.6rem; display: grid; gap: 0.3rem; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--rule); }
-.binding-checks.warned { border-color: var(--sev-warning-edge); background: var(--sev-warning-wash); }
-.binding-checks li { display: flex; gap: 0.45rem; align-items: flex-start; font-size: 0.8rem; line-height: 1.45; color: var(--ink-soft); }
-.binding-checks li.warn { color: var(--ink); }
-.binding-checks .chk { flex: none; width: 1em; text-align: center; font-weight: 700; color: var(--ink-soft); }
-.binding-checks li.warn .chk { color: var(--sev-warning-ink); }
-.confirm-host { margin: 0.1rem 0 0.6rem; }
-.confirm-host input:disabled { opacity: 0.7; cursor: not-allowed; }
-.host-hint, .host-locked { font-size: 0.72rem; color: var(--ink-soft); }
-.host-awaiting { font-size: 0.75rem; color: var(--ink); }
-.uploader-host.awaiting input { border-color: var(--accent); }
-.confirm-timing { margin: 0 0 0.4rem; font-size: 0.78rem; color: var(--ink-soft); }
-.host-hint code { font-size: 0.95em; }
-.btn.warn { border-color: var(--sev-warning-ink); }
-.pretraffic h2 { margin-bottom: 0.5rem; }
-/* The deck's badge strings are lowercase ("named by you" · "config" ·
-   "directory" · "auto") — uppercasing them made all four read as one shouted
-   pill. Render the copy as written. */
-.pill-link { text-decoration: none; display: inline-flex; align-items: center; gap: 0.3rem; }
-.pill-link:hover { text-decoration: underline; }
-.pill-out { font-size: 0.85em; opacity: 0.75; }
-.edge-actions { display: flex; gap: 0.35rem; justify-content: flex-end; }
-.edge-rename { border-top: 1px dashed var(--rule); background: var(--surface-sunk); padding: 0.6rem 0.7rem; display: flex; flex-direction: column; gap: 0.45rem; }
-.edge-rename-input { width: 100%; max-width: 26rem; padding: 0.35rem 0.5rem; border: 1px solid var(--rule); border-radius: var(--radius); background: var(--surface); color: var(--ink); font-size: 0.85rem; }
-.edge-suggest { display: flex; align-items: flex-start; gap: 0.4rem; font-size: 0.78rem; color: var(--ink-soft); }
-.edge-suggest input { margin-top: 0.15rem; }
-.edge-rename-actions { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
-.edge-name-note { margin: 0; padding: 0.35rem 0.7rem; font-size: 0.78rem; color: var(--ink-soft); border-top: 1px dashed var(--rule); }
-.edge-row .num { text-align: right; font-variant-numeric: tabular-nums; }
-.edge-row .unit { color: var(--ink-soft); font-size: 0.72rem; margin-left: 0.12rem; }
-.empty.small { font-size: 0.85rem; }
-/* The occurrence count is a number, not a severity: accent, outlined. */
-.occ { font-size: 0.72rem; color: var(--accent-ink); font-weight: 700; border: 1px solid var(--accent-ink); border-radius: var(--radius); padding: 0.05rem 0.45rem; }
-.occ.single { color: var(--ink-soft); border-color: var(--rule); font-weight: 500; }
-
-/* ─── MCP surfaces (v0.5) ─── */
-.mcp-badge { font-size: 0.64rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--accent-ink); border: 1px solid var(--accent-ink); border-radius: var(--radius); padding: 0.08rem 0.35rem; margin-left: 0.4rem; vertical-align: middle; white-space: nowrap; }
-.mcp-headline { margin-top: -0.35rem; }
-.mcp-headline .hl-you { font-size: 1rem; display: flex; align-items: center; gap: 0.55rem; }
-.mcp-headline .mcp-badge { margin-left: 0; }
-.local-notices { margin: 1rem 0; padding: 0.85rem 1.1rem; border-radius: var(--radius); border: 1px dashed var(--rule); background: var(--surface); }
-.ln-head { display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap; }
-.ln-title { font-weight: 700; font-size: 0.9rem; }
-.ln-sub { color: var(--ink-soft); font-size: 0.82rem; }
-.ln-list { margin: 0.55rem 0 0; padding-left: 1.1rem; }
-.ln-item { color: var(--ink-soft); font-size: 0.88rem; margin-top: 0.25rem; }
-.tool-rows { margin-top: 0.65rem; border: 1px solid var(--rule); border-radius: var(--radius); overflow: hidden; }
-.tool-row { padding: 0.42rem 0.7rem; border-top: 1px solid var(--rule); }
-.tool-row:first-child { border-top: 0; }
-.tool-line { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
-.tool-name { font-size: 0.85rem; }
-.tool-tag { font-size: 0.72rem; color: var(--ok-ink); border: 1px solid var(--ok-ink); border-radius: var(--radius); padding: 0.05rem 0.45rem; }
-.tool-tag.partial { color: var(--ink-soft); border-color: var(--rule); }
-.tool-note { color: var(--ink-soft); font-size: 0.8rem; margin: 0.3rem 0 0; }
-
-/* Appearance (Settings) */
-.theme-field { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
-.theme-label { font-size: 0.88rem; font-weight: 600; }
-.theme-help { color: var(--ink-soft); font-size: 0.82rem; }
-/* No overflow clip on the wrapper: the buttons' focus ring sits 2px outside
-   their box, and radius is 0, so a clip would erase the ring and round nothing. */
-.seg { display: inline-flex; border: 1px solid var(--rule); border-radius: var(--radius); }
-.seg button { background: var(--surface); border: 0; border-left: 1px solid var(--rule); color: var(--ink-soft); font: inherit; font-size: 0.85rem; font-weight: 600; padding: 0.35rem 0.85rem; cursor: pointer; }
-.seg button:first-child { border-left: 0; }
+/* Settings: two framed cards side by side — Connect, and Appearance. */
+.settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+.settings-grid > section, .settings-grid > * + section:not(.headline) { margin: 0; border: var(--border-w) solid var(--rule); border-radius: var(--radius); background: var(--surface); padding: 16px 18px; }
+.theme-field { display: grid; grid-template-columns: 130px 1fr; gap: 10px; align-items: center; }
+.theme-label { font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); }
+.theme-help { grid-column: 1 / -1; color: var(--ink-soft); font-size: 12.5px; margin-top: 2px; }
+/* The Light / Dark segmented control: a 2px ink frame, the pressed segment
+   ink-filled so it never reads as a primary button or a warning chip. No
+   overflow clip on the wrapper: the buttons' focus ring sits 2px outside their
+   box, and radius is 0, so a clip would erase the ring and round nothing. */
+.seg { display: inline-flex; justify-self: start; border: var(--border-w) solid var(--ink); border-radius: var(--radius); background: var(--surface); }
+.seg button { background: none; border: 0; color: var(--ink-soft); font: 600 12.5px/1.5 var(--f-sans); padding: 6px 14px; cursor: pointer; transition: color var(--dur-fast) var(--ease), background-color var(--dur-fast) var(--ease); }
 .seg button:hover { color: var(--ink); }
-/* The pressed segment is ink-filled so it never reads as a primary button or a
-   warning chip — all three used to share the copper. */
-.seg button.active { background: var(--ink); color: var(--surface); }
+.seg button.active { background: var(--ink); color: var(--ground); }
 
-/* The two edge tables need the full width well before the phone breakpoint —
-   side by side they squeeze the name cell to a few characters. */
-@media (max-width: 1024px) {
-  .edge-groups { grid-template-columns: 1fr; }
+/* The footer band: two mono micro-labels. */
+.foot { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 10px 18px; border-top: var(--border-w) solid var(--rule); background: var(--surface); font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-soft); }
+
+@media (max-width: 760px) {
+  .settings-grid { grid-template-columns: 1fr; }
+  .drift-row, .drift-row.two { grid-template-columns: 1fr; }
+  .arrow { display: none; }
+  .col { border-right: 0; border-bottom: var(--border-w-hair) solid var(--rule-soft); }
+  .col:last-child { border-bottom: 0; }
 }
 
 @media (max-width: 720px) {
+  .page { margin: 8px; }
+  .topbar, .tabs, .foot { padding-left: 12px; padding-right: 12px; }
+  .tabs button { padding: 10px 10px; }
+  .panel { padding: 16px 12px 20px; }
+  .banner, .theme-flip-banner { margin-left: 12px; margin-right: 12px; }
+  /* The toolbar is a third of a phone viewport: it scrolls with the page. */
+  .tr-toolbar { position: static; }
   .tr-head { display: none; }
-  .tr-row { grid-template-columns: 1fr 1fr; grid-auto-rows: min-content; }
+  /* Each call is a stacked card: the route on its own line, whole (it is the
+     cell that matters, so it wraps rather than ellipsizes); direction, host
+     and status on the second; captured time (muted) and the contract chip on
+     the third; correlation on its own line. Two columns only — a third
+     max-content column (the time beside the status) squeezed the host to
+     30px and wrapped it per character. Nothing sits in an unlabeled cell
+     beside a stranger. */
+  .tr-row {
+    grid-template-columns: minmax(0, 1fr) max-content;
+    grid-template-areas: "call call" "peer status" "when mark" "corr corr";
+    gap: 6px 10px;
+  }
+  .tr-row .c-call { grid-area: call; flex-wrap: wrap; }
+  .tr-row .route { white-space: normal; overflow: visible; text-overflow: clip; word-break: break-word; }
+  .tr-row .c-peer { grid-area: peer; }
+  /* The host is an identity: it wraps at natural breaks rather than ellipsizing. */
+  .tr-row .peer-host { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
+  .tr-row .c-when { grid-area: when; font-size: 11.5px; }
+  .tr-row .c-status { grid-area: status; justify-self: end; }
+  .tr-row .c-corr { grid-area: corr; }
+  .tr-row .c-mark { grid-area: mark; justify-self: end; }
   .reqres { grid-template-columns: 1fr; }
+  .edge-head, .edge-row { gap: 10px; }
+  .edge-head.named, .edge-row.named { grid-template-columns: minmax(0, 1fr) max-content max-content max-content; }
+  .edge-row.named .edge-actions { grid-column: 1 / -1; justify-content: flex-start; }
+}
+
+/* Reduced motion keeps the colour fades and drops everything that moves. */
+@media (prefers-reduced-motion: reduce) {
+  .btn:hover, .btn.ghost:hover, .doc-link:hover, .pending-bar:hover { transform: none; box-shadow: none; }
+  .live-dot { animation: none; }
+  .uncovered-toggle .chev { transition: none; }
+  .finding { transition: none; }
 }
 </style>

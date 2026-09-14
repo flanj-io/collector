@@ -570,3 +570,70 @@ export function providerContractsEmptyText(uncoveredCount: number): string {
   }
   return 'No provider contracts yet. Upload a provider’s OpenAPI document to start validating your calls to it — or send traffic through the SDK to discover providers first.';
 }
+
+/* ── The provider a finding is about ───────────────────────────────────── */
+
+/** Title-case an INTEGRATION SLUG (`acme-payments` → `Acme Payments`): the same
+ *  rule the relay applies server-side. Splits on `-` / `_` only, never on
+ *  dots — it is for slugs, and a host run through it (`api.acme.test` →
+ *  `Api.acme.test`) is a mangled pseudo-name, which is exactly what
+ *  providerNameForFinding exists to prevent. */
+export function humanize(id: string): string {
+  return id
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((w) => w[0].toUpperCase() + w.slice(1))
+    .join(' ');
+}
+
+/** The edge row shape the provider lookup reads (`GET /api/edges`). */
+export interface ProviderEdge {
+  peer_host: string;
+  display_name?: string;
+}
+
+/**
+ * The name the flag sheet addresses and the flag sends for a finding — the
+ * "New thread with <name>" title, the default message, the paste text.
+ *
+ * Two kinds of `integration` reach this from `GET /api/findings`:
+ *
+ *   - a call-evidenced finding (live-vs-spec, the MCP kinds) carries the SDK's
+ *     own integration id (`acme-payments`, `acme-tools`) — a slug the operator
+ *     chose, which humanizes honestly and which the relay humanizes the same
+ *     way;
+ *   - a version-diff carries the CONTRACT's id, and an uploaded contract is
+ *     keyed by the host it was bound to (`api-acme-test` for `api.acme.test`) —
+ *     a slug nobody chose. humanize() turned it into `Api Acme Test`, a
+ *     title-cased pseudo-name the Edges panel already forbids (its unnamed rows
+ *     show the host itself), and the sheet pasted it to the other organization
+ *     while the card above read `Acme Payments API` (QA 2026-09-14).
+ *
+ * So a version-diff resolves through the contract it came from, to the host
+ * that contract is bound to, and takes — in order — the Edges panel's display
+ * name for that host, the contract's own title, then the host itself. Never a
+ * humanized host slug. The configured `provider_display_name` still wins for
+ * the integration it names, as before.
+ */
+export function providerNameForFinding(
+  f: { kind: string; integration: string; peer_host?: string },
+  ctx: {
+    providerDisplayName?: string;
+    healthIntegration?: string;
+    contracts: readonly ContractSpec[];
+    edges: readonly ProviderEdge[];
+  }
+): string {
+  if (ctx.providerDisplayName && (!ctx.healthIntegration || f.integration === ctx.healthIntegration)) {
+    return ctx.providerDisplayName;
+  }
+  if (f.kind === 'version-diff') {
+    const spec = ctx.contracts.find((s) => s.integration === f.integration);
+    const host = spec?.peer_host || f.peer_host || '';
+    const edge = host ? ctx.edges.find((e) => e.peer_host === host) : undefined;
+    const named = edge?.display_name || spec?.title || host;
+    if (named) return named;
+    return f.integration || 'the provider';
+  }
+  return humanize(f.integration) || f.integration || 'the provider';
+}

@@ -81,8 +81,47 @@ write carries `X-Flanj-UI: 1` + JSON (`src/api.ts`). Findings link to their sour
 
 ## Design tokens and theme
 
+The surface is the **Blueprint collector kit** (`docs/design/kits/collector` in the vault: a 2px
+`--rule` frame around a 24px grid-paper ground; sheet header with the inline mono mark, the text
+wordmark, `localhost:<port> · <version>` in mono, the org pill and a green-bolt Connected pill;
+mono uppercase tabs with a 2px ink underline over a copper hairline and square count chips;
+headline cards with a 6px left rule in their tone and a leading hex bolt, no "You:" prefix — the
+subline carries scope; findings as framed cards with `expected ≠ actual ≠ location` in mono cells;
+2px-outline buttons that lift under the hard offset shadow, primary = ink fill; a Light / Dark
+segmented control). The kit's classes are bound straight to the canonical tokens — its alias layer
+(`--bg`, `--panel`, `--cu` …) and font-name literals are not vendored. The hex bolt ships once, as
+the inline `<symbol id="hxbolt">` at the top of `App.vue`'s template; every bolt is
+`<svg class="hx [sm] tone-ok|tone-breaking|tone-warning|tone-accent|tone-info"><use href="#hxbolt"/>`
+and no bolt carries an inline style (a bolt is a mark, so it takes the bare family colour). The
+states the kit does not draw — the uploader, the question sheet, the validated stamp, the MCP
+headline and tool rows, the edge-registration and connect-disclosure panels, the theme-flip
+notice, the load-error and relay banners, the flag sheet's three branches, the Threads rows — are
+extrapolated in the same idiom. The MCP headline keeps the deck's whole `Server: … You: …` sentence
+(`src/mcp.ts`): e2e pins its lowercase clause, so it is the one line that keeps its pivot. A
+description-only definition change names itself in that clause but never takes the drift tone —
+the line rides the verdict its validated calls earned (`ok`, or `neutral` with none) — and the
+DESCRIPTION class wears one vocabulary end to end: the row's steel badge, a steel `N DESCRIPTION`
+card chip, and the tab pill in the steel outline (`.tab-count.warn.desc`) when every un-acked
+informational row is a wording change; the copper fill is kept for NON-BREAKING schema classes.
+
+Dimming is a palette move, never opacity: an acknowledged finding and a closed thread row drop
+their text to `--ink-soft`, their frame to `--rule-soft` and their chips to the steel outline (each
+pair stays ≥ 4.5:1 in both schemes; `src/tokens.test.ts` refuses `opacity` on any dimmed-state
+selector). Timestamps use one format across the surface, `YYYY-MM-DD HH:MM:SS` in local time
+(`src/time.ts`) — the Traffic captured column, a finding's snapshot labels and its detail line — with
+the full RFC 3339 instant on the captured cell's title. A traffic row is a control (`role="button"`,
+`tabindex="0"`, `aria-expanded`, Enter / Space toggle the detail, the token focus ring). At phone
+width the Traffic table renders each call as a stacked card (route whole on its own line; direction,
+host, time and status on the second; correlation and contract on the third), the toolbar stops being
+sticky, and the Threads rows label every fact inline. The Edges tables carry the kit's evidence —
+calls in the window (with the observed rate as a muted suffix only when non-zero), drifted calls in
+red mono when any, last seen — stacked as two group rules rather than two half-width boxes.
+
 Every colour, rule width, radius and focus ring comes from `src/tokens.css`; the SFC style blocks
-hold layout and component rules only. The rules `src/tokens.test.ts` enforces:
+hold layout and component rules only. Text takes the `-ink` role of its family, and text at or
+below 14px never uses `--ink-faint` (the muted text role is `--ink-soft`). Motion is the lift on
+hover and colour fades; `prefers-reduced-motion` keeps only the fades. The rules
+`src/tokens.test.ts` enforces:
 
 - the body below the preamble is the vault file byte for byte (a pinned sha256, plus a direct
   comparison when the docs vault is checked out above this repo) — change the vault copy, then
@@ -90,14 +129,19 @@ hold layout and component rules only. The rules `src/tokens.test.ts` enforces:
 - no SFC or ui CSS declares a custom property whose name the canonical file also defines, and no
   hex or rgb literal lives in an SFC;
 - the theme attribute is `data-flanj-theme` (never `data-theme`): `index.html` stamps
-  `data-flanj-theme="light"` in the served markup so the first paint is light for everyone, and
-  `src/theme-wired.test.ts` mounts the app, clicks the Appearance control and reads the attribute
+  `data-flanj-theme="light"` in the served markup so the first paint is light for everyone who never
+  chose, and an inline `<script>` in its `<head>` — ahead of the module bundle, which runs only after
+  the first frame — re-stamps a stored `flanj.theme = dark` before anything paints, so a dark-theme
+  user never sees a light flash; `src/theme-wired.test.ts` executes that script against a fake
+  document and storage, then mounts the app, clicks the Appearance control and reads the attribute
   off `<html>`;
 - green (`--ok*`) is spent on reached verdicts only (`conforming`, `No drift detected`, Connected);
   the warning tier (`--sev-warning*`) is the same copper as `--accent` by design, so it renders only
   finding-tier badges, tags and counts that carry a label or an outline, and every other attention
   state uses `--accent*`;
-- every control draws `var(--focus-ring)` at `var(--focus-offset)` on `:focus-visible`.
+- every control draws `var(--focus-ring)` at `var(--focus-offset)` on `:focus-visible`;
+- exactly one `<symbol id="hxbolt">` across the SFC templates, and no template carries an inline
+  `style=` attribute.
 
 No webfont is loaded — the page makes no outbound request — so the Space Grotesk stack renders as
 `system-ui` and the mono stack as the platform monospace face. The mark in the topbar is
