@@ -15,7 +15,6 @@ const MCP = { kind: 'definition_change', integration: 'acme-tools' };
 describe('providerNameForFinding', () => {
   it('a version diff takes the Edges panel name for the contract’s host, never a humanized host slug', () => {
     const name = providerNameForFinding(VERSION_DIFF, {
-      healthIntegration: 'acme-payments',
       contracts: [CONTRACT],
       edges: [{ peer_host: HOST, display_name: 'Acme Payments' }]
     });
@@ -37,13 +36,16 @@ describe('providerNameForFinding', () => {
     expect(providerNameForFinding(MCP, { contracts: [], edges: [] })).toBe('Acme Tools');
   });
 
-  it('the configured provider_display_name still wins for the integration it names', () => {
-    const ctx = { providerDisplayName: 'Acme (configured)', healthIntegration: 'acme-payments', contracts: [CONTRACT], edges: [] };
+  it('the configured provider_display_name wins for a call-evidenced REST finding — and only that kind', () => {
+    const ctx = { providerDisplayName: 'Acme (configured)', contracts: [CONTRACT], edges: [] };
     expect(providerNameForFinding(LIVE, ctx)).toBe('Acme (configured)');
-    // …and not for a version diff keyed by a different id — that one resolves through its contract.
+    // …not for a version diff — that one resolves through its contract.
     expect(providerNameForFinding(VERSION_DIFF, ctx)).toBe('Acme Payments API');
-    // With no integration on /api/health the configured name applies to every finding (as before).
-    expect(providerNameForFinding(VERSION_DIFF, { ...ctx, healthIntegration: undefined })).toBe('Acme (configured)');
+    // …and never for an MCP finding: the server names itself. The config `integration_id` used to
+    // be the scope; with it gone (2026-09-14) the kind is, and the composed lane caught the
+    // regression where the configured REST name leaked onto the MCP flag sheet.
+    expect(providerNameForFinding(MCP, ctx)).toBe('Acme Tools');
+    expect(providerNameForFinding({ kind: 'output_mismatch', integration: 'acme-tools' }, ctx)).toBe('Acme Tools');
   });
 
   it('humanize is a slug helper: dots are not word boundaries', () => {

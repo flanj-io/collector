@@ -14,6 +14,7 @@ package flanjdrift
 import (
 	"context"
 	"fmt"
+	"go.uber.org/zap"
 	"os"
 
 	"go.opentelemetry.io/collector/component"
@@ -47,6 +48,11 @@ func createLogsProcessor(
 	next consumer.Logs,
 ) (processor.Logs, error) {
 	c := cfg.(*Config)
+	if keys := c.deprecatedKeys(); len(keys) > 0 {
+		// Said ONCE, at construction: the keys are decoded so an old config
+		// still boots, but nothing reads them (CONTRACTS §8, 2026-09-14).
+		set.Logger.Warn("flanjdrift: config carries keys that are no longer read — remove them", zap.Strings("keys", keys))
+	}
 
 	// The MCP detector is ALWAYS on (no config): MCP contracts are
 	// self-delivering — an observed tools/list snapshot is the local spec.

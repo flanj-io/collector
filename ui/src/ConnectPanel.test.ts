@@ -18,6 +18,9 @@ const NEW_EMAIL = 'dana@acme.example';
 /** What the relay answers to a register call that sent a mail: 202 + the mail's own outcome. */
 const pendingReply = (contact_email: string): ConnectState => ({
   status: 'pending',
+  // The relay keeps the CP's copy of the name and echoes it (2026-09-14); without it the panel's
+  // re-seed would blank the mandatory field and the next Resend would never leave the form.
+  collector_name: 'prod-eu',
   consumer_display_name: ORG,
   contact_email,
   collector_public_id: 'col_test',
@@ -66,6 +69,8 @@ async function adoptEmittedState(w: VueWrapper) {
 
 async function submitForm(w: VueWrapper, email: string) {
   await w.find('input[autocomplete="organization"]').setValue(ORG);
+  // The collector name is mandatory (2026-09-14): a form without one never submits.
+  await w.find('input[placeholder="e.g. prod-eu"]').setValue('prod-eu');
   await w.find('input[type="email"]').setValue(email);
   await w.find('form').trigger('submit');
   await settle(w);

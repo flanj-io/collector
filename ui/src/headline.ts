@@ -44,16 +44,11 @@
 // of them are evidence for THIS line: the REST ones. A caller that pre-counts
 // can count the wrong edge, and did.
 //
-// The `on integration <slug>` fragment had the same hole one level up.
-// /api/health emits the slug from static config (`flanjui.integration_id`)
-// the moment ANY external outbound edge exists — an MCP edge included — so an
-// install that had only ever talked to an MCP server read "Nothing validated
-// yet on integration acme-payments" about a REST integration it had never
-// observed. The v1 build spec's pre-traffic honesty rule settles it: no
-// integration tag sourced from static config, names attach to DISCOVERED edges
-// only. The fragment therefore renders only when a REST call or a live finding
-// in the window actually carries that integration — absent otherwise, with no
-// replacement copy, exactly as the pre-traffic state already reads.
+// The `on integration <slug>` fragment that once rode under this line had the
+// same hole one level up (a slug from static config naming a REST integration
+// nothing had observed). It is gone with the config key (CONTRACTS §8,
+// 2026-09-14): the scope line now names the DEPLOYMENT by its collector name,
+// an identity the operator chose, rendered by App.vue from the Connect state.
 //
 // Pure and vitest-covered, deliberately: it is a lie in this line that the
 // whole coverage story sits underneath, and App.vue logic is invisible to the
@@ -83,10 +78,7 @@ export type HeadlineTone = 'ok' | 'drift' | 'neutral';
 /** The minimum a finding needs to name itself on the headline. */
 export interface HeadlineFinding {
   endpoint: string;
-  /**
-   * The integration the finding is filed under. A finding vouches for the
-   * `on integration` fragment only when it names that integration.
-   */
+  /** The integration the finding is filed under (the SDK's stamp); informational here. */
   integration?: string;
 }
 
@@ -118,21 +110,11 @@ export interface HeadlineInput {
    * purpose: it is the split the caller got wrong.
    */
   calls: readonly HeadlineCall[];
-  /**
-   * Pre-traffic honesty (v1p1): absent from /api/health until the collector has
-   * observed an external outbound edge (or a finding). While absent the
-   * "on integration <slug>" fragment simply does not render — no replacement
-   * copy, no fallback slug. Present, it is still only a CANDIDATE: the
-   * fragment renders once a REST call or a live finding has been observed
-   * under it (see integrationFragment).
-   */
-  integration?: string;
 }
 
 export interface Headline {
   you: string;
   tone: HeadlineTone;
-  integration: string;
 }
 
 /**
@@ -146,28 +128,6 @@ export function isRestCall(c: Pick<HeadlineCall, 'transport'>): boolean {
 }
 
 /**
- * The `on integration <slug>` fragment, or '' when nothing on a REST edge has
- * been observed under that slug.
- *
- * A captured call is enough — validated or not — because the fragment scopes
- * the sentence, and "Nothing validated yet on integration acme-payments" is
- * true of an acme edge nothing has checked. A live finding is enough on its
- * own, because its call can be evicted while the finding outlives it. An MCP
- * call is not: it carries its own integration, and the slug from health is a
- * REST integration's name.
- */
-function integrationFragment(
-  slug: string | undefined,
-  restCalls: readonly HeadlineCall[],
-  findings: readonly HeadlineFinding[]
-): string {
-  if (!slug) return '';
-  const observed =
-    restCalls.some((c) => c.integration === slug) || findings.some((f) => f.integration === slug);
-  return observed ? slug : '';
-}
-
-/**
  * The headline, in priority order.
  *
  * Findings first: a finding is positive evidence that something was validated,
@@ -177,27 +137,23 @@ function integrationFragment(
  */
 export function headlineFor(input: HeadlineInput): Headline {
   const rest = input.calls.filter(isRestCall);
-  const integration = integrationFragment(input.integration, rest, input.liveFindings);
   const n = input.liveFindings.length;
 
   if (n > 0) {
     const endpoints = Array.from(new Set(input.liveFindings.map((f) => f.endpoint)));
     return {
       you: `${n} contract drift finding${n === 1 ? '' : 's'} on ${endpoints.join(', ')}`,
-      tone: 'drift',
-      integration
+      tone: 'drift'
     };
   }
 
-  // The all-clear is earned on the edge the fragment NAMES. When the fragment
-  // renders, only that integration's validated REST calls are evidence — a
-  // second SDK instance under another FLANJ_INTEGRATION_ID exporting to this
-  // collector must not turn "on integration acme-payments" green while acme
-  // itself was never checked. Without a fragment, any REST edge's evidence counts.
-  const evidence = integration ? rest.filter((c) => c.integration === integration) : rest;
-  if (!evidence.some((c) => c.validated)) {
-    return { you: NOTHING_VALIDATED_YET, tone: 'neutral', integration };
+  // The all-clear is earned on REST evidence: any REST edge's validated call
+  // counts, and an MCP tool call never does (its server has its own line). The
+  // "on integration <slug>" scope that once narrowed this went with the config
+  // key (2026-09-14) — the scope line names the collector now, not an edge.
+  if (!rest.some((c) => c.validated)) {
+    return { you: NOTHING_VALIDATED_YET, tone: 'neutral' };
   }
 
-  return { you: NO_DRIFT_DETECTED, tone: 'ok', integration };
+  return { you: NO_DRIFT_DETECTED, tone: 'ok' };
 }

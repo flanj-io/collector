@@ -55,7 +55,7 @@ extensions:
   # `kubectl port-forward` to the store pod).
   flanjui:
     ui_endpoint: 127.0.0.1:5335 # loopback only — the collector is outbound-only
-    integration_id: acme-payments
+    # integration_id: REMOVED (CONTRACTS §8, 2026-09-14) — the deployment's identity is its collector NAME, given in the Connect panel.
     consumer_display_name: Acme Consumer Ltd
     provider_display_name: Acme Payments # the fallback provider name sent ON A FLAG, so a thread names the provider when the UI does not.
     #                                     It does NOT name an edge: edge names come from the UI rename, the uploaded contract's title, or the
@@ -69,7 +69,8 @@ extensions:
     #                                     non-public (loopback, private IP, single-label, .local/.internal/.svc/.test…); otherwise
     #                                     the pill stays a Settings button rather than becoming a dead link. Validated at boot
     #                                     (absolute http(s) URL, no credentials). Never logged.
-    cp_deploy_token: ${env:CP_DEPLOY_TOKEN} # used once, for Connect (register); the per-deployment collector key it returns lives in the store
+    # cp_deploy_token: ${env:CP_DEPLOY_TOKEN} # OPTIONAL (2026-09-14) — Connect needs no token; set it only to present an operator's
+    #                                         # or per-account deploy token. The collector key the CP returns lives in the store either way
 
 receivers:
   otlp:

@@ -37,7 +37,7 @@ the same registry as the image:
 helm install flanj oci://registry-1.docker.io/flanj/flanj-collector \
   --namespace flanj --create-namespace \
   --set specToken.value="$(openssl rand -hex 32)" \
-  --set integration.id=acme-payments
+  --set integration.consumerDisplayName='Acme Consumer Ltd'
 ```
 
 It renders both role configs from your values, gives **both roles the same
@@ -98,8 +98,8 @@ edge; repeats bump `occurrence_count`); `spec_info` → upsert by integration.
   manifest). Container: `flanj-collector`, default
   `CMD --config /etc/flanj/config.yaml` (mount your own over it, or a
   ConfigMap). `EXPOSE 4318` (OTLP from the SDK). That baked file is
-  `config/config.default.yaml` and is **neutral** — no `integration_id`, no
-  display names, no `cp_base_url` — so an unconfigured pod captures, redacts and
+  `config/config.default.yaml` and is **neutral** — no display names, no
+  `cp_base_url` — so an unconfigured pod captures, redacts and
   serves its UI but reports `cp_configured: false` and refuses Connect with
   `cp_not_configured` rather than claiming an identity nobody gave it. The two
   ROLE configs beside it (`front.yaml`, `store.yaml`) still carry example
@@ -122,8 +122,10 @@ edge; repeats bump `occurrence_count`); `spec_info` → upsert by integration.
   wrong side of that last rule: set `cp_public_url` and the guess is bypassed
   entirely.
 - Kubernetes: a `StatefulSet` (replicas **1**) with a `volumeClaimTemplate` for
-  `/data`, a `Service` on 4318 for the SDK, a `Secret` for `CP_DEPLOY_TOKEN`
-  (`cp_deploy_token: ${env:CP_DEPLOY_TOKEN}`).
+  `/data`, a `Service` on 4318 for the SDK, and — only when an operator wants
+  to present a deploy token — a `Secret` for `CP_DEPLOY_TOKEN`
+  (`cp_deploy_token: ${env:CP_DEPLOY_TOKEN}`); since 2026-09-14 Connect needs
+  none.
 - Probes: the UI is loopback-bound, so kubelet cannot `httpGet` it; use
   `tcpSocket: 4318` for readiness/liveness (the OTLP receiver).
 - **Agent MCP surface**: the same loopback port serves a read-only MCP server at
@@ -202,7 +204,7 @@ the *other* half out of your hands: with `specToken.existingSecret`, a value
 that changes underneath a running deployment produces exactly the 401 above.
 
 Mount your own `front.yaml`/`store.yaml` when you need your own
-`integration_id`, display names, `cp_base_url` / `cp_public_url`, or window sizes — the baked
+display names, `cp_base_url` / `cp_public_url`, or window sizes — the baked
 files are the annotated templates (`config/config.front.example.yaml`,
 `config/config.store.example.yaml`). **Provider contracts are not among those
 knobs**: they are uploaded in the UI (Contracts → Add contract), never
@@ -277,8 +279,11 @@ Flow specifics:
   per deployment, not per pod: the collector
   key it returns lives in the store's settings KV (sqlite file / shared
   postgres) next to the evidence — nothing to mount or copy, and a replaced pod
-  is still Connected. `cp_deploy_token` is only used for that first
-  registration.
+  is still Connected. Connect needs no pre-issued token (2026-09-14): the panel
+  asks for a collector NAME (the deployment's identity in the workspace —
+  unique there, changeable) and a contact email, and the contact's
+  confirmation click is the consent. `cp_deploy_token` is optional and, when
+  set, is used for that first registration only.
 - **What the background ticker sends, and how to turn each leg off.** Once
   Connected, one 15s ticker on the store pod runs three independently gated
   legs, each with its own key in the `flanjui` block (all default `true`):
@@ -318,7 +323,7 @@ the same guard, against this same table.
 
 | Variable | Used by | Required? | Meaning |
 |---|---|---|---|
-| `CP_DEPLOY_TOKEN` | single pod, store pod | to Connect | bearer token for the control plane, used ONCE at registration (the only outbound auth). Without it the collector runs and captures normally; it just cannot create thread links |
+| `CP_DEPLOY_TOKEN` | single pod, store pod | no | OPTIONAL since 2026-09-14: an operator's or per-account deploy token, presented ONCE at registration when set. Connect needs none — a new collector registers with no credential and the contact's confirmation click is the consent; the per-deployment collector key the CP returns authorizes every later call either way |
 | `FLANJ_STORE_ENDPOINT` | front | no | the store pod's OTLP ingest base URL for forwarded calls and findings (default `http://flanj-store:4318`) |
 | `FLANJ_SPEC_TOKEN` | **store pod AND every front** | **yes, on the tiered shape** | shared bearer token for the contract endpoint. **Must be the identical value on the store pod (`flanjstore.spec_token`) and on every front (`flanjdrift.store_pod_token`)** — a front presenting a different one gets `401` and reads no contracts. The store pod refuses to start without it (see "Tiered" above); never logged, on either side. Unused on the single-pod and shared-postgres shapes |
 | `FLANJ_STORE_SPEC_ENDPOINT` | front | no | base URL of the store pod's read-only contract endpoint (default `http://flanj-store:5337`). Override only if you renamed the Service or moved the port. **Unset on a front means `store_pod_endpoint` is still set to the default — it is deleting the key from `front.yaml` that disables REST drift there** |

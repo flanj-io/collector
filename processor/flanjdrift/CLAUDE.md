@@ -137,12 +137,13 @@ store dedups on it — the first call creates the finding, later calls increment
 
 - `factory.go` — loads `self_spec_path` at construction (a bad self spec fails
   the build fast). Provider contracts are NOT loaded here.
-- `config.go` — frozen keys `integration_id`, `self_spec_path`,
-  `self_integration_id`, `store_pod_endpoint`, `store_pod_token` (CONTRACTS §8).
-  `self_spec_path` is the contract THIS org publishes and validates INBOUND
-  (server) responses — self findings are relabeled to `self_integration_id`
-  (default `self`, must differ from `integration_id`) with their signature
-  recomputed, so self and provider drift never merge.
+- `config.go` — frozen keys `self_spec_path`, `store_pod_endpoint`,
+  `store_pod_token` (CONTRACTS §8); `integration_id` and `self_integration_id`
+  are DEPRECATED and ignored (removed from §8 2026-09-14 — decoded so an old
+  config boots, with a warning at construction). `self_spec_path` is the
+  contract THIS org publishes and validates INBOUND (server) responses — self
+  findings are relabeled to `self` with their signature recomputed, so self
+  and provider drift never merge (no SDK-stamped integration is `self`).
 - `speccache.go` — the `specSource` interface, the co-located store
   implementation, and the parsed-document cache keyed by peer host. The refresh
   is metadata-first: it compares `loaded_at` and downloads only what moved, so

@@ -1,8 +1,6 @@
 # Tier: scale — postgres, no PVC, autoscaled fronts, bundled evaluation database.
 specToken:
   value: ci-scale-token-not-a-real-secret
-integration:
-  id: acme-payments
 collector:
   replicas: 2
   autoscaling:

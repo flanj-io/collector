@@ -114,7 +114,8 @@ export interface Health {
   /** Absent until the collector has observed ≥1 external outbound edge (or a
    *  finding) — pre-traffic honesty (v1p1): never emitted from bare config at
    *  zero traffic, and the UI renders no fragment while it is absent. */
-  integration?: string;
+  /** The deployment's NAME (2026-09-14), the CP's copy — '' until Connected. Replaced the config `integration` slug. */
+  collector_name?: string;
   window_rows: number;
   calls: number;
   findings: number;

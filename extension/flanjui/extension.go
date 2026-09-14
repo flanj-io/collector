@@ -109,6 +109,12 @@ func (e *uiExtension) servesFronts() bool {
 // store is resolved lazily (see resolveStore).
 func (e *uiExtension) Start(ctx context.Context, host component.Host) error {
 	e.host = host
+	if e.cfg.IntegrationID != "" {
+		// Deprecated 2026-09-14, and said ONCE at boot: the key is decoded so an
+		// old config still starts, but nothing reads it any more. The value is
+		// not logged — the key name is enough to act on.
+		e.telemetry.Logger.Warn("flanj: integration_id is no longer read (the collector's name is given in the Connect panel) — remove the key from the flanjui block")
+	}
 	if e.cfg.CPBaseURL != "" {
 		e.cp = promote.NewClient(e.cfg.CPBaseURL, e.cfg.CPDeployToken, collectorVersion)
 		// Said at boot rather than only at the first Connect, because a headless

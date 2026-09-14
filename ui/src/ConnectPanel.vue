@@ -1,8 +1,12 @@
 <script setup lang="ts">
-// Connect panel (v0.1a): registers this collector with the control plane —
-// org name + a contact email the control plane confirms with one click. Shown
-// on the Settings tab and inline in the Flag sheet. Local data viewing is never
-// gated on it; only creating a thread link is.
+// Connect panel (v0.1a; open since 2026-09-14): registers this collector with
+// the control plane — a collector NAME (mandatory, unique in the workspace,
+// changeable), the org name and a contact email the control plane confirms
+// with one click. No pre-issued token: the confirmation click is the consent.
+// Shown on the Settings tab and inline in the Flag sheet. Local data viewing is
+// never gated on it; only creating a thread link is. A RENAME is the same
+// form, re-sent with the stored key — the relay carries it; the CP updates the
+// record the key names and nothing else.
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { ApiError, apiPost } from './api';
 import { needsCollectorAddress, type ConnectState } from './threads';
@@ -22,6 +26,7 @@ const props = defineProps<{
 const emit = defineEmits<{ (e: 'update:state', s: ConnectState): void; (e: 'cancel'): void; (e: 'dismiss-address-nudge'): void }>();
 
 const org = ref('');
+const collectorName = ref('');
 const name = ref('');
 const email = ref('');
 const localUrl = ref('');
@@ -67,7 +72,7 @@ onBeforeUnmount(() => {
 
 const touched = ref<ConnectFormTouched>(untouched());
 const focusedField = ref<keyof ConnectFormTouched | null>(null);
-const fieldRefs = { org, name, email, localUrl } as const;
+const fieldRefs = { org, collectorName, name, email, localUrl } as const;
 function markTouched(k: keyof ConnectFormTouched) {
   // Typing marks the field as the user's; clearing it back to empty releases it for
   // prefill again (applySeed still never touches the focused field).
@@ -80,8 +85,15 @@ function setFocus(k: keyof ConnectFormTouched | null) {
 /** force = an explicit user action (open edit / cancel / after submit) — background polls never force. */
 function seedForm(force = false) {
   const seeded = seededValues(props.state, props.defaultOrg, typeof window !== 'undefined' ? window.location.origin : '');
-  const next = applySeed({ org: org.value, name: name.value, email: email.value, localUrl: localUrl.value }, seeded, touched.value, force, focusedField.value);
+  const next = applySeed(
+    { org: org.value, collectorName: collectorName.value, name: name.value, email: email.value, localUrl: localUrl.value },
+    seeded,
+    touched.value,
+    force,
+    focusedField.value
+  );
   org.value = next.org;
+  collectorName.value = next.collectorName;
   name.value = next.name;
   email.value = next.email;
   localUrl.value = next.localUrl;
@@ -89,7 +101,7 @@ function seedForm(force = false) {
 }
 seedForm(true);
 watch(
-  () => [props.state?.status, props.state?.contact_email, props.defaultOrg],
+  () => [props.state?.status, props.state?.contact_email, props.state?.collector_name, props.defaultOrg],
   () => {
     // Background refresh: fill only pristine fields — never clobber typed text.
     if (!editing.value) seedForm(false);
@@ -98,6 +110,7 @@ watch(
 
 const status = computed(() => props.state?.status ?? 'disconnected');
 const localUrlEl = ref<HTMLInputElement | null>(null);
+const collectorNameEl = ref<HTMLInputElement | null>(null);
 const showAddressNudge = computed(
   () => !props.inline && !editing.value && needsCollectorAddress(props.state) && !props.addressNudgeDismissed
 );
@@ -122,6 +135,19 @@ watch(
   }
 );
 
+/** "Rename": the same form, focused on the name. Submit re-registers with the stored key — the
+ *  CP updates the record the key names and nothing else; no confirmation mail goes out. */
+async function rename() {
+  seedForm(true);
+  editing.value = true;
+  attempt.value = null;
+  validation.value = '';
+  errorMsg.value = '';
+  await nextTick();
+  collectorNameEl.value?.focus();
+  collectorNameEl.value?.select();
+}
+
 function validEmail(v: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim());
 }
@@ -133,6 +159,10 @@ async function submit(resend = false) {
     validation.value = 'Add your organization first.';
     return;
   }
+  if (!collectorName.value.trim()) {
+    validation.value = 'Give this collector a name.';
+    return;
+  }
   if (!validEmail(email.value)) {
     validation.value = 'Enter a valid email.';
     return;
@@ -142,6 +172,7 @@ async function submit(resend = false) {
   try {
     const s = await apiPost<ConnectState>('/api/connect', {
       consumer_display_name: org.value.trim(),
+      collector_name: collectorName.value.trim(),
       contact_email: email.value.trim(),
       contact_display_name: name.value.trim(),
       local_ui_url: localUrl.value.trim()
@@ -211,6 +242,13 @@ function cancelEdit() {
       <p class="connect-line">Connected</p>
       <dl class="connect-facts">
         <div class="connect-field">
+          <dt class="k">Collector name</dt>
+          <dd class="v">
+            <span class="v-main">{{ state?.collector_name }}</span>
+            <button type="button" class="btn ghost small" @click="rename">Rename</button>
+          </dd>
+        </div>
+        <div class="connect-field">
           <dt class="k">Organization</dt>
           <dd class="v">{{ state?.consumer_display_name }}</dd>
         </div>
@@ -275,6 +313,11 @@ function cancelEdit() {
         <span class="field-help">Shown to the provider on every thread.</span>
       </label>
       <label class="field">
+        <span class="field-label">Collector name</span>
+        <input ref="collectorNameEl" v-model="collectorName" type="text" autocomplete="off" maxlength="80" placeholder="e.g. prod-eu" :disabled="busy" @input="markTouched('collectorName')" @focus="setFocus('collectorName')" @blur="setFocus(null)" />
+        <span class="field-help">How this deployment appears in your Flanj workspace. Unique there, and you can change it later.</span>
+      </label>
+      <label class="field">
         <span class="field-label">Your name <span class="dim">(optional)</span></span>
         <input v-model="name" type="text" autocomplete="name" :placeholder="org ? 'e.g. Dana (' + org + ')' : 'e.g. Dana'" :disabled="busy" @input="markTouched('name')" @focus="setFocus('name')" @blur="setFocus(null)" />
         <span class="field-help">Shown next to your messages on the thread. Defaults to your organization.</span>
@@ -297,7 +340,7 @@ function cancelEdit() {
         </button>
         <button v-if="editing || inline" type="button" class="btn ghost" :disabled="busy" @click="cancelEdit">Cancel</button>
       </div>
-      <p class="connect-foot">Nothing leaves this collector until you click Connect. Connect sends only the fields above.</p>
+      <p class="connect-foot">Nothing leaves this collector until you click Connect. Connect sends only the fields above; no token is needed — the contact's confirmation click is what adds this collector to their workspace.</p>
     </form>
   </div>
 </template>

@@ -26,7 +26,9 @@
 {{ if not .Values.controlPlane.baseUrl }}
 4. No controlPlane.baseUrl is set, so this deployment is fully local: it
    captures, redacts and detects drift, and it cannot create thread links.
-   Set controlPlane.baseUrl (and controlPlane.deployToken) to Connect.
+   Set controlPlane.baseUrl to Connect (no deploy token is needed — the
+   contact's confirmation click is the consent; controlPlane.deployToken is
+   optional).
 {{- else }}
 4. Connect in the UI (Settings → Connect) to create thread links. The Connected
    pill's dashboard door is minted from

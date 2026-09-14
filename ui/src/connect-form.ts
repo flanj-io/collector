@@ -7,6 +7,8 @@ import type { ConnectState } from './threads';
 
 export interface ConnectFormValues {
   org: string;
+  /** The collector's name (2026-09-14) — mandatory at Connect, changeable after. */
+  collectorName: string;
   name: string;
   email: string;
   localUrl: string;
@@ -15,13 +17,14 @@ export interface ConnectFormValues {
 export type ConnectFormTouched = { [K in keyof ConnectFormValues]: boolean };
 
 export function untouched(): ConnectFormTouched {
-  return { org: false, name: false, email: false, localUrl: false };
+  return { org: false, collectorName: false, name: false, email: false, localUrl: false };
 }
 
 /** The values a fresh seed would produce from the current state. */
 export function seededValues(state: ConnectState | null, defaultOrg: string | undefined, origin: string): ConnectFormValues {
   return {
     org: state?.consumer_display_name || defaultOrg || '',
+    collectorName: state?.collector_name || '',
     name: state?.contact_display_name || '',
     email: state?.contact_email || '',
     localUrl: state?.local_ui_url || origin
@@ -47,5 +50,5 @@ export function applySeed(
     if (!touched[k] || current[k] === '') return seeded[k];
     return current[k];
   };
-  return { org: pick('org'), name: pick('name'), email: pick('email'), localUrl: pick('localUrl') };
+  return { org: pick('org'), collectorName: pick('collectorName'), name: pick('name'), email: pick('email'), localUrl: pick('localUrl') };
 }

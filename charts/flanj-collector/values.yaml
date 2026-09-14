@@ -54,8 +54,9 @@ specToken:
 
 # -- Identity ----------------------------------------------------------------
 integration:
-  # Labels this integration on flags and findings (flanjdrift.integration_id +
-  # flanjui.integration_id). Optional, but a thread reads better with one.
+  # id: DEPRECATED and IGNORED (CONTRACTS §8, 2026-09-14) — the deployment's
+  # identity is its collector NAME, given in the Connect panel. Accepted so an
+  # existing values file still installs; nothing is rendered from it.
   id: ""
   # "shared by <name>" on the peek screen — who is running this collector.
   consumerDisplayName: ""
@@ -122,6 +123,9 @@ collector:
   # responses (flanjdrift.self_spec_path). Mount it yourself via extraVolumes /
   # extraVolumeMounts and name the path here; empty disables self validation.
   selfSpecPath: ""
+  # selfIntegrationId: DEPRECATED and IGNORED (2026-09-14, with integration_id):
+  # self-spec findings are always labelled `self`. Accepted so an existing
+  # values file still installs; nothing is rendered from it.
   selfIntegrationId: ""
 
   # Escape hatch: a complete front config that REPLACES everything the chart

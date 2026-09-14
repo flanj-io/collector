@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/flanj-io/collector/internal/promote"
 )
@@ -274,10 +275,135 @@ func connectRig(t *testing.T, r *testRig) {
 	t.Helper()
 	if resp, _, raw := r.do(t, http.MethodPost, "/api/connect", map[string]string{
 		"consumer_display_name": "Acme Consumer Ltd",
+		"collector_name":        "prod-eu",
 		"contact_email":         "ops@acme.test",
 		"contact_display_name":  "Dana",
 	}); resp.StatusCode != 202 && resp.StatusCode != 200 {
 		t.Fatalf("connect: %d %s", resp.StatusCode, raw)
+	}
+}
+
+// The collector name (2026-09-14). Mandatory at Connect; the relay keeps the CP's
+// copy (from the register response, then from `me`), sends it on every register,
+// and a different name with the stored key is a rename — no new registration.
+func TestConnectCollectorName(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+
+	// Mandatory: a Connect without a name never leaves the collector.
+	resp, out, raw := r.do(t, http.MethodPost, "/api/connect", map[string]string{
+		"consumer_display_name": "Acme Consumer Ltd",
+		"contact_email":         "ops@acme.test",
+	})
+	if resp.StatusCode != 400 || out["error"] != "collector_name_required" {
+		t.Fatalf("connect without a name: %d %s", resp.StatusCode, raw)
+	}
+	if r.cp.registerCalls != 0 {
+		t.Fatalf("a refused Connect must not reach the CP; register calls = %d", r.cp.registerCalls)
+	}
+	// A name that is only redaction residue is no name either.
+	resp, out, raw = r.do(t, http.MethodPost, "/api/connect", map[string]string{
+		"consumer_display_name": "Acme Consumer Ltd",
+		"collector_name":        "   ",
+		"contact_email":         "ops@acme.test",
+	})
+	if resp.StatusCode != 400 || out["error"] != "collector_name_required" {
+		t.Fatalf("connect with a blank name: %d %s", resp.StatusCode, raw)
+	}
+
+	// Connect: the name goes out on the wire and the CP's copy comes back into the view.
+	resp, out, raw = r.do(t, http.MethodPost, "/api/connect", map[string]string{
+		"consumer_display_name": "Acme Consumer Ltd",
+		"collector_name":        "  prod   eu  ",
+		"contact_email":         "ops@acme.test",
+	})
+	if resp.StatusCode != 202 {
+		t.Fatalf("connect: %d %s", resp.StatusCode, raw)
+	}
+	if got := r.cp.lastRegisterBody["collector_name"]; got != "prod eu" {
+		t.Fatalf("register body collector_name = %v, want the trimmed name", got)
+	}
+	if out["collector_name"] != "prod eu" {
+		t.Fatalf("view collector_name = %v, want the CP's copy", out["collector_name"])
+	}
+	if v, ok, _ := r.st.GetSetting("connect.collector_name"); !ok || v != "prod eu" {
+		t.Fatalf("stored collector_name = %q (%v)", v, ok)
+	}
+	// /api/health names the deployment too — the Overview's scope line reads it.
+	_, health, _ := r.do(t, http.MethodGet, "/api/health", nil)
+	if health["collector_name"] != "prod eu" {
+		t.Fatalf("health collector_name = %v", health["collector_name"])
+	}
+
+	// A rename: the same call with the stored KEY and a new name; the CP's answer is kept.
+	resp, out, raw = r.do(t, http.MethodPost, "/api/connect", map[string]string{
+		"consumer_display_name": "Acme Consumer Ltd",
+		"collector_name":        "prod-eu-blue",
+		"contact_email":         "ops@acme.test",
+	})
+	if resp.StatusCode != 202 && resp.StatusCode != 200 {
+		t.Fatalf("rename: %d %s", resp.StatusCode, raw)
+	}
+	if got := r.cp.registerAuths; len(got) != 2 || got[1] != "Bearer "+r.cp.collectorKey {
+		t.Fatalf("the rename must go out with the collector KEY: bearers = %v", got)
+	}
+	if out["collector_name"] != "prod-eu-blue" {
+		t.Fatalf("renamed view collector_name = %v", out["collector_name"])
+	}
+
+	// A rename made on the DASHBOARD reaches the panel through `me` on the next refresh.
+	r.cp.mu.Lock()
+	r.cp.collectorName = "renamed-on-d"
+	r.cp.mu.Unlock()
+	r.ext.me.mu.Lock()
+	r.ext.me.at = time.Time{}
+	r.ext.me.mu.Unlock()
+	_, out, _ = r.do(t, http.MethodGet, "/api/connect", nil)
+	if out["collector_name"] != "renamed-on-d" {
+		t.Fatalf("GET /api/connect after a dashboard rename = %v, want the CP's copy", out["collector_name"])
+	}
+	// The name is display text: it never reaches a log line as a value we chose to print.
+	r.assertNeverLogged(t, r.cp.collectorKey)
+}
+
+// The open door (2026-09-14): with NO cp_deploy_token the first Connect goes out
+// with no Authorization header at all — not `Bearer ` with nothing after it,
+// which the CP refuses as a malformed credential — and every later call carries
+// the key the CP returned.
+func TestConnectWithoutDeployToken(t *testing.T) {
+	r := newRig(t)
+	r.cp.deployToken = "" // the stub accepts the anonymous shape only when it has no token itself
+	r.start(t)
+	r.ext.cp = promote.NewClient(r.cp.srv.URL, "", "v-test")
+
+	connectRig(t, r)
+	if got := r.cp.registerAuths; len(got) != 1 || got[0] != "" {
+		t.Fatalf("the first Connect with no token must send NO Authorization header: %q", got)
+	}
+	if v, ok, _ := r.st.GetSetting("connect.collector_key"); !ok || v != r.cp.collectorKey {
+		t.Fatalf("the key the CP returned must be persisted: %q (%v)", v, ok)
+	}
+	// From here on the key authorizes everything — a resend included.
+	connectRig(t, r)
+	if got := r.cp.registerAuths; len(got) != 2 || got[1] != "Bearer "+r.cp.collectorKey {
+		t.Fatalf("the second register must carry the KEY: %q", got)
+	}
+	// The CP's 409 for a name the workspace already holds is passed through as its own sentence.
+	r2 := newRig(t)
+	r2.cp.deployToken = ""
+	r2.start(t)
+	r2.ext.cp = promote.NewClient(r2.cp.srv.URL, "", "v-test")
+	r2.cp.registerCalls = 1 // the stub's second anonymous register is the collision
+	resp, out, raw := r2.do(t, http.MethodPost, "/api/connect", map[string]string{
+		"consumer_display_name": "Acme Consumer Ltd",
+		"collector_name":        "prod-eu",
+		"contact_email":         "ops@acme.test",
+	})
+	if resp.StatusCode != 409 || out["error"] != "collector_name_taken" {
+		t.Fatalf("a taken name must surface as the CP's 409: %d %s", resp.StatusCode, raw)
+	}
+	if !strings.Contains(out["message"].(string), "choose a different name") {
+		t.Fatalf("the CP's own sentence must be rendered: %v", out["message"])
 	}
 }
 
@@ -347,7 +473,7 @@ func TestConnectAgainstAPlaceholderCPSaysSo(t *testing.T) {
 	r.cp.srv.Close()
 
 	resp, out, _ := r.do(t, http.MethodPost, "/api/connect", map[string]string{
-		"consumer_display_name": "Stranger Test", "contact_email": "nobody@acme.test"})
+		"consumer_display_name": "Stranger Test", "collector_name": "prod-eu", "contact_email": "nobody@acme.test"})
 	if resp.StatusCode != 502 || out["error"] != "cp_unreachable" {
 		t.Fatalf("want 502 cp_unreachable, got %d %v", resp.StatusCode, out)
 	}
@@ -370,7 +496,7 @@ func TestConnectAgainstAnInNetworkCPKeepsTheNetworkMessage(t *testing.T) {
 	r.cp.srv.Close()
 
 	resp, out, _ := r.do(t, http.MethodPost, "/api/connect", map[string]string{
-		"consumer_display_name": "Acme", "contact_email": "ops@acme.test"})
+		"consumer_display_name": "Acme", "collector_name": "prod-eu", "contact_email": "ops@acme.test"})
 	if resp.StatusCode != 502 || out["error"] != "cp_unreachable" {
 		t.Fatalf("want 502 cp_unreachable, got %d %v", resp.StatusCode, out)
 	}

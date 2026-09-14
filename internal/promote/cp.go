@@ -16,11 +16,13 @@ import (
 
 // The v0.1a control-plane client surface (CONTRACTS §5, collector-facing subset).
 //
-// Two bearers exist: the install-time deploy token (cp_deploy_token), accepted
-// ONLY by register (Connect), and the per-deployment collector key that register
-// returns — persisted in the store, never logged — which authorizes everything
-// else (flag, thread mutations, summary, me). A Client carries both; bearer()
-// picks the key when present. Neither ever appears in an error message or log.
+// Two bearers exist: the OPTIONAL deploy token (cp_deploy_token), accepted
+// ONLY by register (Connect) — since 2026-09-14 a new collector may register
+// with NO credential at all, and the contact's confirmation click is the
+// consent — and the per-deployment collector key that register returns —
+// persisted in the store, never logged — which authorizes everything else
+// (flag, thread mutations, summary, me). A Client carries both; bearer() picks
+// the key when present. Neither ever appears in an error message or log.
 
 // CPError is a non-2xx control-plane answer with its JSON {error,message} body
 // decoded (CONTRACTS §5: errors are JSON {"error": "<code>", "message": "<human>"}).
@@ -50,12 +52,20 @@ func AsCPError(err error) *CPError {
 	return nil
 }
 
-// RegisterRequest is POST /api/v1/collectors/register (Bearer cp_deploy_token).
+// RegisterRequest is POST /api/v1/collectors/register (no credential, Bearer
+// cp_deploy_token, or Bearer collector key — CONTRACTS §5).
 type RegisterRequest struct {
 	ConsumerDisplayName string `json:"consumer_display_name"`
 	ContactEmail        string `json:"contact_email"`
-	ContactDisplayName  string `json:"contact_display_name,omitempty"`
-	LocalUIURL          string `json:"local_ui_url,omitempty"`
+	// CollectorName is the deployment's NAME (2026-09-14): unique within the
+	// contact's workspace, changeable. Required by the CP from a collector
+	// that knows the field, which this one does — the relay refuses a Connect
+	// without one, so it is never omitted from the wire; `omitempty` only
+	// keeps a hand-built request from sending an empty string, which the CP
+	// answers with a 400.
+	CollectorName      string `json:"collector_name,omitempty"`
+	ContactDisplayName string `json:"contact_display_name,omitempty"`
+	LocalUIURL         string `json:"local_ui_url,omitempty"`
 }
 
 // Confirmation-mail outcomes (CONTRACTS-CP §5.1, additive). A 2xx says the
@@ -75,7 +85,12 @@ type RegisterResponse struct {
 	CollectorID       string `json:"collector_id"`
 	CollectorPublicID string `json:"collector_public_id"`
 	CollectorKey      string `json:"collector_key"`
-	ContactStatus     string `json:"contact_status"`
+	// CollectorName is the name as the CP STORED it after this call — the
+	// one sent, or the one the CP derived for a collector that sent none
+	// (CollectorNameDerived). The relay keeps the CP's copy, never its own.
+	CollectorName        string `json:"collector_name"`
+	CollectorNameDerived bool   `json:"collector_name_derived"`
+	ContactStatus        string `json:"contact_status"`
 	// ConfirmationMail is what actually happened to the confirmation mail on
 	// this call: sent | failed | cooldown, or "" when the CP reported none.
 	// NEVER infer "sent" from the 2xx — that inference is the bug this field
@@ -88,6 +103,9 @@ type RegisterResponse struct {
 
 // MeResponse is GET /api/v1/collectors/me (Bearer collector key).
 type MeResponse struct {
+	// CollectorName is the stored name after any rename — the dashboard's
+	// rename (CONTRACTS-CP §5.21) reaches the panel through this field.
+	CollectorName       string `json:"collector_name"`
 	CollectorID         string `json:"collector_id"`
 	CollectorPublicID   string `json:"collector_public_id"`
 	ConsumerDisplayName string `json:"consumer_display_name"`
@@ -192,12 +210,15 @@ func (c *Client) bearer() string {
 }
 
 // Register performs the FIRST Connect of a deployment: POST
-// /api/v1/collectors/register with the DEPLOY token (the only call that ever
-// uses it after v0.1a). 201 first time, 200 on the idempotent replay. Once a
-// collector key exists the collector MUST use RegisterWithKey instead — the CP
-// has one deploy token and cannot tell deployments apart by it (CONTRACTS-CP
-// §5.1): a deploy-token register with another email would create a NEW
-// collector.
+// /api/v1/collectors/register with the DEPLOY token when one is configured
+// (the only call that ever uses it) and with NO Authorization header when none
+// is — the open door (CONTRACTS §5, 2026-09-14): a new collector needs no
+// pre-issued token, and the CP mails the contact whose click is the consent.
+// 201 first time, 200 on the idempotent replay (a deploy token only — with no
+// credential the CP never replays: a name it already holds in the contact's
+// workspace is a 409). Once a collector key exists the collector MUST use
+// RegisterWithKey instead — the key is the deployment's identity; a register
+// without it is a NEW collector.
 func (c *Client) Register(ctx context.Context, req RegisterRequest) (RegisterResponse, int, error) {
 	var out RegisterResponse
 	status, err := c.do(ctx, http.MethodPost, "/api/v1/collectors/register", c.DeployToken, req, &out, http.StatusCreated, http.StatusOK)
@@ -303,7 +324,12 @@ func (c *Client) do(ctx context.Context, method, path, bearer string, req any, o
 		httpReq.Header.Set("Content-Type", "application/json")
 	}
 	httpReq.Header.Set("Accept", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+bearer)
+	// No credential at all → no header at all. A `Bearer ` with nothing after
+	// it is a MALFORMED credential, and the CP refuses it with a 401 rather
+	// than treating it as "no credential" (CONTRACTS-CP §5.1).
+	if bearer != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+bearer)
+	}
 	httpReq.Header.Set("X-Flanj-Collector-Version", c.CollectorVersion)
 	httpReq.Header.Set("X-Flanj-Schema-Version", fmt.Sprintf("%d", model.SchemaVersion))
 

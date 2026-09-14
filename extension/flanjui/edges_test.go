@@ -229,6 +229,7 @@ func TestConnectCarriesEdgeSyncOnBothVerbs(t *testing.T) {
 
 		_, post, _ := r.do(t, "POST", "/api/connect", map[string]any{
 			"consumer_display_name": "CustomerX",
+			"collector_name":        "prod-eu",
 			"contact_email":         "ops@customerx.example",
 		})
 		if got, ok := post["edge_sync"].(bool); !ok || got != on {

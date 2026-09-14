@@ -15,24 +15,31 @@ import (
 	"github.com/flanj-io/collector/internal/store"
 )
 
-// Connect (v0.1a): the collector registers ONCE per deployment with the
-// install-time deploy token and receives a per-deployment collector key, which
+// Connect (v0.1a; open since 2026-09-14): the collector registers ONCE per
+// deployment — with the optional deploy token when one is configured, with NO
+// credential otherwise — and receives a per-deployment collector key, which
 // authorizes every later CP call; the contact confirms their email with one
-// click. Everything lives in the store's settings KV (`connect.*`) — shared by
-// every pod of a deployment, never a per-pod file — and is read on every relay
-// call. The key is never logged and never returned to the UI.
+// click, and that click is the consent. Everything lives in the store's
+// settings KV (`connect.*`) — shared by every pod of a deployment, never a
+// per-pod file — and is read on every relay call. The key is never logged and
+// never returned to the UI.
 //
-// Once a key exists, every later register (resend / change of contact) is sent
-// with Bearer <collector key> (CONTRACTS-CP §5.1) — the CP has one deploy token
-// and cannot tell deployments apart by it; the key never changes. A change of
-// contact leaves the previously confirmed email usable for threads until the
-// new one confirms (`confirmed_contact_email` from `me`), so the relay gates
-// Create thread on "a confirmed contact exists", not on "the latest contact is
-// confirmed".
+// THE KEY IS THE IDENTITY; THE NAME IS A LABEL. `collector_name` (2026-09-14)
+// is mandatory at Connect, unique within the contact's workspace on the CP,
+// and changeable: once a key exists, every later register — a resend, a change
+// of contact, or a RENAME (the same call with a new name) — is sent with
+// Bearer <collector key> (CONTRACTS-CP §5.1); the CP updates the record the key
+// names and nothing else. The relay keeps the CP's copy of the name (from the
+// register response and from `me`), so a rename made on the dashboard reaches
+// the panel too. A change of contact leaves the previously confirmed email
+// usable for threads until the new one confirms (`confirmed_contact_email`
+// from `me`), so the relay gates Create thread on "a confirmed contact
+// exists", not on "the latest contact is confirmed".
 
 const (
 	settingCollectorKey        = "connect.collector_key"
 	settingCollectorPublicID   = "connect.collector_public_id"
+	settingCollectorName       = "connect.collector_name"
 	settingConsumerDisplayName = "connect.consumer_display_name"
 	settingContactEmail        = "connect.contact_email"
 	settingContactDisplayName  = "connect.contact_display_name"
@@ -55,6 +62,7 @@ const (
 type connectState struct {
 	CollectorKey          string // the secret — never serialized, never logged
 	CollectorPublicID     string
+	CollectorName         string // the CP's copy of the name (2026-09-14)
 	ConsumerDisplayName   string
 	ContactEmail          string // the most recent (possibly pending) contact
 	ContactDisplayName    string
@@ -103,6 +111,7 @@ func (cs connectState) status() string {
 func (cs connectState) view() map[string]any {
 	out := map[string]any{
 		"status":                cs.status(),
+		"collector_name":        nullable(cs.CollectorName),
 		"consumer_display_name": nullable(cs.ConsumerDisplayName),
 		"contact_email":         nullable(cs.ContactEmail),
 		"contact_display_name":  nullable(cs.ContactDisplayName),
@@ -155,6 +164,7 @@ func loadConnect(st store.Store) (connectState, error) {
 	}{
 		{settingCollectorKey, &cs.CollectorKey},
 		{settingCollectorPublicID, &cs.CollectorPublicID},
+		{settingCollectorName, &cs.CollectorName},
 		{settingConsumerDisplayName, &cs.ConsumerDisplayName},
 		{settingContactEmail, &cs.ContactEmail},
 		{settingContactDisplayName, &cs.ContactDisplayName},
@@ -181,6 +191,7 @@ func loadConnect(st store.Store) (connectState, error) {
 func saveConnect(st store.Store, cs connectState) error {
 	puts := map[string]string{
 		settingCollectorPublicID:     cs.CollectorPublicID,
+		settingCollectorName:         cs.CollectorName,
 		settingConsumerDisplayName:   cs.ConsumerDisplayName,
 		settingContactEmail:          cs.ContactEmail,
 		settingContactDisplayName:    cs.ContactDisplayName,
@@ -256,6 +267,9 @@ func (e *uiExtension) refreshConnect(ctx context.Context, st store.Store, cs con
 		}
 	}
 	set(&cs.CollectorPublicID, me.CollectorPublicID)
+	// The name is the CP's to hold: a rename made on the dashboard (§5.21)
+	// lands here on the next refresh, so the panel never shows a stale one.
+	set(&cs.CollectorName, me.CollectorName)
 	set(&cs.ConsumerDisplayName, me.ConsumerDisplayName)
 	set(&cs.ContactEmail, me.ContactEmail)
 	set(&cs.ContactDisplayName, me.ContactDisplayName)
@@ -536,6 +550,7 @@ var publicTLDs = map[string]bool{
 type connectRequestBody struct {
 	ConsumerDisplayName string `json:"consumer_display_name"`
 	ContactEmail        string `json:"contact_email"`
+	CollectorName       string `json:"collector_name"`
 	ContactDisplayName  string `json:"contact_display_name"`
 	LocalUIURL          string `json:"local_ui_url"`
 }
@@ -543,8 +558,9 @@ type connectRequestBody struct {
 // handleConnectPost is Connect. Idempotent: read-before-register; the same
 // contact email = a resend (same key, no second registration state); a
 // different email = a new pending contact on the same collector (the CP keeps
-// the previous confirmed one until the new one confirms). Nothing leaves the
-// collector until this is called.
+// the previous confirmed one until the new one confirms); a different
+// collector_name = a RENAME of this collector on the CP (2026-09-14). Nothing
+// leaves the collector until this is called.
 func (e *uiExtension) handleConnectPost(w http.ResponseWriter, r *http.Request) {
 	if !e.guardMutating(w, r) {
 		return
@@ -555,18 +571,34 @@ func (e *uiExtension) handleConnectPost(w http.ResponseWriter, r *http.Request) 
 	}
 	body.ConsumerDisplayName = strings.TrimSpace(body.ConsumerDisplayName)
 	body.ContactEmail = strings.TrimSpace(body.ContactEmail)
+	// Whitespace collapsed like the CP will collapse it, so what the panel shows before the
+	// answer lands is what the answer will say.
+	body.CollectorName = strings.Join(strings.Fields(body.CollectorName), " ")
 	body.ContactDisplayName = strings.TrimSpace(body.ContactDisplayName)
 	body.LocalUIURL = strings.TrimSpace(body.LocalUIURL)
 	if body.ConsumerDisplayName == "" || body.ContactEmail == "" {
 		writeErr(w, http.StatusBadRequest, "missing_fields", msgConnectFields)
 		return
 	}
+	// The name is MANDATORY (2026-09-14): this collector knows the field, so
+	// the CP requires it from us, and a Connect without one would register a
+	// deployment nobody can tell apart on the dashboard.
+	if body.CollectorName == "" {
+		writeErr(w, http.StatusBadRequest, "collector_name_required", msgConnectNameRequired)
+		return
+	}
 	// Display names are free text that leaves the collector (and is shown on
 	// every thread): run them through the redaction floor, like the flag
-	// message, before anything is sent or persisted.
+	// message, before anything is sent or persisted. The collector name too —
+	// it is shown on the dashboard and in the confirmation mail.
 	rd := redact.New()
 	body.ConsumerDisplayName = strings.TrimSpace(rd.Redact(body.ConsumerDisplayName).Text)
 	body.ContactDisplayName = strings.TrimSpace(rd.Redact(body.ContactDisplayName).Text)
+	body.CollectorName = strings.TrimSpace(rd.Redact(body.CollectorName).Text)
+	if body.CollectorName == "" {
+		writeErr(w, http.StatusBadRequest, "collector_name_required", msgConnectNameRequired)
+		return
+	}
 	if addr, err := mail.ParseAddress(body.ContactEmail); err != nil || addr.Address != body.ContactEmail || !strings.Contains(body.ContactEmail, "@") {
 		writeErr(w, http.StatusBadRequest, "invalid_email", msgInvalidEmail)
 		return
@@ -581,15 +613,18 @@ func (e *uiExtension) handleConnectPost(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// First Connect: register with the deploy token; the collector key is
-	// returned once. Afterwards EVERY register goes out with the collector key
-	// (CONTRACTS-CP §5.1): the same email only re-sends the confirmation; a
-	// different email starts a new pending contact on the same collector. The
-	// deploy token is never used again once a key exists — with it the CP
-	// could not tell this deployment apart and would register a new collector.
+	// First Connect: register with the deploy token when one is configured,
+	// with no credential otherwise (the open door, 2026-09-14); the collector
+	// key is returned once. Afterwards EVERY register goes out with the
+	// collector key (CONTRACTS-CP §5.1): the same email only re-sends the
+	// confirmation; a different email starts a new pending contact on the same
+	// collector; a different collector_name renames it. The deploy token is
+	// never used again once a key exists — a register without the key is a NEW
+	// collector on the CP.
 	req := promote.RegisterRequest{
 		ConsumerDisplayName: body.ConsumerDisplayName,
 		ContactEmail:        body.ContactEmail,
+		CollectorName:       body.CollectorName,
 		ContactDisplayName:  body.ContactDisplayName,
 		LocalUIURL:          body.LocalUIURL,
 	}
@@ -621,6 +656,14 @@ func (e *uiExtension) handleConnectPost(w http.ResponseWriter, r *http.Request) 
 	}
 	if resp.CollectorPublicID != "" {
 		cs.CollectorPublicID = resp.CollectorPublicID
+	}
+	// The CP's copy of the name, not ours: it is what the workspace sees, and
+	// it can differ from what was sent (a CP that cleaned it). An older CP
+	// that reports none keeps what the operator typed.
+	if resp.CollectorName != "" {
+		cs.CollectorName = resp.CollectorName
+	} else {
+		cs.CollectorName = body.CollectorName
 	}
 	cs.ConsumerDisplayName = body.ConsumerDisplayName
 	cs.ContactEmail = body.ContactEmail

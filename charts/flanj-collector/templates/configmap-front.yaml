@@ -2,8 +2,7 @@
 {{/*
 The FRONT role's config (config/config.front.example.yaml is the annotated
 original). Rendered rather than using the image's baked /etc/flanj/front.yaml,
-because the baked file carries example identity (integration_id: acme-payments)
-and the example store Service name — this one carries yours and the Services
+because the baked file carries the example store Service name — this one carries yours and the Services
 this release actually created. Mounted at /etc/flanj/chart/front.yaml so the
 baked files stay readable next to it.
 
@@ -38,16 +37,10 @@ data:
       flanjredaction: {}
 
       flanjdrift:
-        {{- with .Values.integration.id }}
-        integration_id: {{ . | quote }}
-        {{- end }}
         store_pod_endpoint: {{ include "flanj-collector.storeSpecEndpoint" . | quote }}
         store_pod_token: ${env:FLANJ_SPEC_TOKEN}
         {{- with .Values.collector.selfSpecPath }}
         self_spec_path: {{ . | quote }}
-        {{- end }}
-        {{- with .Values.collector.selfIntegrationId }}
-        self_integration_id: {{ . | quote }}
         {{- end }}
 
     exporters:

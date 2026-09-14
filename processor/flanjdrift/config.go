@@ -15,9 +15,11 @@ import "errors"
 // binds each contract to exactly one host, which the singular config model
 // could not express.
 type Config struct {
-	// IntegrationID labels findings from the self spec's sibling config and is
-	// read by the UI extension. Provider findings take their integration from
-	// the call the SDK stamped, not from here.
+	// IntegrationID is DEPRECATED and IGNORED (removed from CONTRACTS §8,
+	// 2026-09-14): a finding's integration is the one the SDK stamped on the
+	// call, and never came from here; the deployment's identity is its
+	// collector NAME on the control plane. Still decodable so a config that
+	// carries it boots, with a one-line warning at construction.
 	IntegrationID string `mapstructure:"integration_id"`
 
 	// SelfSpecPath is the org's OWN OpenAPI spec — the contract THIS org
@@ -29,8 +31,10 @@ type Config struct {
 	// one per vendor, so it has neither the plurality problem nor the freshness
 	// problem that moved provider contracts into the UI.
 	SelfSpecPath string `mapstructure:"self_spec_path"`
-	// SelfIntegrationID labels findings from the self spec (default "self").
-	// Must differ from integration_id so self and provider findings never merge.
+	// SelfIntegrationID is DEPRECATED and IGNORED (2026-09-14, with
+	// integration_id): self-spec findings are always labelled "self", which
+	// no SDK-stamped integration is, so self and provider findings never
+	// merge without a knob. Decodable so an old config boots.
 	SelfIntegrationID string `mapstructure:"self_integration_id"`
 
 	// StorePodEndpoint is the tiered topology's spec channel: the base URL of
@@ -51,19 +55,28 @@ type Config struct {
 // `flanjdrift: {}` is valid and makes the processor a pass-through until a
 // contract is uploaded.
 func (c *Config) Validate() error {
-	if c.SelfSpecPath != "" && c.selfIntegration() == c.IntegrationID {
-		return errors.New("flanjdrift: self_integration_id must differ from integration_id (self and provider findings must not merge)")
-	}
 	if c.StorePodToken != "" && c.StorePodEndpoint == "" {
 		return errors.New("flanjdrift: store_pod_token needs store_pod_endpoint (a token with nothing to authenticate to is a misconfiguration, not a default)")
 	}
 	return nil
 }
 
-// selfIntegration returns the label for self-spec findings ("self" by default).
+// selfIntegration is the label for self-spec findings: always "self" since
+// 2026-09-14 (self_integration_id is ignored). Kept as a method so the two call
+// sites read the rule from one place.
 func (c *Config) selfIntegration() string {
-	if c.SelfIntegrationID != "" {
-		return c.SelfIntegrationID
-	}
 	return "self"
+}
+
+// deprecatedKeys names the removed CONTRACTS §8 keys this config still carries,
+// for the one-line boot warning. Empty when it carries none.
+func (c *Config) deprecatedKeys() []string {
+	var keys []string
+	if c.IntegrationID != "" {
+		keys = append(keys, "integration_id")
+	}
+	if c.SelfIntegrationID != "" {
+		keys = append(keys, "self_integration_id")
+	}
+	return keys
 }

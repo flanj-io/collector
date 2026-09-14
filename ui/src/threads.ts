@@ -137,6 +137,9 @@ export const THREADS_NOT_CONNECTED_NOTICE =
 
 export interface ConnectState {
   status: ConnectStatus;
+  /** The deployment's NAME (2026-09-14): unique in the workspace, changeable.
+   *  The CP's copy — a rename made on the dashboard lands here through `me`. */
+  collector_name?: string | null;
   consumer_display_name?: string;
   contact_email?: string;
   contact_display_name?: string;

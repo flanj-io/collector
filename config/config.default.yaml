@@ -20,8 +20,8 @@
 # is deliberate — looking around without connecting is a property of this thing,
 # so an unconfigured collector must boot rather than refuse.
 #
-# TO CONNECT: copy config/config.example.yaml, set integration_id,
-# consumer_display_name, cp_base_url and cp_deploy_token, and mount it over
+# TO CONNECT: copy config/config.example.yaml, set consumer_display_name and
+# cp_base_url (a deploy token is optional since 2026-09-14), and mount it over
 # /etc/flanj/config.yaml (README "Run it on a laptop"). Every key is frozen in
 # contracts/CONTRACTS.md §8; the example documents all of them, this file
 # documents none, and that split is the point.
@@ -38,12 +38,14 @@ extensions:
 
   flanjui:
     ui_endpoint: 127.0.0.1:5335 # loopback only — the collector is outbound-only
-    # integration_id, consumer_display_name, provider_display_name: ABSENT on
-    # purpose. An identity belongs to whoever installed this collector, and the
-    # image has never met them. Connect asks for the org name in the UI.
+    # consumer_display_name, provider_display_name: ABSENT on purpose. An
+    # identity belongs to whoever installed this collector, and the image has
+    # never met them. Connect asks for the org name and the collector's NAME in
+    # the UI (the name is the deployment's identity — CONTRACTS §5, 2026-09-14).
     #
-    # cp_base_url, cp_deploy_token: ABSENT on purpose. With no base URL the CP
-    # client is never built, so nothing outbound exists to fail. The sync
+    # cp_base_url: ABSENT on purpose. With no base URL the CP client is never
+    # built, so nothing outbound exists to fail. (cp_deploy_token is optional
+    # everywhere: Connect needs no pre-issued token.) The sync
     # switches (finding_sync, directory_sync, edge_sync) default true and are
     # inert without it — they return early with no collector key.
 
