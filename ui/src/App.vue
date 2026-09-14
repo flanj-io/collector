@@ -1600,10 +1600,10 @@ watch(tab, (t) => {
         :class="m.headline.tone"
       >
         <svg class="hx" :class="toneClass(m.headline.tone)" aria-hidden="true" focusable="false"><use href="#hxbolt" /></svg>
-        <!-- The deck's sentence stays whole (`Server: … You: …`): its clause is
-             pinned lowercase by e2e headline-fresh, so it is the one line that
-             keeps its pivot. A description-only change names itself in the
-             clause but never takes the drift tone (ui/src/mcp.ts). -->
+        <!-- The deck's sentence stays whole (`Server: … — …`): its clause is
+             pinned lowercase by e2e headline-fresh. A description-only change
+             names itself in the clause but never takes the drift tone
+             (ui/src/mcp.ts). -->
         <div class="hl-you">
           <span class="mcp-badge" :title="MCP_BADGE_TOOLTIP">MCP</span>
           <strong>{{ m.headline.text }}</strong>

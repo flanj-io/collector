@@ -64,7 +64,7 @@ export const NOTHING_VALIDATED_YET = 'Nothing validated yet';
 
 /**
  * The same zero state in clause position, for a headline that reads
- * `Server: <name>. You: <clause>` — the per-server MCP line. Derived, not
+ * `Server: <name> — <clause>` — the per-server MCP line. Derived, not
  * retyped, so A6's ruling moves both lines with one edit.
  */
 export const NOTHING_VALIDATED_YET_CLAUSE =
