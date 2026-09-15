@@ -397,55 +397,170 @@ export function findingIdFromHash(hash: string): string | null {
   }
 }
 
-// ─── Who may open the thread (thread-domain-gate, 2026-09-14) ─────────────
-// The sheet's "Open to" field. A thread is shared with the email domains the
-// operator names — a reader confirms an address at one of them before the
-// control plane shows them anything — or, as an EXPLICIT choice, with anyone
-// who holds the link. There is no silent default: the relay refuses a create
-// that says neither, and so does this sheet, before the click.
+// ─── Who can open the thread (thread-domain-gate; three modes 2026-09-15) ──
+// The sheet's "Who can open it" choice. Three modes, ALWAYS in this order:
+// specific people (exact addresses), anyone at a domain (a reader confirms an
+// address there), or — as an explicit choice — anyone who holds the link. On
+// the wire it is always BOTH keys: the chosen list and null, or both null for
+// anyone. The relay refuses a create that carries neither key, and this sheet
+// refuses an unusable list before anything is posted. Every string here is
+// final copy (open-to-v2 §6).
 
-export const OPEN_TO_LABEL = 'Open to';
-export const OPEN_TO_PLACEHOLDER = 'their-company.com';
-/** Under the field while it is empty or being typed. */
-export const OPEN_TO_HELP = 'Email domains, comma-separated. People with an address there confirm it once to open the thread; nobody else can read it.';
-/** The explicit opt-out, worded so it cannot be mistaken for the default. */
-export const OPEN_TO_ANYONE_LABEL = 'Anyone with the link — not recommended';
-/** Create thread is inert while the field says nothing and the box is unticked. */
-export const OPEN_TO_REQUIRED = 'Name at least one domain, or choose Anyone with the link.';
-export const OPEN_TO_MAX = 20;
-export function openToTooMany(): string {
-  return `A thread can be open to at most ${OPEN_TO_MAX} domains.`;
+export type OpenToMode = 'emails' | 'domains' | 'anyone';
+/** What a sheet is sharing: a flag's redacted evidence, or a question's message. */
+export type OpenToWhat = 'evidence' | 'message';
+
+export const OPEN_TO_LEGEND = 'Who can open it';
+/** The three modes, in the order every surface shows them. */
+export const OPEN_TO_MODES: ReadonlyArray<{ value: OpenToMode; label: string }> = [
+  { value: 'emails', label: 'Only specific people' },
+  { value: 'domains', label: 'Anyone at a domain' },
+  { value: 'anyone', label: 'Anyone with the link — not recommended' }
+];
+/** The collector sheets (flag and edge) open on a domain. */
+export const OPEN_TO_DEFAULT_MODE: OpenToMode = 'domains';
+export function openToModeLabel(mode: OpenToMode): string {
+  return OPEN_TO_MODES.find((m) => m.value === mode)?.label ?? '';
 }
-/** Under the field when the directory prefilled it: says WHY it is trusted. */
+
+export const OPEN_TO_EMAILS_PLACEHOLDER = 'dana@their-company.com, sam@their-company.com';
+export const OPEN_TO_EMAILS_HELP = 'Only these addresses can open the thread, after confirming once.';
+export const OPEN_TO_DOMAINS_PLACEHOLDER = 'their-company.com';
+/** The domains help when nothing was prefilled. */
+export const OPEN_TO_DOMAINS_HELP = "Their email domain, like acme.com — not always the API's domain. Separate several with commas.";
+/** The domains help when the directory prefilled a CLAIMED domain: says why it is trusted. */
 export function openToPrefillNote(domain: string): string {
-  return `Prefilled from the Flanj directory — ${domain} is a verified claim. Edit it if their email domain is different.`;
+  return `Prefilled from the Flanj directory: ${domain} is verified. Change it if their email addresses end in something else.`;
 }
-/** Entries longer than this are shortened in the guard: a pasted log must not become one unbroken line. */
+export function openToAnyoneHelp(what: OpenToWhat): string {
+  const reads = what === 'evidence' ? 'the redacted evidence' : 'your message';
+  return `Anyone holding the link can read ${reads}. Paste it only where just their team can see it.`;
+}
+
+export const OPEN_TO_MAX = 20;
+export const OPEN_TO_EMAILS_EMPTY = 'Add at least one email address.';
+export const OPEN_TO_DOMAINS_EMPTY = 'Add at least one domain.';
+export const OPEN_TO_TOO_MANY_PEOPLE = `A thread can be open to at most ${OPEN_TO_MAX} people.`;
+export const OPEN_TO_TOO_MANY_DOMAINS = `A thread can be open to at most ${OPEN_TO_MAX} domains.`;
+
+/** Entries longer than this are shortened in a guard: a pasted log must not become one unbroken line. */
 export const OPEN_TO_NOTE_ENTRY_MAX = 48;
+export function shortOpenToEntry(entry: string): string {
+  return entry.length > OPEN_TO_NOTE_ENTRY_MAX ? `${entry.slice(0, OPEN_TO_NOTE_ENTRY_MAX)}…` : entry;
+}
+/** Domains field: an entry that is not a bare domain. */
 export function openToInvalidNote(entry: string): string {
-  const shown = entry.length > OPEN_TO_NOTE_ENTRY_MAX ? `${entry.slice(0, OPEN_TO_NOTE_ENTRY_MAX)}…` : entry;
-  return `"${shown}" is not a domain — write each like acme.com, with no @, path or port.`;
+  return `"${shortOpenToEntry(entry)}" is not a domain — write each like acme.com, with no @, path or port.`;
+}
+/** Domains field: an address typed where a domain belongs — names the domain to write instead. */
+export function openToAddressInDomainsNote(entry: string, domain: string): string {
+  return `"${shortOpenToEntry(entry)}" is an address — write just the domain, ${shortOpenToEntry(domain)}.`;
+}
+/** Emails field: an entry that is not an email address. */
+export function openToInvalidEmailNote(entry: string): string {
+  return `"${shortOpenToEntry(entry)}" is not an email address — write each like dana@acme.com.`;
+}
+/** Emails field: a domain typed where an address belongs — points at the other mode. */
+export function openToDomainInEmailsNote(entry: string, domain: string): string {
+  return `"${shortOpenToEntry(entry)}" is a domain — choose Anyone at a domain, or write an address like dana@${shortOpenToEntry(domain)}.`;
 }
 
 /** A bare domain: labels of letters, digits and hyphens, at least one dot. */
 const DOMAIN_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
 
+/** Domain normalizing (§1): trim, lower-case, drop a leading `@` and a trailing `.`. */
+function normalizeDomain(entry: string): string {
+  return entry.trim().toLowerCase().replace(/^@+/, '').replace(/\.+$/, '');
+}
+function isBareDomain(d: string): boolean {
+  return d.length <= 253 && DOMAIN_RE.test(d);
+}
+/** Address normalizing (§1): trim, lower-case. */
+function normalizeEmail(entry: string): string {
+  return entry.trim().toLowerCase();
+}
+/** Exactly one `@`, a local part with no spaces, a bare domain after it — the relay's own rule. */
+function isPlainEmail(address: string): boolean {
+  const at = address.indexOf('@');
+  if (at <= 0 || at !== address.lastIndexOf('@') || address.length > 254) return false;
+  const local = address.slice(0, at);
+  if (local.length > 64 || /\s/.test(local)) return false;
+  return isBareDomain(address.slice(at + 1));
+}
+
 /**
- * Parse what the operator typed: split on commas, whitespace and semicolons,
- * trim, lower-case, drop a leading `@` and a trailing `.`, de-duplicate. The
- * first entry that is not a bare domain is reported so the guard can name it.
- * The relay and the control plane normalize the same way; this is what lets
- * the sheet refuse before the click.
+ * Split what the operator typed into entries: on `,` `;` and newlines; a piece
+ * holding `<…>` yields what is inside (a pasted `Dana Lee <dana@acme.com>`);
+ * any other piece splits on whitespace. Normalizing is the caller's.
  */
-export function parseOpenTo(text: string): { domains: string[]; invalid: string | null } {
-  const domains: string[] = [];
-  for (const raw of text.split(/[\s,;]+/)) {
-    const d = raw.trim().toLowerCase().replace(/^@+/, '').replace(/\.+$/, '');
-    if (!d) continue;
-    if (d.length > 253 || !DOMAIN_RE.test(d)) return { domains, invalid: raw.trim() };
-    if (!domains.includes(d)) domains.push(d);
+export function splitOpenTo(text: string): string[] {
+  const entries: string[] = [];
+  for (const raw of text.split(/[,;\r\n]+/)) {
+    const piece = raw.trim();
+    if (!piece) continue;
+    const bracketed = Array.from(piece.matchAll(/<([^<>]*)>/g), (m) => m[1].trim());
+    if (bracketed.length > 0) {
+      const inside = bracketed.filter(Boolean);
+      // `Dana <>` holds nothing usable: keep the piece whole so the guard can name it.
+      entries.push(...(inside.length > 0 ? inside : [piece]));
+      continue;
+    }
+    entries.push(...piece.split(/\s+/).filter(Boolean));
   }
-  return { domains, invalid: null };
+  return entries;
+}
+
+export interface ParsedOpenTo {
+  /** The normalized, de-duplicated list — postable only while `guard` is empty. */
+  list: string[];
+  /** The one sentence that says what is wrong with the field, or '' when it is usable. */
+  guard: string;
+}
+
+/**
+ * Parse one field of the choice. The first entry that does not belong names the
+ * guard — and when it belongs in the OTHER field (a domain typed as a person, an
+ * address typed as a domain) the guard says so. The relay and the control plane
+ * normalize and refuse the same shapes; this is what lets the sheet refuse
+ * before anything is posted.
+ */
+export function parseOpenTo(text: string, kind: 'emails' | 'domains'): ParsedOpenTo {
+  const list: string[] = [];
+  for (const entry of splitOpenTo(text)) {
+    if (kind === 'emails') {
+      const address = normalizeEmail(entry);
+      if (!isPlainEmail(address)) {
+        const asDomain = normalizeDomain(entry);
+        return { list, guard: isBareDomain(asDomain) ? openToDomainInEmailsNote(entry, asDomain) : openToInvalidEmailNote(entry) };
+      }
+      if (!list.includes(address)) list.push(address);
+    } else {
+      const domain = normalizeDomain(entry);
+      if (!isBareDomain(domain)) {
+        const asAddress = normalizeEmail(entry);
+        return {
+          list,
+          guard: isPlainEmail(asAddress) ? openToAddressInDomainsNote(entry, asAddress.slice(asAddress.indexOf('@') + 1)) : openToInvalidNote(entry)
+        };
+      }
+      if (!list.includes(domain)) list.push(domain);
+    }
+  }
+  if (list.length === 0) return { list, guard: kind === 'emails' ? OPEN_TO_EMAILS_EMPTY : OPEN_TO_DOMAINS_EMPTY };
+  if (list.length > OPEN_TO_MAX) return { list, guard: kind === 'emails' ? OPEN_TO_TOO_MANY_PEOPLE : OPEN_TO_TOO_MANY_DOMAINS };
+  return { list, guard: '' };
+}
+
+/** The request fields (§1): always BOTH keys — the chosen list and null, or both null for anyone. */
+export function openToBody(
+  mode: OpenToMode,
+  emails: string[],
+  domains: string[]
+): { allowed_emails: string[] | null; allowed_domains: string[] | null } {
+  return {
+    allowed_emails: mode === 'emails' ? emails : null,
+    allowed_domains: mode === 'domains' ? domains : null
+  };
 }
 
 /** `acme.test` · `acme.test or globex.test` · `acme.test, globex.test or corp.test` */
@@ -454,13 +569,29 @@ export function domainsSentence(domains: string[]): string {
   return `${domains.slice(0, -1).join(', ')} or ${domains[domains.length - 1]}`;
 }
 
+/** `a` · `a and b` · `a, b and c` · more than three: `a, b, c and N others`. */
+export function peopleSentence(emails: string[]): string {
+  if (emails.length <= 1) return emails[0] ?? '';
+  if (emails.length <= 3) return `${emails.slice(0, -1).join(', ')} and ${emails[emails.length - 1]}`;
+  const rest = emails.length - 3;
+  return `${emails.slice(0, 3).join(', ')} and ${rest} ${rest === 1 ? 'other' : 'others'}`;
+}
+
+function readsAndReplies(what: OpenToWhat): string {
+  return what === 'evidence' ? 'read the redacted evidence and reply' : 'read your message and reply';
+}
+
 /**
- * The success-state warning for a GATED thread. The open-link variants promise
+ * The success-state warning for a DOMAINS thread. The open-link variants promise
  * "Anyone with this link can read…", which is exactly what the operator chose
  * against; this one says who can, and that nobody else can.
  */
-export function gatedShareWarning(domains: string[], provider: string, what: 'evidence' | 'message'): string {
-  const reads = what === 'evidence' ? 'read the redacted evidence and reply' : 'read your message and reply';
+export function gatedShareWarning(domains: string[], provider: string, what: OpenToWhat): string {
   // Every domain carries its own @ — "@a or b" read as one address at a plus a bare word (QA 2026-09-14).
-  return `People with an ${domainsSentence(domains.map((d) => `@${d}`))} address can open this link — they confirm it once, then ${reads}. Nobody else can read it. Paste it where you already talk to ${provider}'s team. It lasts 30 days and extends with each reply.`;
+  return `People with an ${domainsSentence(domains.map((d) => `@${d}`))} address can open this link — they confirm it once, then ${readsAndReplies(what)}. Nobody else can read it. Paste it where you already talk to ${provider}'s team. It lasts 30 days and extends with each reply.`;
+}
+
+/** The success-state warning for a SPECIFIC PEOPLE thread: names up to three of them. */
+export function peopleShareWarning(emails: string[], provider: string, what: OpenToWhat): string {
+  return `Only ${peopleSentence(emails)} can open this link — they confirm their address once, then ${readsAndReplies(what)}. Nobody else can read it. Paste it where you already talk to ${provider}'s team. It lasts 30 days and extends with each reply.`;
 }

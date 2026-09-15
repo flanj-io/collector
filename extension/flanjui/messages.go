@@ -91,11 +91,16 @@ const (
 	msgEdgeThreadMessageRequired = "Write your question first — a thread started from an edge carries no evidence, only what you say."
 	// Who may open the thread (thread-domain-gate, 2026-09-14). The sheet refuses
 	// these before the click; the relay refuses them again for any other caller.
-	msgOpenToRequired = "Choose who can open the thread — one or more email domains, or Anyone with the link."
-	msgOpenToEmpty    = "Name at least one domain, or choose Anyone with the link."
-	msgOpenToInvalid  = "One of the domains is not a domain name — write each like acme.com, with no @, path or port."
-	msgOpenToNotAList = "allowed_domains must be a list of domains, or null for Anyone with the link."
-	msgOpenToTooMany  = "A thread can be open to at most 20 domains."
+	msgOpenToRequired       = "Choose who can open the thread — specific people, a domain, or Anyone with the link."
+	msgOpenToConflict       = "Choose specific people or domains, not both."
+	msgOpenToEmpty          = "Add at least one domain."
+	msgOpenToInvalid        = "One of the domains is not a domain name — write each like acme.com, with no @, path or port."
+	msgOpenToNotAList       = "allowed_domains must be a list of domains, or null for anyone with the link."
+	msgOpenToTooMany        = "A thread can be open to at most 20 domains."
+	msgOpenToEmailsEmpty    = "Add at least one email address."
+	msgOpenToInvalidEmail   = "One of the addresses is not an email address — write each like dana@acme.com."
+	msgOpenToEmailsNotAList = "allowed_emails must be a list of addresses, or null for anyone with the link."
+	msgOpenToTooManyPeople  = "A thread can be open to at most 20 people."
 )
 
 // msgNameSuggestRefused is the OTHER partial-success copy: the local save

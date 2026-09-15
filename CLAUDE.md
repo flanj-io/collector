@@ -32,8 +32,9 @@ suggest-and-approve is v4 and is NOT this) and the **control-plane relay** (CONT
 **collector key** in the store settings KV, never logs it; the contact confirms their email with one click),
 `POST /api/flag` (Create thread — requires a Connected collector with a confirmed contact, `412 not_connected |
 contact_unconfirmed` otherwise; promotes the redacted call + finding with the collector key and returns the **thread
-link**; since 2026-09-14 it REQUIRES `allowed_domains`, who may open the thread — email domains, or an explicit null for
-anyone with the link — and answers `400 missing_fields` without it) and `/api/threads…` (state summaries, owner handoff `open`, `close` / `reopen`, `replace-link`). Every
+link**; since 2026-09-14 it REQUIRES who can open the thread, in three modes (2026-09-15, in this order): specific people
+(`allowed_emails`, exact addresses), anyone at a domain (`allowed_domains`, email domains), or anyone with the link (both
+null) — at least one of the two keys must be present, and a body with neither answers `400 missing_fields`) and `/api/threads…` (state summaries, owner handoff `open`, `close` / `reopen`, `replace-link`). Every
 mutating relay route needs `X-Flanj-UI: 1` + JSON and rejects a foreign `Origin`. The conversation itself lives on
 the CP; the collector shows thread *state* only. Headless and **outbound-only** except the localhost UI. Nothing
 inbound off-host.
@@ -59,7 +60,7 @@ Contracts tab lists the server and restarts re-seed). MCP findings: `output_mism
 since qfix2-2026-08-26; a human always presses the control) and the local-only `stale_client`; the flag relay REFUSES local-only kinds server-side
 (`403 not_flaggable` — CONTRACTS §4). **Since v1p4-2026-09-08 a finding needs no call to be flagged**
 (the message carries the ask — `400 finding_has_no_call` is gone from the relay), and `POST
-/api/edges/thread` starts a MESSAGE-ONLY thread from an edge row: no call, no finding, `evidence_count: 0`. Both thread-creating routes send `allowed_domains` (CONTRACTS §5, 2026-09-14); the Flag sheet's Open to field prefills a claimed directory domain through the read-only `GET /api/directory/hint`. A drift is **per endpoint** (HTTP: method+route; MCP: the tool name): findings
+/api/edges/thread` starts a MESSAGE-ONLY thread from an edge row: no call, no finding, `evidence_count: 0`. Both thread-creating routes carry both keys, `allowed_emails` and `allowed_domains` — the chosen list and null, or both null for anyone (CONTRACTS §5, 2026-09-14; three modes 2026-09-15). The Flag sheet's "Who can open it" choice offers Only specific people, Anyone at a domain (the default) and Anyone with the link, and prefills the domain field with a claimed directory domain through the read-only `GET /api/directory/hint`. A drift is **per endpoint** (HTTP: method+route; MCP: the tool name): findings
 dedup by `signature`, so one drift = one finding (with an `occurrence_count`) = one flag.
 
 ## Stack & commands

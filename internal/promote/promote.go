@@ -53,9 +53,12 @@ type FlagRequest struct {
 	// the CP reads an ABSENT field as anyone too, but only because a collector
 	// that predates the field could not have asked; this collector always can, so
 	// null on the wire is the operator's explicit choice, never a default.
-	AllowedDomains []string            `json:"allowed_domains"`
-	Call           *model.RedactedCall `json:"call,omitempty"`
-	Finding        *model.Finding      `json:"finding,omitempty"`
+	AllowedDomains []string `json:"allowed_domains"`
+	// AllowedEmails: exact addresses (three modes, 2026-09-15). At most one of the
+	// two lists is set; both nil — both JSON null — is anyone with the link.
+	AllowedEmails []string            `json:"allowed_emails"`
+	Call          *model.RedactedCall `json:"call,omitempty"`
+	Finding       *model.Finding      `json:"finding,omitempty"`
 }
 
 // FlagResponse is the CP reply (201 created | 200 existing). ThreadURL is the
@@ -84,6 +87,8 @@ type Input struct {
 	// AllowedDomains: who may open the thread — nil is "Anyone with the link".
 	// The relay has already validated the list (non-empty, bare domains).
 	AllowedDomains []string
+	// AllowedEmails: exact addresses; at most one of the two lists is set.
+	AllowedEmails []string
 }
 
 // QuestionInput is what the UI hands the promoter for one "Start a thread" click
@@ -102,6 +107,7 @@ type QuestionInput struct {
 	Message      string
 	// AllowedDomains: who may open the thread — nil is "Anyone with the link".
 	AllowedDomains []string
+	AllowedEmails  []string
 }
 
 // Build assembles a schema-valid FlagRequest. The idempotency key is derived
@@ -131,6 +137,7 @@ func Build(in Input) FlagRequest {
 		ProviderDisplayName: provider,
 		Message:             msg,
 		AllowedDomains:      in.AllowedDomains,
+		AllowedEmails:       in.AllowedEmails,
 		Call:                in.Call,
 		Finding:             &finding,
 	}
@@ -150,6 +157,7 @@ func BuildQuestion(in QuestionInput) FlagRequest {
 		ProviderHost:        strings.TrimSpace(in.ProviderHost),
 		Message:             redact.New().Redact(strings.TrimSpace(in.Message)).Text,
 		AllowedDomains:      in.AllowedDomains,
+		AllowedEmails:       in.AllowedEmails,
 	}
 }
 

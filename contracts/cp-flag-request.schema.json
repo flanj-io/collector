@@ -51,6 +51,23 @@
           "call"
         ]
       }
+    },
+    {
+      "$comment": "thread-domain-gate (2026-09-14): a thread is open to specific people OR to domains OR to anyone with the link — never to both lists at once (`400 access_conflict`).",
+      "not": {
+        "required": [
+          "allowed_domains",
+          "allowed_emails"
+        ],
+        "properties": {
+          "allowed_domains": {
+            "type": "array"
+          },
+          "allowed_emails": {
+            "type": "array"
+          }
+        }
+      }
     }
   ],
   "properties": {
@@ -82,7 +99,22 @@
         "minLength": 3,
         "maxLength": 253
       },
-      "description": "OPTIONAL, additive (thread-domain-gate, 2026-09-14): who may OPEN the thread. An array of email domains (`acme.com`) — the reader confirms an address at one of them (or a subdomain of one) before the thread JSON discloses the call, the finding or the conversation; `null` means anyone holding the link, as before this field existed. ABSENT means null: every collector shipped before this field could not have asked, so its threads stay open to the link. A collector that knows the field ALWAYS sends it — `null` is the operator's explicit \"Anyone with the link\" choice, never a silent default. The CP lower-cases and trims each entry, strips a leading `@` and a trailing `.`, and refuses `400 allowed_domains_empty` (nothing left) or `400 invalid_domain` (an entry that is not a bare domain — a scheme, path, port or `@` in it)."
+      "description": "OPTIONAL, additive (thread-domain-gate, 2026-09-14): who may OPEN the thread, by DOMAIN — an array of email domains (`acme.com`); a reader confirms an address at one of them (or a subdomain of one) before the thread JSON discloses the call, the finding or the conversation. At most one of `allowed_domains` / `allowed_emails` may be a list (`400 access_conflict`); both null means anyone holding the link. BOTH ABSENT means anyone: every collector shipped before these fields could not have asked, so its threads stay open to the link. A collector that knows the fields ALWAYS sends both, the unchosen one as null. The CP lower-cases and trims each entry, strips a leading `@` and a trailing `.`, and refuses `400 allowed_domains_empty` (nothing left) or `400 invalid_domain` (an entry that is not a bare domain)."
+    },
+    "allowed_emails": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "minItems": 1,
+      "maxItems": 20,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 3,
+        "maxLength": 254
+      },
+      "description": "OPTIONAL, additive (thread-domain-gate, 2026-09-14): who may OPEN the thread, by ADDRESS — an array of exact email addresses; only a reader who confirms one of them opens the thread. At most one of `allowed_emails` / `allowed_domains` may be a list; both null (or both absent) means anyone holding the link. The CP trims and lower-cases each entry and refuses `400 allowed_emails_empty` (nothing left) or `400 invalid_email` (an entry that is not one plain address). A refusal on such a thread names nobody — a link holder never learns who else it was shared with."
     },
     "invitee_email": {
       "type": "string",
