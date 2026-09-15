@@ -545,8 +545,10 @@ watch(result, (r) => {
               @input="emailsTouched = true"
             />
             <p :id="openToIds.emailsHelp" class="ids open-to-note">{{ OPEN_TO_EMAILS_HELP }}</p>
+            <!-- The guard is always in the DOM (hidden while empty): the input's aria-describedby must resolve before
+                 a guard speaks, and the live region must already exist when its text changes, or nothing is announced. -->
             <div class="open-to-live" aria-live="polite">
-              <p v-if="emailsGuard" :id="openToIds.emailsGuard" class="guard open-to-guard" aria-live="polite">{{ emailsGuard }}</p>
+              <p v-show="emailsGuard" :id="openToIds.emailsGuard" class="guard open-to-guard">{{ emailsGuard }}</p>
             </div>
           </div>
 
@@ -573,7 +575,7 @@ watch(result, (r) => {
             />
             <p :id="openToIds.domainsHelp" class="ids open-to-note">{{ domainsHelp }}</p>
             <div class="open-to-live" aria-live="polite">
-              <p v-if="domainsGuard" :id="openToIds.domainsGuard" class="guard open-to-guard" aria-live="polite">{{ domainsGuard }}</p>
+              <p v-show="domainsGuard" :id="openToIds.domainsGuard" class="guard open-to-guard">{{ domainsGuard }}</p>
             </div>
           </div>
 

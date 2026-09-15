@@ -103,6 +103,11 @@ const choose = (w: VueWrapper, mode: Mode) => radio(w, mode).setValue(true);
 const domains = (w: VueWrapper) => w.find('input.open-to');
 const emails = (w: VueWrapper) => w.find('input.open-to-emails');
 const guard = (w: VueWrapper) => w.find('p.open-to-guard');
+/** The guard paragraph is always in the DOM (its id must resolve); it shows only while it has something to say. */
+const guardShown = (w: VueWrapper) => {
+  const g = guard(w);
+  return g.exists() && (g.element as HTMLElement).style.display !== 'none' && g.text() !== '';
+};
 const notes = (w: VueWrapper) => w.findAll('.open-to-note').map((n) => n.text());
 async function create(w: VueWrapper): Promise<void> {
   await createButton(w).trigger('click');
@@ -197,10 +202,10 @@ describe('guards wait for a touch or a Create, and Create thread stays enabled',
   it('opens with no guard, and Create thread enabled though the field is empty', async () => {
     stubFetch([]);
     const w = await open();
-    expect(guard(w).exists()).toBe(false);
+    expect(guardShown(w)).toBe(false);
     expect(createButton(w).attributes('disabled')).toBeUndefined();
     await choose(w, 'emails');
-    expect(guard(w).exists()).toBe(false);
+    expect(guardShown(w)).toBe(false);
   });
 
   it('a Create with a guard posts nothing, shows the guard and focuses the field', async () => {
@@ -227,7 +232,7 @@ describe('guards wait for a touch or a Create, and Create thread stays enabled',
     await emails(w).setValue('dana');
     expect(guard(w).text()).toBe('"dana" is not an email address — write each like dana@acme.com.');
     await emails(w).setValue('dana@acme.test');
-    expect(guard(w).exists()).toBe(false);
+    expect(guardShown(w)).toBe(false);
     await emails(w).setValue('');
     expect(guard(w).text()).toBe('Add at least one email address.');
 
@@ -272,7 +277,7 @@ describe('what is typed', () => {
     const w = await open();
     await choose(w, 'emails');
     await emails(w).setValue('Dana Lee <Dana@Acme.test>; sam@acme.test\n"Sam" <SAM@acme.test>, kim@globex.test');
-    expect(guard(w).exists()).toBe(false);
+    expect(guardShown(w)).toBe(false);
     await create(w);
     expect(calls).toHaveLength(1);
     expect(calls[0].body.allowed_emails).toEqual(['dana@acme.test', 'sam@acme.test', 'kim@globex.test']);
@@ -331,10 +336,20 @@ describe('aria', () => {
       expect(document.getElementById(input(w).attributes('aria-labelledby') ?? '')?.textContent).toBe(label);
       expect(input(w).attributes('aria-invalid')).toBeUndefined();
 
+      // The guard's id resolves BEFORE it has anything to say, hidden and empty inside a live wrapper that is already
+      // in the DOM (QA 2026-09-15: a v-if guard left aria-describedby dangling and arrived with its own live region,
+      // so a screen reader could miss it).
+      const idle = document.getElementById(guardId);
+      expect(idle, 'the guard id resolves before the guard speaks').not.toBeNull();
+      expect(idle!.textContent).toBe('');
+      expect((idle as HTMLElement).style.display).toBe('none');
+      expect(idle!.parentElement?.getAttribute('aria-live')).toBe('polite');
+
       await input(w).setValue('not valid');
       expect(guard(w).attributes('id')).toBe(guardId);
-      expect(guard(w).attributes('aria-live')).toBe('polite');
-      // ...inside a live wrapper that was there BEFORE the guard, so its arrival is announced.
+      expect(guardShown(w)).toBe(true);
+      // ...the same element, inside the live wrapper that was there BEFORE the guard, so its arrival is announced.
+      expect(guard(w).element).toBe(idle);
       expect(guard(w).element.parentElement?.getAttribute('aria-live')).toBe('polite');
       expect(input(w).attributes('aria-invalid')).toBe('true');
 
@@ -491,7 +506,7 @@ describe('the directory prefill', () => {
     expect(notes(w)).toEqual([
       'Prefilled from the Flanj directory: acme-payments.test is verified. Change it if their email addresses end in something else.'
     ]);
-    expect(guard(w).exists()).toBe(false);
+    expect(guardShown(w)).toBe(false);
 
     await domains(w).setValue('mail.acme-payments.test');
     expect(notes(w)).toEqual([DOMAINS_HELP]);
