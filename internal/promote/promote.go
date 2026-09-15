@@ -41,13 +41,21 @@ import (
 // the edge it is about and the thread page can resolve a verified directory name
 // for its provider slot instead of an unattributed consumer-asserted one.
 type FlagRequest struct {
-	IdempotencyKey      string              `json:"idempotency_key"`
-	ConsumerDisplayName string              `json:"consumer_display_name"`
-	ProviderDisplayName string              `json:"provider_display_name"`
-	ProviderHost        string              `json:"provider_host,omitempty"`
-	Message             string              `json:"message"`
-	Call                *model.RedactedCall `json:"call,omitempty"`
-	Finding             *model.Finding      `json:"finding,omitempty"`
+	IdempotencyKey      string `json:"idempotency_key"`
+	ConsumerDisplayName string `json:"consumer_display_name"`
+	ProviderDisplayName string `json:"provider_display_name"`
+	ProviderHost        string `json:"provider_host,omitempty"`
+	Message             string `json:"message"`
+	// AllowedDomains is who may OPEN the thread (CONTRACTS §5, thread-domain-gate
+	// 2026-09-14): the email domains a reader confirms an address at before the
+	// CP discloses the call, the finding or the conversation. A nil slice encodes
+	// as JSON `null` — "Anyone with the link" — and is ALWAYS sent (no omitempty):
+	// the CP reads an ABSENT field as anyone too, but only because a collector
+	// that predates the field could not have asked; this collector always can, so
+	// null on the wire is the operator's explicit choice, never a default.
+	AllowedDomains []string            `json:"allowed_domains"`
+	Call           *model.RedactedCall `json:"call,omitempty"`
+	Finding        *model.Finding      `json:"finding,omitempty"`
 }
 
 // FlagResponse is the CP reply (201 created | 200 existing). ThreadURL is the
@@ -73,6 +81,9 @@ type Input struct {
 	// Finding itself carries.
 	Call    *model.RedactedCall
 	Finding model.Finding
+	// AllowedDomains: who may open the thread — nil is "Anyone with the link".
+	// The relay has already validated the list (non-empty, bare domains).
+	AllowedDomains []string
 }
 
 // QuestionInput is what the UI hands the promoter for one "Start a thread" click
@@ -89,6 +100,8 @@ type QuestionInput struct {
 	// provider slot. Empty is legal; it just costs the verified-name resolution.
 	ProviderHost string
 	Message      string
+	// AllowedDomains: who may open the thread — nil is "Anyone with the link".
+	AllowedDomains []string
 }
 
 // Build assembles a schema-valid FlagRequest. The idempotency key is derived
@@ -117,6 +130,7 @@ func Build(in Input) FlagRequest {
 		ConsumerDisplayName: in.ConsumerDisplayName,
 		ProviderDisplayName: provider,
 		Message:             msg,
+		AllowedDomains:      in.AllowedDomains,
 		Call:                in.Call,
 		Finding:             &finding,
 	}
@@ -135,6 +149,7 @@ func BuildQuestion(in QuestionInput) FlagRequest {
 		ProviderDisplayName: strings.TrimSpace(in.ProviderDisplayName),
 		ProviderHost:        strings.TrimSpace(in.ProviderHost),
 		Message:             redact.New().Redact(strings.TrimSpace(in.Message)).Text,
+		AllowedDomains:      in.AllowedDomains,
 	}
 }
 

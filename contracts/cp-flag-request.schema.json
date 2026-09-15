@@ -69,6 +69,21 @@
       "type": "string",
       "description": "OPTIONAL, additive (v1p4-2026-09-08): the observed host of the edge this thread is about, for a thread that carries NO call. The domain is the anchor and the name is decoration (v1 spec §5), so a message-only thread started from an edge row sends the host it was started from and the thread page resolves a VERIFIED directory name or the bare domain for its provider slot instead of an unattributed consumer-asserted name. IGNORED whenever `call` is present — the evidence's own URL always wins over a client assertion. Unparseable values are dropped, never guessed at."
     },
+    "allowed_domains": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "minItems": 1,
+      "maxItems": 20,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 3,
+        "maxLength": 253
+      },
+      "description": "OPTIONAL, additive (thread-domain-gate, 2026-09-14): who may OPEN the thread. An array of email domains (`acme.com`) — the reader confirms an address at one of them (or a subdomain of one) before the thread JSON discloses the call, the finding or the conversation; `null` means anyone holding the link, as before this field existed. ABSENT means null: every collector shipped before this field could not have asked, so its threads stay open to the link. A collector that knows the field ALWAYS sends it — `null` is the operator's explicit \"Anyone with the link\" choice, never a silent default. The CP lower-cases and trims each entry, strips a leading `@` and a trailing `.`, and refuses `400 allowed_domains_empty` (nothing left) or `400 invalid_domain` (an entry that is not a bare domain — a scheme, path, port or `@` in it)."
+    },
     "invitee_email": {
       "type": "string",
       "format": "email",

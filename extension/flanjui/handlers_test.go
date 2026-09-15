@@ -616,7 +616,7 @@ func TestConnectThenFlagLoop(t *testing.T) {
 	}
 
 	// 7. flag → 201 {thread_id, thread_public_id, thread_url, state, status}; uses the KEY; record persisted
-	resp, out, raw = r.do(t, http.MethodPost, "/api/flag", map[string]string{"finding_id": "fnd_1"})
+	resp, out, raw = r.do(t, http.MethodPost, "/api/flag", map[string]any{"finding_id": "fnd_1", "allowed_domains": []string{"acme-payments.test"}})
 	if resp.StatusCode != 201 {
 		t.Fatalf("flag: %d %s", resp.StatusCode, raw)
 	}
@@ -640,7 +640,7 @@ func TestConnectThenFlagLoop(t *testing.T) {
 		t.Errorf("thread record: %+v ok=%v", rec, ok)
 	}
 	// re-flag → 200 existing, fresh link persisted
-	resp, out, _ = r.do(t, http.MethodPost, "/api/flag", map[string]string{"finding_id": "fnd_1"})
+	resp, out, _ = r.do(t, http.MethodPost, "/api/flag", map[string]any{"finding_id": "fnd_1", "allowed_domains": []string{"acme-payments.test"}})
 	if resp.StatusCode != 200 || out["status"] != "existing" {
 		t.Errorf("re-flag: %d %v", resp.StatusCode, out)
 	}
@@ -1176,7 +1176,7 @@ func TestChangeContactKeepsKeyAndThreads(t *testing.T) {
 	}
 
 	// Create thread works — the confirmed contact still exists (no 412)
-	resp, out, _ = r.do(t, http.MethodPost, "/api/flag", map[string]string{"finding_id": "fnd_1"})
+	resp, out, _ = r.do(t, http.MethodPost, "/api/flag", map[string]any{"finding_id": "fnd_1", "allowed_domains": []string{"acme-payments.test"}})
 	if resp.StatusCode != 201 || out["thread_id"] != "thr_1" {
 		t.Fatalf("flag while a new contact is pending: %d %v", resp.StatusCode, out)
 	}
@@ -1271,7 +1271,7 @@ func TestFlagGateBeforeFirstConfirmation(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
 	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, ConsumerDisplayName: "Acme", ContactEmail: "ops@acme.test", ContactStatus: "pending"})
-	resp, out, _ := r.do(t, http.MethodPost, "/api/flag", map[string]string{"finding_id": "fnd_1"})
+	resp, out, _ := r.do(t, http.MethodPost, "/api/flag", map[string]any{"finding_id": "fnd_1", "allowed_domains": []string{"acme-payments.test"}})
 	if resp.StatusCode != 412 || out["error"] != "contact_unconfirmed" {
 		t.Fatalf("flag with no confirmed contact: %d %v", resp.StatusCode, out)
 	}
@@ -1325,7 +1325,7 @@ func TestFlagRefusesLocalOnlyKinds(t *testing.T) {
 	}
 
 	// The flaggable MCP kind goes through unchanged.
-	resp, out, raw := r.do(t, http.MethodPost, "/api/flag", map[string]string{"finding_id": "fnd_mismatch"})
+	resp, out, raw := r.do(t, http.MethodPost, "/api/flag", map[string]any{"finding_id": "fnd_mismatch", "allowed_domains": []string{"acme-payments.test"}})
 	if resp.StatusCode != 201 || out["thread_url"] == "" {
 		t.Fatalf("flag output_mismatch: %d %s", resp.StatusCode, raw)
 	}
@@ -1342,7 +1342,7 @@ func TestFlagRefusesLocalOnlyKinds(t *testing.T) {
 	// CALL-LESS FLAGGING (ux-design-v2 §2.7.5): a DESCRIPTION definition change
 	// has no source call at all. It must NOT 400 finding_has_no_call, and the
 	// body must omit `call` rather than invent one.
-	resp, out, raw = r.do(t, http.MethodPost, "/api/flag", map[string]string{"finding_id": "fnd_desc"})
+	resp, out, raw = r.do(t, http.MethodPost, "/api/flag", map[string]any{"finding_id": "fnd_desc", "allowed_domains": []string{"acme-payments.test"}})
 	if (resp.StatusCode != 201 && resp.StatusCode != 200) || out["thread_url"] == "" {
 		t.Fatalf("flag DESCRIPTION definition change: %d %s", resp.StatusCode, raw)
 	}
@@ -1366,7 +1366,7 @@ func TestFlagRefusesLocalOnlyKinds(t *testing.T) {
 		Severity: model.SeverityBreaking, Integration: "acme-payments", Endpoint: "list_transactions",
 		Expected: "type=integer", Actual: `type=string ("1200")`, Rule: "type-mismatch",
 		DetectedAt: "2026-08-24T10:00:01Z"})
-	resp, out, raw = r.do(t, http.MethodPost, "/api/flag", map[string]string{"finding_id": "fnd_mismatch_nocall"})
+	resp, out, raw = r.do(t, http.MethodPost, "/api/flag", map[string]any{"finding_id": "fnd_mismatch_nocall", "allowed_domains": []string{"acme-payments.test"}})
 	if (resp.StatusCode != 201 && resp.StatusCode != 200) || out["thread_url"] == "" {
 		t.Fatalf("call-less output_mismatch: %d %s", resp.StatusCode, raw)
 	}
@@ -1746,7 +1746,7 @@ func TestFindingAckFlow(t *testing.T) {
 
 	// 7. with cp unconfigured the RELAY routes still 503 — the local guard
 	// relaxation applies to ack/unack only.
-	if resp, out, _ = r.do(t, http.MethodPost, "/api/flag", map[string]string{"finding_id": "fnd_mism"}); resp.StatusCode != 503 || out["error"] != "cp_not_configured" {
+	if resp, out, _ = r.do(t, http.MethodPost, "/api/flag", map[string]any{"finding_id": "fnd_mism", "allowed_domains": []string{"acme-payments.test"}}); resp.StatusCode != 503 || out["error"] != "cp_not_configured" {
 		t.Errorf("flag with no cp: %d %v", resp.StatusCode, out)
 	}
 	// and nothing ever reached the CP from the ack flow

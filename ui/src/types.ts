@@ -140,6 +140,20 @@ export interface Health {
   serves_fronts?: boolean;
 }
 
+/**
+ * GET /api/directory/hint?host= — the sheet's "Open to" prefill question
+ * (thread-domain-gate): the host's registrable domain, and whether the local
+ * directory table holds a CLAIMED entry for it (a D5 domain proof — what makes
+ * prefilling it as the share domain honest). Read from the local table only.
+ */
+export interface DirectoryHint {
+  host: string;
+  domain: string;
+  name: string | null;
+  tier: string | null;
+  claimed: boolean;
+}
+
 /** POST /api/flag success body. */
 export interface FlagResult {
   thread_id: string;

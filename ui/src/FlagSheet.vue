@@ -17,7 +17,7 @@
 // REQUIRED message (it is the whole artifact), and a disclosure/share copy that
 // names the domain instead of a call.
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
-import { ApiError, apiPost, openThreadInNewTab } from './api';
+import { ApiError, apiGet, apiPost, openThreadInNewTab } from './api';
 import { copyText, selectInput } from './clipboard';
 import ConnectPanel from './ConnectPanel.vue';
 import {
@@ -32,6 +32,17 @@ import {
   QUESTION_LEAD,
   QUESTION_MESSAGE_LABEL,
   QUESTION_MESSAGE_REQUIRED,
+  OPEN_TO_ANYONE_LABEL,
+  OPEN_TO_HELP,
+  OPEN_TO_LABEL,
+  OPEN_TO_MAX,
+  OPEN_TO_PLACEHOLDER,
+  OPEN_TO_REQUIRED,
+  gatedShareWarning,
+  openToInvalidNote,
+  openToPrefillNote,
+  openToTooMany,
+  parseOpenTo,
   questionDisclosureLead,
   questionPasteText,
   questionShareWarning,
@@ -49,7 +60,7 @@ import {
   mcpEvidenceLine,
   mcpIdsLineFor
 } from './mcp';
-import type { Correlation, Finding, FlagResult, RedactedCall } from './types';
+import type { Correlation, DirectoryHint, Finding, FlagResult, RedactedCall } from './types';
 
 const props = defineProps<{
   /** Absent in QUESTION mode — an edge is a domain, not a drift. */
@@ -59,6 +70,9 @@ const props = defineProps<{
   call?: RedactedCall | null;
   /** Present in QUESTION mode: the edge row "Start a thread" was pressed on. */
   edge?: { host: string; domain: string } | null;
+  /** FLAG mode: the provider host the finding is about (its pinned call's peer
+   *  host) — what the "Open to" prefill asks the directory about. */
+  providerHost?: string | null;
   provider: string;
   consumer: string;
   connect: ConnectState | null;
@@ -79,6 +93,44 @@ const isQuestion = computed(() => !props.finding);
 const edgeDomain = computed(() => props.edge?.domain || props.edge?.host || '');
 /** In question mode the message IS the thread, so an empty one cannot be sent. */
 const messageMissing = computed(() => isQuestion.value && message.value.trim().length === 0);
+
+// ─── Who may open the thread (thread-domain-gate, 2026-09-14) ───────────
+// The "Open to" field: email domains, or the explicit "Anyone with the link".
+// There is no silent default — Create thread is inert until the operator has
+// said one or the other. The directory prefills the provider host's domain
+// when it is a CLAIMED entry (a D5 domain proof: someone there proved they
+// control it, so it is honestly their email domain); anything less proves
+// nothing about a mailbox, and the field stays required input.
+const openTo = ref('');
+const openToAnyone = ref(false);
+/** The operator typed into the field — a prefill that lands later must not overwrite it. */
+const openToTouched = ref(false);
+const openToPrefill = ref('');
+const openToParsed = computed(() => parseOpenTo(openTo.value));
+const openToGuard = computed(() => {
+  if (openToAnyone.value) return '';
+  if (openToParsed.value.invalid !== null) return openToInvalidNote(openToParsed.value.invalid);
+  if (openToParsed.value.domains.length === 0) return OPEN_TO_REQUIRED;
+  if (openToParsed.value.domains.length > OPEN_TO_MAX) return openToTooMany();
+  return '';
+});
+const openToMissing = computed(() => openToGuard.value !== '');
+/** What the created thread was opened to — read by the success state's warning. */
+const createdOpenTo = ref<string[] | null>(null);
+const hintHost = computed(() => props.edge?.host || props.providerHost || props.call?.peer_host || props.finding?.peer_host || '');
+
+async function loadOpenToHint() {
+  const host = hintHost.value;
+  if (!host) return;
+  try {
+    const hint = await apiGet<DirectoryHint>(`/api/directory/hint?host=${encodeURIComponent(host)}`);
+    if (!hint || !hint.claimed || !hint.domain) return;
+    openToPrefill.value = hint.domain;
+    if (!openToTouched.value && openTo.value.trim() === '') openTo.value = hint.domain;
+  } catch {
+    // No hint is the required-input case, not an error: the operator types the domain.
+  }
+}
 /** One id per open sheet: what makes a retry after a failed create replay onto
  *  the SAME thread instead of opening a second one. Minted once, here. */
 const requestId = typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(36).slice(2);
@@ -165,12 +217,14 @@ const paste = computed(() => {
   });
 });
 /** The share warning. The flag line names "the redacted evidence" — which a
- *  question thread does not carry. */
-const shareWarning = computed(() =>
-  !props.finding
+ *  question thread does not carry — and a GATED thread says who can open it
+ *  instead of "Anyone with this link", which is what the operator chose against. */
+const shareWarning = computed(() => {
+  if (createdOpenTo.value) return gatedShareWarning(createdOpenTo.value, props.provider, props.finding ? 'evidence' : 'message');
+  return !props.finding
     ? questionShareWarning(props.provider)
-    : `Anyone with this link can read the redacted evidence and reply. Paste it where you already talk to ${props.provider}'s team. It lasts 30 days and extends with each reply.`
-);
+    : `Anyone with this link can read the redacted evidence and reply. Paste it where you already talk to ${props.provider}'s team. It lasts 30 days and extends with each reply.`;
+});
 
 function toggleDisclosure() {
   disclosureOpen.value = !disclosureOpen.value;
@@ -179,9 +233,11 @@ function toggleDisclosure() {
 }
 
 async function createThread() {
-  if (messageMissing.value) return;
+  if (messageMissing.value || openToMissing.value) return;
   busy.value = true;
   errorMsg.value = '';
+  // Always on the wire: a list, or null for the explicit "Anyone with the link".
+  const allowedDomains = openToAnyone.value ? null : openToParsed.value.domains;
   try {
     // Two routes, one flow. The question route sends the sheet's own request id
     // so a retry after a failed create replays onto the same thread.
@@ -189,13 +245,16 @@ async function createThread() {
       ? await apiPost<FlagResult>('/api/flag', {
           finding_id: props.finding.id,
           message: message.value,
-          provider_display_name: props.provider
+          provider_display_name: props.provider,
+          allowed_domains: allowedDomains
         })
       : await apiPost<FlagResult>('/api/edges/thread', {
           host: props.edge?.host ?? '',
           message: message.value,
-          request_id: requestId
+          request_id: requestId,
+          allowed_domains: allowedDomains
         });
+    createdOpenTo.value = allowedDomains;
     result.value = r;
     localStorage.setItem(DISCLOSURE_KEY, '1');
     emit('created', r);
@@ -351,6 +410,7 @@ onMounted(() => {
   if (backdrop.value) restoreOutside = inertOutside(backdrop.value);
   document.addEventListener('keydown', onKey);
   nextTick(() => (sheet.value?.querySelector<HTMLElement>('textarea, input, button') ?? sheet.value)?.focus());
+  void loadOpenToHint();
 });
 onUnmounted(() => {
   document.removeEventListener('keydown', onKey);
@@ -412,11 +472,34 @@ watch(result, (r) => {
         </label>
         <p v-if="messageMissing" class="guard">{{ QUESTION_MESSAGE_REQUIRED }}</p>
 
+        <!-- Who may open the thread. Required: domains, or the explicit toggle. -->
+        <label class="field">
+          <span class="field-label">{{ OPEN_TO_LABEL }}</span>
+          <input
+            v-model="openTo"
+            class="open-to"
+            type="text"
+            name="allowed_domains"
+            :placeholder="OPEN_TO_PLACEHOLDER"
+            :disabled="busy || openToAnyone"
+            autocomplete="off"
+            spellcheck="false"
+            @input="openToTouched = true"
+          />
+        </label>
+        <p v-if="openToPrefill && !openToTouched && !openToAnyone" class="ids open-to-note">{{ openToPrefillNote(openToPrefill) }}</p>
+        <p v-else-if="!openToAnyone" class="ids open-to-note">{{ OPEN_TO_HELP }}</p>
+        <label class="check open-to-anyone">
+          <input v-model="openToAnyone" type="checkbox" name="open_to_anyone" :disabled="busy" />
+          <span>{{ OPEN_TO_ANYONE_LABEL }}</span>
+        </label>
+        <p v-if="openToGuard" class="guard open-to-guard">{{ openToGuard }}</p>
+
         <p v-if="descriptionGuard" class="guard">{{ descriptionGuard }}</p>
 
         <p v-if="errorMsg" class="error">{{ errorMsg }}</p>
         <div class="sheet-actions">
-          <button type="button" class="btn primary" :disabled="busy || messageMissing" @click="createThread">
+          <button type="button" class="btn primary" :disabled="busy || messageMissing || openToMissing" @click="createThread">
             {{ busy ? 'Creating…' : errorMsg ? 'Retry' : 'Create thread' }}
           </button>
           <button type="button" class="btn ghost" :disabled="busy" @click="emit('close')">Cancel</button>
@@ -469,9 +552,14 @@ watch(result, (r) => {
 .disclosure-body { margin: 0; color: var(--ink-soft); font-size: 13.5px; background: var(--surface-sunk); border: var(--border-w) solid var(--rule); border-radius: var(--radius); padding: 8px 12px; }
 .field { display: flex; flex-direction: column; gap: 4px; }
 .field-label { font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); }
-textarea { background: var(--surface); border: var(--border-w) solid var(--rule); border-radius: var(--radius); color: var(--ink); font: inherit; font-size: 14px; padding: 8px 10px; resize: vertical; transition: border-color var(--dur-fast) var(--ease); }
-textarea:focus { border-color: var(--ink); }
-textarea:focus-visible, .link-input:focus-visible, .disclosure:focus-visible, .paste-preview summary:focus-visible, .hint-copy a:focus-visible { outline: var(--focus-ring); outline-offset: var(--focus-offset); }
+textarea, .open-to { background: var(--surface); border: var(--border-w) solid var(--rule); border-radius: var(--radius); color: var(--ink); font: inherit; font-size: 14px; padding: 8px 10px; transition: border-color var(--dur-fast) var(--ease); }
+textarea { resize: vertical; }
+textarea:focus, .open-to:focus { border-color: var(--ink); }
+.open-to:disabled { color: var(--ink-soft); background: var(--surface-sunk); }
+/* The explicit opt-out: a plain checkbox row, never styled as the primary path. */
+.check { display: flex; align-items: center; gap: 8px; font-size: 13.5px; color: var(--ink-soft); cursor: pointer; }
+.check input { margin: 0; accent-color: var(--ink); }
+textarea:focus-visible, .open-to:focus-visible, .check input:focus-visible, .link-input:focus-visible, .disclosure:focus-visible, .paste-preview summary:focus-visible, .hint-copy a:focus-visible { outline: var(--focus-ring); outline-offset: var(--focus-offset); }
 .sheet-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 /* The thread link: mono, in an accent frame — it is the one thing on the
    success state to take away. */
@@ -483,7 +571,7 @@ textarea:focus-visible, .link-input:focus-visible, .disclosure:focus-visible, .p
 .paste-preview { font-size: 12.5px; color: var(--ink-soft); }
 .paste-preview summary { cursor: pointer; }
 .paste { margin: 6px 0 0; word-break: break-all; font-size: 12.5px; background: var(--surface-sunk); border: var(--border-w) solid var(--rule); border-radius: var(--radius); padding: 8px 10px; }
-.guard { margin: 0; color: var(--ink-soft); font-size: 13.5px; }
+.guard { margin: 0; color: var(--ink-soft); font-size: 13.5px; overflow-wrap: anywhere; }
 .error { color: var(--sev-breaking-ink); margin: 0; font-size: 13.5px; }
 .mono { font-family: var(--f-mono); }
 </style>
