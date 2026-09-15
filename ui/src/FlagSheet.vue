@@ -16,7 +16,7 @@
 // would otherwise assert evidence that is not there: no evidence line, a
 // REQUIRED message (it is the whole artifact), and a disclosure/share copy that
 // names the domain instead of a call.
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'vue';
 import { ApiError, apiGet, apiPost, openThreadInNewTab } from './api';
 import { copyText, selectInput } from './clipboard';
 import ConnectPanel from './ConnectPanel.vue';
@@ -32,17 +32,20 @@ import {
   QUESTION_LEAD,
   QUESTION_MESSAGE_LABEL,
   QUESTION_MESSAGE_REQUIRED,
-  OPEN_TO_ANYONE_LABEL,
-  OPEN_TO_HELP,
-  OPEN_TO_LABEL,
-  OPEN_TO_MAX,
-  OPEN_TO_PLACEHOLDER,
-  OPEN_TO_REQUIRED,
+  OPEN_TO_DEFAULT_MODE,
+  OPEN_TO_DOMAINS_HELP,
+  OPEN_TO_DOMAINS_PLACEHOLDER,
+  OPEN_TO_EMAILS_HELP,
+  OPEN_TO_EMAILS_PLACEHOLDER,
+  OPEN_TO_LEGEND,
   gatedShareWarning,
-  openToInvalidNote,
+  openToAnyoneHelp,
+  openToBody,
+  openToModeLabel,
   openToPrefillNote,
-  openToTooMany,
   parseOpenTo,
+  peopleShareWarning,
+  type OpenToMode,
   questionDisclosureLead,
   questionPasteText,
   questionShareWarning,
@@ -94,29 +97,56 @@ const edgeDomain = computed(() => props.edge?.domain || props.edge?.host || '');
 /** In question mode the message IS the thread, so an empty one cannot be sent. */
 const messageMissing = computed(() => isQuestion.value && message.value.trim().length === 0);
 
-// ─── Who may open the thread (thread-domain-gate, 2026-09-14) ───────────
-// The "Open to" field: email domains, or the explicit "Anyone with the link".
-// There is no silent default — Create thread is inert until the operator has
-// said one or the other. The directory prefills the provider host's domain
-// when it is a CLAIMED entry (a D5 domain proof: someone there proved they
-// control it, so it is honestly their email domain); anything less proves
-// nothing about a mailbox, and the field stays required input.
-const openTo = ref('');
-const openToAnyone = ref(false);
-/** The operator typed into the field — a prefill that lands later must not overwrite it. */
-const openToTouched = ref(false);
+// ─── Who can open the thread (thread-domain-gate; three modes 2026-09-15) ──
+// A fieldset of three radios — specific people, anyone at a domain (the
+// default), anyone with the link — each followed by its own input and help;
+// only the selected option's render. Create thread stays ENABLED: a create
+// with an unusable list shows the guard, focuses the field and posts nothing.
+// Guards wait until the field was typed in (or a create was attempted), so a
+// sheet never opens already scolding. The directory prefills the domains field
+// when the provider host is a CLAIMED entry (a D5 domain proof: someone there
+// proved they control it, so it is honestly their email domain); anything less
+// proves nothing about a mailbox, and the field stays required input.
+const openToMode = ref<OpenToMode>(OPEN_TO_DEFAULT_MODE);
+const emailsText = ref('');
+const domainsText = ref('');
+/** The operator typed into the field. For domains it also means a prefill that lands later must not overwrite it. */
+const emailsTouched = ref(false);
+const domainsTouched = ref(false);
+/** A Create thread click happened: every guard of the selected mode shows from here on. */
+const createAttempted = ref(false);
+/** The claimed directory domain the prefill PUT in the field ('' when it put nothing). */
 const openToPrefill = ref('');
-const openToParsed = computed(() => parseOpenTo(openTo.value));
-const openToGuard = computed(() => {
-  if (openToAnyone.value) return '';
-  if (openToParsed.value.invalid !== null) return openToInvalidNote(openToParsed.value.invalid);
-  if (openToParsed.value.domains.length === 0) return OPEN_TO_REQUIRED;
-  if (openToParsed.value.domains.length > OPEN_TO_MAX) return openToTooMany();
-  return '';
+const emailsParsed = computed(() => parseOpenTo(emailsText.value, 'emails'));
+const domainsParsed = computed(() => parseOpenTo(domainsText.value, 'domains'));
+const emailsGuard = computed(() => (emailsTouched.value || createAttempted.value ? emailsParsed.value.guard : ''));
+const domainsGuard = computed(() => (domainsTouched.value || createAttempted.value ? domainsParsed.value.guard : ''));
+/** Whether the selected mode can be posted — judged whether or not its guard is showing yet. */
+const openToBlocked = computed(() => {
+  if (openToMode.value === 'emails') return emailsParsed.value.guard !== '';
+  if (openToMode.value === 'domains') return domainsParsed.value.guard !== '';
+  return false;
 });
-const openToMissing = computed(() => openToGuard.value !== '');
+/** The prefill note stays only while the field still holds what the directory put there. */
+const domainsHelp = computed(() =>
+  openToPrefill.value && domainsText.value.trim() === openToPrefill.value ? openToPrefillNote(openToPrefill.value) : OPEN_TO_DOMAINS_HELP
+);
+const anyoneHelp = computed(() => openToAnyoneHelp(props.finding ? 'evidence' : 'message'));
+const emailsInput = ref<HTMLInputElement | null>(null);
+const domainsInput = ref<HTMLInputElement | null>(null);
+// Per-sheet ids for the help/guard descriptions and the option labels.
+const uid = useId();
+const openToIds = {
+  emailsLabel: `open-to-emails-label-${uid}`,
+  emailsHelp: `open-to-emails-help-${uid}`,
+  emailsGuard: `open-to-emails-guard-${uid}`,
+  domainsLabel: `open-to-domains-label-${uid}`,
+  domainsHelp: `open-to-domains-help-${uid}`,
+  domainsGuard: `open-to-domains-guard-${uid}`,
+  anyoneHelp: `open-to-anyone-help-${uid}`
+};
 /** What the created thread was opened to — read by the success state's warning. */
-const createdOpenTo = ref<string[] | null>(null);
+const createdOpenTo = ref<{ mode: OpenToMode; list: string[] } | null>(null);
 const hintHost = computed(() => props.edge?.host || props.providerHost || props.call?.peer_host || props.finding?.peer_host || '');
 
 async function loadOpenToHint() {
@@ -125,8 +155,9 @@ async function loadOpenToHint() {
   try {
     const hint = await apiGet<DirectoryHint>(`/api/directory/hint?host=${encodeURIComponent(host)}`);
     if (!hint || !hint.claimed || !hint.domain) return;
+    if (domainsTouched.value || domainsText.value.trim() !== '') return;
+    domainsText.value = hint.domain;
     openToPrefill.value = hint.domain;
-    if (!openToTouched.value && openTo.value.trim() === '') openTo.value = hint.domain;
   } catch {
     // No hint is the required-input case, not an error: the operator types the domain.
   }
@@ -217,10 +248,14 @@ const paste = computed(() => {
   });
 });
 /** The share warning. The flag line names "the redacted evidence" — which a
- *  question thread does not carry — and a GATED thread says who can open it
- *  instead of "Anyone with this link", which is what the operator chose against. */
+ *  question thread does not carry — and a thread opened to people or a domain
+ *  says who can open it instead of "Anyone with this link", which is what the
+ *  operator chose against. */
 const shareWarning = computed(() => {
-  if (createdOpenTo.value) return gatedShareWarning(createdOpenTo.value, props.provider, props.finding ? 'evidence' : 'message');
+  const what = props.finding ? 'evidence' : 'message';
+  const created = createdOpenTo.value;
+  if (created?.mode === 'emails') return peopleShareWarning(created.list, props.provider, what);
+  if (created?.mode === 'domains') return gatedShareWarning(created.list, props.provider, what);
   return !props.finding
     ? questionShareWarning(props.provider)
     : `Anyone with this link can read the redacted evidence and reply. Paste it where you already talk to ${props.provider}'s team. It lasts 30 days and extends with each reply.`;
@@ -233,11 +268,20 @@ function toggleDisclosure() {
 }
 
 async function createThread() {
-  if (messageMissing.value || openToMissing.value) return;
+  if (busy.value || messageMissing.value) return;
+  createAttempted.value = true;
+  if (openToBlocked.value) {
+    // The guard is showing now; put the operator in the field it is about. Nothing is posted.
+    await nextTick();
+    (openToMode.value === 'emails' ? emailsInput.value : domainsInput.value)?.focus();
+    return;
+  }
   busy.value = true;
   errorMsg.value = '';
-  // Always on the wire: a list, or null for the explicit "Anyone with the link".
-  const allowedDomains = openToAnyone.value ? null : openToParsed.value.domains;
+  // Always BOTH keys on the wire: the chosen list and null, or both null for anyone.
+  const mode = openToMode.value;
+  const list = mode === 'emails' ? emailsParsed.value.list : mode === 'domains' ? domainsParsed.value.list : [];
+  const access = openToBody(mode, emailsParsed.value.list, domainsParsed.value.list);
   try {
     // Two routes, one flow. The question route sends the sheet's own request id
     // so a retry after a failed create replays onto the same thread.
@@ -246,15 +290,15 @@ async function createThread() {
           finding_id: props.finding.id,
           message: message.value,
           provider_display_name: props.provider,
-          allowed_domains: allowedDomains
+          ...access
         })
       : await apiPost<FlagResult>('/api/edges/thread', {
           host: props.edge?.host ?? '',
           message: message.value,
           request_id: requestId,
-          allowed_domains: allowedDomains
+          ...access
         });
-    createdOpenTo.value = allowedDomains;
+    createdOpenTo.value = { mode, list };
     result.value = r;
     localStorage.setItem(DISCLOSURE_KEY, '1');
     emit('created', r);
@@ -472,34 +516,89 @@ watch(result, (r) => {
         </label>
         <p v-if="messageMissing" class="guard">{{ QUESTION_MESSAGE_REQUIRED }}</p>
 
-        <!-- Who may open the thread. Required: domains, or the explicit toggle. -->
-        <label class="field">
-          <span class="field-label">{{ OPEN_TO_LABEL }}</span>
-          <input
-            v-model="openTo"
-            class="open-to"
-            type="text"
-            name="allowed_domains"
-            :placeholder="OPEN_TO_PLACEHOLDER"
-            :disabled="busy || openToAnyone"
-            autocomplete="off"
-            spellcheck="false"
-            @input="openToTouched = true"
-          />
-        </label>
-        <p v-if="openToPrefill && !openToTouched && !openToAnyone" class="ids open-to-note">{{ openToPrefillNote(openToPrefill) }}</p>
-        <p v-else-if="!openToAnyone" class="ids open-to-note">{{ OPEN_TO_HELP }}</p>
-        <label class="check open-to-anyone">
-          <input v-model="openToAnyone" type="checkbox" name="open_to_anyone" :disabled="busy" />
-          <span>{{ OPEN_TO_ANYONE_LABEL }}</span>
-        </label>
-        <p v-if="openToGuard" class="guard open-to-guard">{{ openToGuard }}</p>
+        <!-- Who can open it: three radios in spec order, each followed by its
+             own input and help; only the selected option's render. Each guard
+             sits in a live wrapper that exists before the guard does, so its
+             arrival is announced. -->
+        <fieldset class="open-to-choice">
+          <legend class="field-label">{{ OPEN_TO_LEGEND }}</legend>
+
+          <label class="check open-to-option">
+            <input v-model="openToMode" type="radio" name="open_to_mode" value="emails" :disabled="busy" />
+            <span :id="openToIds.emailsLabel">{{ openToModeLabel('emails') }}</span>
+          </label>
+          <div v-if="openToMode === 'emails'" class="open-to-detail">
+            <input
+              ref="emailsInput"
+              v-model="emailsText"
+              class="open-to-emails"
+              type="text"
+              name="allowed_emails"
+              :placeholder="OPEN_TO_EMAILS_PLACEHOLDER"
+              :disabled="busy"
+              :aria-labelledby="openToIds.emailsLabel"
+              :aria-describedby="`${openToIds.emailsHelp} ${openToIds.emailsGuard}`"
+              :aria-invalid="emailsGuard ? 'true' : undefined"
+              autocomplete="off"
+              autocapitalize="off"
+              spellcheck="false"
+              @input="emailsTouched = true"
+            />
+            <p :id="openToIds.emailsHelp" class="ids open-to-note">{{ OPEN_TO_EMAILS_HELP }}</p>
+            <div class="open-to-live" aria-live="polite">
+              <p v-if="emailsGuard" :id="openToIds.emailsGuard" class="guard open-to-guard" aria-live="polite">{{ emailsGuard }}</p>
+            </div>
+          </div>
+
+          <label class="check open-to-option">
+            <input v-model="openToMode" type="radio" name="open_to_mode" value="domains" :disabled="busy" />
+            <span :id="openToIds.domainsLabel">{{ openToModeLabel('domains') }}</span>
+          </label>
+          <div v-if="openToMode === 'domains'" class="open-to-detail">
+            <input
+              ref="domainsInput"
+              v-model="domainsText"
+              class="open-to"
+              type="text"
+              name="allowed_domains"
+              :placeholder="OPEN_TO_DOMAINS_PLACEHOLDER"
+              :disabled="busy"
+              :aria-labelledby="openToIds.domainsLabel"
+              :aria-describedby="`${openToIds.domainsHelp} ${openToIds.domainsGuard}`"
+              :aria-invalid="domainsGuard ? 'true' : undefined"
+              autocomplete="off"
+              autocapitalize="off"
+              spellcheck="false"
+              @input="domainsTouched = true"
+            />
+            <p :id="openToIds.domainsHelp" class="ids open-to-note">{{ domainsHelp }}</p>
+            <div class="open-to-live" aria-live="polite">
+              <p v-if="domainsGuard" :id="openToIds.domainsGuard" class="guard open-to-guard" aria-live="polite">{{ domainsGuard }}</p>
+            </div>
+          </div>
+
+          <label class="check open-to-option">
+            <input
+              v-model="openToMode"
+              type="radio"
+              name="open_to_mode"
+              value="anyone"
+              :disabled="busy"
+              :aria-describedby="openToMode === 'anyone' ? openToIds.anyoneHelp : undefined"
+            />
+            <span>{{ openToModeLabel('anyone') }}</span>
+          </label>
+          <div v-if="openToMode === 'anyone'" class="open-to-detail">
+            <p :id="openToIds.anyoneHelp" class="ids open-to-note">{{ anyoneHelp }}</p>
+          </div>
+        </fieldset>
 
         <p v-if="descriptionGuard" class="guard">{{ descriptionGuard }}</p>
 
         <p v-if="errorMsg" class="error">{{ errorMsg }}</p>
         <div class="sheet-actions">
-          <button type="button" class="btn primary" :disabled="busy || messageMissing || openToMissing" @click="createThread">
+          <!-- Stays enabled over an unusable Who can open it: the click shows the guard and focuses the field. -->
+          <button type="button" class="btn primary" :disabled="busy || messageMissing" @click="createThread">
             {{ busy ? 'Creating…' : errorMsg ? 'Retry' : 'Create thread' }}
           </button>
           <button type="button" class="btn ghost" :disabled="busy" @click="emit('close')">Cancel</button>
@@ -552,14 +651,24 @@ watch(result, (r) => {
 .disclosure-body { margin: 0; color: var(--ink-soft); font-size: 13.5px; background: var(--surface-sunk); border: var(--border-w) solid var(--rule); border-radius: var(--radius); padding: 8px 12px; }
 .field { display: flex; flex-direction: column; gap: 4px; }
 .field-label { font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); }
-textarea, .open-to { background: var(--surface); border: var(--border-w) solid var(--rule); border-radius: var(--radius); color: var(--ink); font: inherit; font-size: 14px; padding: 8px 10px; transition: border-color var(--dur-fast) var(--ease); }
+textarea, .open-to, .open-to-emails { background: var(--surface); border: var(--border-w) solid var(--rule); border-radius: var(--radius); color: var(--ink); font: inherit; font-size: 14px; padding: 8px 10px; transition: border-color var(--dur-fast) var(--ease); }
 textarea { resize: vertical; }
-textarea:focus, .open-to:focus { border-color: var(--ink); }
-.open-to:disabled { color: var(--ink-soft); background: var(--surface-sunk); }
-/* The explicit opt-out: a plain checkbox row, never styled as the primary path. */
+textarea:focus, .open-to:focus, .open-to-emails:focus { border-color: var(--ink); }
+.open-to:disabled, .open-to-emails:disabled { color: var(--ink-soft); background: var(--surface-sunk); }
+/* Who can open it: a bare fieldset under the same mono eyebrow as the other
+   fields. Each option's field and help hang under its radio, indented to the
+   label text, so the three read as one choice rather than three forms. */
+.open-to-choice { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.open-to-choice legend { padding: 0; margin-bottom: 4px; }
 .check { display: flex; align-items: center; gap: 8px; font-size: 13.5px; color: var(--ink-soft); cursor: pointer; }
 .check input { margin: 0; accent-color: var(--ink); }
-textarea:focus-visible, .open-to:focus-visible, .check input:focus-visible, .link-input:focus-visible, .disclosure:focus-visible, .paste-preview summary:focus-visible, .hint-copy a:focus-visible { outline: var(--focus-ring); outline-offset: var(--focus-offset); }
+.open-to-option { color: var(--ink); align-self: flex-start; }
+.open-to-detail { display: flex; flex-direction: column; padding-left: 21px; margin-bottom: 4px; }
+.open-to-detail .open-to, .open-to-detail .open-to-emails { width: 100%; box-sizing: border-box; }
+.open-to-detail .open-to-note { margin-top: 4px; }
+/* The live wrapper stays in the DOM with no box of its own; only a guard inside it takes space. */
+.open-to-detail .open-to-guard { margin-top: 4px; }
+textarea:focus-visible, .open-to:focus-visible, .open-to-emails:focus-visible, .check input:focus-visible, .link-input:focus-visible, .disclosure:focus-visible, .paste-preview summary:focus-visible, .hint-copy a:focus-visible { outline: var(--focus-ring); outline-offset: var(--focus-offset); }
 .sheet-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 /* The thread link: mono, in an accent frame — it is the one thing on the
    success state to take away. */

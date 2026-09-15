@@ -75,7 +75,8 @@ async function openFlag(): Promise<VueWrapper> {
 }
 
 const createButton = (w: VueWrapper) => w.findAll('button').find((b) => b.text().startsWith('Create thread') || b.text() === 'Creating…')!;
-/** The "Open to" field (thread-domain-gate): required on every sheet, so each create fills it. */
+/** The domain field of "Who can open it" (the default mode, thread-domain-gate): a create with it
+ *  empty shows a guard and posts nothing, so each create here fills it. */
 const openTo = (w: VueWrapper) => w.find('input.open-to');
 
 beforeEach(() => {
@@ -157,7 +158,8 @@ describe('the message is the whole thread, so it is required', () => {
     const w = await openQuestion();
     const fetchSpy = vi.fn();
     vi.stubGlobal('fetch', fetchSpy);
-    // The Open to field is the OTHER precondition; satisfied here so the message is the one under test.
+    // Who can open it is filled so the message is the only thing under test. (An empty
+    // domain field never disables Create thread — see open-to.test.ts.)
     await openTo(w).setValue('globex.test');
 
     expect(createButton(w).attributes('disabled')).toBeDefined();
@@ -200,7 +202,8 @@ describe('the flag sheet is unchanged', () => {
     expect(w.find('.evidence').text()).toContain('Evidence (1):');
     expect(w.find('.field-label').text()).toBe('Message (optional)');
     expect((w.find('textarea').element as HTMLTextAreaElement).value.length).toBeGreaterThan(0);
-    // Since thread-domain-gate the ONE precondition a flag has is the Open to field, never the message.
+    // A flag's Create thread is enabled whatever the message says; Who can open it is filled so the create goes through.
+    expect(createButton(w).attributes('disabled')).toBeUndefined();
     await openTo(w).setValue('acme-payments.test');
     expect(createButton(w).attributes('disabled')).toBeUndefined();
     expect(w.text()).not.toContain(QUESTION_MESSAGE_REQUIRED);

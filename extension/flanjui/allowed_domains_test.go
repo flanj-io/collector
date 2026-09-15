@@ -1,6 +1,7 @@
 package flanjui
 
 import (
+	"fmt"
 	"net/http"
 	"reflect"
 	"testing"
@@ -41,6 +42,9 @@ func TestFlagAnyoneWithTheLinkIsAnExplicitNull(t *testing.T) {
 	}
 	if v != nil {
 		t.Errorf("Anyone with the link is JSON null, got %v", v)
+	}
+	if e, has := r.cp.lastFlagBody["allowed_emails"]; !has || e != nil {
+		t.Errorf("allowed_emails must be on the wire too, as null, for Anyone with the link: present=%v value=%v", has, e)
 	}
 }
 
@@ -130,4 +134,79 @@ func TestDirectoryHint(t *testing.T) {
 	if resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("POST: %d, want 405", resp.StatusCode)
 	}
+}
+
+// Three modes (2026-09-15): specific people travel as allowed_emails, normalized,
+// with allowed_domains present and null — the relay always forwards both keys.
+func TestFlagSpecificPeopleReachTheWire(t *testing.T) {
+	r := connectedRig(t)
+
+	resp, _, raw := r.do(t, http.MethodPost, "/api/flag", map[string]any{
+		"finding_id":     "fnd_1",
+		"allowed_emails": []string{" Dana@Acme-Payments.test ", "Dana Reyes <dana@acme-payments.test>", "lee@eu.acme-payments.test"},
+	})
+	if resp.StatusCode != 201 {
+		t.Fatalf("flag: %d %s", resp.StatusCode, raw)
+	}
+	got, _ := r.cp.lastFlagBody["allowed_emails"].([]any)
+	if want := []any{"dana@acme-payments.test", "lee@eu.acme-payments.test"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("allowed_emails on the wire = %v, want %v", got, want)
+	}
+	if d, has := r.cp.lastFlagBody["allowed_domains"]; !has || d != nil {
+		t.Errorf("allowed_domains must be on the wire as null beside a people list: present=%v value=%v", has, d)
+	}
+}
+
+func TestFlagRefusesAConflictOrABadPeopleList(t *testing.T) {
+	r := connectedRig(t)
+	cases := []struct {
+		name string
+		body map[string]any
+		code string
+	}{
+		{"both lists", map[string]any{"finding_id": "fnd_1", "allowed_domains": []string{"acme-payments.test"}, "allowed_emails": []string{"dana@acme-payments.test"}}, "access_conflict"},
+		{"empty people", map[string]any{"finding_id": "fnd_1", "allowed_emails": []string{}}, "allowed_emails_empty"},
+		{"not an address", map[string]any{"finding_id": "fnd_1", "allowed_emails": []string{"dana"}}, "invalid_email"},
+		{"two @", map[string]any{"finding_id": "fnd_1", "allowed_emails": []string{"a@b@acme.test"}}, "invalid_email"},
+		{"people not a list", map[string]any{"finding_id": "fnd_1", "allowed_emails": "dana@acme-payments.test"}, "bad_request"},
+		{"21 domains", map[string]any{"finding_id": "fnd_1", "allowed_domains": manyOf(21, "d%d.test")}, "bad_request"},
+		{"21 people", map[string]any{"finding_id": "fnd_1", "allowed_emails": manyOf(21, "p%d@acme.test")}, "bad_request"},
+	}
+	for _, c := range cases {
+		before := r.cp.flagCalls
+		resp, out, _ := r.do(t, http.MethodPost, "/api/flag", c.body)
+		if resp.StatusCode != http.StatusBadRequest || out["error"] != c.code {
+			t.Errorf("%s: %d %v, want 400 %s", c.name, resp.StatusCode, out, c.code)
+		}
+		if r.cp.flagCalls != before {
+			t.Errorf("%s: a refused Open to must not leave the collector", c.name)
+		}
+	}
+	// One list and the other key null is a choice, not a conflict.
+	resp, _, raw := r.do(t, http.MethodPost, "/api/flag", map[string]any{"finding_id": "fnd_1", "allowed_domains": nil, "allowed_emails": []string{"dana@acme-payments.test"}})
+	if resp.StatusCode != 201 {
+		t.Errorf("a people list beside a null domains key: %d %s", resp.StatusCode, raw)
+	}
+}
+
+func TestEdgeThreadSendsSpecificPeople(t *testing.T) {
+	r := connectedRig(t)
+	seedOutboundEdge(r, "api.globex.test")
+	resp, _, raw := r.do(t, http.MethodPost, "/api/edges/thread", map[string]any{
+		"host": "api.globex.test", "message": "hello", "request_id": "req-1", "allowed_emails": []string{"Kai@Globex.test"},
+	})
+	if resp.StatusCode != 201 && resp.StatusCode != 200 {
+		t.Fatalf("POST /api/edges/thread: %d %s", resp.StatusCode, raw)
+	}
+	if got, _ := r.cp.lastFlagBody["allowed_emails"].([]any); !reflect.DeepEqual(got, []any{"kai@globex.test"}) {
+		t.Errorf("allowed_emails on the wire = %v, want [kai@globex.test]", got)
+	}
+}
+
+func manyOf(n int, format string) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = fmt.Sprintf(format, i)
+	}
+	return out
 }

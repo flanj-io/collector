@@ -550,6 +550,9 @@ type flagRequestBody struct {
 	// domains, or JSON null for "Anyone with the link". Kept raw so an absent
 	// field and an explicit null stay distinguishable — see allowedDomainsOf.
 	AllowedDomains json.RawMessage `json:"allowed_domains"`
+	// AllowedEmails is the other half of the choice (three modes, 2026-09-15):
+	// exact addresses. At least one of the two keys must be present.
+	AllowedEmails json.RawMessage `json:"allowed_emails"`
 }
 
 // humanizeIntegration turns an integration id into a human display name
@@ -688,7 +691,7 @@ func (e *uiExtension) handleFlag(w http.ResponseWriter, r *http.Request) {
 	// Who may open the thread — the last local check before anything leaves.
 	// Refused HERE so the operator reads it in the sheet; the CP refuses the
 	// same shapes independently.
-	allowedDomains, refuseCode, refuseMsg := allowedDomainsOf(body.AllowedDomains)
+	allowedDomains, allowedEmails, refuseCode, refuseMsg := openToOf(body.AllowedDomains, body.AllowedEmails)
 	if refuseCode != "" {
 		writeErr(w, http.StatusBadRequest, refuseCode, refuseMsg)
 		return
@@ -700,6 +703,7 @@ func (e *uiExtension) handleFlag(w http.ResponseWriter, r *http.Request) {
 		Call:                call,
 		Finding:             finding,
 		AllowedDomains:      allowedDomains,
+		AllowedEmails:       allowedEmails,
 	})
 
 	resp, code, err := cli.Post(r.Context(), req)
@@ -768,6 +772,7 @@ type edgeThreadRequestBody struct {
 	RequestID string `json:"request_id"`
 	// AllowedDomains: the sheet's "Open to" choice, REQUIRED — see flagRequestBody.
 	AllowedDomains json.RawMessage `json:"allowed_domains"`
+	AllowedEmails  json.RawMessage `json:"allowed_emails"`
 }
 
 // handleEdgeThread = Start a thread from an edge row (v1 phase 4, CONTRACTS §5):
@@ -843,7 +848,7 @@ func (e *uiExtension) handleEdgeThread(w http.ResponseWriter, r *http.Request) {
 	providerName, _ := names.resolve(target.PeerHost, domain)
 
 	// Who may open the thread — the same rule, in the same place, as the flag path.
-	allowedDomains, refuseCode, refuseMsg := allowedDomainsOf(body.AllowedDomains)
+	allowedDomains, allowedEmails, refuseCode, refuseMsg := openToOf(body.AllowedDomains, body.AllowedEmails)
 	if refuseCode != "" {
 		writeErr(w, http.StatusBadRequest, refuseCode, refuseMsg)
 		return
@@ -855,6 +860,7 @@ func (e *uiExtension) handleEdgeThread(w http.ResponseWriter, r *http.Request) {
 		ProviderHost:        target.PeerHost,
 		Message:             body.Message,
 		AllowedDomains:      allowedDomains,
+		AllowedEmails:       allowedEmails,
 	})
 
 	resp, code, err := cli.Post(r.Context(), req)

@@ -293,49 +293,153 @@ describe('cannotListThreads (gate on the 412 the relay would answer)', () => {
   });
 });
 
-// thread-domain-gate (2026-09-14): the "Open to" field's parser and copy.
-import { domainsSentence, gatedShareWarning, openToInvalidNote, OPEN_TO_NOTE_ENTRY_MAX, parseOpenTo } from './threads';
+// thread-domain-gate: the "Who can open it" parser and copy (open-to-v2 §6, three modes 2026-09-15).
+import {
+  domainsSentence,
+  gatedShareWarning,
+  openToAddressInDomainsNote,
+  openToAnyoneHelp,
+  openToBody,
+  openToDomainInEmailsNote,
+  openToInvalidEmailNote,
+  openToInvalidNote,
+  openToModeLabel,
+  openToPrefillNote,
+  OPEN_TO_DEFAULT_MODE,
+  OPEN_TO_MODES,
+  OPEN_TO_NOTE_ENTRY_MAX,
+  parseOpenTo,
+  peopleSentence,
+  peopleShareWarning,
+  splitOpenTo
+} from './threads';
 
-describe('openToInvalidNote (QA 2026-09-14: a pasted 16 KB entry ran out of the sheet)', () => {
-  it('names a short entry whole, and shortens a long one', () => {
-    expect(openToInvalidNote('dana@acme.test')).toBe('"dana@acme.test" is not a domain — write each like acme.com, with no @, path or port.');
-    const note = openToInvalidNote(`${'x'.repeat(16_000)}.test`);
-    expect(note).toContain(`"${'x'.repeat(OPEN_TO_NOTE_ENTRY_MAX)}…" is not a domain`);
-    expect(note.length).toBeLessThan(OPEN_TO_NOTE_ENTRY_MAX + 100);
+describe('the Who can open it modes', () => {
+  it('three modes in spec order with their final labels, a domain by default', () => {
+    expect(OPEN_TO_MODES.map((m) => m.value)).toEqual(['emails', 'domains', 'anyone']);
+    expect(OPEN_TO_MODES.map((m) => m.label)).toEqual(['Only specific people', 'Anyone at a domain', 'Anyone with the link — not recommended']);
+    expect(OPEN_TO_DEFAULT_MODE).toBe('domains');
+    expect(openToModeLabel('anyone')).toBe('Anyone with the link — not recommended');
+  });
+  it('the helps that are functions: the prefill note and the anyone help per sheet', () => {
+    expect(openToPrefillNote('acme.test')).toBe(
+      'Prefilled from the Flanj directory: acme.test is verified. Change it if their email addresses end in something else.'
+    );
+    expect(openToAnyoneHelp('evidence')).toBe('Anyone holding the link can read the redacted evidence. Paste it only where just their team can see it.');
+    expect(openToAnyoneHelp('message')).toBe('Anyone holding the link can read your message. Paste it only where just their team can see it.');
+  });
+});
+
+describe('guard sentences (QA 2026-09-14: a pasted 16 KB entry ran out of the sheet)', () => {
+  it('name a short entry whole', () => {
+    expect(openToInvalidNote('acme.test/x')).toBe('"acme.test/x" is not a domain — write each like acme.com, with no @, path or port.');
+    expect(openToAddressInDomainsNote('dana@acme.test', 'acme.test')).toBe('"dana@acme.test" is an address — write just the domain, acme.test.');
+    expect(openToInvalidEmailNote('dana')).toBe('"dana" is not an email address — write each like dana@acme.com.');
+    expect(openToDomainInEmailsNote('acme.test', 'acme.test')).toBe(
+      '"acme.test" is a domain — choose Anyone at a domain, or write an address like dana@acme.test.'
+    );
+  });
+  it('shorten every entry over 48 chars to its first 48 and an ellipsis', () => {
+    const long = 'x'.repeat(16_000);
+    const shown = `${'x'.repeat(OPEN_TO_NOTE_ENTRY_MAX)}…`;
+    expect(OPEN_TO_NOTE_ENTRY_MAX).toBe(48);
+    expect(openToInvalidNote(long)).toBe(`"${shown}" is not a domain — write each like acme.com, with no @, path or port.`);
+    expect(openToInvalidEmailNote(long)).toBe(`"${shown}" is not an email address — write each like dana@acme.com.`);
+    expect(openToAddressInDomainsNote(long, long)).toBe(`"${shown}" is an address — write just the domain, ${shown}.`);
+    expect(openToDomainInEmailsNote(long, long)).toBe(`"${shown}" is a domain — choose Anyone at a domain, or write an address like dana@${shown}.`);
+    // Exactly 48 is not shortened.
+    expect(openToInvalidEmailNote('y'.repeat(48))).toBe(`"${'y'.repeat(48)}" is not an email address — write each like dana@acme.com.`);
+  });
+});
+
+describe('splitOpenTo', () => {
+  it('splits on commas, semicolons and newlines, then on whitespace', () => {
+    expect(splitOpenTo(' a.test, b.test;c.test\r\nd.test e.test\n\n ,; ')).toEqual(['a.test', 'b.test', 'c.test', 'd.test', 'e.test']);
+  });
+  it('a piece holding <…> yields what is inside', () => {
+    expect(splitOpenTo('Dana Lee <dana@acme.test>, "Sam" <sam@acme.test>; kim@acme.test')).toEqual(['dana@acme.test', 'sam@acme.test', 'kim@acme.test']);
+    // Nothing inside: the piece stays whole, so the guard can name it.
+    expect(splitOpenTo('Dana <>')).toEqual(['Dana <>']);
   });
 });
 
 describe('parseOpenTo', () => {
-  it('splits on commas and whitespace, normalizes and de-duplicates', () => {
-    expect(parseOpenTo(' Acme-Payments.test, @acme-payments.test; globex.test. \n corp.example')).toEqual({
-      domains: ['acme-payments.test', 'globex.test', 'corp.example'],
-      invalid: null
+  it('domains: normalizes and de-duplicates', () => {
+    expect(parseOpenTo(' Acme-Payments.test, @acme-payments.test; globex.test. \n corp.example', 'domains')).toEqual({
+      list: ['acme-payments.test', 'globex.test', 'corp.example'],
+      guard: ''
     });
   });
-  it('names the first entry that is not a bare domain', () => {
-    expect(parseOpenTo('acme.test, https://globex.test/x')).toEqual({ domains: ['acme.test'], invalid: 'https://globex.test/x' });
-    expect(parseOpenTo('dana@acme.test').invalid).toBe('dana@acme.test');
-    expect(parseOpenTo('localhost').invalid).toBe('localhost');
+  it('domains: the first entry that is not a bare domain names the guard — an address says which domain to write', () => {
+    expect(parseOpenTo('acme.test, https://globex.test/x', 'domains').guard).toBe(openToInvalidNote('https://globex.test/x'));
+    expect(parseOpenTo('localhost', 'domains').guard).toBe(openToInvalidNote('localhost'));
+    expect(parseOpenTo('Dana@Acme.test', 'domains').guard).toBe('"Dana@Acme.test" is an address — write just the domain, acme.test.');
   });
-  it('an empty field is an empty list, not an error', () => {
-    expect(parseOpenTo('   ')).toEqual({ domains: [], invalid: null });
+  it('emails: reads Name <addr>, lower-cases and de-duplicates', () => {
+    expect(parseOpenTo('Dana Lee <Dana@Acme.test>, dana@acme.test\nsam@acme.test', 'emails')).toEqual({
+      list: ['dana@acme.test', 'sam@acme.test'],
+      guard: ''
+    });
+  });
+  it('emails: a domain says to choose Anyone at a domain; anything else is not an address', () => {
+    expect(parseOpenTo('@Acme.test', 'emails').guard).toBe(
+      '"@Acme.test" is a domain — choose Anyone at a domain, or write an address like dana@acme.test.'
+    );
+    expect(parseOpenTo('dana', 'emails').guard).toBe(openToInvalidEmailNote('dana'));
+    expect(parseOpenTo('dana@@acme.test', 'emails').guard).toBe(openToInvalidEmailNote('dana@@acme.test'));
+    expect(parseOpenTo('dana@localhost', 'emails').guard).toBe(openToInvalidEmailNote('dana@localhost'));
+  });
+  it('an empty field, and more than 20, in each list', () => {
+    expect(parseOpenTo('  ', 'domains')).toEqual({ list: [], guard: 'Add at least one domain.' });
+    expect(parseOpenTo(' ,; ', 'emails')).toEqual({ list: [], guard: 'Add at least one email address.' });
+    const twentyOneDomains = Array.from({ length: 21 }, (_, i) => `d${i}.test`).join(',');
+    const twentyOnePeople = Array.from({ length: 21 }, (_, i) => `p${i}@acme.test`).join(',');
+    expect(parseOpenTo(twentyOneDomains, 'domains').guard).toBe('A thread can be open to at most 20 domains.');
+    expect(parseOpenTo(twentyOnePeople, 'emails').guard).toBe('A thread can be open to at most 20 people.');
+    // Duplicates are not counted twice.
+    expect(parseOpenTo(`${Array.from({ length: 20 }, (_, i) => `d${i}.test`).join(',')},d0.test`, 'domains').guard).toBe('');
   });
 });
 
-describe('the gated share warning', () => {
-  it('names the domains, says nobody else can read it, and never says "Anyone with this link"', () => {
+describe('openToBody', () => {
+  it('always both keys: the chosen list and null, or both null for anyone', () => {
+    expect(openToBody('emails', ['dana@acme.test'], ['acme.test'])).toEqual({ allowed_emails: ['dana@acme.test'], allowed_domains: null });
+    expect(openToBody('domains', ['dana@acme.test'], ['acme.test'])).toEqual({ allowed_emails: null, allowed_domains: ['acme.test'] });
+    expect(openToBody('anyone', ['dana@acme.test'], ['acme.test'])).toEqual({ allowed_emails: null, allowed_domains: null });
+  });
+});
+
+describe('the share warnings', () => {
+  it('a domain thread names the domains, says nobody else can read it, and never says "Anyone with this link"', () => {
     const one = gatedShareWarning(['acme.test'], 'Acme', 'evidence');
-    expect(one).toContain('People with an @acme.test address can open this link');
-    expect(one).toContain('read the redacted evidence and reply');
-    expect(one).toContain('Nobody else can read it');
+    expect(one).toBe(
+      "People with an @acme.test address can open this link — they confirm it once, then read the redacted evidence and reply. Nobody else can read it. Paste it where you already talk to Acme's team. It lasts 30 days and extends with each reply."
+    );
     expect(one).not.toContain('Anyone with this link');
     expect(gatedShareWarning(['acme.test', 'globex.test'], 'Acme', 'message')).toContain('People with an @acme.test or @globex.test address');
     expect(gatedShareWarning(['a.test', 'b.test', 'c.test'], 'Acme', 'message')).toContain('read your message and reply');
+  });
+  it('a people thread names up to three, then "and N others"; a question reads your message', () => {
+    expect(peopleShareWarning(['a@x.test', 'b@x.test', 'c@x.test'], 'Acme', 'evidence')).toBe(
+      "Only a@x.test, b@x.test and c@x.test can open this link — they confirm their address once, then read the redacted evidence and reply. Nobody else can read it. Paste it where you already talk to Acme's team. It lasts 30 days and extends with each reply."
+    );
+    expect(peopleShareWarning(['a@x.test', 'b@x.test', 'c@x.test', 'd@x.test', 'e@x.test', 'f@x.test'], 'Acme', 'message')).toBe(
+      "Only a@x.test, b@x.test, c@x.test and 3 others can open this link — they confirm their address once, then read your message and reply. Nobody else can read it. Paste it where you already talk to Acme's team. It lasts 30 days and extends with each reply."
+    );
   });
   it('domainsSentence joins with commas and a final or', () => {
     expect(domainsSentence([])).toBe('');
     expect(domainsSentence(['a.test'])).toBe('a.test');
     expect(domainsSentence(['a.test', 'b.test'])).toBe('a.test or b.test');
     expect(domainsSentence(['a.test', 'b.test', 'c.test'])).toBe('a.test, b.test or c.test');
+  });
+  it('peopleSentence joins with commas and a final and', () => {
+    expect(peopleSentence([])).toBe('');
+    expect(peopleSentence(['a'])).toBe('a');
+    expect(peopleSentence(['a', 'b'])).toBe('a and b');
+    expect(peopleSentence(['a', 'b', 'c'])).toBe('a, b and c');
+    expect(peopleSentence(['a', 'b', 'c', 'd', 'e'])).toBe('a, b, c and 2 others');
+    // One more than three is "1 other", never "1 others" (builder note, 2026-09-15).
+    expect(peopleSentence(['a', 'b', 'c', 'd'])).toBe('a, b, c and 1 other');
   });
 });
