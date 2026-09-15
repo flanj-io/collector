@@ -95,11 +95,11 @@ const (
 	msgOpenToConflict       = "Choose specific people or domains, not both."
 	msgOpenToEmpty          = "Add at least one domain."
 	msgOpenToInvalid        = "One of the domains is not a domain name — write each like acme.com, with no @, path or port."
-	msgOpenToNotAList       = "allowed_domains must be a list of domains, or null for Anyone with the link."
+	msgOpenToNotAList       = "allowed_domains must be a list of domains, or null for anyone with the link."
 	msgOpenToTooMany        = "A thread can be open to at most 20 domains."
 	msgOpenToEmailsEmpty    = "Add at least one email address."
 	msgOpenToInvalidEmail   = "One of the addresses is not an email address — write each like dana@acme.com."
-	msgOpenToEmailsNotAList = "allowed_emails must be a list of addresses, or null for Anyone with the link."
+	msgOpenToEmailsNotAList = "allowed_emails must be a list of addresses, or null for anyone with the link."
 	msgOpenToTooManyPeople  = "A thread can be open to at most 20 people."
 )
 

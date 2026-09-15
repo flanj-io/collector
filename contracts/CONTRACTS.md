@@ -463,8 +463,9 @@ Headers: `X-Flanj-Collector-Version`, `X-Flanj-Schema-Version`.
   "peek_url": "<deprecated alias of thread_url>", "magic_token": "<deprecated alias>", "state": "open", "status": "created" }
 // 400 finding_has_no_call  — `call` missing, `message` empty, and the kind is not call-less by nature
 // 400 allowed_domains_empty | invalid_domain | allowed_emails_empty | invalid_email — a list with nothing usable
-//                            in it, or an entry that is not a bare domain / one plain address
+//                            in it, or an entry that is not a bare domain / one plain address (or not a string)
 // 400 access_conflict      — `allowed_domains` and `allowed_emails` are both lists
+// 400 bad_request          — `allowed_domains` / `allowed_emails` is neither a list nor null, or has more than 20 entries
 // 403 not_flaggable        — a consumer-local kind (`stale_client`), with or without a message
 // 412 not_connected | contact_unconfirmed
 ```
@@ -490,10 +491,10 @@ specific people it names nobody.
 - **Both fields absent read as anyone with the link.** A collector shipped before them could not have asked its
   operator, so its threads stay open to the link. That is the compatibility default, not a recommendation.
 - **A collector that knows the fields always sends both**, the unchosen one as `null`, so `null` records the
-  operator's explicit choice. The collector's own relay refuses a create that carries neither.
+  operator's explicit choice. The collector's own relay refuses a create that carries neither (`400 missing_fields`).
 - At most one of the two may be a list (`400 access_conflict`). Entries are trimmed and lower-cased — a domain also
   loses a leading `@` and a trailing `.`, and an address written `Name <addr>` is read as the address — and duplicates
-  fold; at most 20. An empty list is
+  fold; at most 20 (`400 bad_request`, as is a value that is neither a list nor null). An empty list is
   `400 allowed_emails_empty` / `allowed_domains_empty`; an entry that is not one plain address / a bare domain is
   `400 invalid_email` / `invalid_domain`.
 - The side that shared the thread keeps all of it regardless of the choice.

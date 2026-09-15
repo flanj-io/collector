@@ -38,10 +38,14 @@ func normalizeDomain(raw string) string {
 
 // normalizeEmail reads `Noor Haddad <noor@globex.test>` — what a mail client
 // copies — as the address inside the brackets, then trims and lower-cases it.
+// Brackets with nothing in them (`Dana <>`) stay part of the entry, so it is
+// refused as not an address rather than dropped without a word, as the CP does.
 func normalizeEmail(raw string) string {
 	if open := strings.IndexByte(raw, '<'); open >= 0 {
 		if end := strings.IndexByte(raw[open+1:], '>'); end >= 0 {
-			raw = raw[open+1 : open+1+end]
+			if inner := strings.TrimSpace(raw[open+1 : open+1+end]); inner != "" {
+				raw = inner
+			}
 		}
 	}
 	return strings.ToLower(strings.TrimSpace(raw))
@@ -86,24 +90,30 @@ func isJSONList(raw json.RawMessage) bool {
 	return len(t) > 0 && t[0] == '['
 }
 
-// readList reads one key: absent or null → nil. Anything but a list of strings,
-// or more than openToMax entries, is bad_request; entries are normalized,
+// readList reads one key: absent or null → nil. Anything but a list, or more
+// than openToMax entries, is bad_request. An entry that is not a string is
+// refused like any other bad entry (invalid_*, as the CP does), never as "not a
+// list" — that sentence would be false about a list. Entries are normalized,
 // judged and de-duplicated, and a list with nothing usable left is refused.
 func readList(raw json.RawMessage, r listRules) (list []string, code, msg string) {
 	t := bytes.TrimSpace(raw)
 	if len(t) == 0 || bytes.Equal(t, []byte("null")) {
 		return nil, "", ""
 	}
-	var entries []string
-	if err := json.Unmarshal(t, &entries); err != nil {
+	var items []any
+	if err := json.Unmarshal(t, &items); err != nil {
 		return nil, "bad_request", r.notAListMsg
 	}
-	if len(entries) > openToMax {
+	if len(items) > openToMax {
 		return nil, "bad_request", r.tooManyMsg
 	}
 	seen := map[string]bool{}
 	out := []string{}
-	for _, entry := range entries {
+	for _, item := range items {
+		entry, ok := item.(string)
+		if !ok {
+			return nil, r.invalidCode, r.invalidMsg
+		}
 		v := r.normalize(entry)
 		if v == "" {
 			continue

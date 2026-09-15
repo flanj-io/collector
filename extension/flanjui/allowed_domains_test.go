@@ -61,7 +61,8 @@ func TestFlagRefusesAMissingOrEmptyOpenTo(t *testing.T) {
 		{"not a domain", map[string]any{"finding_id": "fnd_1", "allowed_domains": []string{"https://acme.test/x"}}, "invalid_domain"},
 		{"an address", map[string]any{"finding_id": "fnd_1", "allowed_domains": []string{"dana@acme.test"}}, "invalid_domain"},
 		{"not a list", map[string]any{"finding_id": "fnd_1", "allowed_domains": "acme.test"}, "bad_request"},
-		{"a list of non-strings", map[string]any{"finding_id": "fnd_1", "allowed_domains": []int{42}}, "bad_request"},
+		{"a list of non-strings", map[string]any{"finding_id": "fnd_1", "allowed_domains": []int{42}}, "invalid_domain"},
+		{"a string beside a number", map[string]any{"finding_id": "fnd_1", "allowed_domains": []any{"acme.test", 5}}, "invalid_domain"},
 	}
 	for _, c := range cases {
 		before := r.cp.flagCalls
@@ -75,6 +76,16 @@ func TestFlagRefusesAMissingOrEmptyOpenTo(t *testing.T) {
 		if r.cp.flagCalls != before {
 			t.Errorf("%s: a refused Open to must not leave the collector", c.name)
 		}
+	}
+	// The relay answers with the CP's sentences word for word: a list with a non-string entry is a bad
+	// entry, never "must be a list" (false about a list), and "anyone with the link" is not a label here.
+	_, out, _ := r.do(t, http.MethodPost, "/api/flag", map[string]any{"finding_id": "fnd_1", "allowed_domains": []any{"acme.test", 5}})
+	if out["message"] != msgOpenToInvalid {
+		t.Errorf("a non-string entry: %v, want %q", out, msgOpenToInvalid)
+	}
+	_, out, _ = r.do(t, http.MethodPost, "/api/flag", map[string]any{"finding_id": "fnd_1", "allowed_domains": "acme.test"})
+	if out["message"] != "allowed_domains must be a list of domains, or null for anyone with the link." {
+		t.Errorf("not a list: %v", out)
 	}
 }
 
@@ -169,6 +180,8 @@ func TestFlagRefusesAConflictOrABadPeopleList(t *testing.T) {
 		{"not an address", map[string]any{"finding_id": "fnd_1", "allowed_emails": []string{"dana"}}, "invalid_email"},
 		{"two @", map[string]any{"finding_id": "fnd_1", "allowed_emails": []string{"a@b@acme.test"}}, "invalid_email"},
 		{"people not a list", map[string]any{"finding_id": "fnd_1", "allowed_emails": "dana@acme-payments.test"}, "bad_request"},
+		{"a null among the people", map[string]any{"finding_id": "fnd_1", "allowed_emails": []any{"dana@acme-payments.test", nil}}, "invalid_email"},
+		{"a name with empty brackets", map[string]any{"finding_id": "fnd_1", "allowed_emails": []string{"dana@acme-payments.test", "Dana <>"}}, "invalid_email"},
 		{"21 domains", map[string]any{"finding_id": "fnd_1", "allowed_domains": manyOf(21, "d%d.test")}, "bad_request"},
 		{"21 people", map[string]any{"finding_id": "fnd_1", "allowed_emails": manyOf(21, "p%d@acme.test")}, "bad_request"},
 	}
