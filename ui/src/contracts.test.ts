@@ -11,6 +11,8 @@ import {
   contractOrigin,
   findingBelongsToContract,
   providerContractsEmptyText,
+  MCP_NEEDS_NO_SETUP,
+  UPLOAD_NO_URL_FETCH,
   hasBindingWarning,
   endpointCount,
   provenanceWord,
@@ -497,6 +499,30 @@ describe('findingBelongsToContract', () => {
   });
 });
 
+
+describe('MCP_NEEDS_NO_SETUP — the Contracts empty state', () => {
+  // The canonical paragraph in the vault's positioning-2026-09.md §5 ends
+  // "REST providers need a spec: paste a URL, or upload one". Pasting a URL is
+  // the contract-fetch phase and it has NOT shipped: this collector never
+  // fetches on the operator's behalf, and UPLOAD_NO_URL_FETCH says so on the
+  // same tab. Copying the doc verbatim would put a false claim on the one
+  // surface whose whole argument is that it does not make them — two lines
+  // apart, contradicting each other.
+  //
+  // Proved red first: with the doc's verbatim string in place, this test fails
+  // on /paste a URL/ while the UPLOAD_NO_URL_FETCH assertion below still
+  // passes, which is exactly the contradiction it exists to catch.
+  it('promises no URL fetch, because the collector does not do one', () => {
+    expect(MCP_NEEDS_NO_SETUP).not.toMatch(/paste a url|fetch|from a url/i);
+    expect(UPLOAD_NO_URL_FETCH).toMatch(/never fetches on your behalf/);
+  });
+
+  it('states the contrast, not the convenience — both halves in one line', () => {
+    expect(MCP_NEEDS_NO_SETUP).toMatch(/MCP servers need nothing here/);
+    expect(MCP_NEEDS_NO_SETUP).toMatch(/tools\/list is the contract/);
+    expect(MCP_NEEDS_NO_SETUP).toMatch(/REST provider needs a spec/);
+  });
+});
 
 describe('providerContractsEmptyText', () => {
   // BUG (postgres-lane QA walk, 2026-09-01): the empty state told the operator
