@@ -5,7 +5,8 @@
 
 # Flanj collector
 
-Your integrations break when the other side changes. Flanj catches it, with proof both teams can act on.
+Nothing threw. Nothing 500'd. The response was 200 OK and a field was renamed. Your integration
+didn't break — it started being wrong, and every tool that waits for an error is blind to it.
 
 [![License: Elastic License 2.0](https://img.shields.io/badge/license-Elastic%202.0-1f2933)](LICENSE)
 [![Docker Hub: flanj/collector](https://img.shields.io/docker/v/flanj/collector?sort=semver&label=docker%20hub&color=1f2933)](https://hub.docker.com/r/flanj/collector)
@@ -74,6 +75,18 @@ Then open <http://localhost:5335>; health is at <http://localhost:5335/api/healt
 `--network host` works instead of the sidecar (`localhost:5335` is then the same loopback); on Docker
 Desktop it is not equivalent, so use the sidecar. In Kubernetes it is `kubectl port-forward <pod>
 5335:5335`. Either way the bind stays loopback: tunnel to it, never rebind it.
+
+### MCP needs no spec. REST does.
+
+REST drift detection needs a spec somebody published and kept accurate. MCP servers publish their
+contract on every single call — `tools/list` **is** the spec. So this collector has the baseline from
+the first call your agent makes, for every MCP server it touches, with nothing to configure and
+nothing to upload: the SDK forwards the observed `tools/list` as a contract snapshot and the drift
+processor versions it by content hash. A REST provider needs a document instead — drop its OpenAPI
+spec into the **Contracts** tab, where it binds to exactly one host and stays on this collector.
+
+That is not a convenience difference. "Nobody publishes an accurate OpenAPI spec" is the strongest
+practical objection to the REST half of this, and it does not apply to MCP at all.
 
 ## Run it on Kubernetes
 
@@ -202,6 +215,17 @@ OpenAPI document.
 server operator with evidence. (The transport-neutral `Contract` model and the definition-diff classifier
 live in the public [`contract`](contract/) package.)
 **Roadmap:** webhooks (received-webhook contract drift; missing-webhook detection under design).
+
+**Languages.** Node / TypeScript — **supported** (the [SDK](https://github.com/flanj-io/sdk):
+HTTP egress and ingress, plus the MCP client). Python — **early**, MCP client only, with no HTTP body
+capture. The rule is the same one the transports above follow: a language is called *supported* only
+once the whole loop runs on it end to end in our own e2e harness, with that lane's assertions green.
+Until then it says early — here, and on every other surface.
+
+**Where this stops, said out loud.** A REST provider needs a spec and this collector never fetches
+one on your behalf; an MCP server needs none. A call to a host with no contract is captured and
+**not validated**, and the UI says exactly that rather than showing a green light — `not checked`
+never reads as `conforming`, anywhere, by design.
 
 ## License
 

@@ -40,7 +40,8 @@ import {
   rollCall,
   uncoveredHeading,
   uncoveredProviders,
-  providerContractsEmptyText
+  providerContractsEmptyText,
+  MCP_NEEDS_NO_SETUP
 } from './contracts';
 import {
   THEME_FLIP_NOTICE_KEY,
@@ -1019,14 +1020,16 @@ const cardGroups = computed(() => [
         // response first, every time. What this actually buys is the SOURCE of the
         // news: your own traffic instead of someone else's bug report.
         'No self contract loaded. Point flanjdrift.self_spec_path at the OpenAPI document you publish and your own responses get checked against it — so your drift reaches you from your traffic, not from a consumer.'
-      : ''
+      : '',
+    emptyNote: ''
   },
   {
     key: 'mcp',
     title: `MCP servers${contractCards.value.mcpServers.length ? ` (${contractCards.value.mcpServers.length})` : ''}`,
     sub: 'each server publishes its own contract on tools/list — nothing to upload, nothing to remove',
     cards: contractCards.value.mcpServers,
-    emptyText: ''
+    emptyText: '',
+    emptyNote: ''
   },
   {
     key: 'providers',
@@ -1035,7 +1038,12 @@ const cardGroups = computed(() => [
     title: `Provider contracts${contractCards.value.providers.length ? ` (${contractCards.value.providers.length})` : ''}`,
     sub: 'the contracts your providers publish — your outbound calls validated against them',
     cards: contractCards.value.providers,
-    emptyText: providerContractsEmptyText(uncoveredHosts.value.length)
+    emptyText: providerContractsEmptyText(uncoveredHosts.value.length),
+    // The MCP contrast, said where a new operator stands when they wonder what
+    // to do next (positioning-2026-09.md §5). On the PROVIDER section rather
+    // than the MCP one: the reader with nothing here is the one asking why one
+    // half of the tab needed an upload and the other half filled itself in.
+    emptyNote: MCP_NEEDS_NO_SETUP
   }
 ]);
 
@@ -1804,6 +1812,7 @@ watch(tab, (t) => {
           <small>{{ g.sub }}</small>
         </h2>
         <p v-if="g.cards.length === 0" class="empty">{{ g.emptyText }}</p>
+        <p v-if="g.cards.length === 0 && g.emptyNote" class="empty-note">{{ g.emptyNote }}</p>
 
         <article
           v-for="p in g.cards"
@@ -2559,6 +2568,15 @@ code { font-family: var(--f-mono); }
 h2 { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 12px; padding: 0; border: 0; font: 500 11px/1.5 var(--f-mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-soft); }
 h2 small { font: 400 12.5px/1.5 var(--f-sans); letter-spacing: 0.04em; text-transform: none; color: var(--ink-soft); margin: 0; }
 .empty { color: var(--ink-soft); }
+/* The MCP contrast under the provider empty state: the same soft ink, set off
+   by a rule so it reads as a second thought rather than more instruction. */
+.empty-note {
+  color: var(--ink-soft);
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: var(--border-w-hair) solid var(--rule);
+  max-width: 68ch;
+}
 .empty.small { font-size: 13px; }
 .hint { color: var(--ink-soft); font-size: 12.5px; margin: 16px 0 0; }
 .hint-inline { color: var(--ink-soft); font-size: 12.5px; }

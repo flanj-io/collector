@@ -55,6 +55,26 @@ export const NO_CONTRACT_ROW =
  *  ONCE there: at 28 rows the per-row version was its own wall. */
 export const NO_CONTRACT_SECTION =
   'These providers have traffic but no contract — their calls are captured, and nothing validates them.';
+/**
+ * The MCP contrast, stated as a COMPARISON — the canonical paragraph in the
+ * vault's `positioning-2026-09.md` §5, which names this empty state as its
+ * highest-leverage single placement: it is where a new operator stands when
+ * they wonder what to do next.
+ *
+ * The power is in the contrast, not the convenience. "Nobody publishes an
+ * accurate OpenAPI spec" is the strongest practical objection to the REST half,
+ * and it does not apply to MCP at all.
+ *
+ * DELIBERATELY NOT the doc's verbatim wording. §5 ends "REST providers need a
+ * spec: paste a URL, or upload one" — pasting a URL is the contract-fetch phase
+ * and it has not shipped. This collector never fetches on the operator's behalf
+ * (UPLOAD_NO_URL_FETCH, three lines up, says so), so the verbatim string would
+ * be a false claim on the one surface whose whole argument is that it does not
+ * make them. Restore the URL clause in the same commit that ships the fetch,
+ * and not before — `contracts.test.ts` holds it to that.
+ */
+export const MCP_NEEDS_NO_SETUP =
+  'MCP servers need nothing here — their baseline arrived with the traffic, because tools/list is the contract. A REST provider needs a spec somebody published: upload its OpenAPI document.';
 export const ROLL_CALL_ZERO =
   'No providers checked against a contract yet — upload one to start drift detection on it.';
 export const UPLOAD_STAYS_LOCAL = 'Stays on this collector. Uploaded contracts are never sent to Flanj.';
