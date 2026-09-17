@@ -1,4 +1,8 @@
 import { describe, it, expect } from 'vitest';
+// The WHOLE deck, for the two sweeps that assert a claim appears nowhere in it.
+// A per-constant list would pass the day somebody adds the forbidden sentence
+// to a new constant, which is exactly the day it needs to fail.
+import * as deck from './contracts';
 import {
   contractMeta,
   contractsByHost,
@@ -11,8 +15,16 @@ import {
   contractOrigin,
   findingBelongsToContract,
   providerContractsEmptyText,
+  FETCH_ONCE_ONLY,
+  FETCH_PROMPT,
+  FETCH_STAYS_LOCAL,
   MCP_NEEDS_NO_SETUP,
-  UPLOAD_NO_URL_FETCH,
+  PROBE_ACTION,
+  PROBE_NOTHING_FOUND,
+  PROBE_OFFER_ONLY,
+  fetchedSourceForThread,
+  fetchedSourceLine,
+  probeCandidateLine,
   hasBindingWarning,
   endpointCount,
   provenanceWord,
@@ -502,25 +514,142 @@ describe('findingBelongsToContract', () => {
 
 describe('MCP_NEEDS_NO_SETUP — the Contracts empty state', () => {
   // The canonical paragraph in the vault's positioning-2026-09.md §5 ends
-  // "REST providers need a spec: paste a URL, or upload one". Pasting a URL is
-  // the contract-fetch phase and it has NOT shipped: this collector never
-  // fetches on the operator's behalf, and UPLOAD_NO_URL_FETCH says so on the
-  // same tab. Copying the doc verbatim would put a false claim on the one
-  // surface whose whole argument is that it does not make them — two lines
-  // apart, contradicting each other.
+  // "REST providers need a spec: paste a URL, or upload one". PR #91 shipped
+  // this string WITHOUT the URL clause and this test asserted its ABSENCE,
+  // because the collector could not then fetch anything and the doc's own rule
+  // was: restore the clause in the same commit that ships the fetch, and not
+  // before.
   //
-  // Proved red first: with the doc's verbatim string in place, this test fails
-  // on /paste a URL/ while the UPLOAD_NO_URL_FETCH assertion below still
-  // passes, which is exactly the contradiction it exists to catch.
-  it('promises no URL fetch, because the collector does not do one', () => {
-    expect(MCP_NEEDS_NO_SETUP).not.toMatch(/paste a url|fetch|from a url/i);
-    expect(UPLOAD_NO_URL_FETCH).toMatch(/never fetches on your behalf/);
+  // That commit is this one (ruling R5 — extension/flanjui/contracts_fetch.go),
+  // so the assertion INVERTS: the clause must now be present. The premise
+  // changed, the discipline did not — this copy may only ever promise what the
+  // surface actually does.
+  //
+  // The pairing below is the real guard, and it is why both halves are checked
+  // in one test: the claim and the capability travel together. Delete the fetch
+  // route and this test must go back to asserting the absence, in the same
+  // commit.
+  it('offers the URL, because the collector now fetches one', () => {
+    expect(MCP_NEEDS_NO_SETUP).toMatch(/paste its URL/);
+    // …and the deck's own fetch copy exists, which is the capability half of
+    // the claim. A string promising a URL with no fetch panel behind it is the
+    // false claim #91 refused to ship.
+    expect(FETCH_PROMPT).toMatch(/URL/);
+    expect(FETCH_STAYS_LOCAL).toMatch(/This collector makes the request/);
+  });
+
+  // The line that used to say "this collector never fetches on your behalf" is
+  // RETIRED, not softened: a claim that stopped being true does not get to
+  // survive in a gentler form somewhere on the same tab.
+  it('no longer promises anywhere that the collector never fetches', () => {
+    for (const [name, value] of Object.entries(deck)) {
+      if (typeof value !== 'string') continue;
+      expect(value, `${name} still denies the fetch`).not.toMatch(/never fetches/i);
+    }
   });
 
   it('states the contrast, not the convenience — both halves in one line', () => {
     expect(MCP_NEEDS_NO_SETUP).toMatch(/MCP servers need nothing here/);
     expect(MCP_NEEDS_NO_SETUP).toMatch(/tools\/list is the contract/);
     expect(MCP_NEEDS_NO_SETUP).toMatch(/REST provider needs a spec/);
+  });
+});
+
+describe('the fetch is fetched-once, and says so', () => {
+  // The operator's reasonable assumption about a URL is that it is a
+  // subscription. It is NOT one — nothing re-reads it, by design: periodic
+  // re-fetch is the control-plane registry (v2). A UI that let that assumption
+  // stand would be selling the v2 feature for free and delivering nothing.
+  it('promises no re-checking', () => {
+    expect(FETCH_ONCE_ONLY).toMatch(/Fetched once/);
+    expect(FETCH_ONCE_ONLY).toMatch(/Nothing re-checks/);
+  });
+
+  it('never implies a schedule', () => {
+    for (const [name, value] of Object.entries(deck)) {
+      if (typeof value !== 'string') continue;
+      expect(value, `${name} implies a recurring fetch`)
+        .not.toMatch(/\b(kept up to date|stays up to date|re-?fetch(es|ed)? (daily|hourly|nightly|automatically)|watches the url)\b/i);
+    }
+  });
+});
+
+describe('the probe OFFERS and never binds', () => {
+  // The probe's whole risk is copy: a result that reads like a setup step is
+  // one an operator takes on trust, and a wrong contract renders DRIFTED to a
+  // stranger on their real provider. Every string it shows has to describe an
+  // offer.
+  it('names the control as looking, not finding or adding', () => {
+    expect(PROBE_ACTION).toMatch(/Look for/);
+    expect(PROBE_ACTION).not.toMatch(/\badd\b|\bbind\b|\bset up\b/i);
+  });
+
+  it('says nothing is bound yet, on the results themselves', () => {
+    expect(PROBE_OFFER_ONLY).toMatch(/nothing is bound yet/i);
+  });
+
+  it('treats a miss as a result, with what to do next', () => {
+    expect(PROBE_NOTHING_FOUND).toMatch(/Nothing at the usual paths/);
+    expect(PROBE_NOTHING_FOUND).toMatch(/paste the URL|upload/i);
+    // Never a verdict about the provider: "they don't publish a spec" is a
+    // claim about somebody else's behaviour drawn from four failed GETs.
+    expect(PROBE_NOTHING_FOUND).not.toMatch(/doesn.t publish (a|any) spec\b/i);
+  });
+
+  it('shows the corroboration on the offer, not after it is taken', () => {
+    expect(probeCandidateLine({ title: 'Acme', version: '1.2.0', endpoints: 4, servers_match: true }))
+      .toBe('Acme · v1.2.0 · 4 endpoints · its servers list this host');
+    expect(probeCandidateLine({ endpoints: 1, servers_match: false }))
+      .toBe('OpenAPI document · 1 endpoint · its servers don’t list this host');
+  });
+});
+
+describe('fetchedSourceLine / fetchedSourceForThread — the evidence sentence', () => {
+  const fetched = {
+    integration: 'api-acme-test',
+    source: 'fetched',
+    source_url: 'https://api.acme.test/openapi.json',
+    loaded_at: '2026-09-17T10:00:00Z'
+  };
+  const NOW = Date.parse('2026-09-17T12:00:00Z');
+
+  it('names the URL and when it was read', () => {
+    const line = fetchedSourceLine(fetched, NOW);
+    expect(line).toContain('https://api.acme.test/openapi.json');
+    expect(line).toMatch(/Fetched from/);
+  });
+
+  // The whole point of the phase: an uploaded file's provenance is not
+  // checkable by a stranger, so it gets NO line rather than a hedge. "Uploaded
+  // from a file" would be filler dressed as provenance.
+  it('is empty for every source that cannot be checked by the provider', () => {
+    for (const source of ['upload', 'config', 'observed', undefined]) {
+      expect(fetchedSourceLine({ ...fetched, source })).toBe('');
+    }
+    // A fetched row with no URL is a row that cannot support the claim.
+    expect(fetchedSourceLine({ ...fetched, source_url: '' })).toBe('');
+    expect(fetchedSourceLine(null)).toBe('');
+  });
+
+  it("the thread's version is written for the provider, in their terms", () => {
+    const line = fetchedSourceForThread(fetched, () => '17 Sep');
+    expect(line).toBe(
+      'Checked against your published spec at https://api.acme.test/openapi.json, fetched 17 Sep.'
+    );
+  });
+
+  // A thread is read days after it is written. A relative time silently
+  // re-anchors to the READER's now, so "fetched 2 hours ago" becomes a lie the
+  // moment the provider opens the link — on the one sentence whose entire job
+  // is to be checkable.
+  it('the thread version takes an absolute date, never a relative one', () => {
+    const line = fetchedSourceForThread(fetched, (iso) => iso.slice(0, 10));
+    expect(line).toContain('2026-09-17');
+    expect(line).not.toMatch(/\bago\b/);
+  });
+
+  it('says nothing on the thread for an unfetched contract', () => {
+    expect(fetchedSourceForThread({ ...fetched, source: 'upload' }, () => 'x')).toBe('');
   });
 });
 

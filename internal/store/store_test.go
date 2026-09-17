@@ -780,6 +780,72 @@ func TestSpecInfo_SourceRoundTrip(t *testing.T) {
 	})
 }
 
+// TestSpecInfo_FetchedSourceURLRoundTrip: a fetched contract's source URL
+// survives the write, the LIST, a replace and a restart.
+//
+// The URL is EVIDENCE — the finding and the flagged thread both repeat it, and
+// a provider is meant to check it against what they publish. A column that
+// round-trips "mostly" turns that sentence into one the collector cannot
+// support, on the one surface whose whole argument is that its claims are
+// checkable.
+//
+// The listing is checked explicitly because it is the only path the UI reads:
+// a column written and never selected is a column that does not exist as far as
+// every surface in this phase is concerned.
+func TestSpecInfo_FetchedSourceURLRoundTrip(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, b *testBackend) {
+		s := b.open(t, 0, 0)
+		const url = "https://api.acme.test/openapi.json"
+		info := model.SpecInfo{
+			Integration: "api-acme-test", Role: model.SpecRoleProvider, PeerHost: "api.acme.test",
+			EdgeClass: model.EdgeClassExternal, Format: model.SpecFormatOpenAPI, Title: "Acme",
+			Version: "1.0.0", Endpoints: 2, LoadedAt: "2026-09-17T10:00:00Z",
+			Source: model.SpecSourceFetched, SourceURL: url,
+		}
+		if _, err := s.PutUploadedSpec(info, []byte("openapi: 3.0.0\n")); err != nil {
+			t.Fatalf("put: %v", err)
+		}
+
+		read := func(t *testing.T, s Store, when string) model.SpecInfo {
+			t.Helper()
+			infos, err := s.ListSpecInfos()
+			if err != nil {
+				t.Fatalf("list %s: %v", when, err)
+			}
+			if len(infos) != 1 {
+				t.Fatalf("%s: %d rows, want 1", when, len(infos))
+			}
+			return infos[0]
+		}
+
+		got := read(t, s, "after put")
+		if got.Source != model.SpecSourceFetched || got.SourceURL != url {
+			t.Fatalf("after put: source=%q url=%q, want %q %q", got.Source, got.SourceURL, model.SpecSourceFetched, url)
+		}
+
+		_ = s.Close()
+		s = b.reopen(t, 0, 0)
+		if got := read(t, s, "after reopen"); got.SourceURL != url {
+			t.Errorf("after reopen: source_url = %q, want %q", got.SourceURL, url)
+		}
+
+		// A REPLACE rewrites the provenance, so the row always describes the
+		// document in it — an upload landing over a fetched row must not leave
+		// the old URL behind, claiming a source the current bytes never had.
+		uploaded := info
+		uploaded.Source = model.SpecSourceUpload
+		uploaded.SourceURL = ""
+		uploaded.Version = "2.0.0"
+		if _, err := s.PutUploadedSpec(uploaded, []byte("openapi: 3.0.1\n")); err != nil {
+			t.Fatalf("replace: %v", err)
+		}
+		if got := read(t, s, "after an upload replaced it"); got.SourceURL != "" || got.Source != model.SpecSourceUpload {
+			t.Errorf("after replace: source=%q url=%q — a stale URL would claim a source these bytes never had",
+				got.Source, got.SourceURL)
+		}
+	})
+}
+
 // TestSpecInfo_RoundTrip proves the provider-contract record the drift processor
 // writes at Start: upsert by integration, list metadata, fetch the raw doc.
 func TestSpecInfo_RoundTrip(t *testing.T) {

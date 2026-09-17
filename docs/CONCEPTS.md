@@ -45,6 +45,21 @@ Three properties make it safe to hand to a model:
 - **Read-only.** No tool writes anything. Flagging a drift to a provider stays a person's act in the UI.
 - **No raw body, ever.** No tool returns a body, a header map or a full URL, and the free-value fields of
   a finding pass the redaction floor once more on the way out.
+- **A contract's provenance is part of its evidence.** A contract enters the collector one of two ways,
+  both of them a human pressing a control: **uploaded** from a file, or **fetched** from a URL — the
+  provider's own published spec. A fetched contract keeps the URL and the moment it was read, and the
+  finding and the flagged thread both say so: *"checked against your published spec at `<url>`, fetched
+  `<when>`"*. That is a claim the provider can check against what they serve today; "somebody here had a
+  file" never was.
+
+  Nothing binds itself. The collector can **look** for a spec at the conventional paths on a host it
+  already calls, and it **offers** what it finds — a human binds it. The reason is the discipline the
+  whole product rests on: **a wrong contract is worse than no contract.** No contract renders `not
+  checked`, honestly, and costs nobody anything. A mismatched one renders `DRIFTED` — loudly, to a
+  stranger, about their real API.
+
+  And nothing re-fetches. A fetched document is read once, when it was approved.
+
 - **An empty answer is not an all-clear.** Every answer carries how many calls were actually validated
   against a contract, so "no findings" cannot be read as "nothing is wrong" when the truth is "nothing
   was checked".
@@ -61,6 +76,12 @@ Three properties make it safe to hand to a model:
 3. **Outbound-only collector.** No inbound surface; the collector only pushes to the control plane. The
    localhost UI and the agent MCP surface share one loopback listener — the second is a route on the
    first, never a listener of its own.
+
+   Since 2026-09-17 there is one more outbound destination, and it is not Flanj: **contract fetch and
+   probe** issue `GET`s to a **provider's** host for the OpenAPI document that provider publishes. Both
+   are operator-initiated — nothing schedules them and no config key enables them — and both are READS:
+   no data leaves on either path. The probe only ever asks a host this deployment already sends traffic
+   to. See `docs/DEPLOYMENT.md` for the exact requests, timeouts, caps and egress-policy notes.
 4. **Technical adherence only.** Drift detection validates fields/types/shapes/enums — never business or
    economic correctness (prices, fees, FX), which are legitimately variable.
 

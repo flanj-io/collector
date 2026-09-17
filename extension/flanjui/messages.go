@@ -63,9 +63,35 @@ const (
 	// a hand-crafted request and the refusal has to be true on its own.
 	msgContractNotRemovableObserved = "This is an observed MCP snapshot, not an upload — it refreshes from the server's tools/list."
 	msgContractNotLoaded            = "No contract is loaded for that integration."
-	msgNotFlaggable                 = "This finding is a local notice — stale-client calls stay on this collector and can't be flagged to the provider."
-	msgNotAckable                   = "Only non-breaking informational findings can be acknowledged — breaking findings need a fix or a thread."
-	msgFindingNotFound              = "That finding is no longer in the local store."
+
+	// Contract FETCH and PROBE (ruling R5, 2026-09-16). Every one of these is a
+	// STATED state: a fetch that fails must say what failed, because the
+	// alternative — a shrug, and a card that quietly shows no contract — is
+	// indistinguishable from the operator never having tried. Each sentence
+	// names the next move, and the status-carrying one names the status,
+	// because 404 and 401 send an operator to two different places.
+	msgContractFetchURLRequired       = "Paste the URL of the provider's OpenAPI document."
+	msgContractFetchURLInvalid        = "That doesn't look like a URL. Paste the full address of the document, e.g. https://api.acme.test/openapi.json."
+	msgContractFetchSchemeUnsupported = "Only http and https URLs can be fetched."
+	msgContractFetchNoCredentials     = "That URL carries a username and password. Flanj only fetches specs a provider publishes openly — download it yourself and upload the file instead."
+	msgContractFetchBlockedTarget     = "That address is a cloud metadata endpoint, not a published spec. Flanj won't request it."
+	msgContractFetchTimeout           = "That host didn't answer within 20 seconds. Check the URL, or download the document and upload it instead."
+	msgContractFetchUnreachable       = "Couldn't reach that URL from this collector."
+	msgContractFetchStatusFmt         = "That URL answered %d, so there's no document to bind. Check the address — or the provider may not publish a spec."
+	msgContractFetchEmpty             = "That URL answered with an empty document. Nothing was bound."
+	msgContractFetchUnparseable       = "That URL answered, but not with an OpenAPI document. Some hosts return an HTML page for a missing file."
+	// Expired, already bound, or never staged — one sentence, because the
+	// operator's next move is the same in all three and naming a token they
+	// never saw explains nothing.
+	msgContractFetchExpired      = "That fetch is no longer waiting for confirmation. Fetch the document again."
+	msgContractProbeHostRequired = "Which provider should Flanj look at? Enter the host, e.g. api.acme.test."
+	// The probe only ever touches a host this collector ALREADY calls. That is
+	// what keeps it from being a URL fetcher wearing a different name, and the
+	// refusal says so rather than pretending the host was malformed.
+	msgContractProbeUnknownHost = "Flanj only looks for a spec on a provider it already sees traffic to. This collector has no calls to that host."
+	msgNotFlaggable             = "This finding is a local notice — stale-client calls stay on this collector and can't be flagged to the provider."
+	msgNotAckable               = "Only non-breaking informational findings can be acknowledged — breaking findings need a fix or a thread."
+	msgFindingNotFound          = "That finding is no longer in the local store."
 	// RETIRED as a refusal by v1p4-2026-09-08: a finding with no source call is
 	// now flaggable on every kind (the message carries the ask), so nothing
 	// answers 400 finding_has_no_call any more. The string stays because the

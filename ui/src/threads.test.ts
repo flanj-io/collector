@@ -200,6 +200,32 @@ describe('defaultFlagMessage + evidence', () => {
       'Seeing string on POST /v1/charges — spec says integer. Can you confirm on your side?'
     );
   });
+  // The thread is the surface the PROVIDER reads, and a fetched contract is the
+  // only kind whose source they can check for themselves. Phase 3 (ruling R5)
+  // exists to put that sentence here.
+  it('names the provider\u2019s own published spec when the contract was fetched', () => {
+    const d = (iso: string) => (iso ? 'Aug 20' : '');
+    const source = 'Checked against your published spec at https://api.acme.test/openapi.json, fetched 17 Sep.';
+    const msg = defaultFlagMessage(f, 'req_1', d, source);
+    expect(msg).toContain(source);
+    // Placed after the drift, before the request ID: "spec says integer" is the
+    // claim, and WHICH spec belongs with it — not after an unrelated id.
+    expect(msg.indexOf(source)).toBeGreaterThan(msg.indexOf('spec says integer'));
+    expect(msg.indexOf(source)).toBeLessThan(msg.indexOf('Request ID'));
+    expect(msg.endsWith('Can you confirm on your side?')).toBe(true);
+  });
+
+  // An uploaded contract's provenance is not checkable by a stranger, so the
+  // message says nothing about it — "from a file we have" is words with no fact
+  // in them, on a message a provider reads.
+  it('is byte-identical to the pre-R5 message when there is no source to name', () => {
+    const d = (iso: string) => (iso ? 'Aug 20' : '');
+    expect(defaultFlagMessage(f, 'req_1', d, '')).toBe(defaultFlagMessage(f, 'req_1', d));
+    expect(defaultFlagMessage(f, 'req_1', d, undefined)).toBe(
+      'Seeing quantity come back as string on POST /v1/charges since Aug 20 — spec says integer. Request ID req_1 is in the thread. Can you confirm on your side?'
+    );
+  });
+
   it('names the field from several path shapes', () => {
     expect(fieldName('$.quantity')).toBe('quantity');
     expect(fieldName('/data/amount')).toBe('amount');

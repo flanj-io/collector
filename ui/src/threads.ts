@@ -312,11 +312,23 @@ export function defaultFlagMessage(f: {
   actual: string;
   first_seen?: string;
   detected_at?: string;
-}, requestId: string | null | undefined, fmtDate: (iso: string) => string = shortDate): string {
+}, requestId: string | null | undefined, fmtDate: (iso: string) => string = shortDate,
+   specSource?: string): string {
   const field = fieldName(f.field_path || f.location || '');
   const since = fmtDate(f.first_seen || f.detected_at || '');
   const what = field ? 'Seeing ' + field + ' come back as ' + f.actual : 'Seeing ' + f.actual;
   let msg = what + ' on ' + f.endpoint + (since ? ' since ' + since : '') + ' — spec says ' + f.expected + '.';
+  // WHICH spec, when the answer is checkable. A fetched contract can name the
+  // provider's own published URL and the moment it was read, so the person
+  // reading this thread can go and look — which is the difference between a
+  // claim and evidence, and the whole reason ruling R5's fetch exists.
+  //
+  // An uploaded contract says nothing here. "Spec says X" already implies a
+  // spec; adding "from a file we have" would be words without a fact in them,
+  // and this message is read by a stranger who did not ask for our filing
+  // arrangements. Built by contracts.ts → fetchedSourceForThread, which is the
+  // ONE place this sentence is phrased.
+  if (specSource) msg += ' ' + specSource;
   if (requestId) msg += ' Request ID ' + requestId + ' is in the thread.';
   msg += ' Can you confirm on your side?';
   return msg;
