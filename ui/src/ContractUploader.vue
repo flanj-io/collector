@@ -13,8 +13,10 @@
  * reversal has to answer it rather than forget it:
  *
  *   (a) "An SSRF pivot onto internal admin and metadata endpoints." Real, and
- *       answered where it can be — `fetchTargetError` refuses the cloud
- *       metadata service and re-checks every redirect hop, the route is behind
+ *       answered where it can be — the cloud metadata service is refused at
+ *       DIAL time, on the RESOLVED address (`dialGuard`), so a hostname whose
+ *       DNS points at it is refused too and every redirect hop is covered by
+ *       the same check; the route is behind
  *       the same `X-Flanj-UI` + Origin guard as upload so no foreign page can
  *       drive it, and the PROBE can only ever reach a host this collector
  *       already calls. Private and internal addresses stay reachable on the

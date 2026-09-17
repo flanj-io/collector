@@ -296,7 +296,8 @@ Flow specifics:
     (the store pod on a tiered deployment) needs egress to your providers'
     hosts on 443. The cloud instance-metadata service (`169.254.169.254`,
     `fd00:ec2::254`, link-local generally) is refused in code, on the typed URL
-    and on every redirect hop.
+    and on every redirect hop — and, since the check runs on the **resolved**
+    address at connect time, also when a hostname's DNS points there.
   - **No re-fetch, ever.** A fetched contract is read once, at the moment a
     human approved it, and the URL is kept as provenance — not as a handle.
     Nothing re-reads it on a schedule or at start-up.

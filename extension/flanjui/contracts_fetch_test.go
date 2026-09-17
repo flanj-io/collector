@@ -1,10 +1,15 @@
 package flanjui
 
 import (
+	"context"
+	"encoding/binary"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/flanj-io/collector/internal/model"
 )
@@ -492,6 +497,119 @@ func TestFetchTargetError(t *testing.T) {
 			t.Errorf("%s was refused (%v); refusing internal hosts refuses the self-hosted case", allowed, err)
 		}
 	}
+}
+
+// TestANameResolvingToMetadataIsRefusedAtDial is the hole the first cut of this
+// guard left open, and the reason the check moved onto the dialer.
+//
+// Refusing IP LITERALS and a short alias list stops nothing: `evil.test IN A
+// 169.254.169.254` is an ordinary A record, it passes every string check on the
+// URL, and it needs no rebinding race — anyone who can publish a DNS name can
+// point one at the metadata service. The check has to run on the address the
+// connection is actually being made to.
+//
+// The resolver is faked rather than mocked out, so what is exercised is the
+// real path: net.Dialer resolves, then calls Control with the resolved
+// address, then dialGuard refuses it. A test that called dialGuard directly
+// would pass just as happily with the hook unwired.
+func TestANameResolvingToMetadataIsRefusedAtDial(t *testing.T) {
+	// A resolver that answers every name with the EC2/GCP metadata address —
+	// which is exactly what a hostile or compromised DNS answer looks like.
+	fakeDNS := newFakeResolver(t, "169.254.169.254")
+
+	dialer := &net.Dialer{
+		Resolver: fakeDNS,
+		Control:  func(_, address string, _ syscall.RawConn) error { return dialGuard(address) },
+	}
+	_, err := dialer.DialContext(context.Background(), "tcp", "spec.evil.test:80")
+	if err == nil {
+		t.Fatal("a name resolving to the metadata service was dialled; the URL-level check cannot see this")
+	}
+	if !strings.Contains(err.Error(), msgContractFetchBlockedTarget) {
+		t.Errorf("refused with %v, want the blocked-target refusal", err)
+	}
+
+	// And the guard is WIRED: the client the fetch path builds carries a
+	// transport with a dial hook, not the default one. Without this, the test
+	// above proves a function nobody calls.
+	tr, ok := contractHTTPClient(time.Second).Transport.(*http.Transport)
+	if !ok || tr.DialContext == nil {
+		t.Fatal("the contract fetch client does not install a guarded dialer")
+	}
+}
+
+// newFakeResolver answers every lookup with one address, over a real UDP DNS
+// listener — so net.Dialer's own resolution path is what runs.
+func newFakeResolver(t *testing.T, answer string) *net.Resolver {
+	t.Helper()
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("no local udp socket for the fake resolver: %v", err)
+	}
+	t.Cleanup(func() { _ = pc.Close() })
+	ip := net.ParseIP(answer).To4()
+	if ip == nil {
+		t.Fatalf("fake resolver needs an IPv4 answer, got %q", answer)
+	}
+
+	go func() {
+		buf := make([]byte, 512)
+		for {
+			n, addr, err := pc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			reply, ok := dnsAnswer(buf[:n], ip)
+			if !ok {
+				continue
+			}
+			_, _ = pc.WriteTo(reply, addr)
+		}
+	}()
+
+	return &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "udp", pc.LocalAddr().String())
+		},
+	}
+}
+
+// dnsAnswer builds a minimal A-record response to a query, echoing the question
+// section and appending one answer. Enough for the resolver to accept it;
+// deliberately not a DNS implementation.
+func dnsAnswer(query []byte, ip net.IP) ([]byte, bool) {
+	if len(query) < 12 {
+		return nil, false
+	}
+	// Walk the QNAME to find where the question ends.
+	i := 12
+	for i < len(query) && query[i] != 0 {
+		i += int(query[i]) + 1
+	}
+	if i >= len(query) || i+5 > len(query) {
+		return nil, false
+	}
+	qEnd := i + 5 // the 0 terminator + QTYPE(2) + QCLASS(2)
+	qtype := binary.BigEndian.Uint16(query[i+1 : i+3])
+
+	out := make([]byte, 0, qEnd+16)
+	out = append(out, query[:qEnd]...)
+	out[2] = 0x81 // QR=1, RD=1
+	out[3] = 0x80 // RA=1, RCODE=0
+	binary.BigEndian.PutUint16(out[6:8], 0)
+	if qtype != 1 { // not an A query (the resolver also asks AAAA): NOERROR, no answers
+		return out, true
+	}
+	binary.BigEndian.PutUint16(out[6:8], 1) // ANCOUNT
+	out = append(out, 0xc0, 0x0c)           // name: pointer to the question
+	out = append(out, 0x00, 0x01)           // TYPE A
+	out = append(out, 0x00, 0x01)           // CLASS IN
+	out = append(out, 0x00, 0x00, 0x00, 0x1e)
+	out = append(out, 0x00, 0x04)
+	out = append(out, ip...)
+	return out, true
 }
 
 // TestFetchTakesTheHostFromTheURLWhenNoneIsGiven — the probe's candidates and a

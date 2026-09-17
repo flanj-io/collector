@@ -55,7 +55,9 @@ deployment ALREADY has an edge for — refused outright otherwise, which is what
 under another name — and **OFFERS** what it finds; it never writes to the store, and taking an offer goes back
 through fetch. **Nothing re-fetches** (periodic re-fetch is the CP registry, v2). These two routes are the only
 requests this collector makes to a non-Flanj host: a new egress class, documented in `docs/DEPLOYMENT.md` and
-`docs/CONCEPTS.md`, with the cloud metadata service refused on the typed URL and on every redirect hop.
+`docs/CONCEPTS.md`, with the cloud metadata service refused **at DIAL time on the resolved address**
+(`dialGuard` on the dialer's `Control` hook — a URL-level check alone is defeated by any A record
+pointing at 169.254.169.254, and the dial hook covers every redirect hop for free).
 Why suggest-and-approve rather than auto-bind: **a wrong contract is worse than no contract** — no contract
 renders `not checked`, honestly; a mismatched one renders `DRIFTED`, loudly, to a stranger, on their real
 provider. Each binding covers exactly ONE provider host, stays on this collector, and is read from the store at runtime by the drift processor's spec

@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/flanj-io/collector/internal/drift"
@@ -428,10 +429,15 @@ func fetchTargetError(host string) error {
 	h = strings.Trim(h, "[]")
 	ip := net.ParseIP(h)
 	if ip == nil {
-		// A NAME. Not resolved here on purpose: resolving to check and then
-		// letting the transport resolve again is a TOCTOU that buys nothing,
-		// and the metadata service is reached by its address in every exploit
-		// that matters. The names that alias it are refused below.
+		// A NAME, checked here only for the well-known metadata aliases — so
+		// the operator gets the specific sentence rather than a dial error.
+		//
+		// This is NOT where a name is made safe. Refusing literals and a short
+		// alias list leaves `evil.test IN A 169.254.169.254` straight through,
+		// which is the ordinary way this guard is defeated and needs no
+		// rebinding race to pull off. The check that actually holds is
+		// dialGuard, which runs on the RESOLVED address at connect time — see
+		// contractHTTPClient.
 		lower := strings.ToLower(h)
 		if lower == "metadata.google.internal" || lower == "metadata" {
 			return errors.New(msgContractFetchBlockedTarget)
@@ -473,19 +479,7 @@ func (e *uiExtension) fetchContractDoc(ctx context.Context, target *url.URL, tim
 	req.Header.Set("User-Agent", "flanj-collector (contract fetch)")
 	req.Header.Set("Accept", "application/json, application/yaml, text/yaml, text/plain;q=0.8, */*;q=0.5")
 
-	client := &http.Client{
-		Timeout: timeout,
-		CheckRedirect: func(r *http.Request, via []*http.Request) error {
-			if len(via) >= contractFetchMaxRedirects {
-				return errors.New("too many redirects")
-			}
-			// Every hop is re-checked: a redirect to the metadata service is
-			// exactly how a target-check that runs only on the typed URL is
-			// defeated.
-			return fetchTargetError(r.URL.Host)
-		},
-	}
-	resp, err := client.Do(req)
+	resp, err := contractHTTPClient(timeout).Do(req)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			return nil, "", &fetchError{http.StatusGatewayTimeout, "fetch_timeout", msgContractFetchTimeout, err}
@@ -534,6 +528,54 @@ func (e *uiExtension) fetchContractDoc(ctx context.Context, target *url.URL, tim
 		return nil, final, &fetchError{http.StatusBadGateway, "empty_document", msgContractFetchEmpty, nil}
 	}
 	return doc, final, nil
+}
+
+// contractHTTPClient builds the client every fetch and probe request goes
+// through. It exists so the destination guard cannot be forgotten at a call
+// site — there is one client, and it carries the guard.
+//
+// The guard that MATTERS is dialGuard, on the dialer's Control hook. Checking
+// the URL's host catches only literals: `evil.test IN A 169.254.169.254` is an
+// ordinary A record and passes every string check, so a URL-level guard alone
+// is defeated by anyone who can publish a DNS name — no rebinding race
+// required. Control runs after resolution, on the address the connection is
+// actually about to be made to, which closes the name case and the
+// resolve-then-resolve-again TOCTOU in the same stroke.
+//
+// It also covers every REDIRECT hop for free: each hop dials, so each hop is
+// checked, whatever the Location header said. CheckRedirect below still runs —
+// it bounds the chain and produces the operator's sentence — but it is no
+// longer the thing standing between a redirect and the metadata service.
+func contractHTTPClient(timeout time.Duration) *http.Client {
+	dialer := &net.Dialer{
+		Timeout:   timeout,
+		KeepAlive: 30 * time.Second,
+		Control: func(_, address string, _ syscall.RawConn) error {
+			return dialGuard(address)
+		},
+	}
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: &http.Transport{DialContext: dialer.DialContext},
+		CheckRedirect: func(r *http.Request, via []*http.Request) error {
+			if len(via) >= contractFetchMaxRedirects {
+				return errors.New("too many redirects")
+			}
+			return fetchTargetError(r.URL.Host)
+		},
+	}
+}
+
+// dialGuard refuses a connection about to be made to an address this collector
+// must not request. `address` is what the dialer resolved — an IP literal with
+// a port — so a name that resolves to the metadata service is refused here
+// even though its spelling passed every earlier check.
+//
+// It delegates to fetchTargetError so there is exactly ONE list of refused
+// destinations. Two lists is how the dial guard and the URL guard come to
+// disagree about what is blocked.
+func dialGuard(address string) error {
+	return fetchTargetError(address)
 }
 
 // newFetchToken mints a staging handle. It is a handle, not a secret: the route
