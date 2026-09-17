@@ -19,12 +19,14 @@ type diffCases struct {
 		Before json.RawMessage `json:"before"`
 		After  json.RawMessage `json:"after"`
 		Expect []struct {
-			Class       Class  `json:"class"`
-			OperationID string `json:"operationId"`
-			Rule        string `json:"rule"`
-			FieldPath   string `json:"fieldPath"`
-			Before      any    `json:"before"`
-			After       any    `json:"after"`
+			Kind        Kind     `json:"kind"`
+			Severity    Severity `json:"severity"`
+			Reported    bool     `json:"reported"`
+			OperationID string   `json:"operationId"`
+			Rule        string   `json:"rule"`
+			FieldPath   string   `json:"fieldPath"`
+			Before      any      `json:"before"`
+			After       any      `json:"after"`
 		} `json:"expect"`
 	} `json:"cases"`
 }
@@ -59,7 +61,7 @@ func toContract(t *testing.T, raw json.RawMessage, observedAt string) *contract.
 }
 
 type key struct {
-	Class       Class
+	Severity    Severity
 	OperationID string
 	Rule        string
 	FieldPath   string
@@ -77,7 +79,7 @@ func sortKeys(ks []key) {
 		if a.FieldPath != b.FieldPath {
 			return a.FieldPath < b.FieldPath
 		}
-		return a.Class < b.Class
+		return a.Severity < b.Severity
 	})
 }
 
@@ -85,7 +87,7 @@ func sortKeys(ks []key) {
 // (spec §4.A accept (2)): >=2 fixture cases per class, including a rename.
 func TestClassify_FixtureBattery(t *testing.T) {
 	cs := loadCases(t)
-	perClass := map[Class]int{}
+	perSeverity := map[Severity]int{}
 	sawRename := false
 
 	for _, tc := range cs.Cases {
@@ -96,11 +98,11 @@ func TestClassify_FixtureBattery(t *testing.T) {
 
 			gotKeys := make([]key, 0, len(got))
 			for _, c := range got {
-				gotKeys = append(gotKeys, key{c.Class, c.OperationID, c.Rule, c.FieldPath})
+				gotKeys = append(gotKeys, key{c.Severity, c.OperationID, c.Rule, c.FieldPath})
 			}
 			wantKeys := make([]key, 0, len(tc.Expect))
 			for _, e := range tc.Expect {
-				wantKeys = append(wantKeys, key{e.Class, e.OperationID, e.Rule, e.FieldPath})
+				wantKeys = append(wantKeys, key{e.Severity, e.OperationID, e.Rule, e.FieldPath})
 			}
 			sortKeys(gotKeys)
 			sortKeys(wantKeys)
@@ -114,7 +116,7 @@ func TestClassify_FixtureBattery(t *testing.T) {
 			}
 
 			for _, c := range got {
-				perClass[c.Class]++
+				perSeverity[c.Severity]++
 				if c.Rule == RuleOperationRenamed {
 					sawRename = true
 					if c.Before != "create_refund" || c.After != "refund_create" {
@@ -162,9 +164,12 @@ func TestClassify_FixtureBattery(t *testing.T) {
 		})
 	}
 
-	for _, cls := range []Class{ClassBreaking, ClassNonBreaking, ClassDescription} {
-		if perClass[cls] < 2 {
-			t.Errorf("battery covers class %s only %d time(s); spec requires >=2 cases", cls, perClass[cls])
+	// >=2 fixture cases per severity bucket, the unreported (additive) bucket
+	// included — "" is that bucket, and it must stay covered so a rule
+	// silently promoted out of additive is caught here.
+	for _, sev := range []Severity{SeverityBreaking, SeverityWarning, SeverityInfo, ""} {
+		if perSeverity[sev] < 2 {
+			t.Errorf("battery covers severity %q only %d time(s); spec requires >=2 cases", sev, perSeverity[sev])
 		}
 	}
 	if !sawRename {
@@ -209,7 +214,7 @@ paths:
 		t.Fatalf("got %d changes, want 1: %+v", len(got), got)
 	}
 	c := got[0]
-	if c.Class != ClassBreaking || c.Rule != RuleOutputPropertyTypeChanged ||
+	if c.Severity != SeverityBreaking || c.Rule != RuleOutputPropertyTypeChanged ||
 		c.OperationID != "GET /balance" || c.FieldPath != "output.amount" {
 		t.Errorf("unexpected change: %+v", c)
 	}

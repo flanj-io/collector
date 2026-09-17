@@ -580,27 +580,49 @@ func staleToolFinding(call model.RedactedCall, toolName, now string) model.Findi
 // the CURRENT tools/list.
 const RuleToolNotListed = "tool-not-listed"
 
+// severityOf maps the classifier's ruled severity (R-B's upper-case
+// vocabulary) onto the finding wire's lower-case one. The two spellings exist
+// on purpose: R-B is written in upper case and the drift dataset publishes it
+// that way, while model.Severity* is a field the control plane, the dashboard
+// and e2e all already read, so re-casing it would be a breaking wire change
+// for no gain. This function is the only place the two meet.
+//
+// Additive (unreported) changes DO still reach here in this slice: the
+// findings pipeline deliberately keeps emitting what it emitted before, so
+// that dropping them to satisfy R-B's "additive: not reported" row happens in
+// ONE cross-repo step together with R-C's flag gating and the e2e specs that
+// assert on those findings, rather than half here and half there. Their
+// severity is empty and maps to info — exactly what ClassNonBreaking produced
+// before — so this slice changes no finding SET, only the severity of the
+// findings already emitted.
+func severityOf(s diff.Severity) string {
+	switch s {
+	case diff.SeverityBreaking:
+		return model.SeverityBreaking
+	case diff.SeverityWarning:
+		return model.SeverityWarning
+	case diff.SeverityInfo:
+		return model.SeverityInfo
+	}
+	return model.SeverityInfo
+}
+
 // definitionChangeFinding maps one classified change onto the finding shape:
 // one finding per (edge, operation.id, rule, fieldPath) — the signature
 // convention — with the classifier's before/after FRAGMENTS as evidence and
 // both snapshot versions + timestamps. No source call (the evidence is the
 // snapshot pair, exactly like version-diff).
 func definitionChangeFinding(integration string, ch diff.Change, prev, cur *contract.Contract, now string) model.Finding {
-	severity := model.SeverityBreaking
-	switch ch.Class {
-	case diff.ClassNonBreaking:
-		severity = model.SeverityInfo
-	case diff.ClassDescription:
-		// Informational: a wording change is not a severity claim. Flaggable
-		// since qfix2-2026-08-26 (the evidence is the provider's own published
-		// text) — but only ever by a human pressing the control; the detector
-		// never flags anything.
-		severity = model.SeverityWarning
-	}
+	severity := severityOf(ch.Severity)
 	f := model.Finding{
-		SchemaVersion:   model.SchemaVersion,
-		ID:              otlpattr.NewID(),
-		Kind:            model.KindDefinitionChange,
+		SchemaVersion: model.SchemaVersion,
+		ID:            otlpattr.NewID(),
+		Kind:          model.KindDefinitionChange,
+		// ChangeKind is R-A's kind (wording | input | output | catalog): WHAT
+		// moved, a finer axis than Kind, which names WHICH DETECTOR spoke
+		// (definition_change here). The two are separate fields because they
+		// answer different questions and one cannot be derived from the other.
+		ChangeKind:      string(ch.Kind),
 		Severity:        severity,
 		Integration:     integration,
 		Endpoint:        ch.OperationID,
@@ -615,8 +637,8 @@ func definitionChangeFinding(integration string, ch diff.Change, prev, cur *cont
 		// off the rule id — the optional-removal cells) goes BEFORE the
 		// timestamp tail, which two UIs regex out of the end of this string
 		// (TestDefinitionChangeDetailTail_UIRegex).
-		Detail: fmt.Sprintf("Definition change (%s): %s on `%s`%s%s — tools/list observed %s → %s.",
-			ch.Class, ch.Rule, ch.OperationID, atFieldPath(ch.FieldPath), consequence(ch.Detail),
+		Detail: fmt.Sprintf("Definition change (%s/%s): %s on `%s`%s%s — tools/list observed %s → %s.",
+			ch.Kind, ch.Severity, ch.Rule, ch.OperationID, atFieldPath(ch.FieldPath), consequence(ch.Detail),
 			prev.Version.ObservedAt, cur.Version.ObservedAt),
 		// The optional snapshot_observed_at (CONTRACTS §4): the AFTER snapshot.
 		SnapshotObservedAt: cur.Version.ObservedAt,

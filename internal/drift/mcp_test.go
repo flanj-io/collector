@@ -462,6 +462,12 @@ func TestDefinitionChange_Classes(t *testing.T) {
 		if f.Severity != severity {
 			t.Errorf("%s severity = %q, want %q", rule, f.Severity, severity)
 		}
+		// R-A: every finding carries a change_kind alongside its severity, and
+		// the two are independent. A definition_change must never ship without
+		// one — an empty change_kind is what the single Class label looked like.
+		if f.ChangeKind == "" {
+			t.Errorf("%s carries no change_kind", rule)
+		}
 		if f.Flaggable() != flaggable {
 			t.Errorf("%s flaggable = %v, want %v", rule, f.Flaggable(), flaggable)
 		}
@@ -493,13 +499,21 @@ func TestDefinitionChange_Classes(t *testing.T) {
 		t.Errorf("marshalled definition_change must carry snapshot_observed_from (err=%v): %s", err, doc)
 	}
 
-	check("create_refund", diff.RuleInputRequiredPropertyAdded, "input.reason", model.SeverityBreaking, true)
+	// R-B, 2026-09-17: a new REQUIRED param is the one input cell above INFO,
+	// and it is WARNING, not breaking. It was breaking here until the ruling.
+	reqAdd := check("create_refund", diff.RuleInputRequiredPropertyAdded, "input.reason", model.SeverityWarning, true)
+	if reqAdd.ChangeKind != string(diff.KindInput) {
+		t.Errorf("change_kind = %q, want input", reqAdd.ChangeKind)
+	}
 	check("list_transactions", diff.RuleOutputSchemaDeclared, "output", model.SeverityInfo, true)
 	// DESCRIPTION is FLAGGABLE since qfix2-2026-08-26 (ux-design-v2 §2.7): the
 	// evidence rule is amended, not broken — a description change is the
 	// provider's own published text, before and after. It still never
 	// auto-flags; only a human pressing the control sends it.
 	desc := check("create_refund", diff.RuleDescriptionChanged, "description", model.SeverityWarning, true)
+	if desc.ChangeKind != string(diff.KindWording) {
+		t.Errorf("a description change is change_kind wording; got %q", desc.ChangeKind)
+	}
 	if desc.Rule != model.RuleDescriptionChanged {
 		t.Errorf("model.RuleDescriptionChanged mirror out of sync: %q vs %q", desc.Rule, model.RuleDescriptionChanged)
 	}
@@ -522,9 +536,12 @@ func TestDefinitionChange_Classes(t *testing.T) {
 	if opt.Actual != "(none)" {
 		t.Errorf("a removal has no after fragment; actual = %q", opt.Actual)
 	}
-	// A renamed input property is ONE breaking finding under the OLD path,
-	// carrying both names; the twin never surfaces as a required addition.
-	ren := check("list_transactions", diff.RuleInputPropertyRenamed, "input.account_id", model.SeverityBreaking, true)
+	// A renamed input property is ONE finding under the OLD path, carrying
+	// both names; the twin never surfaces as a required addition. INFO since
+	// 2026-09-17 (was breaking): it is the same parameter under a new
+	// spelling, so it is information for the caller, not a promise broken to
+	// them — and that holds even when the new name is REQUIRED.
+	ren := check("list_transactions", diff.RuleInputPropertyRenamed, "input.account_id", model.SeverityInfo, true)
 	if !strings.Contains(ren.Expected, `"account_id"`) || !strings.Contains(ren.Actual, `"accountId"`) {
 		t.Errorf("rename fragments = %q / %q, want old and new names", ren.Expected, ren.Actual)
 	}

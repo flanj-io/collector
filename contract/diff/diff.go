@@ -1,9 +1,16 @@
 // Package diff is the transport-neutral definition-diff classifier
-// (v0.5 spec §4 Step A). It compares two revisions of a Contract and
-// classifies every change as BREAKING / NON_BREAKING / DESCRIPTION per the
-// rule table in contracts/CONTRACTS.md §4 — the SINGLE implementation,
-// imported by the collector's findings pipeline (Step C) and by
-// mcp-drift-watch (Step F).
+// (v0.5 spec §4 Step A). It compares two revisions of a Contract and gives
+// every change TWO separate fields — a Kind (what moved) and a Severity (how
+// much it matters) — per ruling R-A/R-B (Idan, 2026-09-17) and the rule table
+// in contracts/CONTRACTS.md §4. It is the SINGLE implementation, imported by
+// the collector's findings pipeline (Step C) and by mcp-drift-watch (Step F).
+//
+// The single `Class` label it used to emit (BREAKING / NON_BREAKING /
+// DESCRIPTION) mixed the two axes in one vocabulary — "DESCRIPTION" named a
+// kind while "BREAKING" named a severity — so neither could be read without
+// the other. Every severity now comes from the one table in severity.go and
+// from nowhere else; see the R-A/R-B notes there for each cell and its
+// argument.
 //
 // The classifier is generic over contract.Contract: it never looks at the
 // transport (http vs mcp_tool), only at operations and their JSON Schema
@@ -14,13 +21,17 @@
 // by which way it moved: a union that gained a member (`number` ->
 // `["number","string"]`) is a WIDENING, one that lost a member is a NARROWING,
 // and a set replaced outright is a CHANGE. The three carry distinct rule ids
-// on both sides, and their classes differ by side:
+// on both sides:
 //
 //   - input widened is the one additive cell — every argument a caller sends
-//     today still validates;
-//   - input narrowed / changed are breaking — a caller sending the dropped
-//     type now fails validation;
-//   - EVERY output cell is breaking. Widened: the consumer may now receive a
+//     today still validates, so it is not reported at all;
+//   - input narrowed / changed keep their own rule ids, and R-B grades the
+//     whole input family INFO: a caller controls their own arguments, so a
+//     moved input surface is information for them rather than a promise broken
+//     to them. The Detail still names the consequence; the severity does not
+//     inflate on their behalf. The one input cell above INFO is a new
+//     REQUIRED param (WARNING);
+//   - EVERY output TYPE cell is breaking. Widened: the consumer may now receive a
 //     type it never handled. Narrowed: the product's frozen posture on
 //     response enums (internal/drift/versiondiff.go promotes
 //     response-property-enum-value-removed to breaking because "a value the
@@ -31,25 +42,37 @@
 //     two apart without a business judgement it is not allowed to make.
 //     Changed: both at once.
 //
+// Not every output cell is breaking, though, and this prose used to say so.
+// Two output cells sit below BREAKING in R-B, and the blanket claim
+// contradicted the ruled table until 2026-09-17:
+//
+//   - an output enum that GAINED a value is WARNING (Idan, 2026-09-17): a
+//     consumer may now receive a value it has no branch for, which is worth
+//     telling them, but nothing they already handle stopped being valid;
+//   - an OPTIONAL declared output field removed is WARNING. Before R-B that
+//     cell emitted nothing at all, so a provider could stop declaring a field
+//     consumers were reading and the diff stayed silent.
+//
 // JSON Schema's one subtype relation is honoured in the set comparison: every
 // `integer` is a `number`, so `number` -> `integer` narrows and `integer` ->
 // `number` widens. Two sets that accept the same values under that relation
 // (`["number","integer"]` vs `["number"]`) are no change at all.
 //
-// Removal of an input property is judged by whether callers were REQUIRED to
-// send it: a required removal is breaking; an optional one is breaking only
-// when the new schema declares `additionalProperties: false` (a caller still
-// sending it now fails validation) and otherwise non-breaking, with the
-// consequence stated on the change's Detail. Optional OUTPUT removals stay
-// unclassified (the table's standing posture: a value consumers were never
-// promised).
+// Removal of an input property still carries its own rule id by whether
+// callers were REQUIRED to send it, and the Detail still states the
+// consequence (an optional removal under `additionalProperties: false` means a
+// caller still sending it now fails validation). R-B grades every one of them
+// INFO — see the input-family note above. Optional OUTPUT removals are WARNING
+// since R-B; they were unclassified before it, on the standing posture that
+// they are a value consumers were never promised.
 //
 // An enum whose value set moved is ONE change per field per comparison,
 // carrying the removed and the added values as its before/after fragments:
-// `*-enum-value-removed` (breaking) when values only left, `*-enum-value-added`
-// (non-breaking) when values only arrived, `*-enum-value-replaced` (breaking)
-// when both happened at once — a swap used to read as two rows carrying the
-// same two full lists.
+// `*-enum-value-removed` when values only left, `*-enum-value-added` when
+// values only arrived, `*-enum-value-replaced` when both happened at once — a
+// swap used to read as two rows carrying the same two full lists. The
+// severities live in severity.go; the replaced cell follows the REMOVED half,
+// which is the worse one.
 //
 // Rename pairing — a DELIBERATE strengthening of spec §4.A: the spec's table
 // pairs "removed + added with identical inputSchema" as one rename. This
@@ -80,15 +103,6 @@ import (
 	"github.com/flanj-io/collector/contract"
 )
 
-// Class is the classification of one definition change.
-type Class string
-
-const (
-	ClassBreaking    Class = "BREAKING"
-	ClassNonBreaking Class = "NON_BREAKING"
-	ClassDescription Class = "DESCRIPTION"
-)
-
 // Rule identifiers. Stable strings: the drift signature
 // (edge, operation.id, rule, fieldPath) hangs off them. The full table, with
 // the class of every cell and the argument for it, is contracts/CONTRACTS.md §4.
@@ -110,6 +124,13 @@ const (
 	RuleInputEnumValueReplaced       = "input-enum-value-replaced"
 
 	RuleOutputRequiredPropertyRemoved = "output-required-property-removed"
+	// RuleOutputOptionalPropertyRemoved exists only because R-B gives the cell
+	// a severity ("OPTIONAL declared output field removed ... WARNING"). Before
+	// that ruling this classifier deliberately emitted NOTHING here — the
+	// standing posture was that an optional output field is "a value consumers
+	// were never promised" — so a consumer reading a field the provider had
+	// quietly stopped declaring got no finding at all.
+	RuleOutputOptionalPropertyRemoved = "output-optional-property-removed"
 	RuleOutputOptionalPropertyAdded   = "output-optional-property-added"
 	RuleOutputPropertyRenamed         = "output-property-renamed"
 	RuleOutputPropertyTypeWidened     = "output-property-type-widened"
@@ -130,7 +151,14 @@ const (
 // state (the optional-removal cells): one sentence naming the consequence for
 // a caller, in the vocabulary of the schema, never of the business.
 type Change struct {
-	Class       Class  `json:"class"`
+	// Kind is WHAT moved and Severity is HOW MUCH it matters — two separate
+	// fields per ruling R-A. Reported is false for R-B's additive cells. All
+	// three are stamped from the single table in severity.go; no construction
+	// site in this file sets them, so none can disagree with the ruling.
+	Kind     Kind     `json:"kind"`
+	Severity Severity `json:"severity,omitempty"`
+	Reported bool     `json:"reported"`
+
 	OperationID string `json:"operationId"`
 	Rule        string `json:"rule"`
 	FieldPath   string `json:"fieldPath"`
@@ -215,12 +243,12 @@ func Classify(before, after *contract.Contract) []Change {
 		case inOld:
 			if newID, ok := renamedTo[id]; ok {
 				out = append(out, Change{
-					Class: ClassBreaking, OperationID: id, Rule: RuleOperationRenamed,
+					OperationID: id, Rule: RuleOperationRenamed,
 					Before: id, After: newID,
 				})
 			} else {
 				out = append(out, Change{
-					Class: ClassBreaking, OperationID: id, Rule: RuleOperationRemoved,
+					OperationID: id, Rule: RuleOperationRemoved,
 					Before: id,
 				})
 			}
@@ -234,12 +262,16 @@ func Classify(before, after *contract.Contract) []Change {
 				diffOutput(id, oldOps[oldID], n, &out)
 			} else {
 				out = append(out, Change{
-					Class: ClassNonBreaking, OperationID: id, Rule: RuleOperationAdded,
+					OperationID: id, Rule: RuleOperationAdded,
 					After: id,
 				})
 			}
 		}
 	}
+	// R-A/R-B are applied HERE and only here: every change above carries a
+	// rule id and nothing else about its gravity, and the table in
+	// severity.go turns that into (Kind, Severity, Reported).
+	stamp(out)
 	return out
 }
 
@@ -273,7 +305,7 @@ func diffOperation(id string, o, n *contract.Operation, out *[]Change) {
 func diffDescription(id string, o, n *contract.Operation, out *[]Change) {
 	if o.Description != n.Description {
 		*out = append(*out, Change{
-			Class: ClassDescription, OperationID: id, Rule: RuleDescriptionChanged,
+			OperationID: id, Rule: RuleDescriptionChanged,
 			FieldPath: "description", Before: o.Description, After: n.Description,
 		})
 	}
@@ -286,12 +318,12 @@ func diffOutput(id string, o, n *contract.Operation, out *[]Change) {
 		// no output contract declared, before or after — nothing to judge
 	case o.OutputSchema == nil:
 		*out = append(*out, Change{
-			Class: ClassNonBreaking, OperationID: id, Rule: RuleOutputSchemaDeclared,
+			OperationID: id, Rule: RuleOutputSchemaDeclared,
 			FieldPath: "output", After: typeFragment(n.OutputSchema),
 		})
 	case n.OutputSchema == nil:
 		*out = append(*out, Change{
-			Class: ClassBreaking, OperationID: id, Rule: RuleOutputSchemaRemoved,
+			OperationID: id, Rule: RuleOutputSchemaRemoved,
 			FieldPath: "output", Before: typeFragment(o.OutputSchema),
 		})
 	default:
@@ -341,7 +373,7 @@ func diffSchema(opID string, s side, path string, old, new map[string]any, out *
 				rule = RuleOutputPropertyRenamed
 			}
 			*out = append(*out, Change{
-				Class: ClassBreaking, OperationID: opID, Rule: rule, FieldPath: child,
+				OperationID: opID, Rule: rule, FieldPath: child,
 				Before: map[string]any{"name": name, "schema": oldProps[name]},
 				After:  map[string]any{"name": newName, "schema": newProps[newName]},
 			})
@@ -359,11 +391,18 @@ func diffSchema(opID string, s side, path string, old, new map[string]any, out *
 		if _, ok := newProps[name]; !ok {
 			if s == sideInput {
 				*out = append(*out, inputPropertyRemoved(opID, child, name, oldProps[name], oldReq[name], new))
-			} else if oldReq[name] {
-				// spec table: OUTPUT property removal is classified when the
-				// property was required (a value consumers were promised)
+			} else {
+				// R-B grades an output removal by whether consumers were
+				// PROMISED the value: required is BREAKING, optional is
+				// WARNING. Before R-B the optional cell emitted nothing at
+				// all, so a provider could quietly stop declaring a field
+				// consumers were reading and the diff stayed silent.
+				rule := RuleOutputOptionalPropertyRemoved
+				if oldReq[name] {
+					rule = RuleOutputRequiredPropertyRemoved
+				}
 				*out = append(*out, Change{
-					Class: ClassBreaking, OperationID: opID, Rule: RuleOutputRequiredPropertyRemoved,
+					OperationID: opID, Rule: rule,
 					FieldPath: child, Before: oldProps[name],
 				})
 			}
@@ -386,18 +425,18 @@ func diffSchema(opID string, s side, path string, old, new map[string]any, out *
 		if s == sideInput {
 			if newReq[name] {
 				*out = append(*out, Change{
-					Class: ClassBreaking, OperationID: opID, Rule: RuleInputRequiredPropertyAdded,
+					OperationID: opID, Rule: RuleInputRequiredPropertyAdded,
 					FieldPath: child, After: newProps[name],
 				})
 			} else {
 				*out = append(*out, Change{
-					Class: ClassNonBreaking, OperationID: opID, Rule: RuleInputOptionalPropertyAdded,
+					OperationID: opID, Rule: RuleInputOptionalPropertyAdded,
 					FieldPath: child, After: newProps[name],
 				})
 			}
 		} else {
 			*out = append(*out, Change{
-				Class: ClassNonBreaking, OperationID: opID, Rule: RuleOutputOptionalPropertyAdded,
+				OperationID: opID, Rule: RuleOutputOptionalPropertyAdded,
 				FieldPath: child, After: newProps[name],
 			})
 		}
@@ -427,11 +466,10 @@ func diffType(opID string, s side, path string, old, new map[string]any, out *[]
 		return // equivalent under integer ⊂ number, e.g. ["number","integer"] vs ["number"]
 	}
 	var rule string
-	class := ClassBreaking
 	switch {
 	case newCoversOld: // widened: the new set accepts everything the old one did, and more
 		if s == sideInput {
-			rule, class = RuleInputTypeWidened, ClassNonBreaking
+			rule = RuleInputTypeWidened
 		} else {
 			rule = RuleOutputPropertyTypeWidened
 		}
@@ -449,7 +487,7 @@ func diffType(opID string, s side, path string, old, new map[string]any, out *[]
 		}
 	}
 	*out = append(*out, Change{
-		Class: class, OperationID: opID, Rule: rule, FieldPath: path,
+		OperationID: opID, Rule: rule, FieldPath: path,
 		Before: map[string]any{"type": old["type"]},
 		After:  map[string]any{"type": new["type"]},
 	})
@@ -469,7 +507,6 @@ func diffEnum(opID string, s side, path string, old, new map[string]any, out *[]
 	removed := enumMissingFrom(oldE, newE)
 	added := enumMissingFrom(newE, oldE)
 	var rule string
-	class := ClassBreaking
 	switch {
 	case len(removed) > 0 && len(added) > 0:
 		rule = RuleInputEnumValueReplaced
@@ -482,7 +519,6 @@ func diffEnum(opID string, s side, path string, old, new map[string]any, out *[]
 			rule = RuleOutputEnumValueRemoved
 		}
 	case len(added) > 0:
-		class = ClassNonBreaking
 		rule = RuleInputEnumValueAdded
 		if s == sideOutput {
 			rule = RuleOutputEnumValueAdded
@@ -491,7 +527,7 @@ func diffEnum(opID string, s side, path string, old, new map[string]any, out *[]
 		return
 	}
 	*out = append(*out, Change{
-		Class: class, OperationID: opID, Rule: rule, FieldPath: path,
+		OperationID: opID, Rule: rule, FieldPath: path,
 		Before: map[string]any{"enum": removed}, After: map[string]any{"enum": added},
 	})
 }
@@ -504,19 +540,19 @@ func diffEnum(opID string, s side, path string, old, new map[string]any, out *[]
 func inputPropertyRemoved(opID, child, name string, before any, wasRequired bool, new map[string]any) Change {
 	if wasRequired {
 		return Change{
-			Class: ClassBreaking, OperationID: opID, Rule: RuleInputRequiredPropertyRemoved,
+			OperationID: opID, Rule: RuleInputRequiredPropertyRemoved,
 			FieldPath: child, Before: before,
 		}
 	}
 	if additionalPropertiesFalse(new) {
 		return Change{
-			Class: ClassBreaking, OperationID: opID, Rule: RuleInputOptionalPropertyRemoved,
+			OperationID: opID, Rule: RuleInputOptionalPropertyRemoved,
 			FieldPath: child, Before: before,
 			Detail: fmt.Sprintf("callers still sending `%s` now fail validation: the new schema declares additionalProperties: false", name),
 		}
 	}
 	return Change{
-		Class: ClassNonBreaking, OperationID: opID, Rule: RuleInputOptionalPropertyRemoved,
+		OperationID: opID, Rule: RuleInputOptionalPropertyRemoved,
 		FieldPath: child, Before: before,
 		Detail: fmt.Sprintf("callers still sending `%s` are not rejected (the new schema does not declare additionalProperties: false), but the value no longer has a declared effect", name),
 	}
@@ -524,9 +560,20 @@ func inputPropertyRemoved(opID, child, name string, before any, wasRequired bool
 
 // pairRenamedProperties pairs each removed property with the first added
 // property (both in name order, deterministic) whose name normalises to the
-// same key and whose declared type set is equal and non-empty. On the output
-// side only a REQUIRED removed property pairs — an optional output removal is
-// not a classified change, so its twin stays an optional addition.
+// same key and whose declared type set is equal and non-empty. This is the
+// rule Idan ruled on 2026-09-17: same tool, same comparison, same side, same
+// declared type set, names equal after folding case and dropping `_`/`-`.
+//
+// On the output side only a REQUIRED removed property pairs. That restriction
+// used to follow from optional output removals being unclassified; R-B ended
+// that (they are WARNING now), so it survives as a DELIBERATE conservatism:
+// grading an optional output rename would need a cell R-B does not state
+// (BREAKING for the "renamed" row vs WARNING for the "optional removed" row),
+// and inventing one would publish a severity nobody ruled. An optional output
+// property that is in fact renamed therefore surfaces as
+// output-optional-property-removed (WARNING) plus an unreported addition:
+// the consumer is still told the field they read is no longer declared, they
+// are just not told the new name. Recorded as an open question, not a bug.
 func pairRenamedProperties(s side, oldProps, newProps map[string]any, oldReq map[string]bool) map[string]string {
 	var removed, added []string
 	for _, name := range sortedKeys(oldProps) {

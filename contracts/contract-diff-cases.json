@@ -1,5 +1,5 @@
 {
-  "_comment": "Step A definition-diff classifier battery (v0.5 spec §4.A acceptance (2)): >=2 cases per class (BREAKING / NON_BREAKING / DESCRIPTION), including a rename — plus, since 2026-09-13, one case per cell of the direction-aware rule table in CONTRACTS.md §4 (type widened / narrowed / changed on both sides, required vs optional input removal, one enum row per field, property renames) — plus the rename edge cases: a rename with a co-occurring output change must yield BOTH changes, and a schema-less/empty-object pair must never pair as a rename (the deliberate strengthening documented in contract/diff's package comment). Each case diffs two tools/list revisions (the classifier is transport-neutral; contract/diff/diff_test.go also replays one case through the OpenAPI loader). COLLECTOR-OWNED for now; promote to the canonical e2e/contracts set when another repo consumes it.",
+  "_comment": "Step A definition-diff classifier battery (v0.5 spec §4.A acceptance (2)): >=2 cases per class (BREAKING / NON_BREAKING / DESCRIPTION), including a rename — plus, since 2026-09-13, one case per cell of the direction-aware rule table in CONTRACTS.md §4 (type widened / narrowed / changed on both sides, required vs optional input removal, one enum row per field, property renames) — plus the rename edge cases: a rename with a co-occurring output change must yield BOTH changes, and a schema-less/empty-object pair must never pair as a rename (the deliberate strengthening documented in contract/diff's package comment). Each expect entry states the two INDEPENDENT fields ruling R-A requires — `kind` (what moved) and `severity` (how much it matters) — plus `reported`, which is false for R-B's additive cells (a new tool, a new optional param, a widened input, a newly declared output schema): those changes are returned by the classifier but carry no severity and must never reach a published count. This file is a HAND-WRITTEN statement of R-B, deliberately independent of the Go table in contract/diff/severity.go, so the two disagreeing is a test failure. Each case diffs two tools/list revisions (the classifier is transport-neutral; contract/diff/diff_test.go also replays one case through the OpenAPI loader). COLLECTOR-OWNED for now; promote to the canonical e2e/contracts set when another repo consumes it.",
   "cases": [
     {
       "name": "no-change",
@@ -11,21 +11,21 @@
       "name": "operation-removed",
       "before": { "tools": [ { "name": "get_balance", "inputSchema": { "type": "object", "properties": { "account_id": { "type": "string" } } } }, { "name": "create_refund", "inputSchema": { "type": "object", "properties": { "charge_id": { "type": "string" } } } } ] },
       "after": { "tools": [ { "name": "get_balance", "inputSchema": { "type": "object", "properties": { "account_id": { "type": "string" } } } } ] },
-      "expect": [ { "class": "BREAKING", "operationId": "create_refund", "rule": "operation-removed", "fieldPath": "" } ]
+      "expect": [ { "kind": "catalog", "severity": "BREAKING", "reported": true, "operationId": "create_refund", "rule": "operation-removed", "fieldPath": "" } ]
     },
     {
       "name": "operation-renamed (identical inputSchema)",
       "before": { "tools": [ { "name": "create_refund", "description": "Create a refund.", "inputSchema": { "type": "object", "properties": { "charge_id": { "type": "string" }, "amount": { "type": "integer" } }, "required": ["charge_id", "amount"] } } ] },
       "after": { "tools": [ { "name": "refund_create", "description": "Create a refund.", "inputSchema": { "type": "object", "properties": { "charge_id": { "type": "string" }, "amount": { "type": "integer" } }, "required": ["charge_id", "amount"] } } ] },
-      "expect": [ { "class": "BREAKING", "operationId": "create_refund", "rule": "operation-renamed", "fieldPath": "", "before": "create_refund", "after": "refund_create" } ]
+      "expect": [ { "kind": "catalog", "severity": "BREAKING", "reported": true, "operationId": "create_refund", "rule": "operation-renamed", "fieldPath": "", "before": "create_refund", "after": "refund_create" } ]
     },
     {
       "name": "operation-renamed with co-occurring output type change (both must surface)",
       "before": { "tools": [ { "name": "create_refund", "description": "Create a refund.", "inputSchema": { "type": "object", "properties": { "charge_id": { "type": "string" }, "amount": { "type": "integer" } }, "required": ["charge_id", "amount"] }, "outputSchema": { "type": "object", "properties": { "amount": { "type": "number" } }, "required": ["amount"] } } ] },
       "after": { "tools": [ { "name": "refund_create", "description": "Create a refund.", "inputSchema": { "type": "object", "properties": { "charge_id": { "type": "string" }, "amount": { "type": "integer" } }, "required": ["charge_id", "amount"] }, "outputSchema": { "type": "object", "properties": { "amount": { "type": "string" } }, "required": ["amount"] } } ] },
       "expect": [
-        { "class": "BREAKING", "operationId": "create_refund", "rule": "operation-renamed", "fieldPath": "", "before": "create_refund", "after": "refund_create" },
-        { "class": "BREAKING", "operationId": "refund_create", "rule": "output-property-type-changed", "fieldPath": "output.amount" }
+        { "kind": "catalog", "severity": "BREAKING", "reported": true, "operationId": "create_refund", "rule": "operation-renamed", "fieldPath": "", "before": "create_refund", "after": "refund_create" },
+        { "kind": "output", "severity": "BREAKING", "reported": true, "operationId": "refund_create", "rule": "output-property-type-changed", "fieldPath": "output.amount" }
       ]
     },
     {
@@ -33,56 +33,56 @@
       "before": { "tools": [ { "name": "ping", "inputSchema": { "type": "object" } }, { "name": "status", "inputSchema": { "type": "object", "properties": {} } } ] },
       "after": { "tools": [ { "name": "healthcheck", "inputSchema": { "type": "object" } }, { "name": "health_status", "inputSchema": { "type": "object", "properties": {} } } ] },
       "expect": [
-        { "class": "BREAKING", "operationId": "ping", "rule": "operation-removed", "fieldPath": "" },
-        { "class": "BREAKING", "operationId": "status", "rule": "operation-removed", "fieldPath": "" },
-        { "class": "NON_BREAKING", "operationId": "healthcheck", "rule": "operation-added", "fieldPath": "" },
-        { "class": "NON_BREAKING", "operationId": "health_status", "rule": "operation-added", "fieldPath": "" }
+        { "kind": "catalog", "severity": "BREAKING", "reported": true, "operationId": "ping", "rule": "operation-removed", "fieldPath": "" },
+        { "kind": "catalog", "severity": "BREAKING", "reported": true, "operationId": "status", "rule": "operation-removed", "fieldPath": "" },
+        { "kind": "catalog", "reported": false, "operationId": "healthcheck", "rule": "operation-added", "fieldPath": "" },
+        { "kind": "catalog", "reported": false, "operationId": "health_status", "rule": "operation-added", "fieldPath": "" }
       ]
     },
     {
       "name": "operation-added",
       "before": { "tools": [ { "name": "get_balance", "inputSchema": { "type": "object", "properties": { "account_id": { "type": "string" } } } } ] },
       "after": { "tools": [ { "name": "get_balance", "inputSchema": { "type": "object", "properties": { "account_id": { "type": "string" } } } }, { "name": "list_transactions", "inputSchema": { "type": "object", "properties": { "limit": { "type": "integer" } } } } ] },
-      "expect": [ { "class": "NON_BREAKING", "operationId": "list_transactions", "rule": "operation-added", "fieldPath": "" } ]
+      "expect": [ { "kind": "catalog", "reported": false, "operationId": "list_transactions", "rule": "operation-added", "fieldPath": "" } ]
     },
     {
       "name": "input-required-property-added",
       "before": { "tools": [ { "name": "create_refund", "inputSchema": { "type": "object", "properties": { "charge_id": { "type": "string" } }, "required": ["charge_id"] } } ] },
       "after": { "tools": [ { "name": "create_refund", "inputSchema": { "type": "object", "properties": { "charge_id": { "type": "string" }, "reason_code": { "type": "string" } }, "required": ["charge_id", "reason_code"] } } ] },
-      "expect": [ { "class": "BREAKING", "operationId": "create_refund", "rule": "input-required-property-added", "fieldPath": "input.reason_code" } ]
+      "expect": [ { "kind": "input", "severity": "WARNING", "reported": true, "operationId": "create_refund", "rule": "input-required-property-added", "fieldPath": "input.reason_code" } ]
     },
     {
       "name": "input-optional-property-added",
       "before": { "tools": [ { "name": "create_refund", "inputSchema": { "type": "object", "properties": { "charge_id": { "type": "string" } }, "required": ["charge_id"] } } ] },
       "after": { "tools": [ { "name": "create_refund", "inputSchema": { "type": "object", "properties": { "charge_id": { "type": "string" }, "metadata": { "type": "object" } }, "required": ["charge_id"] } } ] },
-      "expect": [ { "class": "NON_BREAKING", "operationId": "create_refund", "rule": "input-optional-property-added", "fieldPath": "input.metadata" } ]
+      "expect": [ { "kind": "input", "reported": false, "operationId": "create_refund", "rule": "input-optional-property-added", "fieldPath": "input.metadata" } ]
     },
     {
       "name": "input-optional-property-removed (tolerated: the new schema does not forbid the stray argument)",
       "before": { "tools": [ { "name": "create_refund", "inputSchema": { "type": "object", "properties": { "charge_id": { "type": "string" }, "reason": { "type": "string" } }, "required": ["charge_id"] } } ] },
       "after": { "tools": [ { "name": "create_refund", "inputSchema": { "type": "object", "properties": { "charge_id": { "type": "string" } }, "required": ["charge_id"] } } ] },
-      "expect": [ { "class": "NON_BREAKING", "operationId": "create_refund", "rule": "input-optional-property-removed", "fieldPath": "input.reason" } ]
+      "expect": [ { "kind": "input", "severity": "INFO", "reported": true, "operationId": "create_refund", "rule": "input-optional-property-removed", "fieldPath": "input.reason" } ]
     },
     {
       "name": "input-optional-property-removed (additionalProperties: false — a caller still sending it now fails validation)",
       "before": { "tools": [ { "name": "get_apy_history", "inputSchema": { "type": "object", "properties": { "market": { "type": "string" }, "reserve": { "type": "string" } }, "required": ["market"], "additionalProperties": false } } ] },
       "after": { "tools": [ { "name": "get_apy_history", "inputSchema": { "type": "object", "properties": { "market": { "type": "string" } }, "required": ["market"], "additionalProperties": false } } ] },
-      "expect": [ { "class": "BREAKING", "operationId": "get_apy_history", "rule": "input-optional-property-removed", "fieldPath": "input.reserve" } ]
+      "expect": [ { "kind": "input", "severity": "INFO", "reported": true, "operationId": "get_apy_history", "rule": "input-optional-property-removed", "fieldPath": "input.reserve" } ]
     },
     {
       "name": "input-required-property-removed",
       "before": { "tools": [ { "name": "create_refund", "inputSchema": { "type": "object", "properties": { "charge_id": { "type": "string" }, "reason": { "type": "string" } }, "required": ["charge_id", "reason"] } } ] },
       "after": { "tools": [ { "name": "create_refund", "inputSchema": { "type": "object", "properties": { "charge_id": { "type": "string" } }, "required": ["charge_id"] } } ] },
-      "expect": [ { "class": "BREAKING", "operationId": "create_refund", "rule": "input-required-property-removed", "fieldPath": "input.reason" } ]
+      "expect": [ { "kind": "input", "severity": "INFO", "reported": true, "operationId": "create_refund", "rule": "input-required-property-removed", "fieldPath": "input.reason" } ]
     },
     {
       "name": "input-property-renamed (camelCase -> snake_case, same type: one row, not removed + added)",
       "before": { "tools": [ { "name": "compare_database_schema", "inputSchema": { "type": "object", "properties": { "branchId": { "type": "string" }, "projectId": { "type": "string" }, "databaseName": { "type": "string" } }, "required": ["branchId", "projectId"] } } ] },
       "after": { "tools": [ { "name": "compare_database_schema", "inputSchema": { "type": "object", "properties": { "branch_id": { "type": "string" }, "project_id": { "type": "string" }, "database_name": { "type": "string" } }, "required": ["branch_id", "project_id"] } } ] },
       "expect": [
-        { "class": "BREAKING", "operationId": "compare_database_schema", "rule": "input-property-renamed", "fieldPath": "input.branchId", "before": { "name": "branchId", "schema": { "type": "string" } }, "after": { "name": "branch_id", "schema": { "type": "string" } } },
-        { "class": "BREAKING", "operationId": "compare_database_schema", "rule": "input-property-renamed", "fieldPath": "input.databaseName" },
-        { "class": "BREAKING", "operationId": "compare_database_schema", "rule": "input-property-renamed", "fieldPath": "input.projectId" }
+        { "kind": "input", "severity": "INFO", "reported": true, "operationId": "compare_database_schema", "rule": "input-property-renamed", "fieldPath": "input.branchId", "before": { "name": "branchId", "schema": { "type": "string" } }, "after": { "name": "branch_id", "schema": { "type": "string" } } },
+        { "kind": "input", "severity": "INFO", "reported": true, "operationId": "compare_database_schema", "rule": "input-property-renamed", "fieldPath": "input.databaseName" },
+        { "kind": "input", "severity": "INFO", "reported": true, "operationId": "compare_database_schema", "rule": "input-property-renamed", "fieldPath": "input.projectId" }
       ]
     },
     {
@@ -90,33 +90,33 @@
       "before": { "tools": [ { "name": "create_refund", "inputSchema": { "type": "object", "properties": { "chargeId": { "type": "string" } }, "required": ["chargeId"] } } ] },
       "after": { "tools": [ { "name": "create_refund", "inputSchema": { "type": "object", "properties": { "charge_id": { "type": "integer" } }, "required": ["charge_id"] } } ] },
       "expect": [
-        { "class": "BREAKING", "operationId": "create_refund", "rule": "input-required-property-removed", "fieldPath": "input.chargeId" },
-        { "class": "BREAKING", "operationId": "create_refund", "rule": "input-required-property-added", "fieldPath": "input.charge_id" }
+        { "kind": "input", "severity": "INFO", "reported": true, "operationId": "create_refund", "rule": "input-required-property-removed", "fieldPath": "input.chargeId" },
+        { "kind": "input", "severity": "WARNING", "reported": true, "operationId": "create_refund", "rule": "input-required-property-added", "fieldPath": "input.charge_id" }
       ]
     },
     {
       "name": "input-type-changed",
       "before": { "tools": [ { "name": "create_refund", "inputSchema": { "type": "object", "properties": { "amount": { "type": "integer" } }, "required": ["amount"] } } ] },
       "after": { "tools": [ { "name": "create_refund", "inputSchema": { "type": "object", "properties": { "amount": { "type": "string" } }, "required": ["amount"] } } ] },
-      "expect": [ { "class": "BREAKING", "operationId": "create_refund", "rule": "input-type-changed", "fieldPath": "input.amount" } ]
+      "expect": [ { "kind": "input", "severity": "INFO", "reported": true, "operationId": "create_refund", "rule": "input-type-changed", "fieldPath": "input.amount" } ]
     },
     {
       "name": "input-type-narrowed (union loses a member: a caller sending the dropped type now fails)",
       "before": { "tools": [ { "name": "list_transactions", "inputSchema": { "type": "object", "properties": { "limit": { "type": ["integer", "string"] } } } } ] },
       "after": { "tools": [ { "name": "list_transactions", "inputSchema": { "type": "object", "properties": { "limit": { "type": "integer" } } } } ] },
-      "expect": [ { "class": "BREAKING", "operationId": "list_transactions", "rule": "input-type-narrowed", "fieldPath": "input.limit" } ]
+      "expect": [ { "kind": "input", "severity": "INFO", "reported": true, "operationId": "list_transactions", "rule": "input-type-narrowed", "fieldPath": "input.limit" } ]
     },
     {
       "name": "input-type-narrowed (number -> integer: every integer is a number)",
       "before": { "tools": [ { "name": "list_projects", "inputSchema": { "type": "object", "properties": { "limit": { "type": "number" } } } } ] },
       "after": { "tools": [ { "name": "list_projects", "inputSchema": { "type": "object", "properties": { "limit": { "type": "integer" } } } } ] },
-      "expect": [ { "class": "BREAKING", "operationId": "list_projects", "rule": "input-type-narrowed", "fieldPath": "input.limit" } ]
+      "expect": [ { "kind": "input", "severity": "INFO", "reported": true, "operationId": "list_projects", "rule": "input-type-narrowed", "fieldPath": "input.limit" } ]
     },
     {
       "name": "input-type-widened (union gains a member: additive — every argument sent today still validates)",
       "before": { "tools": [ { "name": "list_transactions", "inputSchema": { "type": "object", "properties": { "limit": { "type": "integer" } } } } ] },
       "after": { "tools": [ { "name": "list_transactions", "inputSchema": { "type": "object", "properties": { "limit": { "type": ["integer", "string"] } } } } ] },
-      "expect": [ { "class": "NON_BREAKING", "operationId": "list_transactions", "rule": "input-type-widened", "fieldPath": "input.limit" } ]
+      "expect": [ { "kind": "input", "reported": false, "operationId": "list_transactions", "rule": "input-type-widened", "fieldPath": "input.limit" } ]
     },
     {
       "name": "type sets that accept the same values are no change ([number, integer] -> number)",
@@ -128,105 +128,105 @@
       "name": "input-enum-value-removed",
       "before": { "tools": [ { "name": "create_refund", "inputSchema": { "type": "object", "properties": { "reason": { "type": "string", "enum": ["duplicate", "fraudulent", "requested_by_customer"] } } } } ] },
       "after": { "tools": [ { "name": "create_refund", "inputSchema": { "type": "object", "properties": { "reason": { "type": "string", "enum": ["duplicate", "requested_by_customer"] } } } } ] },
-      "expect": [ { "class": "BREAKING", "operationId": "create_refund", "rule": "input-enum-value-removed", "fieldPath": "input.reason" } ]
+      "expect": [ { "kind": "input", "severity": "INFO", "reported": true, "operationId": "create_refund", "rule": "input-enum-value-removed", "fieldPath": "input.reason" } ]
     },
     {
       "name": "input-enum-value-added",
       "before": { "tools": [ { "name": "create_refund", "inputSchema": { "type": "object", "properties": { "reason": { "type": "string", "enum": ["duplicate", "fraudulent"] } } } } ] },
       "after": { "tools": [ { "name": "create_refund", "inputSchema": { "type": "object", "properties": { "reason": { "type": "string", "enum": ["duplicate", "fraudulent", "chargeback"] } } } } ] },
-      "expect": [ { "class": "NON_BREAKING", "operationId": "create_refund", "rule": "input-enum-value-added", "fieldPath": "input.reason" } ]
+      "expect": [ { "kind": "input", "reported": false, "operationId": "create_refund", "rule": "input-enum-value-added", "fieldPath": "input.reason" } ]
     },
     {
       "name": "output-required-property-removed",
       "before": { "tools": [ { "name": "create_refund", "inputSchema": { "type": "object" }, "outputSchema": { "type": "object", "properties": { "refund_id": { "type": "string" }, "status": { "type": "string" } }, "required": ["refund_id", "status"] } } ] },
       "after": { "tools": [ { "name": "create_refund", "inputSchema": { "type": "object" }, "outputSchema": { "type": "object", "properties": { "refund_id": { "type": "string" } }, "required": ["refund_id"] } } ] },
-      "expect": [ { "class": "BREAKING", "operationId": "create_refund", "rule": "output-required-property-removed", "fieldPath": "output.status" } ]
+      "expect": [ { "kind": "output", "severity": "BREAKING", "reported": true, "operationId": "create_refund", "rule": "output-required-property-removed", "fieldPath": "output.status" } ]
     },
     {
       "name": "output-property-type-changed (amount number -> string)",
       "before": { "tools": [ { "name": "get_balance", "inputSchema": { "type": "object" }, "outputSchema": { "type": "object", "properties": { "amount": { "type": "number" } }, "required": ["amount"] } } ] },
       "after": { "tools": [ { "name": "get_balance", "inputSchema": { "type": "object" }, "outputSchema": { "type": "object", "properties": { "amount": { "type": "string" } }, "required": ["amount"] } } ] },
-      "expect": [ { "class": "BREAKING", "operationId": "get_balance", "rule": "output-property-type-changed", "fieldPath": "output.amount" } ]
+      "expect": [ { "kind": "output", "severity": "BREAKING", "reported": true, "operationId": "get_balance", "rule": "output-property-type-changed", "fieldPath": "output.amount" } ]
     },
     {
       "name": "output-property-type-widened (number -> [number, string]: the consumer may receive a type it never handled)",
       "before": { "tools": [ { "name": "get_balance", "inputSchema": { "type": "object" }, "outputSchema": { "type": "object", "properties": { "amount": { "type": "number" } }, "required": ["amount"] } } ] },
       "after": { "tools": [ { "name": "get_balance", "inputSchema": { "type": "object" }, "outputSchema": { "type": "object", "properties": { "amount": { "type": ["number", "string"] } }, "required": ["amount"] } } ] },
-      "expect": [ { "class": "BREAKING", "operationId": "get_balance", "rule": "output-property-type-widened", "fieldPath": "output.amount" } ]
+      "expect": [ { "kind": "output", "severity": "BREAKING", "reported": true, "operationId": "get_balance", "rule": "output-property-type-widened", "fieldPath": "output.amount" } ]
     },
     {
       "name": "output-property-type-narrowed ([null, string] -> string: a type the consumer's code may branch on has silently disappeared)",
       "before": { "tools": [ { "name": "get_balance", "inputSchema": { "type": "object" }, "outputSchema": { "type": "object", "properties": { "memo": { "type": ["null", "string"] } } } } ] },
       "after": { "tools": [ { "name": "get_balance", "inputSchema": { "type": "object" }, "outputSchema": { "type": "object", "properties": { "memo": { "type": "string" } } } } ] },
-      "expect": [ { "class": "BREAKING", "operationId": "get_balance", "rule": "output-property-type-narrowed", "fieldPath": "output.memo" } ]
+      "expect": [ { "kind": "output", "severity": "BREAKING", "reported": true, "operationId": "get_balance", "rule": "output-property-type-narrowed", "fieldPath": "output.memo" } ]
     },
     {
       "name": "output-property-type-changed (nested)",
       "before": { "tools": [ { "name": "get_balance", "inputSchema": { "type": "object" }, "outputSchema": { "type": "object", "properties": { "card": { "type": "object", "properties": { "brand": { "type": "string" } } } } } } ] },
       "after": { "tools": [ { "name": "get_balance", "inputSchema": { "type": "object" }, "outputSchema": { "type": "object", "properties": { "card": { "type": "object", "properties": { "brand": { "type": "integer" } } } } } } ] },
-      "expect": [ { "class": "BREAKING", "operationId": "get_balance", "rule": "output-property-type-changed", "fieldPath": "output.card.brand" } ]
+      "expect": [ { "kind": "output", "severity": "BREAKING", "reported": true, "operationId": "get_balance", "rule": "output-property-type-changed", "fieldPath": "output.card.brand" } ]
     },
     {
       "name": "output-enum-value-removed",
       "before": { "tools": [ { "name": "create_refund", "inputSchema": { "type": "object" }, "outputSchema": { "type": "object", "properties": { "status": { "type": "string", "enum": ["pending", "succeeded", "failed"] } } } } ] },
       "after": { "tools": [ { "name": "create_refund", "inputSchema": { "type": "object" }, "outputSchema": { "type": "object", "properties": { "status": { "type": "string", "enum": ["pending", "succeeded"] } } } } ] },
-      "expect": [ { "class": "BREAKING", "operationId": "create_refund", "rule": "output-enum-value-removed", "fieldPath": "output.status" } ]
+      "expect": [ { "kind": "output", "severity": "BREAKING", "reported": true, "operationId": "create_refund", "rule": "output-enum-value-removed", "fieldPath": "output.status" } ]
     },
     {
       "name": "output-enum-value-added",
       "before": { "tools": [ { "name": "create_refund", "inputSchema": { "type": "object" }, "outputSchema": { "type": "object", "properties": { "status": { "type": "string", "enum": ["pending", "succeeded"] } } } } ] },
       "after": { "tools": [ { "name": "create_refund", "inputSchema": { "type": "object" }, "outputSchema": { "type": "object", "properties": { "status": { "type": "string", "enum": ["pending", "succeeded", "requires_action"] } } } } ] },
-      "expect": [ { "class": "NON_BREAKING", "operationId": "create_refund", "rule": "output-enum-value-added", "fieldPath": "output.status" } ]
+      "expect": [ { "kind": "output", "severity": "WARNING", "reported": true, "operationId": "create_refund", "rule": "output-enum-value-added", "fieldPath": "output.status" } ]
     },
     {
       "name": "output-enum-value-replaced (a swap is ONE row carrying the removed and the added values, never removed + added)",
       "before": { "tools": [ { "name": "list_cities", "inputSchema": { "type": "object" }, "outputSchema": { "type": "object", "properties": { "cities": { "type": "array", "items": { "type": "object", "properties": { "kind": { "type": "string", "enum": ["city", "region"] } } } } } } } ] },
       "after": { "tools": [ { "name": "list_cities", "inputSchema": { "type": "object" }, "outputSchema": { "type": "object", "properties": { "cities": { "type": "array", "items": { "type": "object", "properties": { "kind": { "type": "string", "enum": ["city", "state"] } } } } } } } ] },
-      "expect": [ { "class": "BREAKING", "operationId": "list_cities", "rule": "output-enum-value-replaced", "fieldPath": "output.cities.items.kind", "before": { "enum": ["region"] }, "after": { "enum": ["state"] } } ]
+      "expect": [ { "kind": "output", "severity": "BREAKING", "reported": true, "operationId": "list_cities", "rule": "output-enum-value-replaced", "fieldPath": "output.cities.items.kind", "before": { "enum": ["region"] }, "after": { "enum": ["state"] } } ]
     },
     {
       "name": "input-enum-value-replaced",
       "before": { "tools": [ { "name": "create_refund", "inputSchema": { "type": "object", "properties": { "reason": { "type": "string", "enum": ["duplicate", "fraudulent"] } } } } ] },
       "after": { "tools": [ { "name": "create_refund", "inputSchema": { "type": "object", "properties": { "reason": { "type": "string", "enum": ["duplicate", "fraud"] } } } } ] },
-      "expect": [ { "class": "BREAKING", "operationId": "create_refund", "rule": "input-enum-value-replaced", "fieldPath": "input.reason", "before": { "enum": ["fraudulent"] }, "after": { "enum": ["fraud"] } } ]
+      "expect": [ { "kind": "input", "severity": "INFO", "reported": true, "operationId": "create_refund", "rule": "input-enum-value-replaced", "fieldPath": "input.reason", "before": { "enum": ["fraudulent"] }, "after": { "enum": ["fraud"] } } ]
     },
     {
       "name": "output-property-renamed (required, same type: one row)",
       "before": { "tools": [ { "name": "create_refund", "inputSchema": { "type": "object" }, "outputSchema": { "type": "object", "properties": { "refundId": { "type": "string" }, "status": { "type": "string" } }, "required": ["refundId", "status"] } } ] },
       "after": { "tools": [ { "name": "create_refund", "inputSchema": { "type": "object" }, "outputSchema": { "type": "object", "properties": { "refund_id": { "type": "string" }, "status": { "type": "string" } }, "required": ["refund_id", "status"] } } ] },
-      "expect": [ { "class": "BREAKING", "operationId": "create_refund", "rule": "output-property-renamed", "fieldPath": "output.refundId", "before": { "name": "refundId", "schema": { "type": "string" } }, "after": { "name": "refund_id", "schema": { "type": "string" } } } ]
+      "expect": [ { "kind": "output", "severity": "BREAKING", "reported": true, "operationId": "create_refund", "rule": "output-property-renamed", "fieldPath": "output.refundId", "before": { "name": "refundId", "schema": { "type": "string" } }, "after": { "name": "refund_id", "schema": { "type": "string" } } } ]
     },
     {
       "name": "output-optional-property-added",
       "before": { "tools": [ { "name": "get_balance", "inputSchema": { "type": "object" }, "outputSchema": { "type": "object", "properties": { "amount": { "type": "number" } }, "required": ["amount"] } } ] },
       "after": { "tools": [ { "name": "get_balance", "inputSchema": { "type": "object" }, "outputSchema": { "type": "object", "properties": { "amount": { "type": "number" }, "balance_after": { "type": "number" } }, "required": ["amount"] } } ] },
-      "expect": [ { "class": "NON_BREAKING", "operationId": "get_balance", "rule": "output-optional-property-added", "fieldPath": "output.balance_after" } ]
+      "expect": [ { "kind": "output", "reported": false, "operationId": "get_balance", "rule": "output-optional-property-added", "fieldPath": "output.balance_after" } ]
     },
     {
       "name": "output-schema-removed (contract-level)",
       "before": { "tools": [ { "name": "get_balance", "inputSchema": { "type": "object" }, "outputSchema": { "type": "object", "properties": { "amount": { "type": "number" } } } } ] },
       "after": { "tools": [ { "name": "get_balance", "inputSchema": { "type": "object" } } ] },
-      "expect": [ { "class": "BREAKING", "operationId": "get_balance", "rule": "output-schema-removed", "fieldPath": "output" } ]
+      "expect": [ { "kind": "output", "severity": "BREAKING", "reported": true, "operationId": "get_balance", "rule": "output-schema-removed", "fieldPath": "output" } ]
     },
     {
       "name": "output-schema-declared",
       "before": { "tools": [ { "name": "list_transactions", "inputSchema": { "type": "object" } } ] },
       "after": { "tools": [ { "name": "list_transactions", "inputSchema": { "type": "object" }, "outputSchema": { "type": "object", "properties": { "transactions": { "type": "array", "items": { "type": "object" } } } } } ] },
-      "expect": [ { "class": "NON_BREAKING", "operationId": "list_transactions", "rule": "output-schema-declared", "fieldPath": "output" } ]
+      "expect": [ { "kind": "output", "reported": false, "operationId": "list_transactions", "rule": "output-schema-declared", "fieldPath": "output" } ]
     },
     {
       "name": "description-changed",
       "before": { "tools": [ { "name": "get_balance", "description": "Get the current balance for an account.", "inputSchema": { "type": "object" } } ] },
       "after": { "tools": [ { "name": "get_balance", "description": "Fetch the up-to-date balance for an account. Always call this before creating a refund.", "inputSchema": { "type": "object" } } ] },
-      "expect": [ { "class": "DESCRIPTION", "operationId": "get_balance", "rule": "description-changed", "fieldPath": "description" } ]
+      "expect": [ { "kind": "wording", "severity": "WARNING", "reported": true, "operationId": "get_balance", "rule": "description-changed", "fieldPath": "description" } ]
     },
     {
       "name": "description-changed (two operations, schemas untouched)",
       "before": { "tools": [ { "name": "create_refund", "description": "Create a refund.", "inputSchema": { "type": "object", "properties": { "charge_id": { "type": "string" } } } }, { "name": "get_balance", "description": "Get the balance.", "inputSchema": { "type": "object" } } ] },
       "after": { "tools": [ { "name": "create_refund", "description": "Create a refund. Requires an existing charge.", "inputSchema": { "type": "object", "properties": { "charge_id": { "type": "string" } } } }, { "name": "get_balance", "description": "Get the balance in minor units.", "inputSchema": { "type": "object" } } ] },
       "expect": [
-        { "class": "DESCRIPTION", "operationId": "create_refund", "rule": "description-changed", "fieldPath": "description" },
-        { "class": "DESCRIPTION", "operationId": "get_balance", "rule": "description-changed", "fieldPath": "description" }
+        { "kind": "wording", "severity": "WARNING", "reported": true, "operationId": "create_refund", "rule": "description-changed", "fieldPath": "description" },
+        { "kind": "wording", "severity": "WARNING", "reported": true, "operationId": "get_balance", "rule": "description-changed", "fieldPath": "description" }
       ]
     }
   ]

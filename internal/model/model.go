@@ -360,9 +360,24 @@ func (f Finding) Flaggable() bool {
 // Finding is a technical-adherence drift record. Mirrors
 // contracts/finding.schema.json.
 type Finding struct {
-	SchemaVersion   int     `json:"schema_version"`
-	ID              string  `json:"id"`
-	Kind            string  `json:"kind"`
+	SchemaVersion int    `json:"schema_version"`
+	ID            string `json:"id"`
+	Kind          string `json:"kind"`
+	// ChangeKind (additive, optional — ruling R-A, Idan 2026-09-17) is WHAT
+	// moved: wording | input | output | catalog | value | observed_failure.
+	// It is a FINER axis than Kind, which names which detector spoke
+	// (definition_change, output_mismatch, stale_client, live-vs-spec,
+	// version-diff) — four of R-A's six kinds are sub-kinds of
+	// definition_change, so the two could not be merged without either losing
+	// the detector or re-lettering a field the control plane, the dashboard
+	// and e2e all read.
+	//
+	// Set on MCP findings: definition_change carries wording/input/output/
+	// catalog, output_mismatch carries value, stale_client carries
+	// observed_failure. Empty on the HTTP/OpenAPI kinds, which R-A's
+	// vocabulary does not describe, and on findings from older collectors —
+	// readers must tolerate its absence.
+	ChangeKind      string  `json:"change_kind,omitempty"`
 	Severity        string  `json:"severity"`
 	Integration     string  `json:"integration"`
 	Endpoint        string  `json:"endpoint"`
