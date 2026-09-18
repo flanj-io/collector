@@ -255,3 +255,15 @@ func foldWording(s string) string {
 	}
 	return b.String()
 }
+
+// Grade returns R-B's verdict for a rule id: its kind, its severity (empty for
+// an additive rule), whether it is reported, and whether the rule is known.
+//
+// Exported for the one caller that must emit a rule Classify cannot: the
+// snapshot layer, which alone knows when a catalog moved behind discovery
+// meta-tools (RuleCatalogMovedBehindMetaTools). Grading through here keeps
+// the severity in this table rather than copied into that caller.
+func Grade(rule string) (kind Kind, sev Severity, reported, known bool) {
+	v, ok := lookup(rule)
+	return v.kind, v.sev, v.reported, ok
+}

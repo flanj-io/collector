@@ -234,3 +234,15 @@ func TestReportableAndHighest(t *testing.T) {
 		t.Errorf("Highest = %q, want INFO", got)
 	}
 }
+
+// TestGradeMatchesTheTable: the exported lookup is the table, including for
+// the rule only the snapshot layer can emit.
+func TestGradeMatchesTheTable(t *testing.T) {
+	k, s, rep, ok := Grade(RuleCatalogMovedBehindMetaTools)
+	if !ok || k != KindCatalog || s != SeverityInfo || !rep {
+		t.Errorf("Grade(catalog-moved-behind-meta-tools) = %s/%s reported=%v known=%v, want catalog/INFO reported", k, s, rep, ok)
+	}
+	if _, _, _, ok := Grade("no-such-rule"); ok {
+		t.Error("an unknown rule must not grade as known")
+	}
+}
