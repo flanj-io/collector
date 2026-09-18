@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/flanj-io/collector/contract"
@@ -143,11 +144,16 @@ func TestClassify_FixtureBattery(t *testing.T) {
 						t.Errorf("%s at %s: missing after fragment", c.Rule, c.FieldPath)
 					}
 				}
-				// The optional-removal cell is the one whose class the rule id
-				// does not state, so it must say why in Detail; no other rule
-				// carries one.
-				if (c.Rule == RuleInputOptionalPropertyRemoved) != (c.Detail != "") {
-					t.Errorf("%s at %s: Detail %q — only input-optional-property-removed carries a Detail", c.Rule, c.FieldPath, c.Detail)
+				// Two kinds of row carry a Detail and no other: the optional
+				// input removal (its consequence is not readable off the rule
+				// id) and every property rename ("renamed <old> → <new>",
+				// Idan 2026-09-17).
+				rename := c.Rule == RuleInputPropertyRenamed || c.Rule == RuleOutputPropertyRenamed || c.Rule == RuleOutputOptionalPropertyRenamed
+				if (c.Rule == RuleInputOptionalPropertyRemoved || rename) != (c.Detail != "") {
+					t.Errorf("%s at %s: Detail %q — only the optional input removal and renames carry a Detail", c.Rule, c.FieldPath, c.Detail)
+				}
+				if rename && !strings.HasPrefix(c.Detail, "renamed ") {
+					t.Errorf("%s at %s: Detail %q, want \"renamed <old> → <new>\"", c.Rule, c.FieldPath, c.Detail)
 				}
 				// Where the battery pins fragments, they must match exactly.
 				for _, e := range tc.Expect {

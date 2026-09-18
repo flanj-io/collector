@@ -133,6 +133,11 @@ const (
 	RuleOutputOptionalPropertyRemoved = "output-optional-property-removed"
 	RuleOutputOptionalPropertyAdded   = "output-optional-property-added"
 	RuleOutputPropertyRenamed         = "output-property-renamed"
+	// RuleOutputOptionalPropertyRenamed is the rename of an output property
+	// consumers were NOT promised (Idan, 2026-09-17): ONE row, WARNING — the
+	// same grade as that property simply disappearing, because to a consumer
+	// reading the old name it did disappear; the row also says where it went.
+	RuleOutputOptionalPropertyRenamed = "output-optional-property-renamed"
 	RuleOutputPropertyTypeWidened     = "output-property-type-widened"
 	RuleOutputPropertyTypeNarrowed    = "output-property-type-narrowed"
 	RuleOutputPropertyTypeChanged     = "output-property-type-changed"
@@ -371,11 +376,15 @@ func diffSchema(opID string, s side, path string, old, new map[string]any, out *
 			rule := RuleInputPropertyRenamed
 			if s == sideOutput {
 				rule = RuleOutputPropertyRenamed
+				if !oldReq[name] {
+					rule = RuleOutputOptionalPropertyRenamed
+				}
 			}
 			*out = append(*out, Change{
 				OperationID: opID, Rule: rule, FieldPath: child,
 				Before: map[string]any{"name": name, "schema": oldProps[name]},
 				After:  map[string]any{"name": newName, "schema": newProps[newName]},
+				Detail: fmt.Sprintf("renamed %s → %s", name, newName),
 			})
 			// Changes that co-occur with the rename (an enum, a nested
 			// property) surface under the NEW name — the surviving surface —
@@ -564,16 +573,13 @@ func inputPropertyRemoved(opID, child, name string, before any, wasRequired bool
 // rule Idan ruled on 2026-09-17: same tool, same comparison, same side, same
 // declared type set, names equal after folding case and dropping `_`/`-`.
 //
-// On the output side only a REQUIRED removed property pairs. That restriction
-// used to follow from optional output removals being unclassified; R-B ended
-// that (they are WARNING now), so it survives as a DELIBERATE conservatism:
-// grading an optional output rename would need a cell R-B does not state
-// (BREAKING for the "renamed" row vs WARNING for the "optional removed" row),
-// and inventing one would publish a severity nobody ruled. An optional output
-// property that is in fact renamed therefore surfaces as
-// output-optional-property-removed (WARNING) plus an unreported addition:
-// the consumer is still told the field they read is no longer declared, they
-// are just not told the new name. Recorded as an open question, not a bug.
+// The rule is the same on both sides (Idan, 2026-09-17: "reuse the input
+// rename pairing" for outputs). A REQUIRED output property renamed is
+// output-property-renamed (BREAKING); an OPTIONAL one is
+// output-optional-property-renamed (WARNING). Until that ruling an optional
+// output rename did not pair at all and read as a WARNING removal plus an
+// unreported addition — the consumer was told the field was gone but not
+// where it went.
 func pairRenamedProperties(s side, oldProps, newProps map[string]any, oldReq map[string]bool) map[string]string {
 	var removed, added []string
 	for _, name := range sortedKeys(oldProps) {
@@ -589,9 +595,6 @@ func pairRenamedProperties(s side, oldProps, newProps map[string]any, oldReq map
 	renamedTo := map[string]string{}
 	taken := map[string]bool{}
 	for _, oldName := range removed {
-		if s == sideOutput && !oldReq[oldName] {
-			continue
-		}
 		op, ok := oldProps[oldName].(map[string]any)
 		if !ok {
 			continue

@@ -21,7 +21,7 @@ var allRules = []string{
 	RuleInputEnumValueRemoved, RuleInputEnumValueAdded, RuleInputEnumValueReplaced,
 
 	RuleOutputRequiredPropertyRemoved, RuleOutputOptionalPropertyRemoved,
-	RuleOutputOptionalPropertyAdded, RuleOutputPropertyRenamed,
+	RuleOutputOptionalPropertyAdded, RuleOutputPropertyRenamed, RuleOutputOptionalPropertyRenamed,
 	RuleOutputPropertyTypeWidened, RuleOutputPropertyTypeNarrowed, RuleOutputPropertyTypeChanged,
 	RuleOutputEnumValueRemoved, RuleOutputEnumValueAdded, RuleOutputEnumValueReplaced,
 	RuleOutputSchemaRemoved, RuleOutputSchemaDeclared,

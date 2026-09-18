@@ -364,20 +364,24 @@ func TestPropertyRenamed(t *testing.T) {
 			t.Errorf("fragments: %v -> %v", c.Before, c.After)
 		}
 	})
-	// Still not a rename — pairing on the output side needs a REQUIRED removed
-	// property, deliberately (see pairRenamedProperties: grading an optional
-	// output rename would need a cell R-B does not state). What changed on
-	// 2026-09-17 is that the removal half is no longer silent: the consumer is
-	// told the field they read is no longer declared, they are just not told
-	// the new name.
-	t.Run("output OPTIONAL removed with a twin: not a rename — a WARNING removal plus an unreported addition", func(t *testing.T) {
+	// Idan, 2026-09-17: an OPTIONAL output property renamed pairs exactly like
+	// an input one — ONE row, output-optional-property-renamed at WARNING,
+	// "renamed X → Y". It used to read as a WARNING removal plus an unreported
+	// addition, telling the consumer the field was gone but not where it went.
+	t.Run("output OPTIONAL removed with a twin: ONE WARNING rename row", func(t *testing.T) {
 		before := mkTools(t, oneTool("", `{"type":"object","properties":{"logoUrl":{"type":"string"}}}`))
 		after := mkTools(t, oneTool("", `{"type":"object","properties":{"logo_url":{"type":"string"}}}`))
+		c := wantOne(t, Classify(before, after), SeverityWarning, RuleOutputOptionalPropertyRenamed, "output.logoUrl")
+		if c.Kind != KindOutput || c.Detail != "renamed logoUrl → logo_url" {
+			t.Errorf("got kind %q detail %q", c.Kind, c.Detail)
+		}
+	})
+	t.Run("output OPTIONAL rename of a different type does not pair", func(t *testing.T) {
+		before := mkTools(t, oneTool("", `{"type":"object","properties":{"logoUrl":{"type":"string"}}}`))
+		after := mkTools(t, oneTool("", `{"type":"object","properties":{"logo_url":{"type":"integer"}}}`))
 		got := Classify(before, after)
-		if len(got) != 2 ||
-			got[0].Rule != RuleOutputOptionalPropertyRemoved || got[0].Severity != SeverityWarning ||
-			got[1].Rule != RuleOutputOptionalPropertyAdded || got[1].Reported {
-			t.Fatalf("want a WARNING removal + an unreported addition, got:\n%s", dump(got))
+		if len(got) != 2 || got[0].Rule != RuleOutputOptionalPropertyRemoved || got[1].Rule != RuleOutputOptionalPropertyAdded {
+			t.Fatalf("want a removal + an addition, got:\n%s", dump(got))
 		}
 	})
 	t.Run("different types never pair: removed + added", func(t *testing.T) {

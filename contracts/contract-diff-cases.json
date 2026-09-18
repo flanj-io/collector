@@ -191,6 +191,12 @@
       "expect": [ { "kind": "input", "severity": "INFO", "reported": true, "operationId": "create_refund", "rule": "input-enum-value-replaced", "fieldPath": "input.reason", "before": { "enum": ["fraudulent"] }, "after": { "enum": ["fraud"] } } ]
     },
     {
+      "name": "output-optional-property-renamed (optional, same type: one WARNING row, Idan 2026-09-17)",
+      "before": { "tools": [ { "name": "get_brand", "inputSchema": { "type": "object", "properties": { "id": { "type": "string" } } }, "outputSchema": { "type": "object", "properties": { "logoUrl": { "type": "string" } } } } ] },
+      "after": { "tools": [ { "name": "get_brand", "inputSchema": { "type": "object", "properties": { "id": { "type": "string" } } }, "outputSchema": { "type": "object", "properties": { "logo_url": { "type": "string" } } } } ] },
+      "expect": [ { "kind": "output", "severity": "WARNING", "reported": true, "operationId": "get_brand", "rule": "output-optional-property-renamed", "fieldPath": "output.logoUrl", "before": { "name": "logoUrl", "schema": { "type": "string" } }, "after": { "name": "logo_url", "schema": { "type": "string" } } } ]
+    },
+    {
       "name": "output-property-renamed (required, same type: one row)",
       "before": { "tools": [ { "name": "create_refund", "inputSchema": { "type": "object" }, "outputSchema": { "type": "object", "properties": { "refundId": { "type": "string" }, "status": { "type": "string" } }, "required": ["refundId", "status"] } } ] },
       "after": { "tools": [ { "name": "create_refund", "inputSchema": { "type": "object" }, "outputSchema": { "type": "object", "properties": { "refund_id": { "type": "string" }, "status": { "type": "string" } }, "required": ["refund_id", "status"] } } ] },

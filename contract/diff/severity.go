@@ -126,6 +126,11 @@ var rbTable = map[string]verdict{
 	// classifier deliberately emitted NOTHING for it ("a value consumers were
 	// never promised"), so the cell had no rule to hang on.
 	RuleOutputOptionalPropertyRemoved: {KindOutput, SeverityWarning, true},
+	// Idan, 2026-09-17: an OPTIONAL output property renamed is ONE row at
+	// WARNING — the grade of that property being removed, which is what it is
+	// to a consumer still reading the old name — never a removal plus an
+	// addition.
+	RuleOutputOptionalPropertyRenamed: {KindOutput, SeverityWarning, true},
 	RuleOutputOptionalPropertyAdded:   {KindOutput, "", false}, // R-B, by family: additive
 	// R-B: "output type changed". Direction does not matter on the output
 	// side: widened hands the consumer a type it never handled, narrowed makes
