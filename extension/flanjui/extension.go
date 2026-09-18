@@ -32,6 +32,11 @@ type uiExtension struct {
 	syncCancel context.CancelFunc
 	syncDone   chan struct{}
 
+	// Contract documents fetched from a URL and waiting for a human to confirm
+	// them (contracts_fetch.go). Server-side on purpose: it is what makes
+	// `source: fetched, url: X` describe bytes THIS collector read from X.
+	staging fetchStaging
+
 	// The agent-facing MCP read surface (mcp.go), built on first request.
 	mcpState
 }

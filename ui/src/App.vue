@@ -29,6 +29,8 @@ import {
   contractOverCap,
   contractOverCapLine,
   contractMeta,
+  fetchedSourceLine,
+  hasFetchedSource,
   contractOrigin,
   provenanceWord,
   findingBelongsToContract,
@@ -165,11 +167,16 @@ interface SpecInfo {
    *  only fact separating two servers that publish the same name; a
    *  local-process (stdio) server has no edge row to look it up from. */
   edge_class?: string;
-  /** How this contract got here: "upload" (the UI), "config" (a mounted
-   *  self_spec_path) or "observed" (an MCP tools/list). The card's provenance
-   *  word tracks it, and only an uploaded contract offers Replace / Remove.
-   *  Absent on rows written before provenance was recorded. */
+  /** How this contract got here: "upload" (a file, in the UI), "fetched" (a URL
+   *  a human approved, in the UI), "config" (a mounted self_spec_path) or
+   *  "observed" (an MCP tools/list). The card's provenance word tracks it, and
+   *  the two a human bound here — upload and fetched — are the ones that offer
+   *  Replace / Remove. Absent on rows written before provenance was recorded. */
   source?: string;
+  /** Where a "fetched" contract came from, after redirects, and empty for every
+   *  other source. The card renders it as a link, and the flagged thread
+   *  repeats it — the provider can check what they publish against it. */
+  source_url?: string;
   /** The version this contract replaced, when it replaced one. */
   prev_version?: string;
 }
@@ -985,11 +992,18 @@ async function onUploaded(notice: string) {
   await refreshContracts();
 }
 
-/** Only an UPLOADED contract offers Replace and Remove. A config-loaded one
- *  would be back at the next start, and a button that undoes itself is worse
- *  than no button. */
-function isUploaded(spec: SpecInfo | null): boolean {
-  return !!spec && spec.format !== 'mcp' && spec.role !== 'self' && (spec.source ?? 'upload') === 'upload';
+/** Only a contract a HUMAN BOUND HERE offers Replace and Remove — uploaded from
+ *  a file, or fetched from a URL they approved. A config-loaded one would be
+ *  back at the next start and an observed MCP snapshot refreshes itself, so a
+ *  button that undoes itself is worse than no button.
+ *
+ *  It is the same rule the relay enforces (`isOperatorBound`,
+ *  contracts_fetch.go); the two must agree, or the UI offers a control the
+ *  server refuses. */
+function isOperatorBound(spec: SpecInfo | null): boolean {
+  if (!spec || spec.format === 'mcp' || spec.role === 'self') return false;
+  const source = spec.source ?? 'upload';
+  return source === 'upload' || source === 'fetched';
 }
 
 async function removeContract(integration: string, host: string) {
@@ -1217,6 +1231,15 @@ async function setAck(f: Finding, ack: boolean) {
 const sheetCall = computed(() =>
   sheetFinding.value?.source_call_id ? callsById.value[sheetFinding.value.source_call_id] || null : null
 );
+
+/** The contract the finding was judged against, so the thread can name WHERE it
+ *  came from. Keyed by the finding's own host — the same lookup the card uses —
+ *  and null when the host is unknown, which is honest: a message-only or
+ *  call-less finding with no host cannot claim a source it cannot identify. */
+const sheetSpec = computed(() => {
+  const host = sheetFinding.value?.peer_host || sheetCall.value?.peer_host || '';
+  return host ? contractByHost.value.get(host) || null : null;
+});
 
 // Headline counts LIVE drift only — spec-version diffs are informational and
 // intentionally excluded from the divergence status. The wording, the neutral
@@ -1895,7 +1918,7 @@ watch(tab, (t) => {
                    the affordance next to it is what stops a date from reading
                    as a nag. -->
               <span class="prov-meta" :title="humanTime(p.spec.loaded_at)">{{ contractMeta(p.spec) }}</span>
-              <template v-if="isUploaded(p.spec)">
+              <template v-if="isOperatorBound(p.spec)">
                 <button type="button" class="btn ghost small" @click="openUploader(p.peerHost)">{{ REPLACE_CONTRACT }}</button>
                 <button type="button" class="btn ghost small" @click="removeContract(p.spec.integration, p.peerHost)">Remove</button>
               </template>
@@ -1906,6 +1929,16 @@ watch(tab, (t) => {
                  no error, no finding, a card that looks finished. -->
             <span class="prov-meta evidence">{{ cardEvidenceMeta(p) }}</span>
           </div>
+          <!-- WHERE a fetched contract came from, as the address itself — the
+               operator must be able to check it, and a link they can open is
+               the only version of that claim that is actually checkable. Absent
+               on every other source, deliberately: an uploaded file has no such
+               fact and a hedge in its place would be filler. -->
+          <p v-if="hasFetchedSource(p.spec)" class="prov-source">
+            Fetched from
+            <a class="doc-link" :href="p.spec!.source_url" target="_blank" rel="noopener noreferrer">{{ p.spec!.source_url }}</a>
+            <span :title="humanTime(p.spec!.loaded_at)">{{ timeAgo(p.spec!.loaded_at) }}</span>
+          </p>
           <p v-else-if="mcpHosts.has(p.peerHost)" class="prov-nospec">{{ MCP_NO_SPEC_NEEDED }}</p>
           <p v-else class="prov-nospec">{{ NO_CONTRACT_ROW }}</p>
 
@@ -2002,6 +2035,15 @@ watch(tab, (t) => {
               {{ defChangeDetail(snapshotStamps(f.detail).from, snapshotStamps(f.detail).to, providerNameFor(f)) }}
             </p>
             <p class="detail" v-else-if="f.detail">{{ f.detail }}</p>
+            <!-- WHICH spec said so. On the finding, not only on the card, because
+                 this is the row the operator flags from — and the sentence that
+                 reaches the provider is the same sentence, so they must be able
+                 to read it here before they send it. A definition_change is
+                 judged against observed tools/list snapshots, never a fetched
+                 document, so it is excluded rather than given an empty line. -->
+            <p v-if="f.kind !== 'definition_change' && fetchedSourceLine(p.spec)" class="finding-source">
+              {{ fetchedSourceLine(p.spec) }}
+            </p>
 
             <div class="corr" v-if="correlationFor(f)">
               <span class="corr-title">correlation keys</span>
@@ -2408,6 +2450,7 @@ watch(tab, (t) => {
       :correlation="correlationFor(sheetFinding)"
       :call="sheetCall"
       :provider-host="sheetFinding.peer_host || sheetCall?.peer_host || null"
+      :spec="sheetSpec"
       :provider="providerNameFor(sheetFinding)"
       :consumer="consumerName"
       :connect="connect"
@@ -2759,6 +2802,15 @@ pre.body { background: var(--surface); border: var(--border-w) solid var(--rule)
    fact about this card, not a warning, and zero must not be dressed as one. */
 .prov-meta.evidence { margin-left: auto; font-family: var(--f-mono); font-size: 11.5px; letter-spacing: 0.02em; }
 .prov-nospec { color: var(--ink-soft); font-size: 13.5px; margin: 10px 0 0; }
+/* WHERE a fetched contract came from. Muted like the rest of the provenance
+   channel — it is a fact about our own filing, not a verdict — but the URL
+   itself is a real link, because a claim the operator cannot open is not a
+   checkable one. */
+.prov-source { margin: 4px 0 0; font-size: 12px; color: var(--ink-soft); display: flex; flex-wrap: wrap; gap: 5px; align-items: baseline; }
+.prov-source a { word-break: break-all; }
+/* The same fact on the finding, in the finding's own detail channel: this is
+   the row a flag is raised from, and the sentence that reaches the provider. */
+.finding-source { margin: 4px 0 0; font-size: 12px; color: var(--ink-soft); }
 /* The document-cap line. Same slot and size as .prov-nospec — the same kind of
    sentence — but it stays on the warning tier: an over-cap document is a
    finding-class condition the operator acts on. Its own text is the label, and

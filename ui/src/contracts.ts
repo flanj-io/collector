@@ -28,8 +28,11 @@ export interface ContractSpec {
   /** 'external' | 'internal' | 'local-process' — mirrors the call field. The
    *  only fact that separates two servers publishing the same name. */
   edge_class?: string;
-  /** How the contract got here: 'upload' | 'config' | 'observed'. */
+  /** How the contract got here: 'upload' | 'fetched' | 'config' | 'observed'. */
   source?: string;
+  /** Where a 'fetched' contract came from. Empty for every other source.
+   *  Evidence, not a handle — nothing re-reads it, and nothing re-fetches. */
+  source_url?: string;
   /** The version this one replaced, when it replaced one. */
   prev_version?: string;
   /** The stored document's size in bytes, measured by the store at list time.
@@ -65,21 +68,91 @@ export const NO_CONTRACT_SECTION =
  * accurate OpenAPI spec" is the strongest practical objection to the REST half,
  * and it does not apply to MCP at all.
  *
- * DELIBERATELY NOT the doc's verbatim wording. §5 ends "REST providers need a
- * spec: paste a URL, or upload one" — pasting a URL is the contract-fetch phase
- * and it has not shipped. This collector never fetches on the operator's behalf
- * (UPLOAD_NO_URL_FETCH, three lines up, says so), so the verbatim string would
- * be a false claim on the one surface whose whole argument is that it does not
- * make them. Restore the URL clause in the same commit that ships the fetch,
- * and not before — `contracts.test.ts` holds it to that.
+ * THE URL CLAUSE IS RESTORED HERE, and this is the commit that earns it.
+ * §5 ends "REST providers need a spec: paste a URL, or upload one", and the doc
+ * says in the same breath: restore the clause in the same commit that ships the
+ * fetch, and not before. PR #91 shipped it WITHOUT the clause because the
+ * collector could not then fetch anything, so the verbatim string would have
+ * been a false claim on the one surface whose whole argument is that it does
+ * not make them. Ruling R5's fetch ships in this commit
+ * (`extension/flanjui/contracts_fetch.go`), so the claim is now true, and
+ * `contracts.test.ts` asserts the clause is present rather than absent.
+ *
+ * If the fetch route is ever removed, this string goes back to the #91 wording
+ * in the same commit. The rule is the doc's and it cuts both ways.
  */
 export const MCP_NEEDS_NO_SETUP =
-  'MCP servers need nothing here — their baseline arrived with the traffic, because tools/list is the contract. A REST provider needs a spec somebody published: upload its OpenAPI document.';
+  'MCP servers need nothing here — their baseline arrived with the traffic, because tools/list is the contract. A REST provider needs a spec somebody published: paste its URL, or upload the document.';
 export const ROLL_CALL_ZERO =
   'No providers checked against a contract yet — upload one to start drift detection on it.';
 export const UPLOAD_STAYS_LOCAL = 'Stays on this collector. Uploaded contracts are never sent to Flanj.';
-export const UPLOAD_NO_URL_FETCH =
-  'Spec lives at a URL? Download it and drop the file — this collector never fetches on your behalf.';
+/**
+ * The fetch's own privacy line, and the replacement for UPLOAD_NO_URL_FETCH
+ * ("this collector never fetches on your behalf"), which was true until this
+ * commit and is now retired rather than softened — a line that is no longer
+ * true does not get to stay in a gentler form.
+ *
+ * What it must say, because this is the one moment the operator decides whether
+ * to point their collector at somebody else's host: WHO makes the request (this
+ * collector, from inside their network, not Flanj), and WHERE the document
+ * lands (here, same as an upload). Both halves matter — the second is the
+ * promise Settings makes about Connect, and a fetch would look like a breach of
+ * it if this line were quiet about it.
+ */
+export const FETCH_STAYS_LOCAL =
+  'This collector makes the request, from your network. The document is stored here, like an upload — Flanj never sees it.';
+/** Said once, at the fetch field: nothing re-reads the URL after the bind. The
+ *  operator's reasonable assumption about a URL is that it is a subscription,
+ *  and it is not one. */
+export const FETCH_ONCE_ONLY =
+  'Fetched once, now. Nothing re-checks the URL later — replace the contract when you want a newer document.';
+export const FETCH_PROMPT = 'Paste the URL of the provider’s OpenAPI document.';
+export const FETCH_ACTION = 'Fetch';
+export const FETCH_TAB_URL = 'From a URL';
+export const FETCH_TAB_FILE = 'From a file';
+
+/**
+ * The probe's copy. Every string here is careful to describe an OFFER: the
+ * control "looks for" a spec, the results are "found", and a human binds. None
+ * of them may ever be rewritten to imply the collector set something up.
+ */
+export const PROBE_ACTION = 'Look for a published spec';
+/** Said above the results, every time, including when there is exactly one.
+ *  A single confident-looking result is the case most likely to be taken on
+ *  trust, so this is where the sentence is needed most. */
+export const PROBE_OFFER_ONLY =
+  'Found at the usual paths — nothing is bound yet. Check it’s the right document, then fetch it.';
+/** A miss is a RESULT, not a failure: most providers publish at none of these
+ *  paths, and an empty panel with no sentence reads as a broken control. */
+export const PROBE_NOTHING_FOUND =
+  'Nothing at the usual paths. Most providers don’t publish one there — paste the URL if you know it, or upload the document.';
+/** Editing the bound host throws away a staged fetch: the document was read and
+ *  described against the old host, and binding it to a different one is the
+ *  wrong binding this confirm step exists to prevent. */
+export const REFETCH_AFTER_HOST_EDIT =
+  'The host changed, so that fetch no longer applies. Fetch the document again for this host.';
+/** Network-level fallbacks. The server has a sentence for every refusal it can
+ *  state; these cover the case where no response arrived to carry one. */
+export const FETCH_UNREACHABLE_FALLBACK = 'Couldn’t reach that URL from this collector.';
+export const FETCH_BIND_FAILED_FALLBACK = 'Couldn’t bind that document. Nothing was changed.';
+export const PROBE_FAILED_FALLBACK = 'Couldn’t look for a spec on that host just now.';
+
+/** One offered candidate, described the way the confirm step describes a
+ *  document: what it is, how big, and whether its own `servers:` corroborate
+ *  the host — the single most useful "is this the right document?" signal, and
+ *  the one an operator taking a suggestion on trust would otherwise skip. */
+export function probeCandidateLine(c: {
+  title?: string;
+  version?: string;
+  endpoints: number;
+  servers_match: boolean;
+}): string {
+  const parts = [c.title || 'OpenAPI document'];
+  if (c.version) parts.push(`v${c.version}`);
+  parts.push(endpointCount(c.endpoints));
+  parts.push(c.servers_match ? 'its servers list this host' : 'its servers don’t list this host');
+  return parts.join(' · ');
+}
 export const UPLOAD_PROMPT = 'Drop the provider’s OpenAPI document here, or choose a file.';
 export const UPLOAD_FORMATS = 'JSON or YAML.';
 export const UPLOAD_TAKES_EFFECT = 'Validating from now on. Calls already captured aren’t re-checked.';
@@ -255,6 +328,9 @@ export function provenanceWord(spec: ContractSpec): string {
   if (spec.source === 'observed') return 'observed';
   if (spec.source === 'config') return 'loaded';
   if (spec.source === 'upload') return 'uploaded';
+  // 'fetched' is the word the finding and the thread repeat verbatim, so it is
+  // the one place all three surfaces agree on what happened.
+  if (spec.source === 'fetched') return 'fetched';
   // Fallbacks, for rows written before provenance was recorded: an MCP
   // snapshot can only have been observed, a provider contract can only have
   // been uploaded, and a self contract can only have come from config.
@@ -284,6 +360,62 @@ export function contractMeta(spec: ContractSpec, now: number = Date.now()): stri
   parts.push(`${provenanceWord(spec)} ${timeAgo(spec.loaded_at, now)}`);
   if (spec.prev_version) parts.push(`replaced v${spec.prev_version}`);
   return parts.join(' · ');
+}
+
+/* ── The fetched source line — the point of the whole fetch phase ───────── */
+
+/**
+ * "your own published spec at <url>, fetched <when>".
+ *
+ * This is the SENTENCE the fetch exists to produce, and it is deliberately one
+ * function used by all three surfaces — the contract card, the finding, and the
+ * flagged thread (`defaultFlagMessage` in threads.ts). Three surfaces phrasing
+ * one claim three ways is how a claim stops being checkable.
+ *
+ * Why it matters more than it looks: an uploaded file's provenance is "somebody
+ * here had a file". A provider reading a flagged thread cannot verify that,
+ * cannot date it, and cannot tell their own document from an edited copy. A URL
+ * they serve, with the moment it was read, is a claim they can check against
+ * what they are publishing right now — which is an EVIDENCE-RULE upgrade, not a
+ * convenience (architecture.md §3.4, ruling R5).
+ *
+ * Returns '' for every other source, and the callers render nothing rather than
+ * a hedge — an uploaded contract simply has no such line, and inventing one
+ * ("uploaded from a file") would be filler dressed as provenance.
+ */
+export function fetchedSourceLine(spec: ContractSpec | null | undefined, now: number = Date.now()): string {
+  if (!hasFetchedSource(spec)) return '';
+  return `Fetched from ${spec!.source_url} ${timeAgo(spec!.loaded_at, now)}.`;
+}
+
+/**
+ * Whether a contract HAS a fetched source — the predicate behind every
+ * `v-if` that guards the line above.
+ *
+ * It exists so a template can ask the question without building the string and
+ * throwing it away, and — the reason that matters — so the card, which renders
+ * the URL as a real anchor the operator can click (a sentence in a `{{ }}` is
+ * not clickable, and an unclickable URL is not a checkable one), asks the SAME
+ * question as the surfaces that render the plain sentence. Two predicates is
+ * how one surface ends up showing the line and another not.
+ */
+export function hasFetchedSource(spec: ContractSpec | null | undefined): boolean {
+  return !!spec && spec.source === 'fetched' && !!spec.source_url;
+}
+
+/**
+ * The same fact, written for a STRANGER — the provider reading the thread, who
+ * does not know what a collector is and has never seen this UI.
+ *
+ * Second person and possessive ("your published spec"), because the entire
+ * point is that THEY can check it: the document was read from a URL they serve.
+ * An absolute date, not "3 days ago" — a thread is read days after it is
+ * written, and a relative time silently re-anchors to the reader's now.
+ */
+export function fetchedSourceForThread(spec: ContractSpec | null | undefined, fmtDate: (iso: string) => string): string {
+  if (!hasFetchedSource(spec)) return '';
+  const when = fmtDate(spec!.loaded_at || '');
+  return `Checked against your published spec at ${spec!.source_url}, fetched ${when}.`;
 }
 
 /** The Edges row's third line, in the muted text channel under the host:

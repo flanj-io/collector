@@ -63,6 +63,8 @@ import {
   mcpEvidenceLine,
   mcpIdsLineFor
 } from './mcp';
+import { fetchedSourceForThread } from './contracts';
+import type { ContractSpec } from './contracts';
 import type { Correlation, DirectoryHint, Finding, FlagResult, RedactedCall } from './types';
 
 const props = defineProps<{
@@ -76,6 +78,12 @@ const props = defineProps<{
   /** FLAG mode: the provider host the finding is about (its pinned call's peer
    *  host) — what the "Open to" prefill asks the directory about. */
   providerHost?: string | null;
+  /** The contract bound to this provider, when one is. Passed so the default
+   *  message can name the provider's OWN published spec URL and the moment it
+   *  was read — the evidence upgrade a fetched contract buys (ruling R5). A
+   *  contract from any other source contributes nothing and the sentence is
+   *  simply absent. */
+  spec?: ContractSpec | null;
   provider: string;
   consumer: string;
   connect: ConnectState | null;
@@ -174,12 +182,16 @@ const mcpTool = computed(() => props.finding?.endpoint ?? '');
 
 // A question starts EMPTY: prefilling one would be putting words in the
 // operator's mouth on a thread where their words are the entire content.
+/** The provenance sentence a stranger can check, or '' — one phrasing, shared
+ *  with the contract card and the finding (contracts.ts). MCP is excluded by
+ *  construction: its baseline is `observed`, so there is no URL to name. */
+const specSourceLine = props.spec ? fetchedSourceForThread(props.spec, shortDate) : '';
 const message = ref(
   !props.finding
     ? ''
     : isMcpFinding(props.finding)
       ? mcpDefaultMessage(props.finding, shortDate)
-      : defaultFlagMessage(props.finding, props.correlation?.request_id, shortDate)
+      : defaultFlagMessage(props.finding, props.correlation?.request_id, shortDate, specSourceLine)
 );
 const disclosureOpen = ref(localStorage.getItem(DISCLOSURE_KEY) !== '1');
 const busy = ref(false);

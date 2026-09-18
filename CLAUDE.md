@@ -41,9 +41,30 @@ inbound off-host.
 
 **No target list is configured.** Integration edges are auto-discovered from observed traffic, keyed by
 (`peer.host`, `direction`), classified external vs internal (external-only surfaced on `/api/edges`). Drift
-detection is an OPTIONAL enhancer, and **provider contracts are UPLOADED in the UI, never configured**
-(2026-08-31 — `spec_path`/`spec_v2_path`/`peer_host` removed from CONTRACTS §8). Each upload binds to exactly
-ONE provider host, stays on this collector, and is read from the store at runtime by the drift processor's spec
+detection is an OPTIONAL enhancer, and **provider contracts are BOUND BY A HUMAN IN THE UI, never configured**
+(2026-08-31 — `spec_path`/`spec_v2_path`/`peer_host` removed from CONTRACTS §8). Two ways in, both a press:
+**uploaded** from a file, or — since 2026-09-17, ruling R5 — **fetched** from a URL
+(`POST /api/contracts/fetch`, guarded exactly like upload; `source: "fetched"` + `spec_infos.source_url`,
+and `loaded_at` IS the fetch time). Fetch is TWO STEPS on one route: the first fetches, parses and stages the
+bytes SERVER-SIDE and answers the usual preview plus a token; the second binds that token — so the row's
+`source_url` can only ever describe bytes this collector read from that URL, which is the point. A fetch
+failure is a STATED state with its own code and sentence, never a silent empty bind, and the 8 MiB
+`MaxContractDocBytes` applies (refused, never truncated). `POST /api/contracts/probe` tries four conventional
+paths (`/openapi.json`, `/openapi.yaml`, `/.well-known/openapi`, `/swagger.json`) against a host the
+deployment ALREADY has an edge for — refused outright otherwise, which is what stops it being a URL fetcher
+under another name — and **OFFERS** what it finds; it never writes to the store, and taking an offer goes back
+through fetch. **Nothing re-fetches** (periodic re-fetch is the CP registry, v2). These two routes are the only
+requests this collector makes to a non-Flanj host: a new egress class, documented in `docs/DEPLOYMENT.md` and
+`docs/CONCEPTS.md`. The destination policy (`classifyIP` / `checkDestination`) runs **at DIAL time on the
+resolved address** (`dialGuard` on the dialer's `Control` hook — a URL-level check alone is defeated by any A
+record pointing at 169.254.169.254, and the dial hook covers every redirect hop for free): link-local, metadata,
+unspecified, `0/8`, multicast and broadcast are FORBIDDEN always (IPv4-mapped and NAT64 `64:ff9b::/96` judged by
+the IPv4 they carry); loopback/RFC1918/CGNAT/ULA are reachable ONLY when the URL's own host is a discovered edge,
+and a cross-host redirect drops that for the rest of the chain. No environment proxy (it would hide the target
+address from the dialer). The table in `TestDestinationPolicy` is the policy's spec.
+Why suggest-and-approve rather than auto-bind: **a wrong contract is worse than no contract** — no contract
+renders `not checked`, honestly; a mismatched one renders `DRIFTED`, loudly, to a stranger, on their real
+provider. Each binding covers exactly ONE provider host, stays on this collector, and is read from the store at runtime by the drift processor's spec
 cache — so it validates immediately, no restart: the store extension ANNOUNCES an upload, replace or remove and
 the cache refreshes on the spot (`store.SpecPublisher`/`SpecSubscriber`). Announcements are in-process, so the
 two topologies the announcement cannot cross — a tiered front, and the other pods of a shared-postgres
@@ -88,6 +109,8 @@ processor/flanjdrift/           # live-vs-spec (kin-openapi) + version-diff (oas
 exporter/flanjstore/            # writes call + finding records into the store (queued + retried, idempotent — its CLAUDE.md "Durability")
 extension/flanjstore/           # SINGLE store owner (sqlite default | postgres for multi-pod); shared via host.GetExtensions()
 extension/flanjui/              # localhost HTTP: embed.FS Vue SPA + read API + CP relay (connect / flag / threads)
+                                   # + contracts_upload.go / contracts_fetch.go / contracts_probe.go — the two bind
+                                   #   paths (file, URL) and the offer-only probe; a human presses both
                                    # + the AGENT-FACING read surface: a read-only MCP server at /mcp on the same
                                    # loopback listener (mcp.go — drift_summary / list_edges / list_findings / get_finding)
 ui/                                # Vue/Vite SPA (Overview incl. MCP server health + local notices, Traffic live-tail incl.

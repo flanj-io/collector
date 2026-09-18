@@ -273,9 +273,55 @@ Flow specifics:
   reading from a store pod older than 2026-09-08 gets the old silent truncation,
   and a prefix of exactly 8 MiB is indistinguishable from a document that fits.
   Roll the store pod first.
+- **Contract fetch and probe — a SECOND egress class, to the provider (2026-09-17).**
+  Everything else the collector sends goes to the control plane. These two go to
+  the **provider's own host**, and they are the only requests this collector ever
+  makes to a third party. Both are **operator-initiated**: nothing schedules
+  them, no config key enables them (CONTRACTS §8 is unchanged), and a collector
+  nobody presses a button on makes neither request, ever.
+  - `POST /api/contracts/fetch` — one `GET` for a URL an operator typed or
+    approved, from the pod serving the UI. It follows at most 5 redirects,
+    times out at 20s, sends no credentials (a URL carrying any is refused) and
+    reads at most 8 MiB (`model.MaxContractDocBytes`, never truncating). The
+    document is stored locally exactly as an upload is; **nothing leaves** on
+    this path — it is a read.
+  - `POST /api/contracts/probe` — up to 4 `GET`s (`/openapi.json`,
+    `/openapi.yaml`, `/.well-known/openapi`, `/swagger.json`), 4s each, against
+    a host **this deployment already sends traffic to** — a host with no
+    discovered edge is refused without a request. It **offers** what it finds
+    and binds nothing; a human then fetches the candidate they chose.
+  - **Where a fetch may connect** — decided on the address actually dialled
+    (after DNS), so a hostname cannot route around it, and re-applied on every
+    redirect hop:
+    - **Never:** link-local (`169.254.0.0/16` — the cloud metadata service —
+      and `fe80::/10`), `fd00:ec2::254`, `0.0.0.0/8`, `::`, multicast and
+      broadcast. IPv4-mapped (`::ffff:a.b.c.d`) and NAT64 (`64:ff9b::/96`)
+      addresses are judged by the IPv4 address they carry.
+    - **Only for a provider you already call:** loopback (`127.0.0.0/8`, `::1`),
+      RFC1918 (`10/8`, `172.16/12`, `192.168/16`), CGNAT (`100.64.0.0/10`) and
+      ULA (`fc00::/7`). A private address is reachable only when the URL's
+      **own host** is a discovered edge — so an internal provider's spec is
+      fetchable, and an internal host the app never calls is not. A redirect
+      to any other host drops that allowance for the rest of the chain. The
+      host the contract *binds* to does not count: its edge is not lent to a
+      URL on a different host.
+    - **Everything else** (public addresses) is fetchable from any URL, which
+      is what lets a spec published on a docs host bind to the API host, and
+      lets a fresh install fetch a spec before any traffic exists.
+    - `HTTP_PROXY`/`HTTPS_PROXY` are **not** honoured by these requests: through
+      a proxy the collector never sees the target's address, and this policy
+      would silently stop applying.
+  - **Egress policy.** If you run a default-deny egress NetworkPolicy, these
+    fail closed with a stated error in the UI and nothing else breaks — drift
+    detection on uploaded contracts is unaffected. To allow them, the UI pod
+    (the store pod on a tiered deployment) needs egress to your providers'
+    hosts on 443.
+  - **No re-fetch, ever.** A fetched contract is read once, at the moment a
+    human approved it, and the URL is kept as provenance — not as a handle.
+    Nothing re-reads it on a schedule or at start-up.
 - The flag action runs on the store pod (it holds the evidence); its outbound
   calls to the control plane (Connect, flag, thread state, and the three
-  background sync legs below) are the only off-cluster egress. **Connect** is
+  background sync legs below) are the only off-cluster egress **to Flanj**. **Connect** is
   per deployment, not per pod: the collector
   key it returns lives in the store's settings KV (sqlite file / shared
   postgres) next to the evidence — nothing to mount or copy, and a replaced pod

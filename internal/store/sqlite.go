@@ -113,6 +113,7 @@ CREATE TABLE IF NOT EXISTS spec_infos (
   loaded_at    TEXT NOT NULL,
   doc          TEXT NOT NULL,
   source       TEXT NOT NULL DEFAULT 'config',
+  source_url   TEXT,
   prev_doc     TEXT,
   prev_version TEXT,
   prev_loaded_at TEXT
@@ -189,6 +190,7 @@ var callsAddedColumns = []string{
 var specInfoAddedColumns = []string{
 	`edge_class TEXT`,
 	`source TEXT NOT NULL DEFAULT 'config'`,
+	`source_url TEXT`,
 	`prev_doc TEXT`,
 	`prev_version TEXT`,
 	`prev_loaded_at TEXT`,
@@ -494,15 +496,16 @@ func (s *sqliteStore) PutSpecInfo(info model.SpecInfo, rawSpec []byte) (err erro
 	// was until 2026-09-07) the column default filed every observed MCP
 	// snapshot as config.
 	_, err = s.db.Exec(
-		`INSERT INTO spec_infos (integration, role, peer_host, edge_class, format, title, version, docs_url, endpoints, loaded_at, doc, source)
-		   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+		`INSERT INTO spec_infos (integration, role, peer_host, edge_class, format, title, version, docs_url, endpoints, loaded_at, doc, source, source_url)
+		   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
 		 ON CONFLICT(integration) DO UPDATE SET
 		   role=excluded.role, peer_host=excluded.peer_host, edge_class=excluded.edge_class, format=excluded.format, title=excluded.title,
 		   version=excluded.version, docs_url=excluded.docs_url, endpoints=excluded.endpoints,
 		   loaded_at=CASE WHEN excluded.format=? AND spec_infos.doc=excluded.doc THEN spec_infos.loaded_at ELSE excluded.loaded_at END,
-		   doc=excluded.doc, source=excluded.source`,
+		   doc=excluded.doc, source=excluded.source, source_url=excluded.source_url`,
 		info.Integration, role, nullStr(info.PeerHost), nullStr(info.EdgeClass), info.Format, nullStr(info.Title),
 		nullStr(info.Version), nullStr(info.DocsURL), info.Endpoints, info.LoadedAt, string(rawSpec), specSourceOf(info),
+		nullStr(info.SourceURL),
 		model.SpecFormatMCP,
 	)
 	if err != nil {
@@ -554,17 +557,17 @@ func execUploadedSpec(tx interface {
 	}
 	_, err := tx.Exec(rebind(
 		`INSERT INTO spec_infos (integration, role, peer_host, edge_class, format, title, version, docs_url,
-		                         endpoints, loaded_at, doc, source, prev_doc, prev_version, prev_loaded_at)
-		   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		                         endpoints, loaded_at, doc, source, source_url, prev_doc, prev_version, prev_loaded_at)
+		   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		 ON CONFLICT(integration) DO UPDATE SET
 		   role=excluded.role, peer_host=excluded.peer_host, edge_class=excluded.edge_class, format=excluded.format, title=excluded.title,
 		   version=excluded.version, docs_url=excluded.docs_url, endpoints=excluded.endpoints,
-		   loaded_at=excluded.loaded_at, doc=excluded.doc, source=excluded.source,
+		   loaded_at=excluded.loaded_at, doc=excluded.doc, source=excluded.source, source_url=excluded.source_url,
 		   prev_doc=excluded.prev_doc, prev_version=excluded.prev_version,
 		   prev_loaded_at=excluded.prev_loaded_at`),
 		info.Integration, role, nullStr(info.PeerHost), nullStr(info.EdgeClass), info.Format, nullStr(info.Title),
 		nullStr(info.Version), nullStr(info.DocsURL), info.Endpoints, info.LoadedAt, string(rawSpec),
-		source, nullStr(string(prev.Raw)), nullStr(prev.Version), nullStr(prev.LoadedAt),
+		source, nullStr(info.SourceURL), nullStr(string(prev.Raw)), nullStr(prev.Version), nullStr(prev.LoadedAt),
 	)
 	if err != nil {
 		return fmt.Errorf("put uploaded spec: %w", err)

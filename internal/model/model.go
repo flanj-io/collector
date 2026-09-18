@@ -443,6 +443,18 @@ const (
 	// SpecSourceObserved marks a contract the traffic delivered: an MCP
 	// tools/list snapshot, which needs no configuring and no uploading.
 	SpecSourceObserved = "observed"
+	// SpecSourceFetched marks a contract THIS collector fetched over HTTP from
+	// a URL an operator gave it (or approved from a probe), ruling R5,
+	// 2026-09-16. It is a PROVENANCE word, not a mechanism: the row carries
+	// SpecInfo.SourceURL, and that is the whole point of the source — "your own
+	// published spec at <url>, fetched <when>" is a claim the provider can
+	// check for themselves, which an uploaded file never is.
+	//
+	// It is a sibling of SpecSourceUpload, not a replacement: the document is
+	// fetched ONCE, at the moment a human approved it, and nothing re-fetches
+	// it. Periodic re-fetch is the control-plane registry (v2) and deliberately
+	// does not exist here.
+	SpecSourceFetched = "fetched"
 
 	// Edge classes, shared by RedactedCall and SpecInfo. `local-process` is the
 	// SDK's own word for a server spawned as a child process (MCP over stdio);
@@ -503,14 +515,33 @@ type SpecInfo struct {
 	LoadedAt  string `json:"loaded_at"`
 
 	// Source is how this contract got here: SpecSourceUpload (an operator
-	// uploaded it in the UI), SpecSourceConfig (a mounted self_spec_path), or
+	// uploaded it in the UI), SpecSourceFetched (this collector fetched it from
+	// a URL a human approved), SpecSourceConfig (a mounted self_spec_path), or
 	// SpecSourceObserved (an MCP tools/list, which delivers itself). The UI's
-	// provenance word tracks it — "uploaded" / "loaded" / "observed" — so
-	// which one is live is legible on sight. Every writer sets it; the store
-	// classifies an empty one by format (mcp → observed, else config) and
-	// repairs rows stored before 2026-09-07, when the observed path left it
-	// unset and the column default filed every MCP snapshot as config.
+	// provenance word tracks it — "uploaded" / "fetched" / "loaded" /
+	// "observed" — so which one is live is legible on sight. Every writer sets
+	// it; the store classifies an empty one by format (mcp → observed, else
+	// config) and repairs rows stored before 2026-09-07, when the observed path
+	// left it unset and the column default filed every MCP snapshot as config.
 	Source string `json:"source,omitempty"`
+
+	// SourceURL is where a SpecSourceFetched document came from, verbatim as
+	// this collector requested it (scheme and all), and empty for every other
+	// source. It is EVIDENCE, not a handle: nothing re-reads it, no refresh
+	// loop touches it, and no code path follows it again after the bind.
+	//
+	// It exists so the finding and the thread can say "checked against your
+	// published spec at <url>, fetched <when>" — a sentence the provider
+	// reading the thread can verify against their own publishing, which is an
+	// upgrade to the EVIDENCE RULE and not a convenience (architecture.md §3.4,
+	// ruling R5). An uploaded file's name proves nothing to a stranger; a URL
+	// they serve does.
+	//
+	// The fetch TIME is LoadedAt, deliberately reusing the one timestamp the
+	// row already carries rather than adding a second: for a fetched row
+	// "loaded" and "fetched" are the same instant by construction, and two
+	// columns for one fact is how they come to disagree.
+	SourceURL string `json:"source_url,omitempty"`
 
 	// DocBytes is the stored document's size in bytes, measured by the store at
 	// LIST time — it is derived from the row, never a stored column, and no

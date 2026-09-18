@@ -490,7 +490,7 @@ func (r *testRig) assertNeverLogged(t *testing.T, secrets ...string) {
 func TestGuards(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
-	for _, path := range []string{"/api/flag", "/api/connect", "/api/threads/x/open", "/api/threads/x/close", "/api/threads/x/reopen", "/api/threads/x/replace-link", "/api/findings/x/ack", "/api/findings/x/unack"} {
+	for _, path := range []string{"/api/flag", "/api/connect", "/api/threads/x/open", "/api/threads/x/close", "/api/threads/x/reopen", "/api/threads/x/replace-link", "/api/findings/x/ack", "/api/findings/x/unack", "/api/contracts/fetch", "/api/contracts/probe"} {
 		t.Run(path, func(t *testing.T) {
 			// GET (or any non-POST) → 405 with Allow
 			resp, _, _ := r.do(t, http.MethodPut, path, nil)

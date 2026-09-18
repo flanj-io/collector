@@ -1,0 +1,811 @@
+package flanjui
+
+import (
+	"context"
+	"encoding/binary"
+	"errors"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/flanj-io/collector/internal/model"
+)
+
+// specServer stands in for a provider publishing (or not publishing) a spec.
+// Handlers are keyed by path so one server can be a whole host's conventional
+// paths at once, which is what the probe tests need.
+type specServer struct {
+	srv   *httptest.Server
+	hits  []string
+	paths map[string]http.HandlerFunc
+}
+
+func newSpecServer(t *testing.T) *specServer {
+	t.Helper()
+	s := &specServer{paths: map[string]http.HandlerFunc{}}
+	s.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.hits = append(s.hits, r.URL.Path)
+		if h, ok := s.paths[r.URL.Path]; ok {
+			h(w, r)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(s.srv.Close)
+	return s
+}
+
+func (s *specServer) serve(path, body string) {
+	s.paths[path] = func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}
+}
+
+func (s *specServer) url(path string) string { return s.srv.URL + path }
+
+// newEdgeSpecServer is a spec server this deployment already calls. It listens
+// on loopback — a PRIVATE address — so the fetch policy allows it only because
+// its host is a discovered edge. That is the real shape of an internal
+// provider, and every fetch test that expects to reach the server must say so
+// explicitly rather than inherit it.
+func newEdgeSpecServer(t *testing.T, r *testRig) *specServer {
+	t.Helper()
+	s := newSpecServer(t)
+	seedEdge(t, r, s.host())
+	return s
+}
+
+// host returns the 127.0.0.1:PORT the test server listens on — which is what
+// the SDK would report as `peer.host` for a call to it, so it is also what the
+// contract binds to.
+func (s *specServer) host() string {
+	return strings.TrimPrefix(s.srv.URL, "http://")
+}
+
+// fetchPreview runs step one and returns the staging token.
+func fetchPreview(t *testing.T, r *testRig, body map[string]any) (*http.Response, map[string]any) {
+	t.Helper()
+	resp, out, _ := r.do(t, http.MethodPost, "/api/contracts/fetch", body)
+	return resp, out
+}
+
+// TestFetchedContractCarriesItsSourceURL is the point of the whole phase: the
+// row records WHERE the document came from and WHEN it was read, because
+// "your own published spec at <url>, fetched <when>" is a claim the provider
+// reading a flagged thread can check, and "somebody here had a file" is not.
+func TestFetchedContractCarriesItsSourceURL(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	spec := newEdgeSpecServer(t, r)
+	spec.serve("/openapi.json", specV1Doc(t))
+
+	resp, out := fetchPreview(t, r, map[string]any{
+		"url":       spec.url("/openapi.json"),
+		"peer_host": "api.acme.test",
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("fetch preview = %d: %v", resp.StatusCode, out)
+	}
+	token, _ := out["token"].(string)
+	if token == "" {
+		t.Fatal("no staging token: nothing can be confirmed")
+	}
+	if out["source_url"] != spec.url("/openapi.json") {
+		t.Errorf("source_url = %v, want the URL that was read", out["source_url"])
+	}
+
+	// NOTHING is written by the preview. A preview that persisted would make
+	// "a human binds it" a description of the UI rather than of the system.
+	if infos, _ := r.st.ListSpecInfos(); len(infos) != 0 {
+		t.Fatalf("the preview persisted %d contracts; it must persist none", len(infos))
+	}
+
+	resp, out, raw := r.do(t, http.MethodPost, "/api/contracts/fetch", map[string]any{"token": token})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("bind = %d: %s", resp.StatusCode, raw)
+	}
+
+	infos, _ := r.st.ListSpecInfos()
+	if len(infos) != 1 {
+		t.Fatalf("stored %d contracts, want 1", len(infos))
+	}
+	si := infos[0]
+	if si.Source != model.SpecSourceFetched {
+		t.Errorf("source = %q, want %q — the provenance word is what the card, the finding and the thread all read",
+			si.Source, model.SpecSourceFetched)
+	}
+	if si.SourceURL != spec.url("/openapi.json") {
+		t.Errorf("source_url = %q, want %q", si.SourceURL, spec.url("/openapi.json"))
+	}
+	if si.PeerHost != "api.acme.test" {
+		t.Errorf("peer_host = %q, want the host the operator named", si.PeerHost)
+	}
+	// LoadedAt is the FETCH time, not the confirm time — the sentence says
+	// "fetched <when>" and it has to mean when the bytes were read.
+	if si.LoadedAt == "" {
+		t.Error("loaded_at is empty: the evidence sentence has no time to name")
+	}
+	if out["replaced"] != false {
+		t.Errorf("a first fetch reported a replace: %v", out["replaced"])
+	}
+}
+
+// TestFetchPreviewsBeforeItBinds is the suggest-and-approve guarantee, stated
+// as a test: the ONLY thing that turns a fetched document into a contract is a
+// second, explicit call carrying a token the server minted. There is no
+// one-shot bind, and a client cannot supply the document.
+func TestFetchPreviewsBeforeItBinds(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	spec := newEdgeSpecServer(t, r)
+	spec.serve("/openapi.json", specV1Doc(t))
+
+	// A request naming a URL never binds, however it is shaped.
+	for _, body := range []map[string]any{
+		{"url": spec.url("/openapi.json"), "peer_host": "api.acme.test"},
+		{"url": spec.url("/openapi.json")},
+	} {
+		if resp, out := fetchPreview(t, r, body); resp.StatusCode != http.StatusOK {
+			t.Fatalf("preview = %d: %v", resp.StatusCode, out)
+		}
+		if infos, _ := r.st.ListSpecInfos(); len(infos) != 0 {
+			t.Fatalf("a URL request bound a contract without a confirm: %v", infos)
+		}
+	}
+
+	// A made-up token binds nothing — the bytes live server-side against a
+	// token the server minted, so a caller cannot name one into existence.
+	resp, out, _ := r.do(t, http.MethodPost, "/api/contracts/fetch", map[string]any{"token": "not-a-real-token"})
+	if resp.StatusCode != http.StatusConflict || out["error"] != "fetch_expired" {
+		t.Errorf("unknown token = %d %v, want 409 fetch_expired", resp.StatusCode, out)
+	}
+	if infos, _ := r.st.ListSpecInfos(); len(infos) != 0 {
+		t.Fatalf("an unknown token bound a contract: %v", infos)
+	}
+}
+
+// TestAStagedFetchBindsExactlyOnce: the token is consumed. A double-submitted
+// confirm — a second click, a retry — must not write the row twice or resurrect
+// a document the operator has moved on from.
+func TestAStagedFetchBindsExactlyOnce(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	spec := newEdgeSpecServer(t, r)
+	spec.serve("/openapi.json", specV1Doc(t))
+
+	_, out := fetchPreview(t, r, map[string]any{"url": spec.url("/openapi.json"), "peer_host": "api.acme.test"})
+	token := out["token"].(string)
+
+	if resp, _, _ := r.do(t, http.MethodPost, "/api/contracts/fetch", map[string]any{"token": token}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("first bind = %d", resp.StatusCode)
+	}
+	resp, out2, _ := r.do(t, http.MethodPost, "/api/contracts/fetch", map[string]any{"token": token})
+	if resp.StatusCode != http.StatusConflict || out2["error"] != "fetch_expired" {
+		t.Errorf("second bind = %d %v, want 409 fetch_expired — a token is spent when it is used", resp.StatusCode, out2)
+	}
+}
+
+// TestFetchBindsTheBytesItRead: the document that lands in the store is the one
+// the collector read from the URL, not anything the client sent. This is what
+// makes `source_url` EVIDENCE rather than a label — a URL attached to bytes the
+// client supplied would be checkable by nobody.
+func TestFetchBindsTheBytesItRead(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	spec := newEdgeSpecServer(t, r)
+	spec.serve("/openapi.json", specV1Doc(t))
+
+	_, out := fetchPreview(t, r, map[string]any{"url": spec.url("/openapi.json"), "peer_host": "api.acme.test"})
+	token := out["token"].(string)
+
+	// The confirm carries a document too. It must be ignored: the route reads
+	// the staged bytes and nothing else.
+	if resp, _, raw := r.do(t, http.MethodPost, "/api/contracts/fetch", map[string]any{
+		"token":    token,
+		"document": "tampered: not a spec",
+		"url":      "https://somewhere.else.test/openapi.json",
+	}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("bind = %d: %s", resp.StatusCode, raw)
+	}
+	infos, _ := r.st.ListSpecInfos()
+	if infos[0].SourceURL != spec.url("/openapi.json") {
+		t.Errorf("source_url = %q — a client field overwrote the URL the collector actually read", infos[0].SourceURL)
+	}
+	doc, _, _, _ := r.st.GetSpecDoc(infos[0].Integration)
+	if string(doc) != specV1Doc(t) {
+		t.Error("the stored document is not the one the collector fetched")
+	}
+}
+
+// TestFetchRefusals covers every way a fetch can fail. Each one must be a
+// STATED state with its own code — never a silent empty bind, and never a
+// shrug. A 404 and a document over the cap send the operator to two different
+// places, and "couldn't fetch" sends them to neither.
+func TestFetchRefusals(t *testing.T) {
+	spec := newSpecServer(t)
+	spec.serve("/ok.json", specV1Doc(t))
+	spec.paths["/notfound.json"] = func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotFound) }
+	spec.paths["/unauthorized.json"] = func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusUnauthorized) }
+	spec.paths["/empty.json"] = func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
+	spec.paths["/html.json"] = func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte("<html><body>Not Found</body></html>"))
+	}
+	// One byte past the cap, served with a 200 — the case that would otherwise
+	// be truncated into a document that parses as garbage.
+	spec.paths["/huge.json"] = func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(strings.Repeat("x", model.MaxContractDocBytes+1)))
+	}
+
+	for _, tc := range []struct {
+		name string
+		url  string
+		code string
+		want int
+	}{
+		{"no url at all", "", "invalid_url", http.StatusBadRequest},
+		{"not a url", "::::", "invalid_url", http.StatusBadRequest},
+		{"an unsupported scheme", "file:///etc/passwd", "invalid_url", http.StatusBadRequest},
+		{"credentials in the url", "https://user:pw@api.acme.test/openapi.json", "invalid_url", http.StatusBadRequest},
+		{"the cloud metadata service", "http://169.254.169.254/latest/meta-data/", "blocked_target", http.StatusForbidden},
+		{"metadata behind IPv4-mapped IPv6", "http://[::ffff:169.254.169.254]/latest/", "blocked_target", http.StatusForbidden},
+		{"metadata behind NAT64", "http://[64:ff9b::a9fe:a9fe]/latest/", "blocked_target", http.StatusForbidden},
+		{"the unspecified address", "http://0.0.0.0/openapi.json", "blocked_target", http.StatusForbidden},
+		{"an internal host nobody calls", "http://10.0.0.5/admin", "private_target", http.StatusForbidden},
+		{"a 404", spec.url("/notfound.json"), "fetch_status", http.StatusBadGateway},
+		{"a spec that is not published", spec.url("/unauthorized.json"), "fetch_status", http.StatusBadGateway},
+		{"an empty 200", spec.url("/empty.json"), "empty_document", http.StatusBadGateway},
+		{"an HTML error page served as 200", spec.url("/html.json"), "unparseable_document", http.StatusBadRequest},
+		{"a document over the cap", spec.url("/huge.json"), "document_too_large", http.StatusRequestEntityTooLarge},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRig(t)
+			r.start(t)
+			seedEdge(t, r, spec.host()) // an internal provider we call: the refusals below are the server's, not the policy's
+			resp, out := fetchPreview(t, r, map[string]any{"url": tc.url, "peer_host": "api.acme.test"})
+			if resp.StatusCode != tc.want || out["error"] != tc.code {
+				t.Errorf("= %d %v, want %d %s", resp.StatusCode, out["error"], tc.want, tc.code)
+			}
+			// The sentence, always. A stated state that states nothing is not one.
+			if msg, _ := out["message"].(string); strings.TrimSpace(msg) == "" {
+				t.Error("the refusal carries no sentence — the operator is told a code and nothing to do")
+			}
+			// NOTHING is bound, on any refusal. This is the whole rule.
+			if infos, _ := r.st.ListSpecInfos(); len(infos) != 0 {
+				t.Errorf("a failed fetch bound %d contracts", len(infos))
+			}
+			if _, out := fetchPreview(t, r, map[string]any{"url": tc.url}); out["token"] != nil {
+				t.Error("a failed fetch staged a document")
+			}
+		})
+	}
+}
+
+// TestFetchStatusRefusalNamesTheStatus: 404 and 401 mean different things to an
+// operator — a wrong address versus a provider who does not publish — and the
+// sentence has to let them tell which they hit.
+func TestFetchStatusRefusalNamesTheStatus(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	spec := newEdgeSpecServer(t, r)
+	spec.paths["/x.json"] = func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusForbidden) }
+
+	_, out := fetchPreview(t, r, map[string]any{"url": spec.url("/x.json"), "peer_host": "api.acme.test"})
+	msg, _ := out["message"].(string)
+	if !strings.Contains(msg, "403") {
+		t.Errorf("message = %q, want the status in it", msg)
+	}
+}
+
+// TestFetchRefusesAMetadataRedirect: checking only the typed URL is how a
+// target check gets defeated. Every hop is re-checked.
+func TestFetchRefusesAMetadataRedirect(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	spec := newEdgeSpecServer(t, r)
+	spec.paths["/redirect"] = func(w http.ResponseWriter, req *http.Request) {
+		http.Redirect(w, req, "http://169.254.169.254/latest/meta-data/", http.StatusFound)
+	}
+
+	resp, out := fetchPreview(t, r, map[string]any{"url": spec.url("/redirect"), "peer_host": "api.acme.test"})
+	if resp.StatusCode != http.StatusForbidden || out["error"] != "blocked_target" {
+		t.Errorf("= %d %v, want 403 blocked_target", resp.StatusCode, out)
+	}
+	if infos, _ := r.st.ListSpecInfos(); len(infos) != 0 {
+		t.Error("a redirected fetch bound a contract")
+	}
+}
+
+// TestFetchRecordsWhereItLanded: a redirect that moves the document must be
+// recorded as the final URL, because that is the address the evidence sentence
+// will claim — and an operator approving a claim has to approve the true one.
+func TestFetchRecordsWhereItLanded(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	spec := newEdgeSpecServer(t, r)
+	spec.serve("/v2/openapi.json", specV1Doc(t))
+	spec.paths["/openapi.json"] = func(w http.ResponseWriter, req *http.Request) {
+		http.Redirect(w, req, "/v2/openapi.json", http.StatusMovedPermanently)
+	}
+
+	_, out := fetchPreview(t, r, map[string]any{"url": spec.url("/openapi.json"), "peer_host": "api.acme.test"})
+	if out["source_url"] != spec.url("/v2/openapi.json") {
+		t.Errorf("source_url = %v, want where the document actually came from", out["source_url"])
+	}
+	if out["requested_url"] != spec.url("/openapi.json") {
+		t.Errorf("requested_url = %v — the operator must see that a redirect moved it", out["requested_url"])
+	}
+}
+
+// TestFetchReachesAPrivateAddressOnlyForAnEdge is the bound on fetch itself.
+// Without it, fetch takes any URL and the IP guard is its ONLY destination
+// control; with it, reaching a private address takes BOTH the edge table
+// (the URL's host is one the deployment already calls) and the dial-time
+// address check.
+func TestFetchReachesAPrivateAddressOnlyForAnEdge(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	spec := newSpecServer(t) // loopback, and NOT an edge
+	spec.serve("/openapi.json", specV1Doc(t))
+
+	resp, out := fetchPreview(t, r, map[string]any{"url": spec.url("/openapi.json"), "peer_host": "api.acme.test"})
+	if resp.StatusCode != http.StatusForbidden || out["error"] != "private_target" {
+		t.Fatalf("= %d %v, want 403 private_target", resp.StatusCode, out)
+	}
+	if len(spec.hits) != 0 {
+		t.Fatalf("the refused fetch still reached the host: %v", spec.hits)
+	}
+
+	// The binding host being an edge does NOT lend its privilege to a URL on a
+	// different host — "bind to an edge, fetch an admin endpoint" is the abuse.
+	seedEdge(t, r, "api.acme.test")
+	if resp, out := fetchPreview(t, r, map[string]any{"url": spec.url("/openapi.json"), "peer_host": "api.acme.test"}); out["error"] != "private_target" {
+		t.Fatalf("peer_host's edge was borrowed for the URL's host: %d %v", resp.StatusCode, out)
+	}
+
+	// Once the URL's own host is an edge, the same fetch goes through.
+	seedEdge(t, r, spec.host())
+	if resp, out := fetchPreview(t, r, map[string]any{"url": spec.url("/openapi.json"), "peer_host": "api.acme.test"}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("an edge host was refused: %d %v", resp.StatusCode, out)
+	}
+}
+
+// TestACrossHostRedirectDropsThePrivilege: an allowed internal edge must not be
+// able to bounce the fetch onto an internal host nobody calls. The second
+// server differs only by PORT — a different host key, same loopback address —
+// so this is decided by the policy's host tracking, not by the address check.
+func TestACrossHostRedirectDropsThePrivilege(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	target := newSpecServer(t) // NOT an edge
+	target.serve("/openapi.json", specV1Doc(t))
+	edge := newEdgeSpecServer(t, r)
+	edge.paths["/openapi.json"] = func(w http.ResponseWriter, req *http.Request) {
+		http.Redirect(w, req, target.url("/openapi.json"), http.StatusFound)
+	}
+
+	resp, out := fetchPreview(t, r, map[string]any{"url": edge.url("/openapi.json"), "peer_host": "api.acme.test"})
+	if resp.StatusCode != http.StatusForbidden || out["error"] != "private_target" {
+		t.Fatalf("= %d %v, want 403 private_target — the redirect carried the edge's privilege to another host", resp.StatusCode, out)
+	}
+	if len(target.hits) != 0 {
+		t.Errorf("the redirect target was reached: %v", target.hits)
+	}
+	if infos, _ := r.st.ListSpecInfos(); len(infos) != 0 {
+		t.Error("a refused redirect bound a contract")
+	}
+
+	// A SAME-host redirect keeps it — publishers move specs between paths.
+	edge.serve("/v2/openapi.json", specV1Doc(t))
+	edge.paths["/moved.json"] = func(w http.ResponseWriter, req *http.Request) {
+		http.Redirect(w, req, "/v2/openapi.json", http.StatusMovedPermanently)
+	}
+	if resp, out := fetchPreview(t, r, map[string]any{"url": edge.url("/moved.json"), "peer_host": "api.acme.test"}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("a same-host redirect was refused: %d %v", resp.StatusCode, out)
+	}
+}
+
+// TestANameResolvingToAPrivateAddressIsRefusedAtDial: the private refusal holds
+// at the dialer too, for a name whose spelling reveals nothing — the name case
+// the URL-level check cannot see.
+func TestANameResolvingToAPrivateAddressIsRefusedAtDial(t *testing.T) {
+	dialer := &net.Dialer{
+		Resolver: newFakeResolver(t, "10.0.0.5"),
+		Control:  func(_, address string, _ syscall.RawConn) error { return dialGuard(address, false) },
+	}
+	_, err := dialer.DialContext(context.Background(), "tcp", "innocent.example:80")
+	if !errors.Is(err, errPrivateTarget) {
+		t.Fatalf("dial = %v, want the private refusal", err)
+	}
+}
+
+// TestProbeNeverAutoBinds is the guardrail this route exists inside. A probe
+// offers; a human binds. Nothing below may ever write to the store.
+func TestProbeNeverAutoBinds(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	spec := newEdgeSpecServer(t, r)
+	spec.serve("/openapi.json", specV1Doc(t))
+	// The probe only touches a host with traffic, so give it one.
+	host := spec.host()
+	seedEdge(t, r, host)
+
+	resp, out, raw := r.do(t, http.MethodPost, "/api/contracts/probe", map[string]any{"peer_host": host})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("probe = %d: %s", resp.StatusCode, raw)
+	}
+	candidates, _ := out["candidates"].([]any)
+	if len(candidates) != 1 {
+		t.Fatalf("found %d candidates, want the one document that is there: %s", len(candidates), raw)
+	}
+
+	// THE assertion. A hit, parsed, described — and not bound.
+	if infos, _ := r.st.ListSpecInfos(); len(infos) != 0 {
+		t.Fatalf("the probe bound %d contracts. It must bind none, ever: a wrong contract renders DRIFTED to a stranger on their real provider", len(infos))
+	}
+
+	// What it found is enough to decide on, and taking the offer goes back
+	// through the same fetch confirm a typed URL does.
+	c := candidates[0].(map[string]any)
+	if c["url"] != spec.url("/openapi.json") {
+		t.Errorf("candidate url = %v", c["url"])
+	}
+	if c["endpoints"] == nil || c["endpoints"].(float64) == 0 {
+		t.Error("the offer does not say what is in the document")
+	}
+	if _, ok := c["servers_match"]; !ok {
+		t.Error("the offer omits the servers corroboration — the one signal that catches a wrong document")
+	}
+}
+
+// TestProbeReportsAMissAsAResult: most providers publish at none of these
+// paths. An empty answer with no account of what was asked is indistinguishable
+// from a broken control.
+func TestProbeReportsAMissAsAResult(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	spec := newEdgeSpecServer(t, r) // serves nothing
+	host := spec.host()
+	seedEdge(t, r, host)
+
+	resp, out, raw := r.do(t, http.MethodPost, "/api/contracts/probe", map[string]any{"peer_host": host})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("probe = %d: %s", resp.StatusCode, raw)
+	}
+	if c, _ := out["candidates"].([]any); len(c) != 0 {
+		t.Errorf("candidates = %v, want none", c)
+	}
+	tried, _ := out["tried"].([]any)
+	if len(tried) != len(conventionalSpecPaths) {
+		t.Errorf("tried %d paths, want all %d named — 'we looked' with no list is not checkable",
+			len(tried), len(conventionalSpecPaths))
+	}
+	// And it really did ask, exactly those paths and no others.
+	if len(spec.hits) != len(conventionalSpecPaths) {
+		t.Errorf("made %d requests for %d paths: %v", len(spec.hits), len(conventionalSpecPaths), spec.hits)
+	}
+}
+
+// TestProbeOnlyTouchesAHostWeAlreadyCall is what keeps the probe from being a
+// URL fetcher under another name. It can reach nothing this deployment is not
+// already talking to — so it opens no destination, and a typo'd domain never
+// receives four requests from a stranger.
+func TestProbeOnlyTouchesAHostWeAlreadyCall(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	spec := newSpecServer(t)
+	spec.serve("/openapi.json", specV1Doc(t))
+	// Deliberately NO edge seeded for this host.
+
+	resp, out, _ := r.do(t, http.MethodPost, "/api/contracts/probe", map[string]any{"peer_host": spec.host()})
+	if resp.StatusCode != http.StatusNotFound || out["error"] != "unknown_host" {
+		t.Errorf("= %d %v, want 404 unknown_host", resp.StatusCode, out)
+	}
+	if len(spec.hits) != 0 {
+		t.Errorf("the probe made %d requests to a host with no traffic: %v", len(spec.hits), spec.hits)
+	}
+}
+
+// TestFetchAndProbeAreGuardedLikeUpload: the same browser-facing rules, because
+// a route that fetches a user-typed URL from inside the customer's network is
+// exactly the one a foreign page must not be able to drive.
+func TestFetchAndProbeAreGuardedLikeUpload(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	for _, path := range []string{"/api/contracts/fetch", "/api/contracts/probe"} {
+		t.Run(path, func(t *testing.T) {
+			resp, _, _ := r.do(t, http.MethodGet, path, nil)
+			if resp.StatusCode != http.StatusMethodNotAllowed {
+				t.Errorf("GET = %d, want 405", resp.StatusCode)
+			}
+			resp, out, _ := r.do(t, http.MethodPost, path, map[string]string{}, func(q *http.Request) { q.Header.Del("X-Flanj-UI") })
+			if resp.StatusCode != http.StatusForbidden || out["error"] != "ui_header_required" {
+				t.Errorf("no UI header = %d %v", resp.StatusCode, out)
+			}
+			resp, out, _ = r.do(t, http.MethodPost, path, map[string]string{}, func(q *http.Request) { q.Header.Set("Origin", "https://evil.example") })
+			if resp.StatusCode != http.StatusForbidden || out["error"] != "forbidden_origin" {
+				t.Errorf("foreign origin = %d %v", resp.StatusCode, out)
+			}
+			resp, out, _ = r.do(t, http.MethodPost, path, map[string]string{}, func(q *http.Request) { q.Header.Set("Content-Type", "text/plain") })
+			if resp.StatusCode != http.StatusUnsupportedMediaType || out["error"] != "json_required" {
+				t.Errorf("text/plain = %d %v", resp.StatusCode, out)
+			}
+		})
+	}
+}
+
+// TestAFetchedContractIsRemovableAndReplaceable: a human bound it here, so a
+// human can unbind it here. Missing this answered the CONFIG sentence —
+// "remove it there" — for a contract that has no file anywhere.
+func TestAFetchedContractIsRemovableAndReplaceable(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	spec := newEdgeSpecServer(t, r)
+	spec.serve("/openapi.json", specV1Doc(t))
+
+	_, out := fetchPreview(t, r, map[string]any{"url": spec.url("/openapi.json"), "peer_host": "api.acme.test"})
+	if resp, _, _ := r.do(t, http.MethodPost, "/api/contracts/fetch", map[string]any{"token": out["token"]}); resp.StatusCode != http.StatusOK {
+		t.Fatal("bind failed")
+	}
+
+	// An upload may replace it — the two operator-bound sources are
+	// interchangeable, and a refusal here would strand the contract.
+	resp, _, raw := r.do(t, http.MethodPost, "/api/contracts/upload", map[string]string{
+		"peer_host": "api.acme.test",
+		"document":  specV2Doc(t),
+		"filename":  "acme.yaml",
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("upload over a fetched contract = %d: %s", resp.StatusCode, raw)
+	}
+
+	// Re-fetch, then remove.
+	_, out = fetchPreview(t, r, map[string]any{"url": spec.url("/openapi.json"), "peer_host": "api.acme.test"})
+	if resp, _, _ := r.do(t, http.MethodPost, "/api/contracts/fetch", map[string]any{"token": out["token"]}); resp.StatusCode != http.StatusOK {
+		t.Fatal("re-bind failed")
+	}
+	resp, out2, raw := r.do(t, http.MethodPost, "/api/contracts/remove", map[string]string{"integration": "api-acme-test"})
+	if resp.StatusCode != http.StatusOK || out2["removed"] != true {
+		t.Fatalf("remove a fetched contract = %d %s", resp.StatusCode, raw)
+	}
+}
+
+// TestDestinationPolicy pins every class, including the embedded-IPv4 forms a
+// v4-only check misses. The table IS the policy's specification: adding a
+// range means adding a row here, and the audit that produced it (2026-09-18)
+// found NAT64, 0.0.0.0/8, :: and broadcast all reachable.
+func TestDestinationPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		addr string
+		want destClass
+	}{
+		// FORBIDDEN, always.
+		{"169.254.169.254", destForbidden},
+		{"169.254.0.1", destForbidden},
+		{"::ffff:169.254.169.254", destForbidden}, // IPv4-mapped
+		{"::ffff:a9fe:a9fe", destForbidden},       // same, hex spelling
+		{"64:ff9b::a9fe:a9fe", destForbidden},     // NAT64 — the classic v4-only miss
+		{"64:ff9b::169.254.169.254", destForbidden},
+		{"fe80::1", destForbidden},
+		{"fd00:ec2::254", destForbidden},
+		{"0.0.0.0", destForbidden},
+		{"0.1.2.3", destForbidden}, // 0/8 routes to the local host on Linux
+		{"::", destForbidden},
+		{"::ffff:0.0.0.0", destForbidden},
+		{"224.0.0.1", destForbidden},
+		{"ff02::1", destForbidden},
+		{"255.255.255.255", destForbidden},
+
+		// PRIVATE: reachable only for a discovered edge.
+		{"127.0.0.1", destPrivate},
+		{"127.8.9.10", destPrivate},
+		{"::1", destPrivate},
+		{"::ffff:127.0.0.1", destPrivate},
+		{"10.0.0.5", destPrivate},
+		{"172.16.0.1", destPrivate},
+		{"172.31.255.255", destPrivate},
+		{"192.168.1.1", destPrivate},
+		{"100.64.0.1", destPrivate}, // CGNAT
+		{"100.127.255.254", destPrivate},
+		{"fc00::1", destPrivate},
+		{"fd12:3456::1", destPrivate},
+		{"::ffff:10.0.0.5", destPrivate},
+		{"64:ff9b::a00:5", destPrivate}, // NAT64 onto 10.0.0.5
+
+		// PUBLIC.
+		{"93.184.216.34", destPublic},
+		{"172.32.0.1", destPublic},  // just past 172.16/12
+		{"100.128.0.1", destPublic}, // just past 100.64/10
+		{"2606:4700::1111", destPublic},
+		{"64:ff9b::5db8:d822", destPublic}, // NAT64 onto a public v4
+	} {
+		ip := net.ParseIP(tc.addr)
+		if ip == nil {
+			t.Fatalf("bad fixture %q", tc.addr)
+		}
+		if got := classifyIP(ip); got != tc.want {
+			t.Errorf("classifyIP(%s) = %d, want %d", tc.addr, got, tc.want)
+		}
+	}
+}
+
+// TestCheckDestination: the class becomes a refusal according to the policy,
+// with the address in every spelling the dialer and a URL can hand it over.
+func TestCheckDestination(t *testing.T) {
+	for _, addr := range []string{"169.254.169.254:80", "[::ffff:169.254.169.254]:80", "[64:ff9b::a9fe:a9fe]:443",
+		"0.0.0.0:80", "metadata.google.internal", "metadata.google.internal.", "METADATA"} {
+		for _, allow := range []bool{false, true} {
+			if err := checkDestination(addr, allow); !errors.Is(err, errBlockedTarget) {
+				t.Errorf("checkDestination(%s, allowPrivate=%v) = %v — forbidden is forbidden for every host", addr, allow, err)
+			}
+		}
+	}
+	for _, addr := range []string{"127.0.0.1:9000", "[::1]:80", "10.0.0.5", "192.168.1.10:8080", "100.64.1.1:443"} {
+		if err := checkDestination(addr, false); !errors.Is(err, errPrivateTarget) {
+			t.Errorf("checkDestination(%s, false) = %v, want the private refusal", addr, err)
+		}
+		if err := checkDestination(addr, true); err != nil {
+			t.Errorf("checkDestination(%s, true) = %v — a discovered internal edge must stay fetchable", addr, err)
+		}
+	}
+	// Names pass the string check (except the metadata aliases): the DIALER
+	// judges them, on what they resolve to.
+	for _, name := range []string{"api.acme.test", "api.acme.test:8443", "localhost:3000"} {
+		if err := checkDestination(name, false); err != nil {
+			t.Errorf("checkDestination(%s) = %v, want nil — names are judged at dial", name, err)
+		}
+	}
+}
+
+// TestANameResolvingToMetadataIsRefusedAtDial is the hole the first cut of this
+// guard left open, and the reason the check moved onto the dialer.
+//
+// Refusing IP LITERALS and a short alias list stops nothing: `evil.test IN A
+// 169.254.169.254` is an ordinary A record, it passes every string check on the
+// URL, and it needs no rebinding race — anyone who can publish a DNS name can
+// point one at the metadata service. The check has to run on the address the
+// connection is actually being made to.
+//
+// The resolver is faked rather than mocked out, so what is exercised is the
+// real path: net.Dialer resolves, then calls Control with the resolved
+// address, then dialGuard refuses it. A test that called dialGuard directly
+// would pass just as happily with the hook unwired.
+func TestANameResolvingToMetadataIsRefusedAtDial(t *testing.T) {
+	// A resolver that answers every name with the EC2/GCP metadata address —
+	// which is exactly what a hostile or compromised DNS answer looks like.
+	fakeDNS := newFakeResolver(t, "169.254.169.254")
+
+	dialer := &net.Dialer{
+		Resolver: fakeDNS,
+		Control:  func(_, address string, _ syscall.RawConn) error { return dialGuard(address, true) },
+	}
+	_, err := dialer.DialContext(context.Background(), "tcp", "spec.evil.test:80")
+	if err == nil {
+		t.Fatal("a name resolving to the metadata service was dialled; the URL-level check cannot see this")
+	}
+	if !strings.Contains(err.Error(), msgContractFetchBlockedTarget) {
+		t.Errorf("refused with %v, want the blocked-target refusal", err)
+	}
+
+	// And the guard is WIRED: the client the fetch path builds carries a
+	// transport with a dial hook, not the default one. Without this, the test
+	// above proves a function nobody calls.
+	tr, ok := contractHTTPClient(time.Second, "spec.evil.test", true).Transport.(*http.Transport)
+	if !ok || tr.DialContext == nil {
+		t.Fatal("the contract fetch client does not install a guarded dialer")
+	}
+}
+
+// newFakeResolver answers every lookup with one address, over a real UDP DNS
+// listener — so net.Dialer's own resolution path is what runs.
+func newFakeResolver(t *testing.T, answer string) *net.Resolver {
+	t.Helper()
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("no local udp socket for the fake resolver: %v", err)
+	}
+	t.Cleanup(func() { _ = pc.Close() })
+	ip := net.ParseIP(answer).To4()
+	if ip == nil {
+		t.Fatalf("fake resolver needs an IPv4 answer, got %q", answer)
+	}
+
+	go func() {
+		buf := make([]byte, 512)
+		for {
+			n, addr, err := pc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			reply, ok := dnsAnswer(buf[:n], ip)
+			if !ok {
+				continue
+			}
+			_, _ = pc.WriteTo(reply, addr)
+		}
+	}()
+
+	return &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "udp", pc.LocalAddr().String())
+		},
+	}
+}
+
+// dnsAnswer builds a minimal A-record response to a query, echoing the question
+// section and appending one answer. Enough for the resolver to accept it;
+// deliberately not a DNS implementation.
+func dnsAnswer(query []byte, ip net.IP) ([]byte, bool) {
+	if len(query) < 12 {
+		return nil, false
+	}
+	// Walk the QNAME to find where the question ends.
+	i := 12
+	for i < len(query) && query[i] != 0 {
+		i += int(query[i]) + 1
+	}
+	if i >= len(query) || i+5 > len(query) {
+		return nil, false
+	}
+	qEnd := i + 5 // the 0 terminator + QTYPE(2) + QCLASS(2)
+	qtype := binary.BigEndian.Uint16(query[i+1 : i+3])
+
+	out := make([]byte, 0, qEnd+16)
+	out = append(out, query[:qEnd]...)
+	out[2] = 0x81 // QR=1, RD=1
+	out[3] = 0x80 // RA=1, RCODE=0
+	binary.BigEndian.PutUint16(out[6:8], 0)
+	if qtype != 1 { // not an A query (the resolver also asks AAAA): NOERROR, no answers
+		return out, true
+	}
+	binary.BigEndian.PutUint16(out[6:8], 1) // ANCOUNT
+	out = append(out, 0xc0, 0x0c)           // name: pointer to the question
+	out = append(out, 0x00, 0x01)           // TYPE A
+	out = append(out, 0x00, 0x01)           // CLASS IN
+	out = append(out, 0x00, 0x00, 0x00, 0x1e)
+	out = append(out, 0x00, 0x04)
+	out = append(out, ip...)
+	return out, true
+}
+
+// TestFetchTakesTheHostFromTheURLWhenNoneIsGiven — the probe's candidates and a
+// hurried paste both arrive this way, and an unbound contract validates nothing
+// forever while its card claims otherwise.
+func TestFetchTakesTheHostFromTheURLWhenNoneIsGiven(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	spec := newEdgeSpecServer(t, r)
+	spec.serve("/openapi.json", specV1Doc(t))
+
+	_, out := fetchPreview(t, r, map[string]any{"url": spec.url("/openapi.json")})
+	preview, _ := out["preview"].(map[string]any)
+	if preview["peer_host"] != spec.host() {
+		t.Errorf("peer_host = %v, want the URL's own host %q", preview["peer_host"], spec.host())
+	}
+	if resp, _, _ := r.do(t, http.MethodPost, "/api/contracts/fetch", map[string]any{"token": out["token"]}); resp.StatusCode != http.StatusOK {
+		t.Fatal("bind failed")
+	}
+	infos, _ := r.st.ListSpecInfos()
+	if infos[0].PeerHost != spec.host() {
+		t.Errorf("bound to %q, want %q", infos[0].PeerHost, spec.host())
+	}
+}
+
+// seedEdge records a discovered edge for a host — the probe's precondition, and
+// the same shape seedGraph uses.
+func seedEdge(t *testing.T, r *testRig, host string) {
+	t.Helper()
+	r.st.mu.Lock()
+	defer r.st.mu.Unlock()
+	r.st.edges = append(r.st.edges, model.Edge{
+		PeerHost: host, Direction: "client", Role: "consumer", Class: model.EdgeClassExternal,
+		FirstSeen: "2026-09-17T09:00:00Z", LastSeen: "2026-09-17T10:00:00Z", CallCount: 7,
+	})
+}

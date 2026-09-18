@@ -288,9 +288,28 @@ func sqliteHasColumn(src *sql.DB, table, column string) (bool, error) {
 // prev_doc/prev_version/prev_loaded_at come too: they are the evidence behind
 // the version-diff findings that copyFindings just carried over.
 func copySpecInfos(src *sql.DB, tx *sql.Tx) (int, error) {
+	// source_url is read only when the legacy file HAS it — the same
+	// probe-then-select shape the rest of this import uses, for the same
+	// reason. The source is opened mode=ro, so the additive widening every
+	// other reader leans on (specInfoAddedColumns, applied at open) never runs
+	// here, and the upgrade this migration exists to serve is exactly the one
+	// where nothing else ran it either: a new binary, a backend flipped to
+	// postgres, and a db file last written by the build before this one.
+	// Naming the column unconditionally would turn that into
+	// "no such column: source_url" — which ABORTS THE START, because a failed
+	// migration must never be silent — for one provenance field, on the path
+	// whose whole purpose is not abandoning evidence.
+	//
+	// A probe that errors reads as absent: the cost is one empty URL on one
+	// card, and the alternative is losing the migration.
+	hasSourceURL, _ := sqliteHasColumn(src, "spec_infos", "source_url")
+	sourceURLCol := `'' AS source_url`
+	if hasSourceURL {
+		sourceURLCol = `COALESCE(source_url,'')`
+	}
 	rows, err := src.Query(
 		`SELECT integration, role, peer_host, edge_class, format, title, version, docs_url,
-		        endpoints, loaded_at, doc, source, prev_doc, prev_version, prev_loaded_at
+		        endpoints, loaded_at, doc, source, ` + sourceURLCol + `, prev_doc, prev_version, prev_loaded_at
 		   FROM spec_infos`)
 	if err != nil {
 		return 0, fmt.Errorf("migrate-from-sqlite: read contracts: %w", err)
@@ -301,22 +320,23 @@ func copySpecInfos(src *sql.DB, tx *sql.Tx) (int, error) {
 		var (
 			integration, format, loadedAt, doc, source   string
 			role                                         string
+			sourceURL                                    string
 			peerHost, edgeClass, title, version, docsURL sql.NullString
 			prevDoc, prevVersion, prevLoadedAt           sql.NullString
 			endpoints                                    int
 		)
 		if err := rows.Scan(&integration, &role, &peerHost, &edgeClass, &format, &title, &version,
-			&docsURL, &endpoints, &loadedAt, &doc, &source, &prevDoc, &prevVersion, &prevLoadedAt); err != nil {
+			&docsURL, &endpoints, &loadedAt, &doc, &source, &sourceURL, &prevDoc, &prevVersion, &prevLoadedAt); err != nil {
 			return n, fmt.Errorf("migrate-from-sqlite: scan contract: %w", err)
 		}
 		res, err := tx.Exec(
 			`INSERT INTO spec_infos
 			  (integration, role, peer_host, edge_class, format, title, version, docs_url,
-			   endpoints, loaded_at, doc, source, prev_doc, prev_version, prev_loaded_at)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+			   endpoints, loaded_at, doc, source, source_url, prev_doc, prev_version, prev_loaded_at)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
 			 ON CONFLICT (integration) DO NOTHING`,
 			integration, role, peerHost, edgeClass, format, title, version, docsURL,
-			endpoints, loadedAt, doc, source, prevDoc, prevVersion, prevLoadedAt,
+			endpoints, loadedAt, doc, source, nullStr(sourceURL), prevDoc, prevVersion, prevLoadedAt,
 		)
 		if err != nil {
 			return n, fmt.Errorf("migrate-from-sqlite: insert contract %s: %w", integration, err)

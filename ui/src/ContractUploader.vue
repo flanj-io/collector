@@ -7,12 +7,40 @@
  * edge row cannot render the after-state (version, endpoint count, Replace,
  * View spec) so the operator would be bounced here anyway.
  *
- * NO URL FETCH, deliberately and permanently. A "fetch this URL for me" button
- * in a localhost UI sits INSIDE the customer's network — an SSRF pivot onto
- * internal admin and metadata endpoints — and this product's Settings panel
- * promises in so many words that nothing leaves until you Connect. If it ever
- * returns it returns as a control-plane-side fetch on a Connected collector,
- * never a collector-side fetch of a user-typed URL.
+ * URL FETCH, added 2026-09-17 under ruling R5 (`architecture.md` §3.4), which
+ * REVERSES the "no URL fetch, deliberately and permanently" position this
+ * comment used to state. The old text is worth keeping in view, because the
+ * reversal has to answer it rather than forget it:
+ *
+ *   (a) "An SSRF pivot onto internal admin and metadata endpoints." Real, and
+ *       answered where it can be — the cloud metadata service is refused at
+ *       DIAL time, on the RESOLVED address (`dialGuard`), so a hostname whose
+ *       DNS points at it is refused too and every redirect hop is covered by
+ *       the same check; the route is behind
+ *       the same `X-Flanj-UI` + Origin guard as upload so no foreign page can
+ *       drive it; the PROBE can only ever reach a host this collector already
+ *       calls; and a typed URL reaches a PRIVATE address (loopback, RFC1918,
+ *       CGNAT, ULA) only when its own host is such an edge — so an internal
+ *       provider's spec is fetchable and an internal admin endpoint the app
+ *       never calls is not.
+ *   (b) "Nothing leaves until you Connect." Still true, and this does not break
+ *       it: a fetch sends no data anywhere. It is a GET for a document the
+ *       provider publishes to the world, made by the collector, landing here.
+ *       FETCH_STAYS_LOCAL says exactly that at the field.
+ *   (c) "If it returns it returns as a control-plane-side fetch." Overruled on
+ *       purpose. A CP-side fetch cannot reach an internal provider at all, and
+ *       it would put the free single-player path behind Connect — which R5
+ *       names as the roadmap hollowing out its own OSS wedge.
+ *
+ * What the fetch buys is not convenience, it is EVIDENCE: "your own published
+ * spec at <url>, fetched <when>" is checkable by the provider reading a flagged
+ * thread, and "somebody here had a file" never was.
+ *
+ * Suggest-and-approve, on both new paths: a fetch previews and waits, the probe
+ * only ever OFFERS, and a human presses the button that binds. A WRONG CONTRACT
+ * IS WORSE THAN NO CONTRACT — no contract renders `not checked`, honestly,
+ * while a mismatched one renders DRIFTED, loudly, to a stranger, on their real
+ * provider.
  *
  * Parse-before-commit is the shape, not a nicety: an unparseable document fails
  * at the confirm step and is never persisted, because the drift processor
@@ -24,8 +52,20 @@ import { ApiError, apiPost } from './api';
 import {
   BIND_ANYWAY,
   CONTRACT_TOO_LARGE,
+  FETCH_ACTION,
+  FETCH_ONCE_ONLY,
+  FETCH_PROMPT,
+  FETCH_STAYS_LOCAL,
+  FETCH_TAB_FILE,
+  FETCH_TAB_URL,
+  FETCH_BIND_FAILED_FALLBACK,
+  FETCH_UNREACHABLE_FALLBACK,
+  PROBE_ACTION,
+  PROBE_FAILED_FALLBACK,
+  PROBE_NOTHING_FOUND,
+  PROBE_OFFER_ONLY,
+  REFETCH_AFTER_HOST_EDIT,
   UPLOAD_FORMATS,
-  UPLOAD_NO_URL_FETCH,
   UPLOAD_PROMPT,
   UPLOAD_STAYS_LOCAL,
   UPLOAD_TAKES_EFFECT,
@@ -34,7 +74,8 @@ import {
   contractFileTooLarge,
   endpointCount,
   hasBindingWarning,
-  noTrafficYet
+  noTrafficYet,
+  probeCandidateLine
 } from './contracts';
 
 const props = defineProps<{
@@ -93,6 +134,37 @@ const chooseButton = ref<HTMLButtonElement | null>(null);
  *  never committed against a preview describing a different host. */
 const hostDirty = ref(false);
 
+/* ── From a URL (ruling R5) ────────────────────────────────────────────── */
+
+/** Which half of the panel is showing. The file path is the default: it is the
+ *  one that works for a provider who publishes nothing. */
+const source = ref<'file' | 'url'>('file');
+const specUrl = ref('');
+/** The staged fetch's handle. Held ONLY while its preview is on screen — the
+ *  server binds this token and nothing else, so the document that gets written
+ *  is byte-for-byte the one described above the button. */
+const fetchToken = ref('');
+/** Where the document actually came from, after redirects, and when. Shown on
+ *  the confirm step because it is what the card, the finding and the thread
+ *  will all claim afterwards — the operator approves the CLAIM, not just the
+ *  document. */
+const fetchedFrom = ref('');
+const fetchedAt = ref('');
+const requestedUrl = ref('');
+
+interface ProbeCandidate {
+  url: string;
+  title?: string;
+  version?: string;
+  endpoints: number;
+  servers: string[];
+  servers_match: boolean;
+}
+const probeBusy = ref(false);
+const probeRan = ref(false);
+const probeTried = ref<string[]>([]);
+const probeCandidates = ref<ProbeCandidate[]>([]);
+
 /** Arriving from a provider row the host is already known, so the confirm step
  *  shows one line and there is no field to fill. Zero-question binding for the
  *  common case is the whole ergonomic reason to route through this tab. */
@@ -113,8 +185,9 @@ const needsHost = computed(() => !props.host);
  */
 const previewHost = computed(() => preview.value?.peer_host || '');
 
-/** Work that closing this uploader would throw away. */
-const dirty = computed(() => !!preview.value || !!doc.value);
+/** Work that closing this uploader would throw away — including a staged fetch,
+ *  which is a document already read from somebody's host. */
+const dirty = computed(() => !!preview.value || !!doc.value || !!fetchToken.value);
 watch(dirty, (d) => emit('dirty', d), { immediate: true });
 
 /**
@@ -277,7 +350,141 @@ function onHostEdited() {
   // there would bind against a preview of something else.
   hostDirty.value = true;
   clearTimeout(hostDebounce);
+  if (source.value === 'url') {
+    // A URL-sourced preview cannot be re-derived from a document this component
+    // holds — the bytes live server-side, staged against the host they were
+    // previewed for. Editing the host therefore INVALIDATES the staged fetch
+    // rather than re-parsing it: keeping the token would bind a document that
+    // was described against a different host, which is precisely the wrong
+    // binding this whole confirm step exists to prevent.
+    fetchToken.value = '';
+    preview.value = null;
+    hostDirty.value = false;
+    error.value = REFETCH_AFTER_HOST_EDIT;
+    return;
+  }
   hostDebounce = setTimeout(() => void runPreview(), 400);
+}
+
+/** Fetch and describe. Persists NOTHING — the server stages the bytes and hands
+ *  back a handle; this is the confirm step, same as the file path's. */
+async function runFetch(url?: string) {
+  const target = (url ?? specUrl.value).trim();
+  if (!target) return;
+  busy.value = true;
+  error.value = '';
+  preview.value = null;
+  fetchToken.value = '';
+  try {
+    const res = await apiPost<{
+      token: string;
+      source_url: string;
+      requested_url?: string;
+      fetched_at: string;
+      preview: ContractPreview;
+    }>('/api/contracts/fetch', { url: target, peer_host: boundHost.value || undefined });
+    fetchToken.value = res.token;
+    fetchedFrom.value = res.source_url;
+    requestedUrl.value = res.requested_url || '';
+    fetchedAt.value = res.fetched_at;
+    preview.value = res.preview;
+    // The server may have derived the host from the URL. Reflect its answer, so
+    // the field and the binding never disagree.
+    if (!props.host) typedHost.value = res.preview.peer_host;
+  } catch (e) {
+    // The server's sentence, always — every fetch refusal has one that names
+    // what happened (a 404, a timeout, an HTML page, a document over the cap),
+    // and replacing it with a generic line here would undo the whole point of
+    // a fetch failure being a STATED state.
+    error.value = e instanceof ApiError ? e.message : FETCH_UNREACHABLE_FALLBACK;
+  } finally {
+    busy.value = false;
+    hostDirty.value = false;
+  }
+}
+
+/** Ask the provider's host whether it publishes a spec at a conventional path.
+ *  OFFERS what it finds. Binds nothing — every candidate below goes through the
+ *  same fetch confirm step a typed URL does. */
+async function runProbe() {
+  if (!boundHost.value) return;
+  probeBusy.value = true;
+  error.value = '';
+  try {
+    const res = await apiPost<{ peer_host: string; tried: string[]; candidates: ProbeCandidate[] }>(
+      '/api/contracts/probe',
+      { peer_host: boundHost.value }
+    );
+    probeTried.value = res.tried;
+    probeCandidates.value = res.candidates;
+    probeRan.value = true;
+  } catch (e) {
+    error.value = e instanceof ApiError ? e.message : PROBE_FAILED_FALLBACK;
+  } finally {
+    probeBusy.value = false;
+  }
+}
+
+/** Taking an offer is exactly a typed fetch of that URL — one bind path, so a
+ *  suggestion can never reach the store by a route a human did not walk. */
+function takeCandidate(c: ProbeCandidate) {
+  specUrl.value = c.url;
+  void runFetch(c.url);
+}
+
+/** Bind what was fetched. Sends the TOKEN — never the document, and never the
+ *  URL: the server writes the bytes it read, from the URL it recorded. */
+async function confirmFetched() {
+  if (!preview.value || !fetchToken.value) return;
+  busy.value = true;
+  error.value = '';
+  try {
+    const res = await apiPost<{ replaced: boolean; breaking_changes?: number }>(
+      '/api/contracts/fetch',
+      { token: fetchToken.value }
+    );
+    let notice = preview.value.has_traffic ? UPLOAD_TAKES_EFFECT : noTrafficYet(preview.value.peer_host);
+    if (res.replaced && res.breaking_changes) {
+      const n = res.breaking_changes;
+      notice += ` ${n} breaking change${n === 1 ? '' : 's'} against the version it replaced.`;
+    }
+    emit('uploaded', notice);
+  } catch (e) {
+    // A token that expired or was already spent answers here. The sentence
+    // says fetch again, which is the only thing to do — and nothing was bound.
+    error.value = e instanceof ApiError ? e.message : FETCH_BIND_FAILED_FALLBACK;
+    fetchToken.value = '';
+    preview.value = null;
+  } finally {
+    busy.value = false;
+  }
+}
+
+/** Which confirm button the step shows. A staged token means the bytes are the
+ *  server's; no token means they are the file in `doc`. */
+const confirmingFetch = computed(() => !!fetchToken.value);
+
+/** Back to step one. A staged fetch is DROPPED here rather than kept around:
+ *  the server expires it anyway, and a token surviving a "different document"
+ *  press is how the previous document gets bound by the next confirm. */
+function startOver() {
+  preview.value = null;
+  fetchToken.value = '';
+  error.value = '';
+}
+
+function switchSource(to: 'file' | 'url') {
+  if (source.value === to) return;
+  source.value = to;
+  // Half-finished work on the other path is dropped rather than carried: a
+  // staged fetch and a read file are two different documents, and keeping both
+  // alive is how the wrong one gets bound.
+  error.value = '';
+  preview.value = null;
+  fetchToken.value = '';
+  doc.value = '';
+  filename.value = '';
+  awaitingHost.value = false;
 }
 </script>
 
@@ -303,12 +510,103 @@ function onHostEdited() {
         </small>
       </label>
 
+      <!-- Two sources, one binding model. The tabs are real buttons in the tab
+           order with aria-pressed, not a styled radio group: each one switches
+           a panel, which is what a button does. The FILE half is first and is
+           the default — it is the one that works for a provider who publishes
+           nothing, which is most of them. -->
+      <div class="source-tabs" role="group" aria-label="Where the contract comes from">
+        <button
+          type="button"
+          class="src-tab"
+          :class="{ on: source === 'file' }"
+          :aria-pressed="source === 'file'"
+          @click="switchSource('file')"
+        >{{ FETCH_TAB_FILE }}</button>
+        <button
+          type="button"
+          class="src-tab"
+          :class="{ on: source === 'url' }"
+          :aria-pressed="source === 'url'"
+          @click="switchSource('url')"
+        >{{ FETCH_TAB_URL }}</button>
+      </div>
+
+      <!-- From a URL. The collector makes the request; the document lands here.
+           Nothing re-reads the URL afterwards, which FETCH_ONCE_ONLY says
+           plainly — an operator's reasonable assumption about a URL is that it
+           is a subscription, and it is not one. -->
+      <div v-if="source === 'url'" class="fetch-panel">
+        <label class="uploader-host">
+          <span>Spec URL</span>
+          <input
+            ref="urlField"
+            v-model="specUrl"
+            type="url"
+            :placeholder="'https://api.acme.test/openapi.json'"
+            spellcheck="false"
+            autocapitalize="off"
+            autocorrect="off"
+            :disabled="busy"
+            @keydown.enter.prevent="runFetch()"
+          />
+        </label>
+        <p class="dz-prompt">{{ FETCH_PROMPT }}</p>
+        <div class="uploader-actions">
+          <button type="button" class="btn" :disabled="busy || !specUrl.trim()" @click="runFetch()">
+            {{ busy ? 'Fetching…' : FETCH_ACTION }}
+          </button>
+          <!-- The probe. Only offered once a host is known, because it can only
+               ask a host this collector already calls — and it OFFERS, which is
+               why the control says "look for" and not "find". -->
+          <button
+            v-if="boundHost"
+            type="button"
+            class="btn ghost"
+            :disabled="probeBusy || busy"
+            @click="runProbe"
+          >{{ probeBusy ? 'Looking…' : PROBE_ACTION }}</button>
+        </div>
+
+        <!-- What the probe found, OFFERED. Every row needs a press to go any
+             further, and that press runs the same fetch confirm a typed URL
+             does — there is no path from a suggestion to a bound contract that
+             a human did not walk. -->
+        <div v-if="probeRan" class="probe-results">
+          <template v-if="probeCandidates.length">
+            <p class="probe-lead">{{ PROBE_OFFER_ONLY }}</p>
+            <ul class="probe-list">
+              <li v-for="c in probeCandidates" :key="c.url">
+                <div class="probe-url mono">{{ c.url }}</div>
+                <div class="probe-meta">{{ probeCandidateLine(c) }}</div>
+                <button type="button" class="btn small" :disabled="busy" @click="takeCandidate(c)">
+                  {{ FETCH_ACTION }}
+                </button>
+              </li>
+            </ul>
+          </template>
+          <template v-else>
+            <p class="probe-lead">{{ PROBE_NOTHING_FOUND }}</p>
+            <!-- What was actually asked. "We looked" with no list is a claim
+                 the operator cannot check, and this panel is about checkable
+                 claims. -->
+            <ul class="probe-tried mono">
+              <li v-for="t in probeTried" :key="t">{{ t }}</li>
+            </ul>
+          </template>
+        </div>
+
+        <p class="uploader-privacy">{{ FETCH_STAYS_LOCAL }}</p>
+        <p class="uploader-note">{{ FETCH_ONCE_ONLY }}</p>
+      </div>
+
       <!-- The zone itself is reachable and operable: tabindex puts it in the
            order, Enter/Space opens the picker. Deliberately NOT role="button" —
            it contains a real button, and nesting one widget inside another
            announces badly; a focusable region whose prompt is read out, with the
            explicit control one Tab further on, is the honest shape. -->
       <div
+        v-if="source === 'file'"
         class="dropzone"
         :class="{ dragging }"
         tabindex="0"
@@ -334,8 +632,7 @@ function onHostEdited() {
         />
       </div>
 
-      <p class="uploader-privacy">{{ UPLOAD_STAYS_LOCAL }}</p>
-      <p class="uploader-note">{{ UPLOAD_NO_URL_FETCH }}</p>
+      <p v-if="source === 'file'" class="uploader-privacy">{{ UPLOAD_STAYS_LOCAL }}</p>
     </div>
 
     <!-- Step 2 — confirm what it will bind to. -->
@@ -345,6 +642,19 @@ function onHostEdited() {
         <div v-if="preview.version"><dt>Version</dt><dd>v{{ preview.version }}</dd></div>
         <div><dt>Endpoints</dt><dd>{{ endpointCount(preview.endpoints) }}</dd></div>
         <div v-if="preview.replaces"><dt>Replaces</dt><dd>v{{ preview.replaces }}</dd></div>
+        <!-- WHERE it came from, as a fact on the confirm step, because it is
+             what the card, the finding and the flagged thread will all claim
+             afterwards. The operator is approving the CLAIM here, not only the
+             document — so the URL they approve has to be the one that gets
+             recorded, which is why this is the server's answer (after
+             redirects) and not the string in the field. -->
+        <div v-if="confirmingFetch"><dt>Fetched from</dt><dd class="mono break">{{ fetchedFrom }}</dd></div>
+        <!-- A redirect that moved the document is shown, never swallowed: "I
+             asked for A and got B" is exactly the fact an operator needs before
+             binding B under a claim they will later stand behind. -->
+        <div v-if="confirmingFetch && requestedUrl">
+          <dt>Requested</dt><dd class="mono break">{{ requestedUrl }} <span class="redirect-note">— redirected</span></dd>
+        </div>
       </dl>
 
       <!-- The host stays a FIELD here, not a fact. It was static text, so the
@@ -380,7 +690,7 @@ function onHostEdited() {
            problem to weigh, and scoring them made the list cry wolf. -->
       <p v-if="timing" class="confirm-timing">{{ timing }}</p>
 
-      <p class="uploader-privacy">{{ UPLOAD_STAYS_LOCAL }}</p>
+      <p class="uploader-privacy">{{ confirmingFetch ? FETCH_STAYS_LOCAL : UPLOAD_STAYS_LOCAL }}</p>
 
       <div class="uploader-actions">
         <button
@@ -389,11 +699,13 @@ function onHostEdited() {
           :class="{ warn: warned }"
           :disabled="busy || hostDirty || !boundHost"
           :title="hostDirty ? 'Re-reading the document against the new host…' : ''"
-          @click="confirm"
+          @click="confirmingFetch ? confirmFetched() : confirm()"
         >
           {{ warned ? BIND_ANYWAY : 'Add contract' }}
         </button>
-        <button type="button" class="btn ghost" :disabled="busy" @click="preview = null">Choose a different file</button>
+        <button type="button" class="btn ghost" :disabled="busy" @click="startOver">
+          {{ confirmingFetch ? 'Fetch a different document' : 'Choose a different file' }}
+        </button>
         <button type="button" class="btn ghost" :disabled="busy" @click="emit('cancel')">Cancel</button>
       </div>
     </div>
@@ -455,6 +767,36 @@ function onHostEdited() {
 .uploader-host.awaiting input { border-color: var(--accent); }
 .confirm-timing { margin: 0 0 6px; font-size: 12px; color: var(--ink-soft); }
 .host-hint code { font-size: 0.95em; }
+/* Two sources, one panel. The tabs sit on the sunk surface; the selected one
+   carries the ink rule, never colour alone. */
+.source-tabs { display: flex; gap: 6px; margin-bottom: 10px; }
+.src-tab {
+  padding: 5px 10px; border: var(--border-w-hair) solid var(--rule); border-radius: var(--radius);
+  background: var(--surface); color: var(--ink-soft); font: inherit; font-size: 12.5px; cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.src-tab.on { border-color: var(--ink); color: var(--ink); }
+.src-tab:focus-visible { outline: var(--focus-ring); outline-offset: var(--focus-offset); }
+.fetch-panel { border: var(--border-w-hair) solid var(--rule); border-radius: var(--radius); padding: 12px; background: var(--surface); }
+.fetch-panel .uploader-host { margin-bottom: 6px; }
+.fetch-panel .uploader-host input { max-width: 100%; }
+.fetch-panel .dz-prompt { font-size: 12px; color: var(--ink-soft); }
+/* Probe results are OFFERS: framed as a list of things to look at, with the
+   control on each row, never a single highlighted "best" result. */
+.probe-results { margin-top: 10px; }
+.probe-lead { margin: 0 0 6px; font-size: 12.5px; color: var(--ink); }
+.probe-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.probe-list li {
+  display: grid; gap: 2px; padding: 8px 10px; border: var(--border-w-hair) solid var(--rule);
+  border-radius: var(--radius); background: var(--surface-sunk);
+}
+.probe-list li .btn { justify-self: start; margin-top: 4px; }
+.probe-url { font-size: 12px; word-break: break-all; }
+.probe-meta { font-size: 11.5px; color: var(--ink-soft); }
+.probe-tried { list-style: none; margin: 6px 0 0; padding: 0; font-size: 11px; color: var(--ink-soft); display: grid; gap: 2px; }
+.probe-tried li { word-break: break-all; }
+.confirm-facts dd.break { word-break: break-all; }
+.redirect-note { color: var(--ink-soft); }
 /* `Bind anyway` keeps the warning tier's outline: it is the one control that
    proceeds past a warned checklist, and its label says so. */
 .btn.warn { border-color: var(--sev-warning-ink); color: var(--sev-warning-ink); }

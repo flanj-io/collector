@@ -184,7 +184,7 @@ func (e *uiExtension) handleContractUpload(w http.ResponseWriter, r *http.Reques
 	// wearing that id. Silently replacing the org's own contract with a
 	// vendor's would be a bad way to find out.
 	if existing, found, err := specInfoFor(st, integration); err == nil && found {
-		if existing.Source != model.SpecSourceUpload || existing.PeerHost != req.PeerHost {
+		if !isOperatorBound(existing.Source) || existing.PeerHost != req.PeerHost {
 			writeErr(w, http.StatusConflict, "integration_conflict",
 				fmt.Sprintf("A contract already uses the name %q on this collector. Remove it before binding a new one to %s.",
 					integration, req.PeerHost))
@@ -250,8 +250,13 @@ func (e *uiExtension) handleContractRemove(w http.ResponseWriter, r *http.Reques
 	// replaces it — so the config sentence sent them hunting for something that
 	// does not exist. One code, two sentences: the class of refusal is the
 	// same, the reason is not.
+	// A FETCHED contract is removable for the same reason an uploaded one is: a
+	// human bound it in this UI, so a human can unbind it here. Missing this
+	// answered the config sentence — "remove it there" — for a contract that
+	// has no file anywhere, which is the wrong-diagnosis class the observed
+	// branch below already exists to close.
 	if existing, found, err := specInfoFor(st, integration); err == nil && found &&
-		existing.Source != model.SpecSourceUpload && existing.Source != "" {
+		!isOperatorBound(existing.Source) && existing.Source != "" {
 		msg := msgContractNotRemovable
 		if existing.Source == model.SpecSourceObserved {
 			msg = msgContractNotRemovableObserved

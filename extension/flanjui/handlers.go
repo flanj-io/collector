@@ -44,6 +44,12 @@ func (e *uiExtension) routes() http.Handler {
 	mux.HandleFunc("/api/contracts/spec", e.handleContractSpec)
 	mux.HandleFunc("/api/contracts/preview", e.handleContractPreview)
 	mux.HandleFunc("/api/contracts/upload", e.handleContractUpload)
+	// Fetch is one route with two steps (preview, then bind on the token it
+	// returned); probe only ever OFFERS, and binding an offer goes back through
+	// fetch. So there are exactly two ways a contract is written — upload and
+	// fetch — and both put a human between the document and the row.
+	mux.HandleFunc("/api/contracts/fetch", e.handleContractFetch)
+	mux.HandleFunc("/api/contracts/probe", e.handleContractProbe)
 	mux.HandleFunc("/api/contracts/remove", e.handleContractRemove)
 	mux.HandleFunc("/api/connect", e.handleConnect)
 	mux.HandleFunc("/api/flag", e.handleFlag)
