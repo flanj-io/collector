@@ -1324,6 +1324,20 @@ func TestFlagRefusesLocalOnlyKinds(t *testing.T) {
 		t.Fatalf("a local-only finding reached the CP (%d flag calls)", r.cp.flagCalls)
 	}
 
+	// R-C (Idan, 2026-09-17): INFO never crosses the org boundary, on any
+	// kind — refused here server-side, not just by the UI's missing control.
+	_ = r.st.InsertFinding(model.Finding{SchemaVersion: 1, ID: "fnd_info", Kind: model.KindDefinitionChange,
+		ChangeKind: "input", Severity: model.SeverityInfo, Integration: "acme-payments", Endpoint: "create_refund",
+		Expected: `{"name":"chargeId"}`, Actual: `{"name":"charge_id"}`,
+		Rule: "input-property-renamed", DetectedAt: "2026-08-24T10:00:01Z"})
+	resp, out, _ = r.do(t, http.MethodPost, "/api/flag", map[string]any{"finding_id": "fnd_info", "allowed_domains": []string{"acme-payments.test"}})
+	if resp.StatusCode != 403 || out["error"] != "not_flaggable" {
+		t.Errorf("flag fnd_info = %d %v, want 403 not_flaggable", resp.StatusCode, out)
+	}
+	if r.cp.flagCalls != 0 {
+		t.Fatalf("an info finding reached the CP (%d flag calls)", r.cp.flagCalls)
+	}
+
 	// The flaggable MCP kind goes through unchanged.
 	resp, out, raw := r.do(t, http.MethodPost, "/api/flag", map[string]any{"finding_id": "fnd_mismatch", "allowed_domains": []string{"acme-payments.test"}})
 	if resp.StatusCode != 201 || out["thread_url"] == "" {

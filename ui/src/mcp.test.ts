@@ -55,7 +55,8 @@ import {
   toolContractLabel,
   toolNameOf,
   typeOf,
-  valueOf
+  valueOf,
+  staysLocalAsInfo,
 } from './mcp';
 import type { Finding } from './types';
 
@@ -132,10 +133,14 @@ describe('kinds, classes, flaggability (spec §1/§6)', () => {
     expect(isLocalNotice(descChange())).toBe(false);
   });
 
-  it('every definition_change class is flaggable; stale_client never is', () => {
+  it('warning and breaking definition changes are flaggable; info and stale_client never are', () => {
     expect(isFlaggableMcp(finding({}))).toBe(true);
     expect(isFlaggableMcp(defChange())).toBe(true);
-    expect(isFlaggableMcp(defChange({ severity: 'info' }))).toBe(true);
+    // R-C (Idan, 2026-09-17): INFO stays local on every kind — it was
+    // flaggable here until the ruling.
+    expect(isFlaggableMcp(defChange({ severity: 'info' }))).toBe(false);
+    expect(isFlaggableMcp(finding({ severity: 'info' }))).toBe(false);
+    expect(staysLocalAsInfo(defChange({ severity: 'info' }))).toBe(true);
     expect(isFlaggableMcp(descChange())).toBe(true);
     expect(isFlaggableMcp(finding({ kind: 'stale_client' }))).toBe(false);
   });

@@ -19,7 +19,13 @@ import type { Correlation, Finding, RedactedCall } from './types';
 
 // ─── Kind / class helpers ────────────────────────────────────────────────────
 
-export const MCP_FINDING_KINDS = ['output_mismatch', 'definition_change', 'stale_client'] as const;
+export const MCP_FINDING_KINDS = [
+  'output_mismatch',
+  'definition_change',
+  'stale_client',
+  'value_change',
+  'input_rejection',
+] as const;
 
 export function isMcpFinding(f: Pick<Finding, 'kind'>): boolean {
   return (MCP_FINDING_KINDS as readonly string[]).includes(f.kind);
@@ -36,7 +42,27 @@ export function toolNameOf(c: Pick<RedactedCall, 'mcp_tool_name' | 'route'>): st
 
 export type DefinitionClass = 'BREAKING' | 'NON-BREAKING' | 'DESCRIPTION';
 
-/** Class badge of a definition_change finding, from severity + rule. */
+/** R-A: the severity label, on its own axis — BREAKING | WARNING | INFO. */
+export function severityLabel(f: Pick<Finding, 'severity'>): string {
+  return (f.severity || '').toUpperCase();
+}
+
+/** R-A: the change kind, on its own axis. Older collectors sent none; for a
+ *  definition change it is then read off the rule id the way the classifier
+ *  would have stamped it, and for anything else it stays empty. */
+export function changeKindOf(f: Pick<Finding, 'kind' | 'rule' | 'change_kind'>): string {
+  if (f.change_kind) return f.change_kind;
+  if (f.kind !== 'definition_change') return '';
+  if (f.rule === 'description-changed') return 'wording';
+  if (f.rule.startsWith('operation-')) return 'catalog';
+  if (f.rule.startsWith('input-')) return 'input';
+  if (f.rule.startsWith('output-')) return 'output';
+  return '';
+}
+
+/** Class badge of a definition_change finding, from severity + rule. Used for
+ *  the local TIERS (red / amber / acknowledge), not as a label: the badge
+ *  shows severityLabel and changeKindOf, two separate fields (R-A). */
 export function definitionClass(f: Pick<Finding, 'kind' | 'severity' | 'rule'>): DefinitionClass | '' {
   if (f.kind !== 'definition_change') return '';
   if (f.rule === 'description-changed') return 'DESCRIPTION';
@@ -62,8 +88,22 @@ export function isDescriptionChange(f: Pick<Finding, 'kind' | 'severity' | 'rule
 
 /** Cross-org flaggable kinds (the relay enforces the same rule server-side). */
 export function isFlaggableMcp(f: Pick<Finding, 'kind' | 'severity' | 'rule'>): boolean {
-  return isMcpFinding(f) && !isLocalNotice(f);
+  return isMcpFinding(f) && !isLocalNotice(f) && !staysLocalAsInfo(f);
 }
+
+/**
+ * INFO never crosses the org boundary (ruling R-C, Idan 2026-09-17), on any
+ * kind. The row is still SHOWN where it always was — it is not a local notice
+ * and it does not leave the Contracts tab — it just carries no Flag control,
+ * and the relay and the control plane both refuse it server-side.
+ */
+export function staysLocalAsInfo(f: Pick<Finding, 'severity'>): boolean {
+  return f.severity === 'info';
+}
+
+/** The hint an info finding shows where the Flag control would be. */
+export const INFO_STAYS_LOCAL =
+  'Info — stays on this collector. Info findings are never flagged to another organisation.';
 
 // ─── Badge tiers + local acknowledge (qfix-2026-08-25) ───────────────────────
 // Two-tier taxonomy: red = breaking-severity (act), amber = informational

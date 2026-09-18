@@ -149,7 +149,10 @@ func (d *MCPDetector) LoadSnapshot(snap otlpattr.ContractSnapshot) ([]model.Find
 	var findings []model.Finding
 	if prev != nil {
 		now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00")
-		for _, ch := range diff.Classify(prev, cur) {
+		// R-B: additive changes (a new tool, a new optional param, a widened
+		// input, a newly declared output schema) are real but are not
+		// findings — Reportable drops them before a finding is built.
+		for _, ch := range diff.Reportable(diff.Classify(prev, cur)) {
 			findings = append(findings, definitionChangeFinding(snap.Integration, ch, prev, cur, now))
 		}
 	}
@@ -387,7 +390,8 @@ func (d *MCPDetector) JudgeCall(call model.RedactedCall) ([]model.Finding, model
 		for _, v := range violations {
 			findings = append(findings, mcpFinding(mcpFindingSpec{
 				kind:           model.KindStaleClient,
-				severity:       model.SeverityWarning,
+				changeKind:     string(diff.KindObservedFailure),
+				severity:       model.SeverityBreaking,
 				locationPrefix: "$.request.arguments",
 				detailNoun:     "argument",
 			}, v, call, toolName, now))
@@ -429,6 +433,7 @@ func (d *MCPDetector) JudgeCall(call model.RedactedCall) ([]model.Finding, model
 	for _, v := range violations {
 		findings = append(findings, mcpFinding(mcpFindingSpec{
 			kind:           model.KindOutputMismatch,
+			changeKind:     string(diff.KindOutput),
 			severity:       model.SeverityBreaking,
 			locationPrefix: "$.response.structuredContent",
 			detailNoun:     "result field",
@@ -497,7 +502,10 @@ func validateAgainstSchema(schema contract.Schema, body string, call model.Redac
 // mcpFindingSpec parametrizes the shared call-scoped finding builder over the
 // two call-evidence kinds (output_mismatch / stale_client args).
 type mcpFindingSpec struct {
-	kind           string
+	kind string
+	// changeKind is R-A's axis (output for output_mismatch, observed_failure
+	// for stale_client) — see model.Finding.ChangeKind.
+	changeKind     string
 	severity       string
 	locationPrefix string
 	detailNoun     string
@@ -530,6 +538,7 @@ func mcpFinding(spec mcpFindingSpec, v schemaViolation, call model.RedactedCall,
 		SchemaVersion:      model.SchemaVersion,
 		ID:                 otlpattr.NewID(),
 		Kind:               spec.kind,
+		ChangeKind:         spec.changeKind,
 		Severity:           spec.severity,
 		Integration:        call.Integration,
 		Endpoint:           toolName,
@@ -554,10 +563,15 @@ func mcpFinding(spec mcpFindingSpec, v schemaViolation, call model.RedactedCall,
 func staleToolFinding(call model.RedactedCall, toolName, now string) model.Finding {
 	sourceID := call.ID
 	f := model.Finding{
-		SchemaVersion:   model.SchemaVersion,
-		ID:              otlpattr.NewID(),
-		Kind:            model.KindStaleClient,
-		Severity:        model.SeverityWarning,
+		SchemaVersion: model.SchemaVersion,
+		ID:            otlpattr.NewID(),
+		Kind:          model.KindStaleClient,
+		ChangeKind:    string(diff.KindObservedFailure),
+		// R-B (Idan, 2026-09-17): stale_client on a real call is
+		// observed_failure / BREAKING — the call the agent just made fails.
+		// Still LOCAL ONLY: it is consumer-side, and the kind rule
+		// (model.Finding.Flaggable) is unchanged.
+		Severity:        model.SeverityBreaking,
 		Integration:     call.Integration,
 		Endpoint:        toolName,
 		FieldPath:       model.Ptr(""),
@@ -587,14 +601,10 @@ const RuleToolNotListed = "tool-not-listed"
 // and e2e all already read, so re-casing it would be a breaking wire change
 // for no gain. This function is the only place the two meet.
 //
-// Additive (unreported) changes DO still reach here in this slice: the
-// findings pipeline deliberately keeps emitting what it emitted before, so
-// that dropping them to satisfy R-B's "additive: not reported" row happens in
-// ONE cross-repo step together with R-C's flag gating and the e2e specs that
-// assert on those findings, rather than half here and half there. Their
-// severity is empty and maps to info — exactly what ClassNonBreaking produced
-// before — so this slice changes no finding SET, only the severity of the
-// findings already emitted.
+// Additive (unreported) changes never reach here: LoadSnapshot builds
+// findings from diff.Reportable. An empty severity is therefore a programming
+// error, not a data case; it maps to info (never flaggable) rather than
+// silently inheriting a severity nobody ruled.
 func severityOf(s diff.Severity) string {
 	switch s {
 	case diff.SeverityBreaking:

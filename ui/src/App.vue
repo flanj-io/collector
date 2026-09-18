@@ -73,6 +73,8 @@ import {
   defChangeDetail,
   defChangeNoCallSub,
   definitionClass,
+  severityLabel,
+  changeKindOf,
   descriptionChipLabel,
   descriptionChipTitle,
   descriptionCountTitle,
@@ -83,6 +85,8 @@ import {
   isAcked,
   isBreakingFinding,
   isLocalNotice,
+  staysLocalAsInfo,
+  INFO_STAYS_LOCAL,
   isMcpCall,
   isMcpFinding,
   localNoticesSubFor,
@@ -276,13 +280,9 @@ const pillTone = computed(() =>
 function toneClass(tone: 'drift' | 'ok' | 'neutral'): string {
   return tone === 'drift' ? 'tone-breaking' : tone === 'ok' ? 'tone-ok' : 'tone-info';
 }
-/** The bolt inside a severity chip follows the chip's tier; a DESCRIPTION
- *  (wording) change and the info tier are both steel. */
+/** The bolt inside a severity chip follows the chip's severity. */
 function badgeTone(f: Finding): string {
-  if (f.kind === 'definition_change') {
-    const c = definitionClass(f);
-    return c === 'BREAKING' ? 'tone-breaking' : c === 'NON-BREAKING' ? 'tone-warning' : 'tone-info';
-  }
+  // Severity alone decides the tone (R-A): a kind never implies a severity.
   return f.severity === 'breaking' ? 'tone-breaking' : f.severity === 'warning' ? 'tone-warning' : 'tone-info';
 }
 /** A thread chip lifts to the accent when the turn is ours to act on. */
@@ -1960,15 +1960,17 @@ watch(tab, (t) => {
                control plane's findings index lands on this exact row. -->
           <article v-for="f in p.findings" :id="'finding-' + f.id" :key="f.id" class="finding nested" :class="{ acked: isAcked(f), highlight: f.id === highlightFindingId }">
             <div class="finding-head">
-              <!-- definition_change rows carry the classifier's class badge (deck §3):
-                   BREAKING red · NON-BREAKING copper · DESCRIPTION steel — each
-                   badge matches the tab pill and the card chip that count it. -->
+              <!-- R-A (2026-09-17): TWO labels — the severity (coloured:
+                   BREAKING red · WARNING copper · INFO steel) and, separately,
+                   the change kind (neutral). They replace the single class
+                   badge, which mixed the two ("DESCRIPTION" was a kind,
+                   "BREAKING" a severity). -->
               <span
-                v-if="f.kind === 'definition_change'"
                 class="badge"
-                :class="{ breaking: definitionClass(f) === 'BREAKING', warning: definitionClass(f) === 'NON-BREAKING', description: definitionClass(f) === 'DESCRIPTION' }"
-              ><svg class="hx sm" :class="badgeTone(f)" aria-hidden="true" focusable="false"><use href="#hxbolt" /></svg>{{ definitionClass(f) }}<svg class="hx sm" :class="badgeTone(f)" aria-hidden="true" focusable="false"><use href="#hxbolt" /></svg></span>
-              <span v-else class="badge" :class="f.severity"><svg class="hx sm" :class="badgeTone(f)" aria-hidden="true" focusable="false"><use href="#hxbolt" /></svg>{{ f.severity }}<svg class="hx sm" :class="badgeTone(f)" aria-hidden="true" focusable="false"><use href="#hxbolt" /></svg></span>
+                :class="{ breaking: f.severity === 'breaking', warning: f.severity === 'warning', description: f.severity === 'info' }"
+              ><svg class="hx sm" :class="badgeTone(f)" aria-hidden="true" focusable="false"><use href="#hxbolt" /></svg>{{ severityLabel(f) }}<svg class="hx sm" :class="badgeTone(f)" aria-hidden="true" focusable="false"><use href="#hxbolt" /></svg></span>
+              <span v-if="changeKindOf(f)" class="badge kind" :title="'Kind: what moved. A kind never implies a severity.'">{{ changeKindOf(f) }}</span>
+              <span v-if="f.via_dispatch" class="badge kind" :title="'Called through the dispatcher ' + f.via_dispatch + ' and attributed to the tool it named.'">via {{ f.via_dispatch }}</span>
               <span class="endpoint">{{ f.endpoint }}</span>
               <span class="rule">{{ f.rule }}</span>
               <!-- Call counts belong to call-evidenced kinds only. A
@@ -2090,6 +2092,14 @@ watch(tab, (t) => {
                    Until the list has been answered once, this finding may well
                    already be in a thread — offering Create thread would be a
                    claim we cannot make. Say what we don't know instead. -->
+              <!-- R-C (2026-09-17): INFO stays local, on every kind. Shown, never
+                   flaggable — the relay and the control plane refuse it too.
+                   Acknowledge stays available: it is local-only. -->
+              <template v-else-if="staysLocalAsInfo(f)">
+                <span class="hint-inline info-local">{{ INFO_STAYS_LOCAL }}</span>
+                <button v-if="isAckable(f)" type="button" class="btn ghost small" :disabled="ackBusy[f.id]" :title="ACK_TITLE" @click="setAck(f, true)">{{ ACK_LABEL }}</button>
+                <span v-if="ackError[f.id]" class="error small-err">{{ ackError[f.id] }}</span>
+              </template>
               <template v-else-if="!threadsKnown"><span class="hint-inline">{{ THREAD_STATE_UNKNOWN }}</span></template>
               <!-- definition_change, EVERY class incl. DESCRIPTION (ux-design-v2
                    §2.7): flaggable and CALL-LESS. The control is never born
@@ -2843,6 +2853,9 @@ pre.body { background: var(--surface); border: var(--border-w) solid var(--rule)
    the tier's bare colour, text in its -ink role. Each tier uses its own family
    and the accent never carries one (src/tokens.test.ts pins all three). */
 .badge { display: inline-flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 104px; font: 600 10.5px/1 var(--f-mono); letter-spacing: 0.1em; text-transform: uppercase; padding: 4px 7px; border: var(--border-w-hair) solid currentColor; border-radius: var(--radius); }
+/* The change-kind label (R-A): neutral, never a severity colour — only the
+   severity chip beside it is coloured. */
+.badge.kind { min-width: 0; color: var(--ink-soft); border-color: var(--rule); }
 .badge.breaking { color: var(--sev-breaking-ink); border-color: var(--sev-breaking); }
 .badge.warning { color: var(--sev-warning-ink); border-color: var(--sev-warning); }
 /* INFO is the neutral tier of the product-fixed triad. It used to be filled with

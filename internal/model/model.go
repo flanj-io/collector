@@ -352,9 +352,16 @@ const RuleDescriptionChanged = "description-changed"
 // evidence — the flag sheet now carries the claim honestly. Nothing auto-flags:
 // a description change only ever leaves this collector when a human presses the
 // control.
+//
+// INFO never crosses the org boundary (ruling R-C, Idan 2026-09-17): the local
+// UI shows an info finding, the Flag control is absent on it, this relay
+// refuses it, and the control plane rejects a flag whose finding severity is
+// info. Only WARNING and BREAKING become a flag. This applies to every kind,
+// HTTP as well as MCP.
 func (f Finding) Flaggable() bool {
-	// stale_client only. Never widen this without re-reading the evidence rule.
-	return f.Kind != KindStaleClient
+	// Two refusals, and never widen either without re-reading the rulings:
+	// stale_client is consumer-side (evidence rule), and info stays local (R-C).
+	return f.Kind != KindStaleClient && f.Severity != SeverityInfo
 }
 
 // Finding is a technical-adherence drift record. Mirrors
