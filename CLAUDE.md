@@ -149,7 +149,7 @@ contracts/                         # vendored contract: CONTRACTS.md + fixtures,
    after a successful CP flag POST).
 3. **Redaction is defense-in-depth**: idempotent, add-only, never double-wraps the SDK's `⟦REDACTED:…⟧` tokens
    (conform to `contracts/redaction-vectors.json` AND the cross-language parity battery
-   `contracts/redaction-fixtures.json` — both language suites must produce those exact results).
+   `contracts/redaction-fixtures.json` — every language suite (Go here, TypeScript and Python in the SDKs) must produce those exact results).
 4. **Technical adherence only** in detection — types/shapes/enums; never business/economic correctness.
 5. **Outbound-only**, localhost UI only (the store pod's `:4318` is an intra-cluster ingest for fronts).
    The agent MCP surface is a ROUTE on that same loopback listener, never a second listener, and it is

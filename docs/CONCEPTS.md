@@ -1,6 +1,6 @@
 # Flanj — concepts (engineering overview)
 
-*A technical overview for contributors to the public `sdk` and `collector` repos. It contains the
+*A technical overview for contributors to the public `sdk`, `sdk-py` and `collector` repos. It contains the
 engineering model only, not product strategy.*
 
 ## What Flanj does
@@ -22,9 +22,11 @@ Raw calls never leave the environment they were captured in.
 
 ## The components in these public repos
 
-- **`sdk`** — a thin OpenTelemetry (JS) distribution that adds HTTP **request/response body capture** and
-  **redaction-at-source**. OTel auto-instrumentation gives spans/metadata but not bodies; the bodies are the
+- **`sdk`** — a thin OpenTelemetry (JS) distribution that adds HTTP **request/response body capture**, MCP
+  client capture, and **redaction-at-source**. OTel auto-instrumentation gives spans/metadata but not bodies; the bodies are the
   non-redundant evidence. Redaction happens here, at the call site, **before** anything is stored or sent.
+- **`sdk-py`** — the Python SDK: MCP client capture only, with the same redaction floor and the same OTLP
+  record convention. HTTP body capture is the one thing it does not do.
 - **`collector`** — an OpenTelemetry Collector distribution (built with `ocb`): receives the SDK's OTLP,
   applies defense-in-depth redaction, runs drift detection near the source, stores redacted calls in a
   local store (a rolling window; embedded by default, or a customer-provided Postgres so multiple
@@ -70,7 +72,7 @@ Three properties make it safe to hand to a model:
    (Luhn-gated card number, email, IBAN, phone) behind our own interface, with deep traversal of nested bodies and
    base64 decode-then-scan; local, zero external calls — is mandatory and runs before a body is ever attached
    to a span/log or written to disk. This is defense in depth — the collector re-applies the identical floor
-   in Go (`internal/redact`), idempotently, and a shared fixture suite keeps the two byte-for-byte in parity.
+   in Go (`internal/redact`), idempotently, and a shared fixture suite keeps it byte-for-byte in parity with the TypeScript and Python SDKs.
 2. **Raw calls never leave the local environment.** Only a *referenced* (redacted) call is promoted to the
    control plane, and only when a human flags it.
 3. **Outbound-only collector.** No inbound surface; the collector only pushes to the control plane. The
