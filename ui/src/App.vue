@@ -1939,8 +1939,16 @@ watch(tab, (t) => {
             <a class="doc-link" :href="p.spec!.source_url" target="_blank" rel="noopener noreferrer">{{ p.spec!.source_url }}</a>
             <span :title="humanTime(p.spec!.loaded_at)">{{ timeAgo(p.spec!.loaded_at) }}</span>
           </p>
-          <p v-else-if="mcpHosts.has(p.peerHost)" class="prov-nospec">{{ MCP_NO_SPEC_NEEDED }}</p>
-          <p v-else class="prov-nospec">{{ NO_CONTRACT_ROW }}</p>
+          <!-- Independent of the fetched-source line above: these two answer
+               "is there a contract at all", which `hasFetchedSource` does not
+               — a bound-but-not-fetched contract (uploaded, or an MCP server's
+               own observed snapshot) must show NEITHER line. Each keeps its
+               own explicit `!p.spec` guard rather than chaining off the `<p>`
+               above, precisely so inserting another line ahead of this pair
+               (as collector#92 did) can never re-attach a v-else-if to the
+               wrong sibling again. -->
+          <p v-if="!p.spec && mcpHosts.has(p.peerHost)" class="prov-nospec">{{ MCP_NO_SPEC_NEEDED }}</p>
+          <p v-else-if="!p.spec" class="prov-nospec">{{ NO_CONTRACT_ROW }}</p>
 
           <!-- MCP per-tool rows (deck §3): the server's tools ARE the contract surface. -->
           <div v-if="p.spec?.format === 'mcp' && mcpToolRows(p.spec.integration).length" class="tool-rows">
