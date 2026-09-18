@@ -462,6 +462,11 @@ const (
 	EdgeClassExternal     = "external"
 	EdgeClassInternal     = "internal"
 	EdgeClassLocalProcess = "local-process"
+	// EdgeClassUnknown is the Python SDK's word for an MCP server whose
+	// transport it never saw (CONTRACTS §2): remote or local, it cannot say.
+	// Its peer_host is the server's self-reported serverInfo.name, exactly as
+	// for local-process — a name, not a host identity.
+	EdgeClassUnknown = "unknown"
 )
 
 // MaxContractDocBytes caps ONE contract document, at every boundary a document
