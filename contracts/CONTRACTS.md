@@ -101,6 +101,7 @@ peer classified `internal` stays metadata-only as ever. Additive attributes:
 | `flanj.transport` | string | `"mcp"`. Absent on HTTP records (absent = HTTP). |
 | `flanj.mcp.tool.name` | string | the called tool — the operation id downstream detection matches against the contract (`Operation.id` / `Match.toolName`). |
 | `flanj.mcp.is_error` | bool | the CallToolResult's `isError` (also `true` when the call itself rejected). Feeds the error-rate metric; never a finding on its own. |
+| `flanj.mcp.error.code` *(optional, additive 2026-09-17)* | int | the JSON-RPC `error.code` when the `tools/call` **request itself** was rejected — set only then, never for a result with `isError`. `-32602` (invalid params) on arguments whose shape previously succeeded is the `input_rejection` finding (§4). Absent on SDKs older than the field; readers must tolerate its absence. **Emitted by the Node SDK; the Python SDK (Early) does not emit it yet** — its capture predates the field — so `input_rejection` cannot fire on a Python client until it does. |
 | `flanj.mcp.server.name` *(optional)* | string | `serverInfo.name`. Read from the `_meta` of the result (`io.modelcontextprotocol/serverInfo`, revision 2026-07-28), falling back to the client's `initialize`-derived accessors on an older server. |
 | `flanj.mcp.server.version` *(optional)* | string | `serverInfo.version`, same source and precedence. |
 | `flanj.mcp.protocol.version` *(optional)* | string | the MCP protocol version, when surfaced. |
@@ -250,7 +251,14 @@ JSON Schema: [`v1/finding.schema.json`](./v1/finding.schema.json). Sample: [`v1/
                                              // wording | input | output | catalog | value | observed_failure.
                                              // Set on MCP findings only; absent on the HTTP kinds and on
                                              // findings from older collectors.
-  "severity": "breaking",                    // breaking | warning | info
+  "severity": "breaking",                    // breaking | warning | info — info NEVER crosses the org
+                                             //   boundary (R-C, 2026-09-17): not flaggable on any kind
+  "via_dispatch": null,                      // R-E, additive+optional: the dispatcher tool a call went
+                                             //   through, when detection attributed it to the INNER tool
+  "source": null,                            // additive+optional, definition_change: "tools_list" (absent =
+                                             //   this) | "search_result" (defs a discovery meta-tool returned)
+  "completeness": null,                      // additive+optional: "complete" | "partial" (a search result is
+                                             //   partial by nature — never a source of removals)
   "integration": "acme-payments",
   "endpoint": "POST /v1/charges",
   "field_path": "amount",
@@ -289,7 +297,27 @@ the §2 MCP call / `contract_snapshot` records — same `Finding` shape, same pe
 |---|---|---|
 | `output_mismatch` | a `tools/call` `structuredContent` violates the tool's declared `outputSchema` (same JSON Schema validator + token-aware redaction rules as `live-vs-spec`; captured props of whole-value redactions decide type/length constraints). A tool with **no** `outputSchema` never produces one. `source_call_id` = a representative call carrying the MCP correlation keys. | **Yes** (severity `breaking`) |
 | `definition_change` | two consecutive observed `tools/list` snapshots differ; one finding per (edge, tool, `rule`, `field_path`) from the definition-diff classifier. `expected`/`actual` = before/after schema **fragments**; `spec_version_from`/`to` = abbreviated snapshot content hashes; both snapshot timestamps in `detail`; `source_call_id` = null. `change_kind` is `wording` \| `input` \| `output` \| `catalog`. | **Yes for `warning` and `breaking`** — and never automatic: a human presses the flag control on the row. **`info` is local only** (R-C, 2026-09-17): the UI shows it, the Flag control is unavailable on it, and the CP rejects a flag whose finding severity is `info`. Wording changes stay flaggable (they are `warning`), as they have been since qfix2-2026-08-26. |
-| `stale_client` | the consumer's agent called a tool absent from the **current** `tools/list` (`rule` = `tool-not-listed`) or with arguments violating the **current** `inputSchema`. Consumer-side; severity `warning`. | **No — local only, ever.** No flag control anywhere. |
+| `stale_client` | the consumer's agent called a tool absent from the **current** `tools/list` (`rule` = `tool-not-listed`) or with arguments violating the **current** `inputSchema`. Consumer-side. `change_kind` `observed_failure`, severity **`breaking`** (R-B, 2026-09-17: the call the agent just made fails; it was `warning`). | **No — local only, ever**, at any severity. No flag control anywhere. |
+| `input_rejection` *(2026-09-17)* | a `tools/call` was rejected with JSON-RPC **`-32602`** (`flanj.mcp.error.code`) on arguments whose **shape** (top-level keys and JSON types) previously **succeeded** on the same tool. A `-32602` on a never-accepted shape is the caller's own problem and is not reported. `rule` = `arguments-previously-accepted-rejected`; `change_kind` `observed_failure`; severity `breaking`; `source_call_id` = the rejected call. Provider-side. | **Yes.** |
+| `value_change` *(2026-09-17)* | a field of the tool's OBSERVED responses held one value **format** for 5 consecutive responses and then another in the same family for 3 in a row: timestamp (ISO-8601 / date / epoch seconds / epoch milliseconds), ID (UUID / prefixed / numeric), enum casing (UPPER_CASE / lower_case), number representation (integer / decimal — the units story). A field whose format never settles, or that carries free text, never fires. `rule` = `value-format-changed`; `expected` / `actual` = the old / new format; `change_kind` `value`; severity `warning`. Needs no declared schema. | **Yes.** |
+
+**`change_kind` by kind** (R-A): `definition_change` → `wording` \| `input` \| `output` \| `catalog` (from the rule
+table below); `output_mismatch` → `output`; `value_change` → `value`; `stale_client` and `input_rejection` →
+`observed_failure`. Absent on `live-vs-spec` / `version-diff`, whose vocabulary R-A does not describe.
+
+**INFO stays local** (R-C, Idan 2026-09-17), on **every** kind: the local UI shows an `info` finding with no Flag
+control, the collector's relay answers `403 not_flaggable`, and the control plane answers `400 info_not_flaggable`
+to a flag whose `finding.severity` is `info`. Only `warning` and `breaking` become a thread.
+
+**Servers behind discovery meta-tools** (R-E, 2026-09-17). Detection reads tool definitions out of search RESULTS
+the agent already received (baked adapters for known patterns plus the operator's
+`flanjdrift.mcp_meta_adapters`; the collector never probes). Those definitions are a per-tool contract with
+`source: "search_result"`, `completeness: "partial"`: a tool re-observed with a different definition is a
+`definition_change` on that tool; absence from a later result is never a removal. A dispatcher call is judged as
+its inner tool **only** when the inner name exactly matches a tool the same server returned in a search result
+this collector recorded; its findings are keyed to the inner tool and carry `via_dispatch`. Any other name stays on
+the dispatcher — nothing is inferred from the shape of a call. The stored call is the literal dispatcher call, whose
+request body names the inner tool.
 
 The two flaggable MCP kinds also carry the additive **optional** `snapshot_observed_at` (ISO date-time): the `tools/list` observation backing the finding — the **current** snapshot's `ObservedAt` for `output_mismatch`, the **after** snapshot's for `definition_change`; absent on other kinds and on findings from older collectors (readers must tolerate its absence).
 
@@ -497,6 +525,8 @@ Headers: `X-Flanj-Collector-Version`, `X-Flanj-Schema-Version`.
 // 400 access_conflict      — `allowed_domains` and `allowed_emails` are both lists
 // 400 bad_request          — `allowed_domains` / `allowed_emails` is neither a list nor null, or has more than 20 entries
 // 403 not_flaggable        — a consumer-local kind (`stale_client`), with or without a message
+// 400 info_not_flaggable   — `finding.severity` is `info` (R-C, 2026-09-17): INFO never crosses the org
+//                            boundary, on any kind; the CP's standard one-sentence error body
 // 412 not_connected | contact_unconfirmed
 ```
 `thread_public_id` is random/opaque/≥128-bit/URL-safe; the bearer `<token>` (≥128-bit CSPRNG, stored hashed)

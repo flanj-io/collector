@@ -88,6 +88,10 @@ type RedactedCall struct {
 	// MCPIsError mirrors the CallToolResult's isError (also true when the call
 	// itself rejected). Feeds the error-rate metric; never a finding on its own.
 	MCPIsError bool `json:"mcp_is_error,omitempty"`
+	// MCPErrorCode is the JSON-RPC error code when the call itself was
+	// rejected (CONTRACTS §2 flanj.mcp.error.code, additive, optional); 0 when
+	// the call returned a result or the SDK is older.
+	MCPErrorCode int `json:"mcp_error_code,omitempty"`
 	// MCPServerName / MCPServerVersion carry serverInfo when the client
 	// surfaced it (never guessed).
 	MCPServerName    string `json:"mcp_server_name,omitempty"`
@@ -323,6 +327,16 @@ const (
 	// CURRENT tools/list, or with args violating the current inputSchema.
 	// Consumer-side, LOCAL ONLY — never flaggable, no flag control anywhere.
 	KindStaleClient = "stale_client"
+	// KindValueChange: a value in the tool's OBSERVED responses changed
+	// meaning — timestamp format, ID format, enum casing, integer vs decimal —
+	// while the declared schema (if any) said nothing (R-B: value / WARNING,
+	// collector-only, 2026-09-17).
+	KindValueChange = "value_change"
+	// KindInputRejection: a tools/call was rejected with JSON-RPC -32602 on
+	// arguments of a shape that previously SUCCEEDED on the same tool (R-B:
+	// observed_failure / BREAKING, collector-only, 2026-09-17). Provider-side,
+	// so it is flaggable, unlike stale_client.
+	KindInputRejection = "input_rejection"
 
 	// MCPResultTypeComplete / MCPResultTypeInputRequired are the two `resultType`
 	// values MCP revision 2026-07-28 defines. They are compared, never assumed:

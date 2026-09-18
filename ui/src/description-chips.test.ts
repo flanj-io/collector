@@ -165,3 +165,30 @@ describe('an INFO finding stays local', () => {
     expect(w.find(`#finding-${DESCRIPTION.id} button.flag`).exists()).toBe(true);
   });
 });
+
+// R-B's collector-only rows (2026-09-17) are provider-side evidence and sit on
+// the same cards as output_mismatch and definition_change.
+describe('value_change and input_rejection render on the contract card', () => {
+  it('a value_change shows WARNING + value and can be flagged', async () => {
+    const VALUE = {
+      ...DESCRIPTION,
+      id: 'fnd_value_1',
+      kind: 'value_change',
+      severity: 'warning',
+      change_kind: 'value',
+      rule: 'value-format-changed',
+      field_path: 'created',
+      expected: 'timestamp:iso-8601',
+      actual: 'timestamp:epoch-seconds',
+      source_call_id: 'call_1',
+    };
+    const w = await mountApp([VALUE]);
+    const row = w.find(`#finding-${VALUE.id}`);
+    expect(row.exists()).toBe(true);
+    const badges = row.findAll('.badge');
+    expect(badges[0].text()).toContain('WARNING');
+    expect(badges[1].text()).toBe('value');
+    expect(row.text()).toContain('held before (value format)');
+    expect(row.find('button.flag').exists()).toBe(true);
+  });
+});

@@ -65,6 +65,11 @@ const (
 	// AttrMCPIsError is the CallToolResult's isError (also true when the call
 	// itself rejected). Feeds the error-rate metric; never a finding on its own.
 	AttrMCPIsError = "flanj.mcp.is_error"
+	// AttrMCPErrorCode (additive, optional — 2026-09-17) is the JSON-RPC error
+	// code when the tools/call REQUEST itself was rejected (as opposed to a
+	// result with isError). -32602 (invalid params) on arguments that
+	// previously succeeded is R-B's observed_failure row.
+	AttrMCPErrorCode = "flanj.mcp.error.code"
 	// AttrMCPServerName / AttrMCPServerVersion / AttrMCPProtocolVersion carry
 	// the server identity from initialize, when the client surfaces it.
 	AttrMCPServerName      = "flanj.mcp.server.name"
@@ -284,6 +289,7 @@ func CallFromRecord(lr plog.LogRecord) model.RedactedCall {
 		Transport:          getStr(m, AttrTransport),
 		MCPToolName:        getStr(m, AttrMCPToolName),
 		MCPIsError:         getBool(m, AttrMCPIsError),
+		MCPErrorCode:       getInt(m, AttrMCPErrorCode),
 		MCPServerName:      getStr(m, AttrMCPServerName),
 		MCPServerVersion:   getStr(m, AttrMCPServerVersion),
 		MCPProtocolVersion: getStr(m, AttrMCPProtocolVersion),

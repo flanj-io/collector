@@ -1165,7 +1165,11 @@ const localNoticesProviders = computed(() =>
 // MCP contract findings shown on the Contracts tab: output_mismatch +
 // definition_change (stale_client stays a Health-band notice only).
 const mcpContractFindings = computed(() =>
-  mcpFindings.value.filter((f) => f.kind === 'output_mismatch' || f.kind === 'definition_change')
+  // value_change and input_rejection (2026-09-17, R-B's collector-only rows)
+  // are provider-side contract evidence like the other two, so they sit on the
+  // same cards; stale_client stays a local notice.
+  mcpFindings.value.filter((f) =>
+    f.kind === 'output_mismatch' || f.kind === 'definition_change' || f.kind === 'value_change' || f.kind === 'input_rejection')
 );
 
 // Contracts tab pills (two-tier): red = breaking-severity rows (all sources —
@@ -2020,12 +2024,12 @@ watch(tab, (t) => {
             </div>
             <div v-else class="drift-row">
               <div class="col">
-                <div class="k">{{ f.kind === 'output_mismatch' ? 'declared (their outputSchema)' : 'expected (per spec)' }}</div>
+                <div class="k">{{ f.kind === 'output_mismatch' ? 'declared (their outputSchema)' : f.kind === 'value_change' ? 'held before (value format)' : f.kind === 'input_rejection' ? 'accepted before' : 'expected (per spec)' }}</div>
                 <div class="v expected">{{ f.expected }}</div>
               </div>
               <div class="arrow">≠</div>
               <div class="col">
-                <div class="k">{{ f.kind === 'output_mismatch' ? 'got (structuredContent)' : 'actual (live)' }}</div>
+                <div class="k">{{ f.kind === 'output_mismatch' ? 'got (structuredContent)' : f.kind === 'value_change' ? 'holds now (value format)' : f.kind === 'input_rejection' ? 'rejected now' : 'actual (live)' }}</div>
                 <div class="v actual">{{ f.actual }}</div>
               </div>
               <div class="col loc">

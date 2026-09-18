@@ -52,6 +52,9 @@ type MCPDetector struct {
 	// adapters are operator-configured discovery meta-tools per peer host
 	// (meta.go); the baked adapters apply without them.
 	adapters map[string]MetaAdapter
+	// traffic is what the observed-traffic detectors learned (observed.go),
+	// keyed edge|tool.
+	traffic map[string]*observedState
 }
 
 // mcpEdgeState is one MCP edge's snapshot pair. Versioning is by content hash
@@ -371,12 +374,17 @@ func (d *MCPDetector) JudgeCall(call model.RedactedCall) ([]model.Finding, model
 					fs[i].ViaDispatch = toolName
 					fs[i].Signature = fs[i].ComputeSignature()
 				}
+				fs = append(fs, d.observeTraffic(call, inner, string(args), toolName)...)
 				return append(learned, fs...), v
 			}
 			// An inner name no search result named stays attributed to the
 			// dispatcher. Nothing is guessed from the shape of the call.
 		}
 	}
+
+	// The observed-traffic detectors need no contract at all: they compare
+	// the server with its own earlier behaviour.
+	learned = append(learned, d.observeTraffic(call, toolName, call.RequestBody, "")...)
 
 	cur := d.currentContract(call.PeerHost, call.Direction)
 	if cur == nil {
