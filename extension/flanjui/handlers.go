@@ -639,9 +639,15 @@ func (e *uiExtension) handleFlag(w http.ResponseWriter, r *http.Request) {
 	}
 	// Evidence rule (v0.5 §6, amended qfix2-2026-08-26), enforced SERVER-SIDE —
 	// not just by UI absence: stale_client is consumer-side and never leaves
-	// this collector as a flag. It is the only local-only kind.
+	// this collector as a flag. It is the only local-only kind. R-C
+	// (2026-09-17) adds a second refusal on another axis: an info finding, of
+	// any kind, stays local too. Same code, each with a sentence true of it.
 	if !finding.Flaggable() {
-		writeErr(w, http.StatusForbidden, "not_flaggable", msgNotFlaggable)
+		msg := msgNotFlaggable
+		if finding.Kind != model.KindStaleClient {
+			msg = msgInfoNotFlaggable
+		}
+		writeErr(w, http.StatusForbidden, "not_flaggable", msg)
 		return
 	}
 	// CALL-LESS flagging. qfix2-2026-08-26 (ux-design-v2 §2.7.5) lifted

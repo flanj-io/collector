@@ -1320,6 +1320,9 @@ func TestFlagRefusesLocalOnlyKinds(t *testing.T) {
 	if resp.StatusCode != 403 || out["error"] != "not_flaggable" {
 		t.Errorf("flag fnd_stale = %d %v, want 403 not_flaggable", resp.StatusCode, out)
 	}
+	if out["message"] != msgNotFlaggable {
+		t.Errorf("flag fnd_stale message = %q, want the stale-client sentence", out["message"])
+	}
 	if r.cp.flagCalls != 0 {
 		t.Fatalf("a local-only finding reached the CP (%d flag calls)", r.cp.flagCalls)
 	}
@@ -1333,6 +1336,11 @@ func TestFlagRefusesLocalOnlyKinds(t *testing.T) {
 	resp, out, _ = r.do(t, http.MethodPost, "/api/flag", map[string]any{"finding_id": "fnd_info", "allowed_domains": []string{"acme-payments.test"}})
 	if resp.StatusCode != 403 || out["error"] != "not_flaggable" {
 		t.Errorf("flag fnd_info = %d %v, want 403 not_flaggable", resp.StatusCode, out)
+	}
+	// The refusal must be true of THIS finding: an info row is not a
+	// stale-client call, so it never gets the stale-client sentence.
+	if out["message"] != msgInfoNotFlaggable {
+		t.Errorf("flag fnd_info message = %q, want the info sentence", out["message"])
 	}
 	if r.cp.flagCalls != 0 {
 		t.Fatalf("an info finding reached the CP (%d flag calls)", r.cp.flagCalls)

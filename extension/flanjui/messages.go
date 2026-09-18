@@ -93,8 +93,11 @@ const (
 	// refusal says so rather than pretending the host was malformed.
 	msgContractProbeUnknownHost = "Flanj only looks for a spec on a provider it already sees traffic to. This collector has no calls to that host."
 	msgNotFlaggable             = "This finding is a local notice — stale-client calls stay on this collector and can't be flagged to the provider."
-	msgNotAckable               = "Only non-breaking informational findings can be acknowledged — breaking findings need a fix or a thread."
-	msgFindingNotFound          = "That finding is no longer in the local store."
+	// R-C (Idan, 2026-09-17): an info finding is refused by the same 403, but
+	// the stale-client sentence above is false about it, so it has its own.
+	msgInfoNotFlaggable = "This finding is informational — info findings stay on this collector and are never flagged to another organisation."
+	msgNotAckable       = "Only non-breaking informational findings can be acknowledged — breaking findings need a fix or a thread."
+	msgFindingNotFound  = "That finding is no longer in the local store."
 	// RETIRED as a refusal by v1p4-2026-09-08: a finding with no source call is
 	// now flaggable on every kind (the message carries the ask), so nothing
 	// answers 400 finding_has_no_call any more. The string stays because the
