@@ -1,5 +1,7 @@
 package flanjdrift
 
+import "github.com/flanj-io/collector/internal/drift"
+
 import "errors"
 
 // Config configures the drift detector. Keys are frozen in CONTRACTS §8.
@@ -46,6 +48,22 @@ type Config struct {
 	// StorePodToken authenticates the front to that endpoint. Use
 	// ${env:…} interpolation; it is never logged.
 	StorePodToken string `mapstructure:"store_pod_token"`
+
+	// MCPMetaAdapters names, per MCP peer host, the discovery meta-tools a
+	// server uses in place of a full tools/list (ruling R-E, 2026-09-17): the
+	// search tools whose results carry tool definitions, and the dispatchers
+	// that call a tool by name. They ADD to the baked adapters (Sentry's
+	// search_sentry_tools / execute_sentry_tool, search_tools / call_tool,
+	// shopware-tool-search). A dispatcher call is re-attributed to its inner
+	// tool only when that name was returned by a search result this collector
+	// recorded for the same host — config says which tools to read, never
+	// which calls to trust.
+	//
+	//   mcp_meta_adapters:
+	//     mcp.example.com:
+	//       search_tools: [find_capabilities]
+	//       dispatch_tools: [{name: run, name_arg: op, args_arg: input}]
+	MCPMetaAdapters map[string]drift.MetaAdapter `mapstructure:"mcp_meta_adapters"`
 
 	// prevent unkeyed literal initialization
 	_ struct{}

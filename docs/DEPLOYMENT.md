@@ -243,6 +243,29 @@ Flow specifics:
   — whichever front sees what, and a restarted front resumes from the store
   rather than from the next list it happens to observe. On each front the newer
   observation wins, silently; the front that observed a change reports it.
+- **MCP servers behind discovery meta-tools** (2026-09-17). Some servers list
+  only a search tool and a dispatcher in `tools/list`. The drift processor reads
+  tool definitions out of search RESULTS the agent already received, and judges
+  a dispatcher call as the tool it names — but only when that name was returned
+  by a search result it recorded for the same host; any other name stays on the
+  dispatcher, and the finding carries `via_dispatch`. Known patterns are built in
+  (`search_tools`/`call_tool`, Sentry's `search_sentry_tools`/`execute_sentry_tool`,
+  `shopware-tool-search`); add a server's own names per host under
+  `flanjdrift.mcp_meta_adapters`:
+
+  ```yaml
+  flanjdrift:
+    mcp_meta_adapters:
+      mcp.example.com:
+        search_tools: [find_capabilities]
+        dispatch_tools: [{name: run, name_arg: op, args_arg: input}]
+  ```
+
+  The search-learned catalog is held in memory per process: it is re-learned
+  from the next search after a restart, and on the tiered shape each front
+  learns from the searches it sees — a front that has not seen one leaves the
+  call on the dispatcher, which is the safe direction. The collector never
+  probes a server for its catalog.
 - **One contract document is capped at 8 MiB on that channel**, at both ends:
   the store pod answers `413` rather than serving a larger one, and a front
   refuses to read one rather than reading a prefix. Neither end truncates — a

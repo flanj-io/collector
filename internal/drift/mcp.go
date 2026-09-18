@@ -49,6 +49,9 @@ import (
 type MCPDetector struct {
 	mu    sync.Mutex
 	edges map[string]*mcpEdgeState
+	// adapters are operator-configured discovery meta-tools per peer host
+	// (meta.go); the baked adapters apply without them.
+	adapters map[string]MetaAdapter
 }
 
 // mcpEdgeState is one MCP edge's snapshot pair. Versioning is by content hash
@@ -57,6 +60,9 @@ type mcpEdgeState struct {
 	integration string
 	current     *contract.Contract
 	previous    *contract.Contract
+	// searched is the catalog learned from search results on this edge
+	// (meta.go) — partial by nature, never a source of removals.
+	searched map[string]*searchedTool
 }
 
 // NewMCPDetector returns an empty detector. It needs no configuration: MCP
@@ -341,16 +347,43 @@ func (d *MCPDetector) DetectCall(call model.RedactedCall) []model.Finding {
 // applied. The stale_client checks on the ARGUMENTS run regardless and never
 // move the verdict: they are about the consumer, not the provider's response.
 func (d *MCPDetector) JudgeCall(call model.RedactedCall) ([]model.Finding, model.Validation) {
-	cur := d.currentContract(call.PeerHost, call.Direction)
-	if cur == nil {
-		return nil, model.NotValidated(model.NotValidatedNoContract)
-	}
 	toolName := call.MCPToolName
 	if toolName == "" {
 		toolName = strings.TrimPrefix(call.Route, "/")
 	}
+
+	// Discovery meta-tools (meta.go, R-E). A search result teaches the edge
+	// tool definitions; a dispatcher call whose inner name exactly matches one
+	// of them is judged as THAT tool, with the dispatcher kept as evidence.
+	// Neither needs the tools/list baseline, so both run before its check.
+	search, dispatch := d.adapterFor(call.PeerHost)
+	var learned []model.Finding
+	if search[toolName] && !call.MCPIsError && !call.ResponseBodyTruncated {
+		learned = d.ingestSearchResult(call)
+	}
+	if t, ok := dispatch[toolName]; ok && !call.RequestBodyTruncated {
+		if inner, args, ok := dispatchInner(t, call.RequestBody); ok {
+			if op, seen := d.searchedOpAt(call.PeerHost, call.Direction, inner); op != nil {
+				innerCall := call
+				innerCall.RequestBody = string(args)
+				fs, v := judgeOp(innerCall, op, inner, seen)
+				for i := range fs {
+					fs[i].ViaDispatch = toolName
+					fs[i].Signature = fs[i].ComputeSignature()
+				}
+				return append(learned, fs...), v
+			}
+			// An inner name no search result named stays attributed to the
+			// dispatcher. Nothing is guessed from the shape of the call.
+		}
+	}
+
+	cur := d.currentContract(call.PeerHost, call.Direction)
+	if cur == nil {
+		return learned, model.NotValidated(model.NotValidatedNoContract)
+	}
 	if toolName == "" {
-		return nil, model.NotValidated(model.NotValidatedToolNotListed)
+		return learned, model.NotValidated(model.NotValidatedToolNotListed)
 	}
 	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00")
 
@@ -359,9 +392,19 @@ func (d *MCPDetector) JudgeCall(call model.RedactedCall) ([]model.Finding, model
 		// stale_client: the agent is calling a tool the CURRENT list no longer
 		// declares (renamed/removed server-side, or the client cached an old
 		// list). Consumer-side — LOCAL ONLY, never flaggable.
-		return []model.Finding{staleToolFinding(call, toolName, now)},
+		return append(learned, staleToolFinding(call, toolName, now)),
 			model.NotValidated(model.NotValidatedToolNotListed)
 	}
+	fs, v := judgeOp(call, op, toolName, cur.Version.ObservedAt)
+	return append(learned, fs...), v
+}
+
+// judgeOp validates one call against one operation: the arguments against its
+// inputSchema (stale_client) and the result against its outputSchema
+// (output_mismatch). snapshotObservedAt is when that operation's definition
+// was observed — the tools/list snapshot, or the search result it came from.
+func judgeOp(call model.RedactedCall, op *contract.Operation, toolName, snapshotObservedAt string) ([]model.Finding, model.Validation) {
+	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00")
 
 	// MCP revision 2026-07-28, `resultType: "input_required"`. The server is
 	// asking the caller for more input; the exchange is MID-FLIGHT. Neither half
@@ -437,9 +480,9 @@ func (d *MCPDetector) JudgeCall(call model.RedactedCall) ([]model.Finding, model
 			severity:       model.SeverityBreaking,
 			locationPrefix: "$.response.structuredContent",
 			detailNoun:     "result field",
-			// The optional snapshot_observed_at (CONTRACTS §4): the CURRENT
-			// snapshot this call was validated against.
-			snapshotObservedAt: cur.Version.ObservedAt,
+			// The optional snapshot_observed_at (CONTRACTS §4): when the
+			// definition this call was validated against was observed.
+			snapshotObservedAt: snapshotObservedAt,
 		}, v, call, toolName, now))
 	}
 	return findings, model.VerdictOf(findings)

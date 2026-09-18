@@ -384,8 +384,23 @@ type Finding struct {
 	// observed_failure. Empty on the HTTP/OpenAPI kinds, which R-A's
 	// vocabulary does not describe, and on findings from older collectors —
 	// readers must tolerate its absence.
-	ChangeKind      string  `json:"change_kind,omitempty"`
-	Severity        string  `json:"severity"`
+	ChangeKind string `json:"change_kind,omitempty"`
+	Severity   string `json:"severity"`
+	// ViaDispatch (additive, optional — ruling R-E, 2026-09-17) names the
+	// generic dispatcher a call went through when detection re-attributed it
+	// to the INNER tool. It is set only when the inner name exactly matched a
+	// tool the same server returned in a search result this collector had
+	// already recorded; the stored call itself stays the literal dispatcher
+	// call, whose request body names the inner tool — the evidence a provider
+	// needs to reproduce it.
+	ViaDispatch string `json:"via_dispatch,omitempty"`
+	// Source / Completeness (additive, optional) describe the contract a
+	// definition_change was classified against: "tools_list" (a complete
+	// observed catalog, the default when absent) or "search_result" (tool
+	// definitions a discovery meta-tool returned — "partial" by nature, since
+	// a search page is never the whole catalog).
+	Source          string  `json:"source,omitempty"`
+	Completeness    string  `json:"completeness,omitempty"`
 	Integration     string  `json:"integration"`
 	Endpoint        string  `json:"endpoint"`
 	FieldPath       *string `json:"field_path"`
