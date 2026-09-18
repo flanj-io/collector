@@ -145,6 +145,7 @@ CREATE TABLE IF NOT EXISTS spec_infos (
   doc          TEXT NOT NULL,
   source       TEXT NOT NULL DEFAULT 'config',
   source_url   TEXT,
+  server_command TEXT,
   prev_doc     TEXT,
   prev_version TEXT,
   prev_loaded_at TEXT
@@ -184,6 +185,10 @@ ALTER TABLE spec_infos ADD COLUMN IF NOT EXISTS edge_class TEXT;
 -- (ruling R5, 2026-09-16). NULL for every other source, and nothing re-reads
 -- it — it is the evidence line's URL, not a refresh handle.
 ALTER TABLE spec_infos ADD COLUMN IF NOT EXISTS source_url TEXT;
+-- spec_infos.server_command: how the client launched an observed stdio MCP
+-- server (flanj.mcp.server.command, 2026-09-18) — a JSON array string for the
+-- contract card, display only. NULL for every other row.
+ALTER TABLE spec_infos ADD COLUMN IF NOT EXISTS server_command TEXT;
 ALTER TABLE calls ADD COLUMN IF NOT EXISTS drifted INTEGER NOT NULL DEFAULT 0;
 -- calls.validated: the drift processor's per-call verdict. DEFAULT '' backfills
 -- every pre-existing row and nothing else ever writes '' (InsertCall always
@@ -542,16 +547,16 @@ func (p *postgresStore) PutSpecInfo(info model.SpecInfo, rawSpec []byte) (err er
 	// `source` is written, and rewritten on conflict, so the row's provenance
 	// always describes the document in it — see the sqlite twin.
 	_, err = p.db.Exec(p.rebind(
-		`INSERT INTO spec_infos (integration, role, peer_host, edge_class, format, title, version, docs_url, endpoints, loaded_at, doc, source, source_url)
-		   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+		`INSERT INTO spec_infos (integration, role, peer_host, edge_class, format, title, version, docs_url, endpoints, loaded_at, doc, source, source_url, server_command)
+		   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		 ON CONFLICT (integration) DO UPDATE SET
 		   role=excluded.role, peer_host=excluded.peer_host, edge_class=excluded.edge_class, format=excluded.format, title=excluded.title,
 		   version=excluded.version, docs_url=excluded.docs_url, endpoints=excluded.endpoints,
 		   loaded_at=CASE WHEN excluded.format=? AND spec_infos.doc=excluded.doc THEN spec_infos.loaded_at ELSE excluded.loaded_at END,
-		   doc=excluded.doc, source=excluded.source, source_url=excluded.source_url`),
+		   doc=excluded.doc, source=excluded.source, source_url=excluded.source_url, server_command=excluded.server_command`),
 		info.Integration, role, nullStr(info.PeerHost), nullStr(info.EdgeClass), info.Format, nullStr(info.Title),
 		nullStr(info.Version), nullStr(info.DocsURL), info.Endpoints, info.LoadedAt, string(rawSpec), specSourceOf(info),
-		nullStr(info.SourceURL),
+		nullStr(info.SourceURL), nullStr(info.ServerCommand),
 		model.SpecFormatMCP,
 	)
 	if err != nil {

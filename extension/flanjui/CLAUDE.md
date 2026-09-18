@@ -21,7 +21,11 @@ API + the flag action.
   `GET /api/contracts/spec?integration=...` serves the raw spec document.
   **v0.5 MCP (Step D): no new routes.** `/api/contracts` rows may carry format
   `"mcp"` (an observed `tools/list` snapshot — `…/spec` then serves the raw
-  snapshot JSON verbatim, which the SPA parses into per-tool rows); `/api/calls`
+  snapshot JSON verbatim, which the SPA parses into per-tool rows) and, for a
+  stdio (`local-process`) server, the optional `server_command` — the SDK's
+  launch line as a JSON array string (2026-09-18), rendered as one `Launched
+  as:` line on that card and NEVER read by the flag relay (`servercommand_test.go`
+  pins both); `/api/calls`
   rows pass the additive `transport` / `mcp_*` fields and
   `correlation.client_request_id` through untouched; `/api/findings` carries the
   three MCP kinds plus the optional `snapshot_observed_at` (CONTRACTS §4). All
