@@ -18,11 +18,11 @@
  *       DNS points at it is refused too and every redirect hop is covered by
  *       the same check; the route is behind
  *       the same `X-Flanj-UI` + Origin guard as upload so no foreign page can
- *       drive it, and the PROBE can only ever reach a host this collector
- *       already calls. Private and internal addresses stay reachable on the
- *       typed-URL path, because an internal provider's spec lives on an
- *       internal host and refusing RFC1918 would refuse the self-hosted case
- *       this product exists for.
+ *       drive it; the PROBE can only ever reach a host this collector already
+ *       calls; and a typed URL reaches a PRIVATE address (loopback, RFC1918,
+ *       CGNAT, ULA) only when its own host is such an edge — so an internal
+ *       provider's spec is fetchable and an internal admin endpoint the app
+ *       never calls is not.
  *   (b) "Nothing leaves until you Connect." Still true, and this does not break
  *       it: a fetch sends no data anywhere. It is a GET for a document the
  *       provider publishes to the world, made by the collector, landing here.

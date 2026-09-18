@@ -3,6 +3,7 @@ package flanjui
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -47,6 +48,18 @@ func (s *specServer) serve(path, body string) {
 
 func (s *specServer) url(path string) string { return s.srv.URL + path }
 
+// newEdgeSpecServer is a spec server this deployment already calls. It listens
+// on loopback — a PRIVATE address — so the fetch policy allows it only because
+// its host is a discovered edge. That is the real shape of an internal
+// provider, and every fetch test that expects to reach the server must say so
+// explicitly rather than inherit it.
+func newEdgeSpecServer(t *testing.T, r *testRig) *specServer {
+	t.Helper()
+	s := newSpecServer(t)
+	seedEdge(t, r, s.host())
+	return s
+}
+
 // host returns the 127.0.0.1:PORT the test server listens on — which is what
 // the SDK would report as `peer.host` for a call to it, so it is also what the
 // contract binds to.
@@ -68,7 +81,7 @@ func fetchPreview(t *testing.T, r *testRig, body map[string]any) (*http.Response
 func TestFetchedContractCarriesItsSourceURL(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
-	spec := newSpecServer(t)
+	spec := newEdgeSpecServer(t, r)
 	spec.serve("/openapi.json", specV1Doc(t))
 
 	resp, out := fetchPreview(t, r, map[string]any{
@@ -129,7 +142,7 @@ func TestFetchedContractCarriesItsSourceURL(t *testing.T) {
 func TestFetchPreviewsBeforeItBinds(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
-	spec := newSpecServer(t)
+	spec := newEdgeSpecServer(t, r)
 	spec.serve("/openapi.json", specV1Doc(t))
 
 	// A request naming a URL never binds, however it is shaped.
@@ -162,7 +175,7 @@ func TestFetchPreviewsBeforeItBinds(t *testing.T) {
 func TestAStagedFetchBindsExactlyOnce(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
-	spec := newSpecServer(t)
+	spec := newEdgeSpecServer(t, r)
 	spec.serve("/openapi.json", specV1Doc(t))
 
 	_, out := fetchPreview(t, r, map[string]any{"url": spec.url("/openapi.json"), "peer_host": "api.acme.test"})
@@ -184,7 +197,7 @@ func TestAStagedFetchBindsExactlyOnce(t *testing.T) {
 func TestFetchBindsTheBytesItRead(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
-	spec := newSpecServer(t)
+	spec := newEdgeSpecServer(t, r)
 	spec.serve("/openapi.json", specV1Doc(t))
 
 	_, out := fetchPreview(t, r, map[string]any{"url": spec.url("/openapi.json"), "peer_host": "api.acme.test"})
@@ -240,6 +253,10 @@ func TestFetchRefusals(t *testing.T) {
 		{"an unsupported scheme", "file:///etc/passwd", "invalid_url", http.StatusBadRequest},
 		{"credentials in the url", "https://user:pw@api.acme.test/openapi.json", "invalid_url", http.StatusBadRequest},
 		{"the cloud metadata service", "http://169.254.169.254/latest/meta-data/", "blocked_target", http.StatusForbidden},
+		{"metadata behind IPv4-mapped IPv6", "http://[::ffff:169.254.169.254]/latest/", "blocked_target", http.StatusForbidden},
+		{"metadata behind NAT64", "http://[64:ff9b::a9fe:a9fe]/latest/", "blocked_target", http.StatusForbidden},
+		{"the unspecified address", "http://0.0.0.0/openapi.json", "blocked_target", http.StatusForbidden},
+		{"an internal host nobody calls", "http://10.0.0.5/admin", "private_target", http.StatusForbidden},
 		{"a 404", spec.url("/notfound.json"), "fetch_status", http.StatusBadGateway},
 		{"a spec that is not published", spec.url("/unauthorized.json"), "fetch_status", http.StatusBadGateway},
 		{"an empty 200", spec.url("/empty.json"), "empty_document", http.StatusBadGateway},
@@ -249,6 +266,7 @@ func TestFetchRefusals(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newRig(t)
 			r.start(t)
+			seedEdge(t, r, spec.host()) // an internal provider we call: the refusals below are the server's, not the policy's
 			resp, out := fetchPreview(t, r, map[string]any{"url": tc.url, "peer_host": "api.acme.test"})
 			if resp.StatusCode != tc.want || out["error"] != tc.code {
 				t.Errorf("= %d %v, want %d %s", resp.StatusCode, out["error"], tc.want, tc.code)
@@ -274,7 +292,7 @@ func TestFetchRefusals(t *testing.T) {
 func TestFetchStatusRefusalNamesTheStatus(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
-	spec := newSpecServer(t)
+	spec := newEdgeSpecServer(t, r)
 	spec.paths["/x.json"] = func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusForbidden) }
 
 	_, out := fetchPreview(t, r, map[string]any{"url": spec.url("/x.json"), "peer_host": "api.acme.test"})
@@ -289,7 +307,7 @@ func TestFetchStatusRefusalNamesTheStatus(t *testing.T) {
 func TestFetchRefusesAMetadataRedirect(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
-	spec := newSpecServer(t)
+	spec := newEdgeSpecServer(t, r)
 	spec.paths["/redirect"] = func(w http.ResponseWriter, req *http.Request) {
 		http.Redirect(w, req, "http://169.254.169.254/latest/meta-data/", http.StatusFound)
 	}
@@ -309,7 +327,7 @@ func TestFetchRefusesAMetadataRedirect(t *testing.T) {
 func TestFetchRecordsWhereItLanded(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
-	spec := newSpecServer(t)
+	spec := newEdgeSpecServer(t, r)
 	spec.serve("/v2/openapi.json", specV1Doc(t))
 	spec.paths["/openapi.json"] = func(w http.ResponseWriter, req *http.Request) {
 		http.Redirect(w, req, "/v2/openapi.json", http.StatusMovedPermanently)
@@ -324,12 +342,94 @@ func TestFetchRecordsWhereItLanded(t *testing.T) {
 	}
 }
 
+// TestFetchReachesAPrivateAddressOnlyForAnEdge is the bound on fetch itself.
+// Without it, fetch takes any URL and the IP guard is its ONLY destination
+// control; with it, reaching a private address takes BOTH the edge table
+// (the URL's host is one the deployment already calls) and the dial-time
+// address check.
+func TestFetchReachesAPrivateAddressOnlyForAnEdge(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	spec := newSpecServer(t) // loopback, and NOT an edge
+	spec.serve("/openapi.json", specV1Doc(t))
+
+	resp, out := fetchPreview(t, r, map[string]any{"url": spec.url("/openapi.json"), "peer_host": "api.acme.test"})
+	if resp.StatusCode != http.StatusForbidden || out["error"] != "private_target" {
+		t.Fatalf("= %d %v, want 403 private_target", resp.StatusCode, out)
+	}
+	if len(spec.hits) != 0 {
+		t.Fatalf("the refused fetch still reached the host: %v", spec.hits)
+	}
+
+	// The binding host being an edge does NOT lend its privilege to a URL on a
+	// different host — "bind to an edge, fetch an admin endpoint" is the abuse.
+	seedEdge(t, r, "api.acme.test")
+	if resp, out := fetchPreview(t, r, map[string]any{"url": spec.url("/openapi.json"), "peer_host": "api.acme.test"}); out["error"] != "private_target" {
+		t.Fatalf("peer_host's edge was borrowed for the URL's host: %d %v", resp.StatusCode, out)
+	}
+
+	// Once the URL's own host is an edge, the same fetch goes through.
+	seedEdge(t, r, spec.host())
+	if resp, out := fetchPreview(t, r, map[string]any{"url": spec.url("/openapi.json"), "peer_host": "api.acme.test"}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("an edge host was refused: %d %v", resp.StatusCode, out)
+	}
+}
+
+// TestACrossHostRedirectDropsThePrivilege: an allowed internal edge must not be
+// able to bounce the fetch onto an internal host nobody calls. The second
+// server differs only by PORT — a different host key, same loopback address —
+// so this is decided by the policy's host tracking, not by the address check.
+func TestACrossHostRedirectDropsThePrivilege(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	target := newSpecServer(t) // NOT an edge
+	target.serve("/openapi.json", specV1Doc(t))
+	edge := newEdgeSpecServer(t, r)
+	edge.paths["/openapi.json"] = func(w http.ResponseWriter, req *http.Request) {
+		http.Redirect(w, req, target.url("/openapi.json"), http.StatusFound)
+	}
+
+	resp, out := fetchPreview(t, r, map[string]any{"url": edge.url("/openapi.json"), "peer_host": "api.acme.test"})
+	if resp.StatusCode != http.StatusForbidden || out["error"] != "private_target" {
+		t.Fatalf("= %d %v, want 403 private_target — the redirect carried the edge's privilege to another host", resp.StatusCode, out)
+	}
+	if len(target.hits) != 0 {
+		t.Errorf("the redirect target was reached: %v", target.hits)
+	}
+	if infos, _ := r.st.ListSpecInfos(); len(infos) != 0 {
+		t.Error("a refused redirect bound a contract")
+	}
+
+	// A SAME-host redirect keeps it — publishers move specs between paths.
+	edge.serve("/v2/openapi.json", specV1Doc(t))
+	edge.paths["/moved.json"] = func(w http.ResponseWriter, req *http.Request) {
+		http.Redirect(w, req, "/v2/openapi.json", http.StatusMovedPermanently)
+	}
+	if resp, out := fetchPreview(t, r, map[string]any{"url": edge.url("/moved.json"), "peer_host": "api.acme.test"}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("a same-host redirect was refused: %d %v", resp.StatusCode, out)
+	}
+}
+
+// TestANameResolvingToAPrivateAddressIsRefusedAtDial: the private refusal holds
+// at the dialer too, for a name whose spelling reveals nothing — the name case
+// the URL-level check cannot see.
+func TestANameResolvingToAPrivateAddressIsRefusedAtDial(t *testing.T) {
+	dialer := &net.Dialer{
+		Resolver: newFakeResolver(t, "10.0.0.5"),
+		Control:  func(_, address string, _ syscall.RawConn) error { return dialGuard(address, false) },
+	}
+	_, err := dialer.DialContext(context.Background(), "tcp", "innocent.example:80")
+	if !errors.Is(err, errPrivateTarget) {
+		t.Fatalf("dial = %v, want the private refusal", err)
+	}
+}
+
 // TestProbeNeverAutoBinds is the guardrail this route exists inside. A probe
 // offers; a human binds. Nothing below may ever write to the store.
 func TestProbeNeverAutoBinds(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
-	spec := newSpecServer(t)
+	spec := newEdgeSpecServer(t, r)
 	spec.serve("/openapi.json", specV1Doc(t))
 	// The probe only touches a host with traffic, so give it one.
 	host := spec.host()
@@ -369,7 +469,7 @@ func TestProbeNeverAutoBinds(t *testing.T) {
 func TestProbeReportsAMissAsAResult(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
-	spec := newSpecServer(t) // serves nothing
+	spec := newEdgeSpecServer(t, r) // serves nothing
 	host := spec.host()
 	seedEdge(t, r, host)
 
@@ -445,7 +545,7 @@ func TestFetchAndProbeAreGuardedLikeUpload(t *testing.T) {
 func TestAFetchedContractIsRemovableAndReplaceable(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
-	spec := newSpecServer(t)
+	spec := newEdgeSpecServer(t, r)
 	spec.serve("/openapi.json", specV1Doc(t))
 
 	_, out := fetchPreview(t, r, map[string]any{"url": spec.url("/openapi.json"), "peer_host": "api.acme.test"})
@@ -475,26 +575,89 @@ func TestAFetchedContractIsRemovableAndReplaceable(t *testing.T) {
 	}
 }
 
-// TestFetchTargetError pins the narrowness of the target guard directly. It
-// refuses the cloud metadata pivot and NOTHING ELSE that a self-hosted install
-// legitimately needs: an internal provider's spec lives on an internal host,
-// and refusing RFC1918 would refuse the case this product is built for.
-func TestFetchTargetError(t *testing.T) {
-	for _, blocked := range []string{
-		"169.254.169.254", "169.254.169.254:80", "[fe80::1]", "fd00:ec2::254",
-		"metadata.google.internal", "metadata",
+// TestDestinationPolicy pins every class, including the embedded-IPv4 forms a
+// v4-only check misses. The table IS the policy's specification: adding a
+// range means adding a row here, and the audit that produced it (2026-09-18)
+// found NAT64, 0.0.0.0/8, :: and broadcast all reachable.
+func TestDestinationPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		addr string
+		want destClass
+	}{
+		// FORBIDDEN, always.
+		{"169.254.169.254", destForbidden},
+		{"169.254.0.1", destForbidden},
+		{"::ffff:169.254.169.254", destForbidden}, // IPv4-mapped
+		{"::ffff:a9fe:a9fe", destForbidden},       // same, hex spelling
+		{"64:ff9b::a9fe:a9fe", destForbidden},     // NAT64 — the classic v4-only miss
+		{"64:ff9b::169.254.169.254", destForbidden},
+		{"fe80::1", destForbidden},
+		{"fd00:ec2::254", destForbidden},
+		{"0.0.0.0", destForbidden},
+		{"0.1.2.3", destForbidden}, // 0/8 routes to the local host on Linux
+		{"::", destForbidden},
+		{"::ffff:0.0.0.0", destForbidden},
+		{"224.0.0.1", destForbidden},
+		{"ff02::1", destForbidden},
+		{"255.255.255.255", destForbidden},
+
+		// PRIVATE: reachable only for a discovered edge.
+		{"127.0.0.1", destPrivate},
+		{"127.8.9.10", destPrivate},
+		{"::1", destPrivate},
+		{"::ffff:127.0.0.1", destPrivate},
+		{"10.0.0.5", destPrivate},
+		{"172.16.0.1", destPrivate},
+		{"172.31.255.255", destPrivate},
+		{"192.168.1.1", destPrivate},
+		{"100.64.0.1", destPrivate}, // CGNAT
+		{"100.127.255.254", destPrivate},
+		{"fc00::1", destPrivate},
+		{"fd12:3456::1", destPrivate},
+		{"::ffff:10.0.0.5", destPrivate},
+		{"64:ff9b::a00:5", destPrivate}, // NAT64 onto 10.0.0.5
+
+		// PUBLIC.
+		{"93.184.216.34", destPublic},
+		{"172.32.0.1", destPublic},  // just past 172.16/12
+		{"100.128.0.1", destPublic}, // just past 100.64/10
+		{"2606:4700::1111", destPublic},
+		{"64:ff9b::5db8:d822", destPublic}, // NAT64 onto a public v4
 	} {
-		if fetchTargetError(blocked) == nil {
-			t.Errorf("%s was allowed; it is a metadata endpoint, never a published spec", blocked)
+		ip := net.ParseIP(tc.addr)
+		if ip == nil {
+			t.Fatalf("bad fixture %q", tc.addr)
+		}
+		if got := classifyIP(ip); got != tc.want {
+			t.Errorf("classifyIP(%s) = %d, want %d", tc.addr, got, tc.want)
 		}
 	}
-	for _, allowed := range []string{
-		"api.acme.test", "api.acme.test:8443",
-		"10.0.0.5", "192.168.1.10:8080", "172.16.4.4", // internal providers are first-class here
-		"127.0.0.1:9000", "localhost:3000", // a developer's own machine
-	} {
-		if err := fetchTargetError(allowed); err != nil {
-			t.Errorf("%s was refused (%v); refusing internal hosts refuses the self-hosted case", allowed, err)
+}
+
+// TestCheckDestination: the class becomes a refusal according to the policy,
+// with the address in every spelling the dialer and a URL can hand it over.
+func TestCheckDestination(t *testing.T) {
+	for _, addr := range []string{"169.254.169.254:80", "[::ffff:169.254.169.254]:80", "[64:ff9b::a9fe:a9fe]:443",
+		"0.0.0.0:80", "metadata.google.internal", "metadata.google.internal.", "METADATA"} {
+		for _, allow := range []bool{false, true} {
+			if err := checkDestination(addr, allow); !errors.Is(err, errBlockedTarget) {
+				t.Errorf("checkDestination(%s, allowPrivate=%v) = %v — forbidden is forbidden for every host", addr, allow, err)
+			}
+		}
+	}
+	for _, addr := range []string{"127.0.0.1:9000", "[::1]:80", "10.0.0.5", "192.168.1.10:8080", "100.64.1.1:443"} {
+		if err := checkDestination(addr, false); !errors.Is(err, errPrivateTarget) {
+			t.Errorf("checkDestination(%s, false) = %v, want the private refusal", addr, err)
+		}
+		if err := checkDestination(addr, true); err != nil {
+			t.Errorf("checkDestination(%s, true) = %v — a discovered internal edge must stay fetchable", addr, err)
+		}
+	}
+	// Names pass the string check (except the metadata aliases): the DIALER
+	// judges them, on what they resolve to.
+	for _, name := range []string{"api.acme.test", "api.acme.test:8443", "localhost:3000"} {
+		if err := checkDestination(name, false); err != nil {
+			t.Errorf("checkDestination(%s) = %v, want nil — names are judged at dial", name, err)
 		}
 	}
 }
@@ -519,7 +682,7 @@ func TestANameResolvingToMetadataIsRefusedAtDial(t *testing.T) {
 
 	dialer := &net.Dialer{
 		Resolver: fakeDNS,
-		Control:  func(_, address string, _ syscall.RawConn) error { return dialGuard(address) },
+		Control:  func(_, address string, _ syscall.RawConn) error { return dialGuard(address, true) },
 	}
 	_, err := dialer.DialContext(context.Background(), "tcp", "spec.evil.test:80")
 	if err == nil {
@@ -532,7 +695,7 @@ func TestANameResolvingToMetadataIsRefusedAtDial(t *testing.T) {
 	// And the guard is WIRED: the client the fetch path builds carries a
 	// transport with a dial hook, not the default one. Without this, the test
 	// above proves a function nobody calls.
-	tr, ok := contractHTTPClient(time.Second).Transport.(*http.Transport)
+	tr, ok := contractHTTPClient(time.Second, "spec.evil.test", true).Transport.(*http.Transport)
 	if !ok || tr.DialContext == nil {
 		t.Fatal("the contract fetch client does not install a guarded dialer")
 	}
@@ -618,7 +781,7 @@ func dnsAnswer(query []byte, ip net.IP) ([]byte, bool) {
 func TestFetchTakesTheHostFromTheURLWhenNoneIsGiven(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
-	spec := newSpecServer(t)
+	spec := newEdgeSpecServer(t, r)
 	spec.serve("/openapi.json", specV1Doc(t))
 
 	_, out := fetchPreview(t, r, map[string]any{"url": spec.url("/openapi.json")})

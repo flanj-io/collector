@@ -117,7 +117,10 @@ func (e *uiExtension) handleContractProbe(w http.ResponseWriter, r *http.Request
 	for _, p := range conventionalSpecPaths {
 		u := &url.URL{Scheme: probeScheme(host), Host: host, Path: p}
 		resp.Tried = append(resp.Tried, u.String())
-		doc, final, ferr := e.fetchContractDoc(r.Context(), u, contractProbeTimeout)
+		// The probe host is a discovered edge by construction (refused above
+		// otherwise), so a private address is allowed — the same rule fetch
+		// applies, not an exemption from it.
+		doc, final, ferr := e.fetchContractDoc(r.Context(), u, contractProbeTimeout, true)
 		if ferr != nil {
 			// A miss is the COMMON case and is not an error: most providers
 			// publish at none of these paths. Logged at debug volume only —

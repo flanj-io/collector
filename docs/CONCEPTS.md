@@ -81,7 +81,8 @@ Three properties make it safe to hand to a model:
    probe** issue `GET`s to a **provider's** host for the OpenAPI document that provider publishes. Both
    are operator-initiated — nothing schedules them and no config key enables them — and both are READS:
    no data leaves on either path. The probe only ever asks a host this deployment already sends traffic
-   to. See `docs/DEPLOYMENT.md` for the exact requests, timeouts, caps and egress-policy notes.
+   to, and a fetch reaches a private or internal address only on such a host; metadata, link-local and
+   other reserved addresses are refused always, judged after DNS resolution. See `docs/DEPLOYMENT.md` for the exact requests, timeouts, caps and egress-policy notes.
 4. **Technical adherence only.** Drift detection validates fields/types/shapes/enums — never business or
    economic correctness (prices, fees, FX), which are legitimately variable.
 

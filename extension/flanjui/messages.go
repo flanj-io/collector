@@ -74,12 +74,15 @@ const (
 	msgContractFetchURLInvalid        = "That doesn't look like a URL. Paste the full address of the document, e.g. https://api.acme.test/openapi.json."
 	msgContractFetchSchemeUnsupported = "Only http and https URLs can be fetched."
 	msgContractFetchNoCredentials     = "That URL carries a username and password. Flanj only fetches specs a provider publishes openly — download it yourself and upload the file instead."
-	msgContractFetchBlockedTarget     = "That address is a cloud metadata endpoint, not a published spec. Flanj won't request it."
-	msgContractFetchTimeout           = "That host didn't answer within 20 seconds. Check the URL, or download the document and upload it instead."
-	msgContractFetchUnreachable       = "Couldn't reach that URL from this collector."
-	msgContractFetchStatusFmt         = "That URL answered %d, so there's no document to bind. Check the address — or the provider may not publish a spec."
-	msgContractFetchEmpty             = "That URL answered with an empty document. Nothing was bound."
-	msgContractFetchUnparseable       = "That URL answered, but not with an OpenAPI document. Some hosts return an HTML page for a missing file."
+	msgContractFetchBlockedTarget     = "That address is a cloud metadata, link-local or otherwise reserved address, not a published spec. Flanj won't request it."
+	// A private address is fetchable — but only on a host the deployment
+	// already calls. The sentence says how to get there rather than just no.
+	msgContractFetchPrivateTarget = "That's a private-network address, and this collector sees no traffic to that host. Flanj only fetches from an internal address when it's a provider this deployment already calls — or upload the document instead."
+	msgContractFetchTimeout       = "That host didn't answer within 20 seconds. Check the URL, or download the document and upload it instead."
+	msgContractFetchUnreachable   = "Couldn't reach that URL from this collector."
+	msgContractFetchStatusFmt     = "That URL answered %d, so there's no document to bind. Check the address — or the provider may not publish a spec."
+	msgContractFetchEmpty         = "That URL answered with an empty document. Nothing was bound."
+	msgContractFetchUnparseable   = "That URL answered, but not with an OpenAPI document. Some hosts return an HTML page for a missing file."
 	// Expired, already bound, or never staged — one sentence, because the
 	// operator's next move is the same in all three and naming a token they
 	// never saw explains nothing.

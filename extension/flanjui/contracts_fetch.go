@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -236,7 +237,7 @@ func (e *uiExtension) previewFetch(w http.ResponseWriter, ctx context.Context, s
 		return
 	}
 
-	doc, finalURL, ferr := e.fetchContractDoc(ctx, target, contractFetchTimeout)
+	doc, finalURL, ferr := e.fetchContractDoc(ctx, target, contractFetchTimeout, edgeAllowsPrivate(st, target))
 	if ferr != nil {
 		// A fetch failure is a STATED state and never a bind. Every branch of
 		// fetchError carries its own sentence naming what happened — a 404, a
@@ -404,54 +405,131 @@ func parseFetchURL(raw string) (*url.URL, error) {
 	return u, nil
 }
 
-// fetchTargetError refuses a destination this collector must not request.
+// Where a contract fetch may connect — the destination policy, in one place.
 //
-// This is the answer to the SSRF objection the old "no URL fetch, ever" comment
-// raised, and it is deliberately NARROW. Private and internal addresses are
-// ALLOWED: `internal` is a first-class edge class here, an internal provider's
-// spec lives on an internal host, and refusing RFC1918 would refuse the
-// self-hosted case this product is built for.
+// Three classes, decided on the address the connection is ACTUALLY made to:
 //
-// What is refused is the cloud instance-metadata service — 169.254.169.254 and
-// the link-local range it sits in, plus the IPv6 equivalents. That is the
-// specific pivot the old comment named, it is never a published OpenAPI
-// document, and refusing it costs nothing real.
+//   - FORBIDDEN, always: link-local (169.254/16 — the cloud metadata service —
+//     and fe80::/10), the IPv6 metadata address fd00:ec2::254, unspecified
+//     (0.0.0.0, ::) and the rest of 0/8 (which Linux routes to the local host),
+//     multicast and broadcast. None is ever a published OpenAPI document, so
+//     refusing them costs nothing.
+//   - PRIVATE: loopback (127/8, ::1), RFC1918, CGNAT (100.64/10) and IPv6 ULA
+//     (fc00::/7). Reachable ONLY when the fetch was addressed to a host this
+//     deployment already has an edge for — see destinationPolicy.
+//   - PUBLIC: everything else.
 //
-// This is a guard, not a boundary. The boundary is guardLocalMutating: a
-// foreign page cannot reach this route at all.
-func fetchTargetError(host string) error {
-	h := host
-	if i := strings.LastIndex(h, ":"); i >= 0 && !strings.Contains(h[i+1:], "]") {
-		if hh, _, err := net.SplitHostPort(h); err == nil {
-			h = hh
-		}
+// Why PRIVATE is conditional rather than forbidden: `internal` is a first-class
+// edge class, and an internal provider's spec lives on an internal host —
+// refusing RFC1918 outright would refuse the self-hosted case this product is
+// built for. Conditioning it on the edge table means a fetch can reach an
+// internal address only where the SDK is ALREADY sending traffic, so it opens
+// no destination the deployment was not already talking to. A typed URL naming
+// an internal admin endpoint the app never calls is refused.
+//
+// Embedded IPv4 is classified by the address it carries: an IPv4-mapped
+// ::ffff:a.b.c.d (net.IP.To4 unwraps it) and a NAT64 64:ff9b::/96 address —
+// the second is the one a v4-only check misses, and on a NAT64 network it
+// reaches exactly the IPv4 address it embeds.
+type destClass int
+
+const (
+	destPublic destClass = iota
+	destPrivate
+	destForbidden
+)
+
+var (
+	errBlockedTarget = errors.New(msgContractFetchBlockedTarget)
+	errPrivateTarget = errors.New(msgContractFetchPrivateTarget)
+
+	nat64Prefix   = mustCIDR("64:ff9b::/96")
+	cgnatRange    = mustCIDR("100.64.0.0/10")
+	thisNetwork   = mustCIDR("0.0.0.0/8")
+	ec2MetaIPv6   = net.ParseIP("fd00:ec2::254")
+	ipv4Broadcast = net.IPv4bcast
+)
+
+func mustCIDR(c string) *net.IPNet {
+	_, n, err := net.ParseCIDR(c)
+	if err != nil {
+		panic(err)
 	}
-	h = strings.Trim(h, "[]")
+	return n
+}
+
+// classifyIP puts one address in its class. Forbidden checks come first: an
+// address that is both (say, a mapped link-local) must never be downgraded to
+// merely private.
+func classifyIP(ip net.IP) destClass {
+	if nat64Prefix.Contains(ip) {
+		// The embedded IPv4 is the real destination behind a NAT64 gateway.
+		return classifyIP(net.IP(ip[12:16]))
+	}
+	if v4 := ip.To4(); v4 != nil {
+		ip = v4 // IPv4-mapped IPv6 is judged as the IPv4 it carries
+	}
+	switch {
+	case ip.IsUnspecified(), ip.IsLinkLocalUnicast(), ip.IsLinkLocalMulticast(),
+		ip.IsInterfaceLocalMulticast(), ip.IsMulticast(),
+		ip.Equal(ipv4Broadcast), ip.Equal(ec2MetaIPv6), thisNetwork.Contains(ip):
+		return destForbidden
+	case ip.IsLoopback(), ip.IsPrivate(), cgnatRange.Contains(ip):
+		return destPrivate
+	}
+	return destPublic
+}
+
+// hostOnly strips a port and IPv6 brackets from host[:port].
+func hostOnly(hostport string) string {
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		return h
+	}
+	return strings.Trim(hostport, "[]")
+}
+
+// checkDestination applies the policy to a host[:port] — a URL's host, or the
+// resolved address the dialer is about to connect to.
+//
+// For a NAME it can only refuse the well-known metadata aliases (so the
+// operator gets that specific sentence rather than a dial error). A name is NOT
+// made safe here: `evil.test IN A 169.254.169.254` is an ordinary A record that
+// passes any string check. The binding check is the dialer's Control hook,
+// which calls this with the RESOLVED address — see contractHTTPClient.
+func checkDestination(hostport string, allowPrivate bool) error {
+	h := hostOnly(hostport)
 	ip := net.ParseIP(h)
 	if ip == nil {
-		// A NAME, checked here only for the well-known metadata aliases — so
-		// the operator gets the specific sentence rather than a dial error.
-		//
-		// This is NOT where a name is made safe. Refusing literals and a short
-		// alias list leaves `evil.test IN A 169.254.169.254` straight through,
-		// which is the ordinary way this guard is defeated and needs no
-		// rebinding race to pull off. The check that actually holds is
-		// dialGuard, which runs on the RESOLVED address at connect time — see
-		// contractHTTPClient.
-		lower := strings.ToLower(h)
+		lower := strings.ToLower(strings.TrimSuffix(h, "."))
 		if lower == "metadata.google.internal" || lower == "metadata" {
-			return errors.New(msgContractFetchBlockedTarget)
+			return errBlockedTarget
 		}
 		return nil
 	}
-	if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
-		return errors.New(msgContractFetchBlockedTarget)
-	}
-	// fd00:ec2::254 — the IPv6 instance metadata address.
-	if ip.Equal(net.ParseIP("fd00:ec2::254")) {
-		return errors.New(msgContractFetchBlockedTarget)
+	switch classifyIP(ip) {
+	case destForbidden:
+		return errBlockedTarget
+	case destPrivate:
+		if !allowPrivate {
+			return errPrivateTarget
+		}
 	}
 	return nil
+}
+
+// destinationPolicy is the per-request privilege: may this fetch connect to a
+// PRIVATE address? Decided once from the host the request was addressed to,
+// and only ever LOWERED — a redirect to any other host drops it for the rest of
+// the chain, so an allowed internal edge cannot bounce the fetch onto an
+// internal host the deployment never calls. Monotonic on purpose: coming back
+// to the original host does not restore it.
+//
+// A client is built per request (contractHTTPClient), so this is never shared
+// between requests, and the transport it guards pools no connection to a host
+// the policy did not see.
+type destinationPolicy struct {
+	allowPrivate atomic.Bool
+	origin       string
 }
 
 // fetchContractDoc reads one document. Returns the bytes and the URL they
@@ -462,9 +540,12 @@ func fetchTargetError(host string) error {
 // truncation would report a PARSE error for a SIZE problem and then bind a
 // wrong contract: the exact wrong-diagnosis class model.MaxContractDocBytes
 // exists to end at every other boundary (collector#40, #48, #50).
-func (e *uiExtension) fetchContractDoc(ctx context.Context, target *url.URL, timeout time.Duration) ([]byte, string, *fetchError) {
-	if err := fetchTargetError(target.Host); err != nil {
-		return nil, "", &fetchError{http.StatusForbidden, "blocked_target", err.Error(), err}
+//
+// allowPrivate is whether the addressed host is a discovered edge — the caller
+// decides it (edgeAllowsPrivate), because only the caller holds the store.
+func (e *uiExtension) fetchContractDoc(ctx context.Context, target *url.URL, timeout time.Duration, allowPrivate bool) ([]byte, string, *fetchError) {
+	if err := checkDestination(target.Host, allowPrivate); err != nil {
+		return nil, "", destinationRefusal(err)
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -479,14 +560,16 @@ func (e *uiExtension) fetchContractDoc(ctx context.Context, target *url.URL, tim
 	req.Header.Set("User-Agent", "flanj-collector (contract fetch)")
 	req.Header.Set("Accept", "application/json, application/yaml, text/yaml, text/plain;q=0.8, */*;q=0.5")
 
-	resp, err := contractHTTPClient(timeout).Do(req)
+	resp, err := contractHTTPClient(timeout, target.Host, allowPrivate).Do(req)
 	if err != nil {
+		// Destination refusals first: a refused dial can surface wrapped in a
+		// timeout-shaped error, and "that host didn't answer" would be the
+		// wrong diagnosis for "Flanj refused to ask".
+		if errors.Is(err, errBlockedTarget) || errors.Is(err, errPrivateTarget) {
+			return nil, "", destinationRefusal(err)
+		}
 		if errors.Is(err, context.DeadlineExceeded) {
 			return nil, "", &fetchError{http.StatusGatewayTimeout, "fetch_timeout", msgContractFetchTimeout, err}
-		}
-		var uerr *url.Error
-		if errors.As(err, &uerr) && uerr.Err != nil && strings.Contains(uerr.Err.Error(), msgContractFetchBlockedTarget) {
-			return nil, "", &fetchError{http.StatusForbidden, "blocked_target", msgContractFetchBlockedTarget, err}
 		}
 		return nil, "", &fetchError{http.StatusBadGateway, "fetch_failed", msgContractFetchUnreachable, err}
 	}
@@ -530,52 +613,83 @@ func (e *uiExtension) fetchContractDoc(ctx context.Context, target *url.URL, tim
 	return doc, final, nil
 }
 
+// destinationRefusal maps a policy error to the route's answer. Two codes,
+// because the operator's next move differs: a forbidden target is never
+// fetchable, a private one is fetchable once it is a provider the deployment
+// actually calls.
+func destinationRefusal(err error) *fetchError {
+	if errors.Is(err, errPrivateTarget) {
+		return &fetchError{http.StatusForbidden, "private_target", msgContractFetchPrivateTarget, err}
+	}
+	return &fetchError{http.StatusForbidden, "blocked_target", msgContractFetchBlockedTarget, err}
+}
+
 // contractHTTPClient builds the client every fetch and probe request goes
-// through. It exists so the destination guard cannot be forgotten at a call
-// site — there is one client, and it carries the guard.
+// through — one per request, so the destination policy it carries is that
+// request's alone.
 //
-// The guard that MATTERS is dialGuard, on the dialer's Control hook. Checking
-// the URL's host catches only literals: `evil.test IN A 169.254.169.254` is an
-// ordinary A record and passes every string check, so a URL-level guard alone
-// is defeated by anyone who can publish a DNS name — no rebinding race
-// required. Control runs after resolution, on the address the connection is
-// actually about to be made to, which closes the name case and the
-// resolve-then-resolve-again TOCTOU in the same stroke.
+// The guard that MATTERS is on the dialer's Control hook, which fires after
+// resolution with the address the connection is about to be made to. Checking
+// the URL's host catches only literals: `evil.test IN A 169.254.169.254` passes
+// every string check, no rebinding race required. Control closes the name case
+// and the resolve-then-resolve-again TOCTOU together, and covers every REDIRECT
+// hop for free, because each hop dials.
 //
-// It also covers every REDIRECT hop for free: each hop dials, so each hop is
-// checked, whatever the Location header said. CheckRedirect below still runs —
-// it bounds the chain and produces the operator's sentence — but it is no
-// longer the thing standing between a redirect and the metadata service.
-func contractHTTPClient(timeout time.Duration) *http.Client {
+// CheckRedirect bounds the chain, re-checks each hop's host (for the literal
+// case's sentence), and LOWERS the policy on a cross-host hop before that hop
+// dials.
+func contractHTTPClient(timeout time.Duration, origin string, allowPrivate bool) *http.Client {
+	pol := &destinationPolicy{origin: strings.ToLower(origin)}
+	pol.allowPrivate.Store(allowPrivate)
 	dialer := &net.Dialer{
 		Timeout:   timeout,
 		KeepAlive: 30 * time.Second,
 		Control: func(_, address string, _ syscall.RawConn) error {
-			return dialGuard(address)
+			return dialGuard(address, pol.allowPrivate.Load())
 		},
 	}
 	return &http.Client{
-		Timeout:   timeout,
-		Transport: &http.Transport{DialContext: dialer.DialContext},
+		Timeout: timeout,
+		Transport: &http.Transport{
+			DialContext: dialer.DialContext,
+			// No environment proxy. With HTTP_PROXY set the dial goes to the
+			// PROXY and the target's address is never seen by Control, which
+			// would switch this whole policy off silently.
+			Proxy: nil,
+		},
 		CheckRedirect: func(r *http.Request, via []*http.Request) error {
 			if len(via) >= contractFetchMaxRedirects {
 				return errors.New("too many redirects")
 			}
-			return fetchTargetError(r.URL.Host)
+			if !strings.EqualFold(r.URL.Host, pol.origin) {
+				pol.allowPrivate.Store(false)
+			}
+			return checkDestination(r.URL.Host, pol.allowPrivate.Load())
 		},
 	}
 }
 
-// dialGuard refuses a connection about to be made to an address this collector
-// must not request. `address` is what the dialer resolved — an IP literal with
-// a port — so a name that resolves to the metadata service is refused here
-// even though its spelling passed every earlier check.
+// dialGuard refuses a connection about to be made to an address this
+// collector must not request. `address` is what the dialer resolved — an IP
+// literal with a port — so a name that resolves to a forbidden or (unallowed)
+// private address is refused here even though its spelling passed every
+// earlier check. It is checkDestination, so there is exactly one policy.
+func dialGuard(address string, allowPrivate bool) error {
+	return checkDestination(address, allowPrivate)
+}
+
+// edgeAllowsPrivate reports whether a fetch addressed to this URL may connect
+// to a private address: only when the URL's own host is a discovered edge.
 //
-// It delegates to fetchTargetError so there is exactly ONE list of refused
-// destinations. Two lists is how the dial guard and the URL guard come to
-// disagree about what is blocked.
-func dialGuard(address string) error {
-	return fetchTargetError(address)
+// The URL's host, NOT the peer_host the contract will bind to — otherwise
+// "bind to api.acme.test (an edge), fetch http://10.0.0.5/admin" would borrow
+// the edge's privilege for a host nobody calls.
+func edgeAllowsPrivate(st store.Store, target *url.URL) bool {
+	host, err := normalizeHost(target.Scheme + "://" + target.Host)
+	if err != nil {
+		return false
+	}
+	return hostHasTraffic(st, host)
 }
 
 // newFetchToken mints a staging handle. It is a handle, not a secret: the route

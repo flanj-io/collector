@@ -55,9 +55,13 @@ deployment ALREADY has an edge for — refused outright otherwise, which is what
 under another name — and **OFFERS** what it finds; it never writes to the store, and taking an offer goes back
 through fetch. **Nothing re-fetches** (periodic re-fetch is the CP registry, v2). These two routes are the only
 requests this collector makes to a non-Flanj host: a new egress class, documented in `docs/DEPLOYMENT.md` and
-`docs/CONCEPTS.md`, with the cloud metadata service refused **at DIAL time on the resolved address**
-(`dialGuard` on the dialer's `Control` hook — a URL-level check alone is defeated by any A record
-pointing at 169.254.169.254, and the dial hook covers every redirect hop for free).
+`docs/CONCEPTS.md`. The destination policy (`classifyIP` / `checkDestination`) runs **at DIAL time on the
+resolved address** (`dialGuard` on the dialer's `Control` hook — a URL-level check alone is defeated by any A
+record pointing at 169.254.169.254, and the dial hook covers every redirect hop for free): link-local, metadata,
+unspecified, `0/8`, multicast and broadcast are FORBIDDEN always (IPv4-mapped and NAT64 `64:ff9b::/96` judged by
+the IPv4 they carry); loopback/RFC1918/CGNAT/ULA are reachable ONLY when the URL's own host is a discovered edge,
+and a cross-host redirect drops that for the rest of the chain. No environment proxy (it would hide the target
+address from the dialer). The table in `TestDestinationPolicy` is the policy's spec.
 Why suggest-and-approve rather than auto-bind: **a wrong contract is worse than no contract** — no contract
 renders `not checked`, honestly; a mismatched one renders `DRIFTED`, loudly, to a stranger, on their real
 provider. Each binding covers exactly ONE provider host, stays on this collector, and is read from the store at runtime by the drift processor's spec
