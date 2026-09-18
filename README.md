@@ -5,8 +5,9 @@
 
 # Flanj collector
 
-Nothing threw. Nothing 500'd. The response was 200 OK and a field was renamed. Your integration
-didn't break — it started being wrong, and every tool that waits for an error is blind to it.
+**Your integration didn't break. It started being wrong.**
+
+Every call succeeded. That's why nothing caught it.
 
 [![License: Elastic License 2.0](https://img.shields.io/badge/license-Elastic%202.0-1f2933)](LICENSE)
 [![Docker Hub: flanj/collector](https://img.shields.io/docker/v/flanj/collector?sort=semver&label=docker%20hub&color=1f2933)](https://hub.docker.com/r/flanj/collector)
