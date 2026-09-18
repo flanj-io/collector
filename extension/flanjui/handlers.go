@@ -36,6 +36,10 @@ func (e *uiExtension) routes() http.Handler {
 	// registrable domain a CLAIMED directory entry? Read-only, local table only.
 	mux.HandleFunc("/api/directory/hint", e.handleDirectoryHint)
 	mux.HandleFunc("/api/calls", e.handleCalls)
+	// One stored call by id — what a finding's source_call_id names. The list
+	// above is the newest 200, and a deduplicated finding keeps its FIRST
+	// call as evidence, so on a busy collector that call is often not in it.
+	mux.HandleFunc("/api/calls/{id}", e.handleCall)
 	mux.HandleFunc("/api/findings", e.handleFindings)
 	// Local acknowledge (never a relay route — guarded WITHOUT the CP check).
 	mux.HandleFunc("/api/findings/{id}/ack", e.handleFindingAck)
@@ -442,6 +446,24 @@ func (e *uiExtension) handleCalls(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"calls": calls})
+}
+
+// handleCall serves one stored call by id; 404 when the store holds none.
+func (e *uiExtension) handleCall(w http.ResponseWriter, r *http.Request) {
+	st := e.storeOrError(w)
+	if st == nil {
+		return
+	}
+	call, ok, err := st.GetCall(r.PathValue("id"))
+	if err != nil {
+		e.storeErr(w, "get call", err)
+		return
+	}
+	if !ok {
+		writeErr(w, http.StatusNotFound, "call_not_found", msgCallNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, call)
 }
 
 // findingView decorates a stored finding for the UI with its LOCAL ack state

@@ -150,6 +150,14 @@ func (s *mcpSeeds) reconcile(infos []model.SpecInfo, src specSource, det *drift.
 			continue // the row lost its document between list and fetch; next tick
 		}
 		s.seen[si.Integration] = si.LoadedAt
+		// A search-learned catalog (`<integration>:search`) seeds the edge's
+		// PARTIAL catalog, never its tools/list baseline: it is not the list.
+		if si.Source == model.SpecSourceSearchResult {
+			if _, err := det.SeedSearched(si, raw); err != nil {
+				errs = append(errs, err)
+			}
+			continue
+		}
 		fs, ok, err := det.Seed(si, raw)
 		if err != nil {
 			errs = append(errs, err)

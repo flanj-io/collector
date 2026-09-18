@@ -37,6 +37,8 @@ import {
   localNoticesSubFor,
   mcpBadgeLabel,
   mcpContractMeta,
+  metaCatalogLabel,
+  isSearchCatalog,
   mcpCorrelationCount,
   mcpDefaultMessage,
   mcpDisclosureLead,
@@ -337,6 +339,13 @@ describe('deck §3 — contracts', () => {
     expect(MCP_NO_SPEC_NEEDED).toBe('No spec file needed — the server publishes its own contract on tools/list.');
     expect(mcpContractMeta(3, 'Aug 24, 14:02')).toBe('3 tools · contract observed from tools/list · updated Aug 24, 14:02');
     expect(mcpContractMeta(1, 'now')).toBe('1 tool · contract observed from tools/list · updated now');
+  });
+
+  it('a catalog behind meta-tools is labelled as what was observed (brief §3.5)', () => {
+    expect(metaCatalogLabel(2)).toBe('MCP · catalog behind meta-tools — observed 2 tools');
+    expect(metaCatalogLabel(1)).toBe('MCP · catalog behind meta-tools — observed 1 tool');
+    expect(isSearchCatalog({ source: 'search_result' })).toBe(true);
+    expect(isSearchCatalog({ source: 'observed' })).toBe(false);
   });
 
   it('per-tool rows from the snapshot document', () => {

@@ -2,6 +2,7 @@ package drift
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -40,6 +41,10 @@ type MetaAdapter struct {
 	SearchTools []string `mapstructure:"search_tools"`
 	// DispatchTools call another tool by name.
 	DispatchTools []DispatchTool `mapstructure:"dispatch_tools"`
+	// EnableTools switch a toolset on for the session (brief §3.3). A tools/list
+	// observed right after one of them succeeds is the SESSION's expanded
+	// catalog, not a change to the server's: see LoadSnapshot.
+	EnableTools []string `mapstructure:"enable_tools"`
 }
 
 // DispatchTool is a generic call tool and where its arguments name the inner
@@ -55,12 +60,14 @@ type DispatchTool struct {
 // bakedAdapter is the known-server patterns (brief §3.5), by tool name. Each
 // entry is a pattern seen in the wild, not a guess at a shape: Sentry's
 // search_sentry_tools / execute_sentry_tool (census 2026-09-17), the CPZAI-
-// style search_tools / call_tool pair, Shopware's shopware-tool-search.
+// style search_tools / call_tool pair, Shopware's shopware-tool-search, and
+// the GitHub MCP server's dynamic-toolset enable_toolset.
 var bakedAdapter = MetaAdapter{
 	SearchTools: []string{"search_tools", "search_sentry_tools", "shopware-tool-search"},
 	DispatchTools: []DispatchTool{
 		{Name: "call_tool"}, {Name: "execute_tool"}, {Name: "execute_sentry_tool"},
 	},
+	EnableTools: []string{"enable_toolset"},
 }
 
 // SetMetaAdapters installs operator-configured adapters, keyed by peer host.
@@ -71,40 +78,76 @@ func (d *MCPDetector) SetMetaAdapters(byHost map[string]MetaAdapter) {
 	d.adapters = byHost
 }
 
-func (d *MCPDetector) adapterFor(peerHost string) (search map[string]bool, dispatch map[string]DispatchTool) {
-	search, dispatch = map[string]bool{}, map[string]DispatchTool{}
-	add := func(a MetaAdapter) {
-		for _, n := range a.SearchTools {
-			search[n] = true
+// adapterSet is one host's meta-tools, by role.
+type adapterSet struct {
+	search   map[string]bool
+	dispatch map[string]DispatchTool
+	enable   map[string]bool
+}
+
+// isMeta reports whether a tool is any kind of discovery meta-tool.
+func (a adapterSet) isMeta(name string) bool {
+	_, dispatch := a.dispatch[name]
+	return a.search[name] || dispatch || a.enable[name]
+}
+
+func (d *MCPDetector) adapterFor(peerHost string) adapterSet {
+	a := adapterSet{search: map[string]bool{}, dispatch: map[string]DispatchTool{}, enable: map[string]bool{}}
+	add := func(m MetaAdapter) {
+		for _, n := range m.SearchTools {
+			a.search[n] = true
 		}
-		for _, t := range a.DispatchTools {
-			dispatch[t.Name] = t
+		for _, t := range m.DispatchTools {
+			a.dispatch[t.Name] = t
+		}
+		for _, n := range m.EnableTools {
+			a.enable[n] = true
 		}
 	}
 	add(bakedAdapter)
 	d.mu.Lock()
-	if a, ok := d.adapters[peerHost]; ok {
-		add(a)
+	if m, ok := d.adapters[peerHost]; ok {
+		add(m)
 	}
 	d.mu.Unlock()
-	return search, dispatch
+	return a
 }
 
-// searchedTool is one tool definition learned from a search result.
+// Where a partial-catalog entry came from.
+const (
+	partialFromSearch = "search_result"  // a discovery meta-tool's search result
+	partialFromEnable = "toolset_enable" // a tools/list right after a toolset was enabled
+)
+
+// maxPartialTools bounds one edge's partial catalog. A search tool can return
+// anything; memory must not.
+const maxPartialTools = 500
+
+// searchedTool is one tool definition learned outside a complete tools/list:
+// from a search result, or from a session's toolset-enabled listing.
 type searchedTool struct {
 	def        contract.ToolDef
 	contract   *contract.Contract
-	observedAt string
+	observedAt string // the latest observation of this definition
+	changedAt  string // when this CONTENT was first observed
+	source     string // partialFromSearch | partialFromEnable
+}
+
+// SpecDoc is a contract row to persist: its metadata and its document.
+type SpecDoc struct {
+	Info model.SpecInfo
+	Raw  []byte
 }
 
 // ingestSearchResult records the tool definitions a search result carried and
 // returns a definition_change for every tool RE-observed with a different
-// definition. First sight of a tool is a baseline, never a finding; absence
-// from a later result is never a removal.
-func (d *MCPDetector) ingestSearchResult(call model.RedactedCall) []model.Finding {
+// definition, plus the edge's search-learned catalog as a contract row when
+// this result changed it (brief §3.1). First sight of a tool is a baseline,
+// never a finding; absence from a later result is never a removal.
+func (d *MCPDetector) ingestSearchResult(call model.RedactedCall) ([]model.Finding, *SpecDoc) {
 	defs := searchResultTools(call.ResponseBody)
 	if len(defs) == 0 {
-		return nil
+		return nil, nil
 	}
 	edge := mcpEdgeRef(call.PeerHost, call.Direction)
 	observedAt := call.CapturedAt
@@ -113,6 +156,7 @@ func (d *MCPDetector) ingestSearchResult(call model.RedactedCall) []model.Findin
 	}
 	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00")
 	var findings []model.Finding
+	changed := false
 	for _, def := range defs {
 		c, err := contract.FromToolsList([]contract.ToolDef{def}, edge, observedAt, "search result from "+call.MCPToolName+" at "+observedAt)
 		if err != nil {
@@ -128,38 +172,144 @@ func (d *MCPDetector) ingestSearchResult(call model.RedactedCall) []model.Findin
 			st.searched = map[string]*searchedTool{}
 		}
 		prev := st.searched[def.Name]
-		st.searched[def.Name] = &searchedTool{def: def, contract: c, observedAt: observedAt}
-		d.mu.Unlock()
-		if prev == nil || prev.contract.Version.ContentHash == c.Version.ContentHash {
+		if prev == nil && len(st.searched) >= maxPartialTools {
+			d.mu.Unlock()
 			continue
 		}
-		for _, ch := range diff.Reportable(diff.Classify(prev.contract, c)) {
+		entry := &searchedTool{def: def, contract: c, observedAt: observedAt, changedAt: observedAt, source: partialFromSearch}
+		same := prev != nil && prev.source == partialFromSearch && prev.contract.Version.ContentHash == c.Version.ContentHash
+		if same {
+			entry.changedAt = prev.changedAt // a re-observation of the same content moves nothing
+		} else {
+			changed = true
+		}
+		st.searched[def.Name] = entry
+		d.mu.Unlock()
+		if prev == nil || same {
+			continue
+		}
+		for _, ch := range reportable(diff.Classify(prev.contract, c)) {
 			if ch.Rule == diff.RuleOperationRemoved {
 				continue // unreachable for a single re-observed tool; never a removal from a search page
 			}
 			f := definitionChangeFinding(call.Integration, ch, prev.contract, c, now)
-			f.Source, f.Completeness = "search_result", "partial"
+			f.Source, f.Completeness = partialFromSearch, "partial"
 			f.Signature = f.ComputeSignature()
 			findings = append(findings, f)
 		}
 	}
-	return findings
+	if !changed {
+		return findings, nil
+	}
+	return findings, d.searchSpec(call)
 }
 
-// searchedOpAt is the search-learned contract for a tool on an edge and when
-// it was observed; nil when no recorded search result named that tool.
-func (d *MCPDetector) searchedOpAt(peerHost, direction, tool string) (*contract.Operation, string) {
+// searchSpec renders an edge's search-learned catalog as one contract row:
+// tools/list-shaped, sorted by name, keyed `<integration>:search`, stamped with
+// when its content last changed so an unchanged catalog never restamps.
+func (d *MCPDetector) searchSpec(call model.RedactedCall) *SpecDoc {
+	edge := mcpEdgeRef(call.PeerHost, call.Direction)
+	d.mu.Lock()
+	st := d.edges[edge]
+	var tools []contract.ToolDef
+	var loadedAt string
+	if st != nil {
+		for _, t := range st.searched {
+			if t.source != partialFromSearch {
+				continue
+			}
+			tools = append(tools, t.def)
+			if observedAfter(t.changedAt, loadedAt) || loadedAt == "" {
+				loadedAt = t.changedAt
+			}
+		}
+	}
+	d.mu.Unlock()
+	if len(tools) == 0 {
+		return nil
+	}
+	sort.Slice(tools, func(i, j int) bool { return tools[i].Name < tools[j].Name })
+	raw, err := json.Marshal(map[string]any{"tools": tools})
+	if err != nil {
+		return nil
+	}
+	return &SpecDoc{
+		Info: model.SpecInfo{
+			Integration: model.SearchSpecIntegration(call.Integration),
+			Role:        model.SpecRoleProvider,
+			PeerHost:    call.PeerHost,
+			EdgeClass:   call.EdgeClass,
+			Format:      model.SpecFormatMCP,
+			Source:      model.SpecSourceSearchResult,
+			Title:       call.MCPServerName,
+			Version:     call.MCPServerVersion,
+			Endpoints:   len(tools),
+			LoadedAt:    loadedAt,
+		},
+		Raw: raw,
+	}
+}
+
+// SeedSearched offers an edge the search-learned catalog the STORE holds — so
+// a restarted collector, and every tiered front, starts from what any pod
+// already learned instead of from nothing. Per tool, the newer observation of
+// a different definition wins; adoption reports nothing (the pod that saw the
+// change reported it). It reports whether anything was adopted.
+func (d *MCPDetector) SeedSearched(info model.SpecInfo, raw []byte) (bool, error) {
+	if info.Source != model.SpecSourceSearchResult || len(raw) == 0 {
+		return false, nil
+	}
+	tools, err := contract.ParseToolsList(raw)
+	if err != nil {
+		return false, fmt.Errorf("seed search catalog %q: %w", info.Integration, err)
+	}
+	tools = dropUndecodableSchemas(tools)
+	edge := mcpEdgeRef(info.PeerHost, "client")
+	adopted := false
+	for _, def := range tools {
+		c, err := contract.FromToolsList([]contract.ToolDef{def}, edge, info.LoadedAt, "search result (seeded) at "+info.LoadedAt)
+		if err != nil {
+			continue
+		}
+		d.mu.Lock()
+		st := d.edges[edge]
+		if st == nil {
+			st = &mcpEdgeState{}
+			d.edges[edge] = st
+		}
+		if st.searched == nil {
+			st.searched = map[string]*searchedTool{}
+		}
+		cur := st.searched[def.Name]
+		take := cur == nil && len(st.searched) < maxPartialTools
+		if cur != nil && cur.contract.Version.ContentHash != c.Version.ContentHash && observedAfter(info.LoadedAt, cur.changedAt) {
+			take = true
+		}
+		if take {
+			st.searched[def.Name] = &searchedTool{def: def, contract: c, observedAt: info.LoadedAt, changedAt: info.LoadedAt, source: partialFromSearch}
+			adopted = true
+		}
+		d.mu.Unlock()
+	}
+	return adopted, nil
+}
+
+// partialOpAt is a tool's definition from the edge's partial catalog, when it
+// FALLS BACK there: the observation time and where it came from. searchOnly
+// restricts it to search results — the only source R-E lets re-key a
+// dispatcher call.
+func (d *MCPDetector) partialOpAt(peerHost, direction, tool string, searchOnly bool) (*contract.Operation, string, string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	st := d.edges[mcpEdgeRef(peerHost, direction)]
 	if st == nil || st.searched == nil {
-		return nil, ""
+		return nil, "", ""
 	}
 	s := st.searched[tool]
-	if s == nil {
-		return nil, ""
+	if s == nil || (searchOnly && s.source != partialFromSearch) {
+		return nil, "", ""
 	}
-	return s.contract.Op(tool), s.observedAt
+	return s.contract.Op(tool), s.observedAt, s.source
 }
 
 // dispatchInner reads a dispatcher call's inner tool name and inner

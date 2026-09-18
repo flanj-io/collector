@@ -92,6 +92,8 @@ import {
   localNoticesSubFor,
   mcpBadgeLabel,
   mcpContractMeta,
+  metaCatalogLabel,
+  isSearchCatalog,
   mcpHeadline,
   mcpStatusLabel,
   methodFacetOf,
@@ -1113,6 +1115,16 @@ function mcpServerName(integration: string): string {
 
 // Hosts that are MCP edges: known from mcp contracts and from observed MCP
 // calls — drives the transport badge on the Edges overview.
+// Brief 2026-09-17 §3.5: hosts whose catalog sits behind discovery meta-tools,
+// with how many tools the agent's searches have shown us. Both of a server's
+// cards say so — its tools/list lists only the meta-tools, and the search row
+// is only what was looked up — so neither implies full coverage.
+const searchCatalogByHost = computed(() => {
+  const m = new Map<string, number>();
+  for (const s of mcpContracts.value) if (isSearchCatalog(s) && s.peer_host) m.set(s.peer_host, s.endpoints || 0);
+  return m;
+});
+
 const mcpHosts = computed(() => {
   const hosts = new Set<string>();
   for (const s of mcpContracts.value) if (s.peer_host) hosts.add(s.peer_host);
@@ -1908,13 +1920,17 @@ watch(tab, (t) => {
 
           <div v-if="p.spec" class="prov-links">
             <a class="doc-link" :href="specHref(p.spec)" target="_blank" rel="noopener">
-              {{ p.spec.format === 'mcp' ? 'View tools/list snapshot' : 'View OpenAPI spec' }}
+              {{ p.spec.format === 'mcp' ? (isSearchCatalog(p.spec) ? 'View tools found by search' : 'View tools/list snapshot') : 'View OpenAPI spec' }}
             </a>
             <a v-if="p.spec.docs_url" class="doc-link" :href="p.spec.docs_url" target="_blank" rel="noopener">
               API docs ↗
             </a>
             <template v-if="p.spec.format === 'mcp'">
-              <span class="prov-meta">{{ mcpContractMeta(p.spec.endpoints || 0, humanTime(p.spec.loaded_at)) }}</span>
+              <span v-if="isSearchCatalog(p.spec)" class="prov-meta meta-catalog">{{ metaCatalogLabel(p.spec.endpoints || 0) }} · updated {{ humanTime(p.spec.loaded_at) }}</span>
+              <template v-else>
+                <span class="prov-meta">{{ mcpContractMeta(p.spec.endpoints || 0, humanTime(p.spec.loaded_at)) }}</span>
+                <span v-if="searchCatalogByHost.has(p.peerHost)" class="prov-meta meta-catalog">{{ metaCatalogLabel(searchCatalogByHost.get(p.peerHost) || 0) }}</span>
+              </template>
             </template>
             <template v-else>
               <!-- Provenance + recency, relative, with the absolute time on

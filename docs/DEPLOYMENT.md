@@ -259,13 +259,20 @@ Flow specifics:
       mcp.example.com:
         search_tools: [find_capabilities]
         dispatch_tools: [{name: run, name_arg: op, args_arg: input}]
+        enable_tools: [enable_toolset]
   ```
 
-  The search-learned catalog is held in memory per process: it is re-learned
-  from the next search after a restart, and on the tiered shape each front
-  learns from the searches it sees — a front that has not seen one leaves the
-  call on the dispatcher, which is the safe direction. The collector never
-  probes a server for its catalog.
+  `enable_tools` names the tools that switch a toolset on for the session
+  (baked: `enable_toolset`): a `tools/list` observed within two minutes after
+  one succeeds is read as that session's catalog — compared tool by tool, its
+  new tools judged rather than called stale, the baseline kept — so the next
+  session's plain listing is not reported as the toolset's removal.
+
+  The search-learned catalog is persisted as its own contract row,
+  `<integration>:search`, beside the server's `tools/list` row, and seeded back
+  on restart and to every tiered front like an observed `tools/list`. The
+  Contracts tab labels both cards `MCP · catalog behind meta-tools — observed N
+  tools`. The collector never probes a server for its catalog.
 - **One contract document is capped at 8 MiB on that channel**, at both ends:
   the store pod answers `413` rather than serving a larger one, and a front
   refuses to read one rather than reading a prefix. Neither end truncates — a

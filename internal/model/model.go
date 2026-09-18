@@ -92,6 +92,13 @@ type RedactedCall struct {
 	// rejected (CONTRACTS §2 flanj.mcp.error.code, additive, optional); 0 when
 	// the call returned a result or the SDK is older.
 	MCPErrorCode int `json:"mcp_error_code,omitempty"`
+	// ViaDispatch (additive, optional — ruling R-E, brief 2026-09-17 §3.2) is
+	// the discovery DISPATCHER this call went through, when the collector
+	// re-attributed it to the inner tool it named: MCPToolName and Route then
+	// name that inner tool, and RequestBody stays the literal dispatcher
+	// arguments, so a provider can reproduce the exact call. Empty on every
+	// call that was not re-attributed.
+	ViaDispatch string `json:"via_dispatch,omitempty"`
 	// MCPServerName / MCPServerVersion carry serverInfo when the client
 	// surfaced it (never guessed).
 	MCPServerName    string `json:"mcp_server_name,omitempty"`
@@ -506,6 +513,13 @@ const (
 	// it. Periodic re-fetch is the control-plane registry (v2) and deliberately
 	// does not exist here.
 	SpecSourceFetched = "fetched"
+	// SpecSourceSearchResult (ruling R-E, brief 2026-09-17 §3.1) is an MCP
+	// server's catalog as learned from the SEARCH RESULTS of its discovery
+	// meta-tools — the tools the agent actually looked up, never the whole
+	// catalog. Partial by construction: a tool absent from it is not removed.
+	// Stored as its own row, `<integration>:search` (SearchSpecIntegration),
+	// beside the server's tools/list row, which lists the meta-tools.
+	SpecSourceSearchResult = "search_result"
 
 	// Edge classes, shared by RedactedCall and SpecInfo. `local-process` is the
 	// SDK's own word for a server spawned as a child process (MCP over stdio);
@@ -633,3 +647,11 @@ func (f Finding) ComputeSignature() string {
 
 // Ptr is a small helper for the nullable string fields.
 func Ptr(s string) *string { return &s }
+
+// SearchSpecIntegration is the spec_infos key of an integration's
+// search-learned catalog (SpecSourceSearchResult): its own row, so the
+// server's tools/list row — which on a meta-gated server lists only the
+// meta-tools — keeps its key.
+func SearchSpecIntegration(integration string) string {
+	return integration + ":search"
+}

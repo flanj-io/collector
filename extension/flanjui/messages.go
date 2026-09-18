@@ -98,6 +98,7 @@ const (
 	msgInfoNotFlaggable = "This finding is informational — info findings stay on this collector and are never flagged to another organisation."
 	msgNotAckable       = "Only non-breaking informational findings can be acknowledged — breaking findings need a fix or a thread."
 	msgFindingNotFound  = "That finding is no longer in the local store."
+	msgCallNotFound     = "That call is no longer in the local store."
 	// RETIRED as a refusal by v1p4-2026-09-08: a finding with no source call is
 	// now flaggable on every kind (the message carries the ask), so nothing
 	// answers 400 finding_has_no_call any more. The string stays because the

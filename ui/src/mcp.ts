@@ -367,6 +367,19 @@ export function mcpContractMeta(toolCount: number, updated: string): string {
   return `${toolCount} tool${toolCount === 1 ? '' : 's'} · contract observed from tools/list · updated ${updated}`;
 }
 
+/** R-E / brief 2026-09-17 §3.5: the honest label for a server whose catalog
+ *  sits behind discovery meta-tools. The collector sees only the tools the
+ *  agent looked up, so the count is what was OBSERVED, never the catalog. */
+export function metaCatalogLabel(observed: number): string {
+  return `MCP · catalog behind meta-tools — observed ${observed} tool${observed === 1 ? '' : 's'}`;
+}
+
+/** Whether a contract row is a search-learned catalog (`<integration>:search`,
+ *  source `search_result`) rather than a server's own tools/list. */
+export function isSearchCatalog(spec: { source?: string }): boolean {
+  return spec.source === 'search_result';
+}
+
 /** Per-tool row label from the tool's declared schemas. */
 export function toolContractLabel(hasOutputSchema: boolean): string {
   return hasOutputSchema ? 'input + output contract' : 'input contract only';

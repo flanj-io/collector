@@ -70,6 +70,10 @@ const (
 	// result with isError). -32602 (invalid params) on arguments that
 	// previously succeeded is R-B's observed_failure row.
 	AttrMCPErrorCode = "flanj.mcp.error.code"
+	// AttrMCPViaDispatch (additive, optional — R-E, 2026-09-17) is stamped by
+	// the drift processor, never by an SDK: the dispatcher tool a call went
+	// through when it was re-attributed to the inner tool it named.
+	AttrMCPViaDispatch = "flanj.mcp.via_dispatch"
 	// AttrMCPServerName / AttrMCPServerVersion / AttrMCPProtocolVersion carry
 	// the server identity from initialize, when the client surfaces it.
 	AttrMCPServerName      = "flanj.mcp.server.name"
@@ -290,6 +294,7 @@ func CallFromRecord(lr plog.LogRecord) model.RedactedCall {
 		MCPToolName:        getStr(m, AttrMCPToolName),
 		MCPIsError:         getBool(m, AttrMCPIsError),
 		MCPErrorCode:       getInt(m, AttrMCPErrorCode),
+		ViaDispatch:        getStr(m, AttrMCPViaDispatch),
 		MCPServerName:      getStr(m, AttrMCPServerName),
 		MCPServerVersion:   getStr(m, AttrMCPServerVersion),
 		MCPProtocolVersion: getStr(m, AttrMCPProtocolVersion),
@@ -316,6 +321,20 @@ func StampValidated(lr plog.LogRecord, v model.Validation) {
 	} else {
 		m.Remove(AttrValidatedReason)
 	}
+}
+
+// StampDispatchTarget re-keys a dispatcher call to the inner tool it named
+// (R-E, brief 2026-09-17 §3.2): the tool name and the route now name the inner
+// tool, and the dispatcher is kept as via_dispatch. The request body is left
+// untouched — it is the literal dispatcher call, which is what a provider
+// needs to reproduce it.
+func StampDispatchTarget(lr plog.LogRecord, inner, dispatcher string) {
+	m := lr.Attributes()
+	m.PutStr(AttrMCPToolName, inner)
+	if r, ok := m.Get(AttrRoute); ok && r.Str() == "/"+dispatcher {
+		m.PutStr(AttrRoute, "/"+inner)
+	}
+	m.PutStr(AttrMCPViaDispatch, dispatcher)
 }
 
 // ContractSnapshot is one decoded contract_snapshot record: a COMPLETE observed

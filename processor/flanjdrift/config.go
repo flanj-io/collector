@@ -63,6 +63,7 @@ type Config struct {
 	//     mcp.example.com:
 	//       search_tools: [find_capabilities]
 	//       dispatch_tools: [{name: run, name_arg: op, args_arg: input}]
+	//       enable_tools: [enable_toolset]
 	MCPMetaAdapters map[string]drift.MetaAdapter `mapstructure:"mcp_meta_adapters"`
 
 	// prevent unkeyed literal initialization
