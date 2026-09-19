@@ -38,6 +38,7 @@ import {
   mcpBadgeLabel,
   mcpContractMeta,
   metaCatalogLabel,
+  metaCatalogMeta,
   isSearchCatalog,
   mcpCorrelationCount,
   mcpDefaultMessage,
@@ -337,8 +338,18 @@ describe('deck §2 — health', () => {
 describe('deck §3 — contracts', () => {
   it('server meta + no-spec copy', () => {
     expect(MCP_NO_SPEC_NEEDED).toBe('No spec file needed — the server publishes its own contract on tools/list.');
-    expect(mcpContractMeta(3, 'Aug 24, 14:02')).toBe('3 tools · contract observed from tools/list · updated Aug 24, 14:02');
-    expect(mcpContractMeta(1, 'now')).toBe('1 tool · contract observed from tools/list · updated now');
+    // With a version the line is unchanged — the version is the card heading's chip, and e2e
+    // (mcp.spec.ts) pins `3 tools · contract observed from tools/list`.
+    expect(mcpContractMeta(3, 'Aug 24, 14:02', '1.2.0')).toBe('3 tools · contract observed from tools/list · updated Aug 24, 14:02');
+    expect(mcpContractMeta(1, 'now', '1.2.0')).toBe('1 tool · contract observed from tools/list · updated now');
+  });
+
+  // Idan, 2026-09-19: serverInfo.version is optional; a server that sends none SAYS so,
+  // instead of the card carrying no version anywhere.
+  it('server meta says "version not specified" when serverInfo carries no version', () => {
+    expect(mcpContractMeta(3, 'now', undefined)).toBe('3 tools · version not specified · contract observed from tools/list · updated now');
+    expect(mcpContractMeta(3, 'now', '')).toBe('3 tools · version not specified · contract observed from tools/list · updated now');
+    expect(mcpContractMeta(3, 'now', '   ')).toBe('3 tools · version not specified · contract observed from tools/list · updated now');
   });
 
   it('a catalog behind meta-tools is labelled as what was observed (brief §3.5)', () => {
@@ -346,6 +357,20 @@ describe('deck §3 — contracts', () => {
     expect(metaCatalogLabel(1)).toBe('MCP · catalog behind meta-tools — observed 1 tool');
     expect(isSearchCatalog({ source: 'search_result' })).toBe(true);
     expect(isSearchCatalog({ source: 'observed' })).toBe(false);
+  });
+
+  // A catalog row carries serverInfo.version too (internal/drift/meta.go), which is optional:
+  // with one, the line is unchanged — the version is the heading chip, as on a tools/list card.
+  it('a catalog card with a version reads as before', () => {
+    expect(metaCatalogMeta(2, 'now', '1.2.0')).toBe('MCP · catalog behind meta-tools — observed 2 tools · updated now');
+  });
+
+  // Idan, 2026-09-19: a catalog whose server sends no version says so.
+  it('a catalog card says "version not specified" when serverInfo carries no version', () => {
+    for (const none of [undefined, '', '  ']) {
+      expect(metaCatalogMeta(2, 'now', none))
+        .toBe('MCP · catalog behind meta-tools — observed 2 tools · version not specified · updated now');
+    }
   });
 
   it('per-tool rows from the snapshot document', () => {

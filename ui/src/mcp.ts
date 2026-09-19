@@ -13,6 +13,7 @@
 // Nothing auto-flags: a finding only leaves this collector when a human presses
 // the control.
 
+import { VERSION_NOT_SPECIFIED, versionLabel } from './contracts';
 import { NOTHING_VALIDATED_YET_CLAUSE, type HeadlineTone } from './headline';
 import { requestIdsLine } from './threads';
 import type { Correlation, Finding, RedactedCall } from './types';
@@ -363,8 +364,16 @@ export function noticeLine(f: Finding, server: string): string {
 
 export const MCP_NO_SPEC_NEEDED = 'No spec file needed — the server publishes its own contract on tools/list.';
 
-export function mcpContractMeta(toolCount: number, updated: string): string {
-  return `${toolCount} tool${toolCount === 1 ? '' : 's'} · contract observed from tools/list · updated ${updated}`;
+/** A server's version already sits in the card heading's chip, so the line
+ *  carries it only when there is none to show: serverInfo.version is optional,
+ *  and a card with no version anywhere read as "not applicable". */
+export function mcpContractMeta(toolCount: number, updated: string, version: string | undefined): string {
+  return `${toolCount} tool${toolCount === 1 ? '' : 's'}${missingVersion(version)} · contract observed from tools/list · updated ${updated}`;
+}
+
+/** ` · version not specified` when there is no version to show, else nothing. */
+function missingVersion(version: string | undefined): string {
+  return versionLabel(version) === VERSION_NOT_SPECIFIED ? ` · ${VERSION_NOT_SPECIFIED}` : '';
 }
 
 /** R-E / brief 2026-09-17 §3.5: the honest label for a server whose catalog
@@ -372,6 +381,12 @@ export function mcpContractMeta(toolCount: number, updated: string): string {
  *  agent looked up, so the count is what was OBSERVED, never the catalog. */
 export function metaCatalogLabel(observed: number): string {
   return `MCP · catalog behind meta-tools — observed ${observed} tool${observed === 1 ? '' : 's'}`;
+}
+
+/** A catalog card's meta line. The row carries serverInfo.version like a
+ *  tools/list row does, so it follows the same rule as mcpContractMeta. */
+export function metaCatalogMeta(observed: number, updated: string, version: string | undefined): string {
+  return `${metaCatalogLabel(observed)}${missingVersion(version)} · updated ${updated}`;
 }
 
 /** Whether a contract row is a search-learned catalog (`<integration>:search`,
