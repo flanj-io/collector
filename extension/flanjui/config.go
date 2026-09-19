@@ -19,15 +19,23 @@ type Config struct {
 	IntegrationID string `mapstructure:"integration_id"`
 	// ConsumerDisplayName is the "shared by <name>" identity on the peek screen.
 	ConsumerDisplayName string `mapstructure:"consumer_display_name"`
-	// ProviderDisplayName is the fallback provider name sent ON A FLAG, so the
-	// thread names the provider when the UI does not supply one.
+	// ProviderDisplayName is DEPRECATED and IGNORED for the flag itself
+	// (2026-09-19): the control plane now names the provider side of every
+	// thread itself — the workspace that has proved ownership of the flagged
+	// host's domain, else a verified directory name, else the domain — so a
+	// collector-side guess (this key, or an older UI's per-flag override) is
+	// never sent. The key stays decodable so an existing config keeps loading,
+	// with no effect on anything sent onward.
+	//
+	// It still reaches `GET /api/health` verbatim, pre-traffic honesty rule
+	// aside (`hasObservedProvider`) — that surface is unrelated to the flag and
+	// out of scope for this deprecation.
 	//
 	// It NO LONGER names an edge. That tier needed a config→edge linkage, which
 	// came from the config spec's peer_host, and provider contracts are uploaded
 	// now (CONTRACTS §8, 2026-08-31) — an upload carries the host AND the
 	// document's title, so the `contract` tier names edges from what the
-	// operator actually did. Naming a provider on a thread needs no linkage at
-	// all, which is why this key survives that removal.
+	// operator actually did.
 	ProviderDisplayName string `mapstructure:"provider_display_name"`
 	// CPBaseURL is the control-plane base URL this collector's OWN requests go
 	// to (register, me, flags, threads, the syncs). It may well be an

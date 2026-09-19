@@ -77,10 +77,13 @@
     },
     "consumer_display_name": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "description": "REQUIRED on the wire, IGNORED for naming since 2026-09-19: the control plane names the sender from the flagging workspace's display name. Still required so a control plane that predates the change keeps accepting the flag."
     },
     "provider_display_name": {
-      "type": "string"
+      "type": "string",
+      "deprecated": true,
+      "description": "DEPRECATED 2026-09-19 — accepted and IGNORED. Collectors no longer send it. The control plane names the provider itself: the workspace that has proved ownership of the flagged host's domain, else a verified directory name, else the domain."
     },
     "provider_host": {
       "type": "string",

@@ -629,8 +629,13 @@ func TestConnectThenFlagLoop(t *testing.T) {
 	if _, has := r.cp.lastFlagBody["invitee_email"]; has {
 		t.Errorf("invitee_email must not be sent: %v", r.cp.lastFlagBody)
 	}
-	if r.cp.lastFlagBody["consumer_display_name"] != "Acme Consumer Ltd" || r.cp.lastFlagBody["provider_display_name"] != "Acme Payments" {
+	if r.cp.lastFlagBody["consumer_display_name"] != "Acme Consumer Ltd" {
 		t.Errorf("flag body names: %v", r.cp.lastFlagBody)
+	}
+	// No provider name on the wire (2026-09-19): the control plane names the
+	// provider side of the thread itself.
+	if _, has := r.cp.lastFlagBody["provider_display_name"]; has {
+		t.Errorf("flag body must not carry provider_display_name: %v", r.cp.lastFlagBody)
 	}
 	if len(r.st.promoted) != 1 || r.st.promoted[0] != "call_1" {
 		t.Errorf("evict-after-promote not applied: %v", r.st.promoted)
@@ -1427,6 +1432,37 @@ func TestFlagEvictedCallStillRefuses(t *testing.T) {
 	}
 	if r.cp.flagCalls != 0 {
 		t.Errorf("flag calls = %d, want 0 — nothing may reach the CP", r.cp.flagCalls)
+	}
+}
+
+// TestFlagNeverSendsProviderDisplayName (2026-09-19): the control plane now
+// names both sides of a thread itself — the provider from verified domain
+// ownership, else a verified directory name, else the domain — and reads
+// provider_display_name on a flag only for compatibility with a collector
+// that predates the change. This collector must never send one, even when
+// BOTH legacy inputs are set at once: the deprecated provider_display_name
+// config key AND an older UI's per-flag override in the request body.
+func TestFlagNeverSendsProviderDisplayName(t *testing.T) {
+	r := newRig(t)
+	r.ext.cfg.ProviderDisplayName = "Configured Acme Payments" // deprecated config key, still set
+	r.start(t)                                                 // seeds fnd_1 / call_1, integration "acme-payments"
+	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, ConsumerDisplayName: "Acme",
+		ContactEmail: "ops@acme.test", ContactStatus: "confirmed", ConfirmedContactEmail: "ops@acme.test"})
+	r.cp.mu.Lock()
+	r.cp.contactEmail, r.cp.contactStatus, r.cp.confirmedEmail = "ops@acme.test", "confirmed", "ops@acme.test"
+	r.cp.mu.Unlock()
+
+	resp, out, raw := r.do(t, http.MethodPost, "/api/flag", map[string]any{
+		"finding_id":            "fnd_1",
+		"provider_display_name": "UI Override Acme Payments Inc", // deprecated UI override
+		"allowed_domains":       []string{"acme-payments.test"},
+	})
+	if resp.StatusCode != 201 {
+		t.Fatalf("flag: %d %s", resp.StatusCode, raw)
+	}
+	_ = out
+	if v, has := r.cp.lastFlagBody["provider_display_name"]; has {
+		t.Errorf("flag body must never carry provider_display_name, even with a configured default AND a UI override, got %v: %v", v, r.cp.lastFlagBody)
 	}
 }
 

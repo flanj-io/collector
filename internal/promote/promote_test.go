@@ -201,9 +201,6 @@ func TestFlagBody_CallLessDefinitionChange(t *testing.T) {
 	if req.Call != nil {
 		t.Fatalf("call-less flag carries a call: %+v", req.Call)
 	}
-	if req.ProviderDisplayName != "Acme Tools" {
-		t.Errorf("provider display name = %q, want Acme Tools (humanized from the finding)", req.ProviderDisplayName)
-	}
 	body, err := json.Marshal(req)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -217,6 +214,11 @@ func TestFlagBody_CallLessDefinitionChange(t *testing.T) {
 	}
 	if _, has := m["finding"]; !has {
 		t.Errorf("call-less flag body must still carry the finding: %s", body)
+	}
+	// No provider name either (2026-09-19) — the control plane resolves the
+	// provider side itself, call-less or not.
+	if _, has := m["provider_display_name"]; has {
+		t.Errorf("call-less flag body must not carry provider_display_name: %s", body)
 	}
 	// The guard: a re-vendor that restores `call` to the unconditional `required`
 	// list fails here, not in production.
@@ -292,29 +294,33 @@ func TestHumanizeIntegration(t *testing.T) {
 	}
 }
 
-// TestBuild_ProviderDisplayName proves the flag body carries provider_display_name:
-// the explicit value when given, else the humanized integration id.
-func TestBuild_ProviderDisplayName(t *testing.T) {
+// TestBuild_NeverCarriesProviderDisplayName proves the flag body has no
+// provider_display_name key at all, whatever the finding's or call's
+// integration is: the control plane now names the provider side of every
+// thread itself (verified domain ownership, else a verified directory name,
+// else the domain — CONTRACTS §5, 2026-09-19), so this collector never sends
+// a guess. The field stays OPTIONAL in the vendored schema (accepted, for a
+// control plane that predates the change) — a body that omits it entirely, as
+// this one does, still validates.
+func TestBuild_NeverCarriesProviderDisplayName(t *testing.T) {
 	call := loadJSON[model.RedactedCall](t, "sample-redacted-call.json") // integration=acme-payments
 	finding := loadJSON[model.Finding](t, "sample-finding.json")
 
-	explicit := Build(Input{ConsumerDisplayName: "Acme Consumer Ltd", ProviderDisplayName: "Acme Payments Inc", Call: &call, Finding: finding})
-	if explicit.ProviderDisplayName != "Acme Payments Inc" {
-		t.Errorf("explicit provider name = %q, want Acme Payments Inc", explicit.ProviderDisplayName)
-	}
-
-	defaulted := Build(Input{ConsumerDisplayName: "Acme Consumer Ltd", Call: &call, Finding: finding})
-	if defaulted.ProviderDisplayName != "Acme Payments" {
-		t.Errorf("defaulted provider name = %q, want Acme Payments (humanized integration)", defaulted.ProviderDisplayName)
-	}
-
-	// The defaulted body must still conform to the frozen schema.
+	req := Build(Input{ConsumerDisplayName: "Acme Consumer Ltd", Call: &call, Finding: finding})
 	sch := flagSchema(t)
-	body, err := json.Marshal(defaulted)
+	body, err := json.Marshal(req)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
 	validate(t, sch, body)
+
+	var wire map[string]any
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if v, has := wire["provider_display_name"]; has {
+		t.Errorf("flag body must never carry provider_display_name, got %v: %s", v, body)
+	}
 }
 
 // TestBuild_IdempotencyKeyFromFinding proves re-flagging the same finding yields
@@ -358,7 +364,6 @@ func TestQuestionBody_ConformsToSchema(t *testing.T) {
 	req := BuildQuestion(QuestionInput{
 		IdempotencyKey:      "edge_api.globex.test_abc",
 		ConsumerDisplayName: "Acme Consumer Ltd",
-		ProviderDisplayName: "Globex Payments",
 		ProviderHost:        "api.globex.test",
 		Message:             "Are you versioning /v1/refunds this quarter?",
 	})
@@ -380,6 +385,11 @@ func TestQuestionBody_ConformsToSchema(t *testing.T) {
 	}
 	if wire["provider_host"] != "api.globex.test" {
 		t.Errorf("provider_host = %v", wire["provider_host"])
+	}
+	// No provider name either (2026-09-19) — the thread page resolves a
+	// verified name from provider_host, never an unattributed guess.
+	if _, has := wire["provider_display_name"]; has {
+		t.Errorf("a question flag must not carry provider_display_name: %s", body)
 	}
 
 	// The rule the amendment turns on: with no call and no finding, the message

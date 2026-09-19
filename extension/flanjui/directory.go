@@ -13,8 +13,10 @@ package flanjui
 // edge it meant — that linkage came from the config spec's `peer_host`, and
 // there are no config specs any more. The upload carries both facts at once, so
 // the tier that replaces it derives its name from what the operator actually
-// did. `provider_display_name` itself stays: it is still the fallback provider
-// name sent on a flag, which needs no edge linkage at all.
+// did. `provider_display_name` is now DEPRECATED entirely (2026-09-19): the
+// control plane names the provider side of a thread itself, so this collector
+// no longer sends any provider name on a flag either — the key is accepted and
+// ignored, kept only so an existing config keeps loading.
 //
 // The directory is NEVER queried per cache miss — permanently rejected: the
 // local UI must work with the CP down, and the CP must never receive the org's

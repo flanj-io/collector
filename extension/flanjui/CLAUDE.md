@@ -85,7 +85,12 @@ API + the flag action.
     can (2026-09-07). Absent → the SPA keeps the pill a
     Settings button.
   - `POST /api/flag {finding_id, allowed_emails, allowed_domains, message?, provider_display_name?}` — **Create
-    thread**: `403 {error: not_flaggable}` for LOCAL-ONLY finding kinds
+    thread**. `provider_display_name` is DEPRECATED (2026-09-19): accepted and
+    IGNORED. The control plane now names the provider side of every thread
+    itself (verified domain ownership, else a verified directory name, else
+    the domain — CONTRACTS §5), and `promote.FlagRequest` carries no provider
+    name field at all — the key is only decoded here for an older UI build.
+    `403 {error: not_flaggable}` for LOCAL-ONLY finding kinds
     (`model.Finding.Flaggable()` — `stale_client`, and only `stale_client`): the
     evidence rule is enforced server-side in the relay, never just by UI
     absence, so a hand-crafted request cannot promote a local notice.
@@ -274,6 +279,9 @@ collector is outbound-only; nothing serves off-host.
   DEPRECATED and ignored (removed from §8 2026-09-14; decoded so an old config
   boots, with a warning): the deployment's identity is its collector NAME, and
   `/api/health` carries `collector_name` where the `integration` slug was.
+  `provider_display_name` is likewise DEPRECATED and ignored for the flag
+  (2026-09-19, see below) — decoded so an existing config keeps loading, with
+  no effect on what is sent.
 - `sync.go` — ONE 15s ticker, THREE independently gated legs. `edges.go` is the
   third: **edge registration**, `POST /api/v1/edges/sync` with the
   collector key. It lists the store's EXTERNAL edges and hands them to
@@ -285,9 +293,11 @@ collector is outbound-only; nothing serves off-host.
   panel before the operator Connects, and switchable with `edge_sync: false`
   without touching the other two legs. The log line carries counts and a status —
   never a domain, which would put the dependency graph in the pod logs.
-  `provider_display_name` is the FLAG's fallback provider name only — it stopped
+  `provider_display_name` was the FLAG's fallback provider name — it stopped
   naming edges when contracts moved into the UI (its edge linkage came from the
-  config spec's `peer_host`).
+  config spec's `peer_host`), and since 2026-09-19 it no longer names the flag
+  either: the control plane resolves the provider side itself, so the key is
+  accepted and ignored.
 - `contracts_upload.go` — `POST /api/contracts/{preview,upload,remove}`: the only
   way a provider contract enters this collector. Parse-before-persist, mandatory
   host binding, integration id DERIVED from the host, replace with one previous

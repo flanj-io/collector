@@ -40,10 +40,19 @@ import (
 // the name is decoration (CONTRACTS §5), so a thread with no call still names
 // the edge it is about and the thread page can resolve a verified directory name
 // for its provider slot instead of an unattributed consumer-asserted one.
+//
+// No provider_display_name field, deliberately (2026-09-19): the control plane
+// now names BOTH sides of a thread itself — the provider from verified domain
+// ownership, else a verified directory name, else the domain — and only reads
+// provider_display_name for compatibility with a collector that predates this
+// change. This collector never had a verified name to offer, only a guess (the
+// humanized integration id, or an operator's own override), and a guess is
+// exactly what the control plane's own resolution replaces. The field stays in
+// `contracts/cp-flag-request.schema.json` as optional so a body that omits it
+// entirely — this one — still validates.
 type FlagRequest struct {
 	IdempotencyKey      string `json:"idempotency_key"`
 	ConsumerDisplayName string `json:"consumer_display_name"`
-	ProviderDisplayName string `json:"provider_display_name"`
 	ProviderHost        string `json:"provider_host,omitempty"`
 	Message             string `json:"message"`
 	// AllowedDomains is who may OPEN the thread (CONTRACTS §5, thread-domain-gate
@@ -77,7 +86,6 @@ type FlagResponse struct {
 // Input is what the UI hands the promoter for one flag click.
 type Input struct {
 	ConsumerDisplayName string
-	ProviderDisplayName string // optional; defaults to the humanized integration id
 	Message             string // optional; a default is derived from the finding
 	// Call is the redacted failing call — nil for a CALL-LESS finding
 	// (definition_change), whose evidence is the two published snapshots the
@@ -100,7 +108,6 @@ type Input struct {
 type QuestionInput struct {
 	IdempotencyKey      string
 	ConsumerDisplayName string
-	ProviderDisplayName string
 	// ProviderHost is the edge's observed host — the anchor for the thread page's
 	// provider slot. Empty is legal; it just costs the verified-name resolution.
 	ProviderHost string
@@ -112,24 +119,15 @@ type QuestionInput struct {
 
 // Build assembles a schema-valid FlagRequest. The idempotency key is derived
 // from the finding id so re-flagging the same finding returns the existing
-// thread (CONTRACTS §5). The message is redacted defense-in-depth. When no
-// provider display name is supplied it defaults to the humanized integration id
-// (CONTRACTS §5/§8), so the peek/thread always names the provider side.
+// thread (CONTRACTS §5). The message is redacted defense-in-depth. It never
+// sets a provider name (2026-09-19, see FlagRequest) — the control plane
+// resolves the provider side itself.
 func Build(in Input) FlagRequest {
 	msg := strings.TrimSpace(in.Message)
 	if msg == "" {
 		msg = defaultMessage(in.Finding)
 	}
 	msg = redact.New().Redact(msg).Text
-	provider := strings.TrimSpace(in.ProviderDisplayName)
-	if provider == "" {
-		// A call-less finding names its own integration.
-		integration := in.Finding.Integration
-		if in.Call != nil {
-			integration = in.Call.Integration
-		}
-		provider = HumanizeIntegration(integration)
-	}
 	finding := in.Finding
 	// The caller's service.name names this org's internal topology and stays
 	// on this collector (CONTRACTS §3). The call rides the body whole, so strip
@@ -143,7 +141,6 @@ func Build(in Input) FlagRequest {
 	return FlagRequest{
 		IdempotencyKey:      "flag_" + in.Finding.ID,
 		ConsumerDisplayName: in.ConsumerDisplayName,
-		ProviderDisplayName: provider,
 		Message:             msg,
 		AllowedDomains:      in.AllowedDomains,
 		AllowedEmails:       in.AllowedEmails,
@@ -162,7 +159,6 @@ func BuildQuestion(in QuestionInput) FlagRequest {
 	return FlagRequest{
 		IdempotencyKey:      in.IdempotencyKey,
 		ConsumerDisplayName: in.ConsumerDisplayName,
-		ProviderDisplayName: strings.TrimSpace(in.ProviderDisplayName),
 		ProviderHost:        strings.TrimSpace(in.ProviderHost),
 		Message:             redact.New().Redact(strings.TrimSpace(in.Message)).Text,
 		AllowedDomains:      in.AllowedDomains,
