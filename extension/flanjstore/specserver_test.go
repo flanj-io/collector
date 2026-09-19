@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/collector/extension"
 
 	"github.com/flanj-io/collector/internal/model"
+	"github.com/flanj-io/collector/internal/store"
 )
 
 // testSpecToken: the endpoint refuses to bind without one, so every test that
@@ -62,7 +63,7 @@ func get(t *testing.T, url, token string) (int, []byte) {
 
 func seedContract(t *testing.T, e *storeExtension, integration, host, role, format string, doc []byte) {
 	t.Helper()
-	err := e.Store().PutSpecInfo(model.SpecInfo{
+	err := store.PutSpecRecord(e.Store(), model.SpecInfo{
 		Integration: integration,
 		Role:        role,
 		Format:      format,
@@ -147,7 +148,7 @@ func TestSpecEndpointExposesOnlyProviderContracts(t *testing.T) {
 func TestSpecEndpointServesMCPSnapshots(t *testing.T) {
 	e, base := startStorePod(t, testSpecToken)
 	snapshot := []byte(`{"tools":[{"name":"get_balance","inputSchema":{"type":"object"}}],"serverInfo":{"name":"acme-tools-mcp","version":"1.2.0"}}`)
-	if err := e.Store().PutSpecInfo(model.SpecInfo{
+	if err := e.Store().PutMCPCatalogue(model.SpecInfo{
 		Integration: "acme-tools",
 		Role:        model.SpecRoleProvider,
 		Format:      model.SpecFormatMCP,
@@ -462,5 +463,64 @@ func TestSpecEndpointServesADocumentAtTheCap(t *testing.T) {
 	}
 	if len(body) != len(doc) {
 		t.Errorf("served %d bytes, want the whole %d-byte document", len(body), len(doc))
+	}
+}
+
+// TestSpecDocPicksTheRowByFormat: a host with BOTH a REST contract and an MCP
+// catalogue is two listed rows with one integration, and the doc route hands a
+// front the document of the kind it asks for. Before the split the two were one
+// row and whichever wrote last was the only document either reader could get.
+// A request with no format (a front on an older image) gets the REST contract
+// when there is one and the MCP catalogue otherwise, which is what that request
+// meant before the two could coexist. Proved red by ignoring `format` in
+// pickServable (the MCP request got the OpenAPI document).
+func TestSpecDocPicksTheRowByFormat(t *testing.T) {
+	e, base := startStorePod(t, testSpecToken)
+	openapi := []byte("openapi: 3.0.0\ninfo: {title: Acme, version: '1'}\npaths: {}\n")
+	tools := []byte(`{"tools":[{"name":"charge"}]}`)
+	seedContract(t, e, "api-acme-test", "api.acme.test", model.SpecRoleProvider, model.SpecFormatOpenAPI, openapi)
+	seedContract(t, e, "api-acme-test", "api.acme.test", model.SpecRoleProvider, model.SpecFormatMCP, tools)
+	seedContract(t, e, "mcp-only-test", "mcp-only.test", model.SpecRoleProvider, model.SpecFormatMCP, tools)
+
+	code, body := get(t, base+"/internal/contracts", testSpecToken)
+	if code != http.StatusOK {
+		t.Fatalf("list = %d", code)
+	}
+	var list struct {
+		Contracts []model.SpecInfo `json:"contracts"`
+	}
+	if err := json.Unmarshal(body, &list); err != nil {
+		t.Fatal(err)
+	}
+	formats := map[string]int{}
+	for _, c := range list.Contracts {
+		if c.Integration == "api-acme-test" {
+			formats[c.Format]++
+		}
+	}
+	if formats[model.SpecFormatOpenAPI] != 1 || formats[model.SpecFormatMCP] != 1 {
+		t.Fatalf("listing for the shared host = %v, want one openapi row and one mcp row: %s", formats, body)
+	}
+
+	for _, tc := range []struct {
+		query string
+		want  []byte
+	}{
+		{"integration=api-acme-test&format=openapi", openapi},
+		{"integration=api-acme-test&format=mcp", tools},
+		{"integration=api-acme-test", openapi}, // older front: the contract first
+		{"integration=mcp-only-test", tools},   // older front: the only row there is
+		{"integration=mcp-only-test&format=mcp", tools},
+	} {
+		code, got := get(t, base+"/internal/contracts/doc?"+tc.query, testSpecToken)
+		if code != http.StatusOK || string(got) != string(tc.want) {
+			t.Errorf("doc?%s = %d %q, want 200 %q", tc.query, code, got, tc.want)
+		}
+	}
+	if code, _ := get(t, base+"/internal/contracts/doc?integration=mcp-only-test&format=openapi", testSpecToken); code != http.StatusNotFound {
+		t.Errorf("an openapi request for an MCP-only host = %d, want 404", code)
+	}
+	if code, _ := get(t, base+"/internal/contracts/doc?integration=api-acme-test&format=graphql", testSpecToken); code != http.StatusBadRequest {
+		t.Errorf("an unknown format = %d, want 400", code)
 	}
 }

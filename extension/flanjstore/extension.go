@@ -172,6 +172,8 @@ func (e *storeExtension) Start(_ context.Context, _ component.Host) error {
 					zap.Int("pinned_calls", sum.PinnedCalls),
 					zap.Int("findings", sum.Findings),
 					zap.Int("edges", sum.Edges),
+					zap.Int("contracts", sum.Contracts),
+					zap.Int("mcp_catalogues", sum.MCPCatalogues),
 				)
 			}
 		}

@@ -150,6 +150,22 @@ CREATE TABLE IF NOT EXISTS spec_infos (
   prev_version TEXT,
   prev_loaded_at TEXT
 );
+-- mcp_catalogues: observed MCP catalogues, apart from spec_infos — see the
+-- sqlite schema for why. The format is implicitly mcp.
+CREATE TABLE IF NOT EXISTS mcp_catalogues (
+  integration  TEXT PRIMARY KEY,
+  role         TEXT NOT NULL DEFAULT 'provider',
+  peer_host    TEXT,
+  edge_class   TEXT,
+  title        TEXT,
+  version      TEXT,
+  docs_url     TEXT,
+  endpoints    INTEGER NOT NULL DEFAULT 0,
+  loaded_at    TEXT NOT NULL,
+  doc          TEXT NOT NULL,
+  source       TEXT NOT NULL DEFAULT 'observed',
+  server_command TEXT
+);
 CREATE TABLE IF NOT EXISTS settings (
   key          TEXT PRIMARY KEY,
   value        TEXT NOT NULL,
@@ -194,12 +210,6 @@ ALTER TABLE calls ADD COLUMN IF NOT EXISTS drifted INTEGER NOT NULL DEFAULT 0;
 -- every pre-existing row and nothing else ever writes '' (InsertCall always
 -- supplies the column) — see the sqlite backend's callsAddedColumns note.
 ALTER TABLE calls ADD COLUMN IF NOT EXISTS validated TEXT NOT NULL DEFAULT '';
-
--- One-shot repair, idempotent: until 2026-09-07 PutSpecInfo never wrote
--- source, so every observed MCP snapshot took the column default and was
--- listed as a CONFIG-loaded contract. The rule is specSourceOf's — format
--- "mcp" was observed on the wire. Same statement as the sqlite backend.
-UPDATE spec_infos SET source='observed' WHERE format='mcp' AND source='config';
 `
 	tx, err := p.db.Begin()
 	if err != nil {
@@ -212,6 +222,11 @@ UPDATE spec_infos SET source='observed' WHERE format='mcp' AND source='config';
 		return fmt.Errorf("migrate: schema lock: %w", err)
 	}
 	if _, err := tx.Exec(schema); err != nil {
+		return fmt.Errorf("migrate: %w", err)
+	}
+	// The MCP rows move out of spec_infos in the same transaction, under the
+	// same schema lock, so N pods starting at once move each row exactly once.
+	if err := moveMCPRowsOutOfSpecInfos(tx); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -528,17 +543,14 @@ func (p *postgresStore) evict(keepID string) error {
 	return nil
 }
 
-// PutSpecInfo upserts the provider contract loaded by the drift processor —
-// a single atomic upsert, safe for concurrent pod starts (last writer wins,
-// and every pod loads the same mounted spec).
-//
-// An MCP row's loaded_at moves only when its document does (2026-09-08): the
-// stamp is the "since this snapshot" anchor and the contract channel's change
-// token, and every front that re-observes a list writes the row again with
-// its own first-sighting stamp — restamping on each write flip-flopped the row
-// between two fronts' stamps forever. Same rule, same reasons, as the sqlite
-// backend; the upsert stays one statement, so N pods need no coordination.
+// PutSpecInfo upserts a contract row (REST, or the self/config one) — a
+// single atomic upsert, safe for concurrent pod starts (last writer wins, and
+// every pod loads the same mounted spec). An MCP row is refused — it belongs
+// to PutMCPCatalogue.
 func (p *postgresStore) PutSpecInfo(info model.SpecInfo, rawSpec []byte) (err error) {
+	if info.Format == model.SpecFormatMCP {
+		return errMCPInSpecInfos(info.Integration)
+	}
 	defer func() { err = classify(err) }()
 	role := info.Role
 	if role == "" {
@@ -552,12 +564,11 @@ func (p *postgresStore) PutSpecInfo(info model.SpecInfo, rawSpec []byte) (err er
 		 ON CONFLICT (integration) DO UPDATE SET
 		   role=excluded.role, peer_host=excluded.peer_host, edge_class=excluded.edge_class, format=excluded.format, title=excluded.title,
 		   version=excluded.version, docs_url=excluded.docs_url, endpoints=excluded.endpoints,
-		   loaded_at=CASE WHEN excluded.format=? AND spec_infos.doc=excluded.doc THEN spec_infos.loaded_at ELSE excluded.loaded_at END,
+		   loaded_at=excluded.loaded_at,
 		   doc=excluded.doc, source=excluded.source, source_url=excluded.source_url, server_command=excluded.server_command`),
 		info.Integration, role, nullStr(info.PeerHost), nullStr(info.EdgeClass), info.Format, nullStr(info.Title),
 		nullStr(info.Version), nullStr(info.DocsURL), info.Endpoints, info.LoadedAt, string(rawSpec), specSourceOf(info),
 		nullStr(info.SourceURL), nullStr(info.ServerCommand),
-		model.SpecFormatMCP,
 	)
 	if err != nil {
 		return fmt.Errorf("put spec info: %w", err)
@@ -565,11 +576,21 @@ func (p *postgresStore) PutSpecInfo(info model.SpecInfo, rawSpec []byte) (err er
 	return nil
 }
 
+// PutMCPCatalogue upserts an observed MCP catalogue (putMCPCatalogue). One
+// statement, so N pods writing the same snapshot need no coordination.
+func (p *postgresStore) PutMCPCatalogue(info model.SpecInfo, rawDoc []byte) (err error) {
+	defer func() { err = classify(err) }()
+	return putMCPCatalogue(p.db, p.rebind, info, rawDoc)
+}
+
 // PutUploadedSpec writes an uploaded contract, rotating the document it
 // replaces into prev_doc. One transaction, and — because N pods may share this
 // database — a row lock, so two operators replacing the same contract at once
 // cannot interleave the read and the write into a lost previous document.
 func (p *postgresStore) PutUploadedSpec(info model.SpecInfo, rawSpec []byte) (UploadedSpecPrevious, error) {
+	if info.Format == model.SpecFormatMCP {
+		return UploadedSpecPrevious{}, errMCPInSpecInfos(info.Integration)
+	}
 	var prev UploadedSpecPrevious
 	tx, err := p.db.Begin()
 	if err != nil {

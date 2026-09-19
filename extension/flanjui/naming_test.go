@@ -153,7 +153,7 @@ func relayMessages() []string {
 		msgRequestTooLarge, msgContractHostRequired, msgContractHostInvalid, msgContractHostTooLong,
 		msgContractHostPunycode, msgContractHostBadPort, msgContractDocumentRequired, msgContractTooLarge,
 		msgContractUnparseable, msgContractStoreFailed, msgContractIntegrationRequired,
-		msgContractNotRemovable, msgContractNotRemovableObserved, msgContractNotLoaded,
+		msgContractNotRemovable, msgContractNotLoaded, msgContractFormatInvalid,
 	}
 }
 

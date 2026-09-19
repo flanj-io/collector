@@ -333,8 +333,10 @@ func findingEdgeHost(row mcpFindingRow, specHosts map[string]string) string {
 }
 
 // specHostIndex maps a contract's integration id to the host it is bound to.
+// Both kinds: an MCP finding names its catalogue's integration, a REST one its
+// contract's, and where they share one they share the host too.
 func specHostIndex(st store.Store) (map[string]string, error) {
-	infos, err := st.ListSpecInfos()
+	infos, err := store.ListContractsAndCatalogues(st)
 	if err != nil {
 		return nil, err
 	}

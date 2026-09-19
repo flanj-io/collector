@@ -66,7 +66,7 @@ func TestServerCommandCrossesTheFrontToStoreHop(t *testing.T) {
 				if err != nil {
 					t.Fatalf("decode spec_info: %v", err)
 				}
-				if err := st.PutSpecInfo(info, raw); err != nil {
+				if err := store.PutSpecRecord(st, info, raw); err != nil {
 					t.Fatalf("store pod PutSpecInfo: %v", err)
 				}
 				written++
@@ -76,7 +76,7 @@ func TestServerCommandCrossesTheFrontToStoreHop(t *testing.T) {
 	if written != 1 {
 		t.Fatalf("spec_info records across the hop = %d, want 1", written)
 	}
-	infos, err := st.ListSpecInfos()
+	infos, err := store.ListContractsAndCatalogues(st)
 	if err != nil || len(infos) != 1 {
 		t.Fatalf("store pod listing: %v (%d rows)", err, len(infos))
 	}

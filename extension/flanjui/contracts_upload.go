@@ -243,25 +243,18 @@ func (e *uiExtension) handleContractRemove(w http.ResponseWriter, r *http.Reques
 		writeErr(w, http.StatusBadRequest, "integration_required", msgContractIntegrationRequired)
 		return
 	}
-	// Only uploaded contracts are removable here, and the refusal names the
-	// provenance it actually found. A config contract would be re-loaded at the
-	// next start, so the operator is sent to the file; an observed MCP snapshot
-	// has no file at all — the server delivers it and the next tools/list
-	// replaces it — so the config sentence sent them hunting for something that
-	// does not exist. One code, two sentences: the class of refusal is the
-	// same, the reason is not.
+	// Only operator-bound contracts are removable here. A config contract
+	// would be re-loaded at the next start, so the operator is sent to the file.
 	// A FETCHED contract is removable for the same reason an uploaded one is: a
-	// human bound it in this UI, so a human can unbind it here. Missing this
-	// answered the config sentence — "remove it there" — for a contract that
-	// has no file anywhere, which is the wrong-diagnosis class the observed
-	// branch below already exists to close.
+	// human bound it in this UI, so a human can unbind it here.
+	//
+	// This route reads and deletes REST contracts only (spec_infos). An MCP
+	// server's observed catalogue lives in its own table and is not a filed
+	// contract, so no request to this route can reach one — removing the REST
+	// contract for a host leaves that host's MCP catalogue exactly as it was.
 	if existing, found, err := specInfoFor(st, integration); err == nil && found &&
 		!isOperatorBound(existing.Source) && existing.Source != "" {
-		msg := msgContractNotRemovable
-		if existing.Source == model.SpecSourceObserved {
-			msg = msgContractNotRemovableObserved
-		}
-		writeErr(w, http.StatusConflict, "not_removable", msg)
+		writeErr(w, http.StatusConflict, "not_removable", msgContractNotRemovable)
 		return
 	}
 	existed, err := st.DeleteSpecInfo(integration)
@@ -419,7 +412,11 @@ func specInfoFromDoc(sum drift.SpecSummary, integration, host string) model.Spec
 	}
 }
 
-// specInfoFor finds one contract row by its integration id.
+// specInfoFor finds one CONTRACT row (REST, or the self row) by its
+// integration id. MCP catalogues are not contracts and are not searched: an
+// MCP server on the host an upload names used to share this row and answer
+// the upload with a 409 (or be overwritten by it); they no longer share a
+// table, so there is nothing of theirs for the upload to collide with.
 func specInfoFor(st store.Store, integration string) (model.SpecInfo, bool, error) {
 	infos, err := st.ListSpecInfos()
 	if err != nil {

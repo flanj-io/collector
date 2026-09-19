@@ -119,6 +119,25 @@ CREATE TABLE IF NOT EXISTS spec_infos (
   prev_version TEXT,
   prev_loaded_at TEXT
 );
+-- mcp_catalogues: observed MCP catalogues (a server's tools/list, and an
+-- edge's search-learned <integration>:search catalogue). Apart from
+-- spec_infos because both are keyed by the host-derived integration, and an MCP
+-- server beside a REST API on one host used to be ONE spec_infos row that
+-- every snapshot overwrote. The format is implicitly mcp.
+CREATE TABLE IF NOT EXISTS mcp_catalogues (
+  integration  TEXT PRIMARY KEY,
+  role         TEXT NOT NULL DEFAULT 'provider',
+  peer_host    TEXT,
+  edge_class   TEXT,
+  title        TEXT,
+  version      TEXT,
+  docs_url     TEXT,
+  endpoints    INTEGER NOT NULL DEFAULT 0,
+  loaded_at    TEXT NOT NULL,
+  doc          TEXT NOT NULL,
+  source       TEXT NOT NULL DEFAULT 'observed',
+  server_command TEXT
+);
 CREATE TABLE IF NOT EXISTS settings (
   key          TEXT PRIMARY KEY,
   value        TEXT NOT NULL,
@@ -162,13 +181,19 @@ CREATE INDEX IF NOT EXISTS idx_calls_captured_edge ON calls(captured_at, peer_ho
 			return fmt.Errorf("migrate calls: add %s: %w", col, err)
 		}
 	}
-	// One-shot repair, idempotent: until 2026-09-07 PutSpecInfo never wrote
-	// `source`, so every observed MCP snapshot took the column default and was
-	// listed as a CONFIG-loaded contract. The rule is specSourceOf's — format
-	// "mcp" was observed on the wire — and the postgres schema applies the same
-	// statement. Runs blind on every start; after the first it matches nothing.
-	if _, err := s.db.Exec(`UPDATE spec_infos SET source='observed' WHERE format='mcp' AND source='config'`); err != nil {
-		return fmt.Errorf("migrate spec_infos: repair observed source: %w", err)
+	// The MCP rows move out of spec_infos (moveMCPRowsOutOfSpecInfos), in one
+	// transaction so a crash never leaves a catalogue in both tables or in
+	// neither. Runs blind on every start; after the first it matches nothing.
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("migrate: begin mcp move: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := moveMCPRowsOutOfSpecInfos(tx); err != nil {
+		return fmt.Errorf("migrate: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("migrate: commit mcp move: %w", err)
 	}
 	return nil
 }
@@ -474,19 +499,14 @@ func (s *sqliteStore) evictLocked(keepID string) error {
 	}
 }
 
-// PutSpecInfo upserts the provider contract loaded by the drift processor,
-// keyed by integration. rawSpec is the spec document exactly as loaded; the UI
-// serves it verbatim so engineers can open the contract being validated.
-//
-// An MCP row's loaded_at moves only when its document does (2026-09-08). That
-// stamp is the UI's "since this snapshot" anchor and the contract channel's
-// change token, and an observed tools/list is written by EVERY front that
-// re-observes it, each with its own first-sighting stamp: restamping on each
-// write flip-flopped the row between two fronts' stamps forever, and every
-// flip re-downloaded the document on every front and flipped calls captured
-// before the newer stamp to NOT CHECKED. An OpenAPI row is one uploader's
-// document, written once per upload, and keeps the plain upsert.
+// PutSpecInfo upserts a contract row (REST, or the self/config one), keyed by
+// integration. rawSpec is the spec document exactly as loaded; the UI serves it
+// verbatim so engineers can open the contract being validated. An MCP row is
+// refused — it belongs to PutMCPCatalogue.
 func (s *sqliteStore) PutSpecInfo(info model.SpecInfo, rawSpec []byte) (err error) {
+	if info.Format == model.SpecFormatMCP {
+		return errMCPInSpecInfos(info.Integration)
+	}
 	defer func() { err = classify(err) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -504,12 +524,11 @@ func (s *sqliteStore) PutSpecInfo(info model.SpecInfo, rawSpec []byte) (err erro
 		 ON CONFLICT(integration) DO UPDATE SET
 		   role=excluded.role, peer_host=excluded.peer_host, edge_class=excluded.edge_class, format=excluded.format, title=excluded.title,
 		   version=excluded.version, docs_url=excluded.docs_url, endpoints=excluded.endpoints,
-		   loaded_at=CASE WHEN excluded.format=? AND spec_infos.doc=excluded.doc THEN spec_infos.loaded_at ELSE excluded.loaded_at END,
+		   loaded_at=excluded.loaded_at,
 		   doc=excluded.doc, source=excluded.source, source_url=excluded.source_url, server_command=excluded.server_command`,
 		info.Integration, role, nullStr(info.PeerHost), nullStr(info.EdgeClass), info.Format, nullStr(info.Title),
 		nullStr(info.Version), nullStr(info.DocsURL), info.Endpoints, info.LoadedAt, string(rawSpec), specSourceOf(info),
 		nullStr(info.SourceURL), nullStr(info.ServerCommand),
-		model.SpecFormatMCP,
 	)
 	if err != nil {
 		return fmt.Errorf("put spec info: %w", err)
@@ -517,11 +536,23 @@ func (s *sqliteStore) PutSpecInfo(info model.SpecInfo, rawSpec []byte) (err erro
 	return nil
 }
 
+// PutMCPCatalogue upserts an observed MCP catalogue (putMCPCatalogue), under
+// the store mutex like every other sqlite write.
+func (s *sqliteStore) PutMCPCatalogue(info model.SpecInfo, rawDoc []byte) (err error) {
+	defer func() { err = classify(err) }()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return putMCPCatalogue(s.db, rebindIdentity, info, rawDoc)
+}
+
 // PutUploadedSpec writes an uploaded contract, rotating the document it
 // replaces into prev_doc. Under the store mutex and in one transaction: a
 // half-applied replace would leave the host validating against a document its
 // recorded metadata no longer describes.
 func (s *sqliteStore) PutUploadedSpec(info model.SpecInfo, rawSpec []byte) (UploadedSpecPrevious, error) {
+	if info.Format == model.SpecFormatMCP {
+		return UploadedSpecPrevious{}, errMCPInSpecInfos(info.Integration)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

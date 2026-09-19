@@ -74,7 +74,7 @@ func resetPG(t *testing.T, dsn string) {
 	if _, err := db.Exec(`DO $$ DECLARE t text; BEGIN
 		FOR t IN SELECT table_name FROM information_schema.tables
 		          WHERE table_schema = 'public'
-		            AND table_name IN ('calls','findings','edges','spec_infos','settings','finding_occurrences') LOOP
+		            AND table_name IN ('calls','findings','edges','spec_infos','mcp_catalogues','settings','finding_occurrences') LOOP
 			EXECUTE format('TRUNCATE %I RESTART IDENTITY', t);
 		END LOOP;
 	END $$;`); err != nil {
@@ -704,7 +704,7 @@ func (b *testBackend) rawExec(t *testing.T, stmt string) {
 // specSources lists integration → source as the store serves it.
 func specSources(t *testing.T, s Store) map[string]string {
 	t.Helper()
-	infos, err := s.ListSpecInfos()
+	infos, err := ListContractsAndCatalogues(s)
 	if err != nil {
 		t.Fatalf("list spec infos: %v", err)
 	}
@@ -743,13 +743,13 @@ func TestSpecInfo_SourceRoundTrip(t *testing.T) {
 			{Integration: "acme-tools-stdio", Role: model.SpecRoleProvider, EdgeClass: model.EdgeClassLocalProcess,
 				Format: model.SpecFormatMCP, Title: "acme-tools", Endpoints: 3, LoadedAt: at},
 		} {
-			if err := s.PutSpecInfo(si, snapshot); err != nil {
+			if err := PutSpecRecord(s, si, snapshot); err != nil {
 				t.Fatalf("put %s: %v", si.Integration, err)
 			}
 		}
 		// The common case is a re-observation — every SDK start re-sends
 		// tools/list — and the upsert must keep the row observed.
-		if err := s.PutSpecInfo(observed, snapshot); err != nil {
+		if err := PutSpecRecord(s, observed, snapshot); err != nil {
 			t.Fatalf("re-put: %v", err)
 		}
 		want := map[string]string{
@@ -808,7 +808,7 @@ func TestSpecInfo_FetchedSourceURLRoundTrip(t *testing.T) {
 
 		read := func(t *testing.T, s Store, when string) model.SpecInfo {
 			t.Helper()
-			infos, err := s.ListSpecInfos()
+			infos, err := ListContractsAndCatalogues(s)
 			if err != nil {
 				t.Fatalf("list %s: %v", when, err)
 			}
@@ -862,23 +862,23 @@ func TestSpecInfo_RoundTrip(t *testing.T) {
 			LoadedAt:    "2026-08-18T08:00:00Z",
 		}
 		raw := []byte("openapi: 3.0.3\ninfo:\n  title: Acme Payments API\n")
-		if err := s.PutSpecInfo(info, raw); err != nil {
+		if err := PutSpecRecord(s, info, raw); err != nil {
 			t.Fatalf("put: %v", err)
 		}
 		// Upsert: a reload replaces, never duplicates.
 		info.Version = "1.5.0"
-		if err := s.PutSpecInfo(info, raw); err != nil {
+		if err := PutSpecRecord(s, info, raw); err != nil {
 			t.Fatalf("re-put: %v", err)
 		}
 		// A self contract (we-as-provider) lists alongside, self first.
-		if err := s.PutSpecInfo(model.SpecInfo{
+		if err := PutSpecRecord(s, model.SpecInfo{
 			Integration: "self", Role: model.SpecRoleSelf, Format: "openapi",
 			Title: "Org API", Version: "0.9.0", LoadedAt: "2026-08-18T08:00:00Z",
 		}, []byte("openapi: 3.0.3\ninfo:\n  title: Org API\n")); err != nil {
 			t.Fatalf("put self: %v", err)
 		}
 
-		infos, err := s.ListSpecInfos()
+		infos, err := ListContractsAndCatalogues(s)
 		if err != nil {
 			t.Fatalf("list: %v", err)
 		}
@@ -1112,7 +1112,7 @@ func TestSpecInfo_MCPUnchangedDocKeepsLoadedAt(t *testing.T) {
 		v2 := []byte(`{"tools":[{"name":"get_account_balance"}],"serverInfo":{"name":"acme-payments-mcp"}}`)
 		put := func(loadedAt, title string, doc []byte) {
 			t.Helper()
-			if err := s.PutSpecInfo(model.SpecInfo{
+			if err := PutSpecRecord(s, model.SpecInfo{
 				Integration: "acme-payments", Role: model.SpecRoleProvider, PeerHost: "mcp.acme.test",
 				EdgeClass: model.EdgeClassExternal, Format: model.SpecFormatMCP, Title: title, Endpoints: 1,
 				LoadedAt: loadedAt,
@@ -1122,7 +1122,7 @@ func TestSpecInfo_MCPUnchangedDocKeepsLoadedAt(t *testing.T) {
 		}
 		row := func() model.SpecInfo {
 			t.Helper()
-			infos, err := s.ListSpecInfos()
+			infos, err := ListContractsAndCatalogues(s)
 			if err != nil {
 				t.Fatalf("list: %v", err)
 			}
@@ -1136,7 +1136,7 @@ func TestSpecInfo_MCPUnchangedDocKeepsLoadedAt(t *testing.T) {
 		}
 		doc := func() string {
 			t.Helper()
-			raw, _, ok, err := s.GetSpecDoc("acme-payments")
+			raw, ok, err := s.GetMCPCatalogueDoc("acme-payments")
 			if err != nil || !ok {
 				t.Fatalf("get doc: ok=%v err=%v", ok, err)
 			}
@@ -1181,14 +1181,14 @@ func TestSpecInfo_MCPUnchangedDocKeepsLoadedAt(t *testing.T) {
 		api := model.SpecInfo{Integration: "api-acme", Role: model.SpecRoleProvider, PeerHost: "api.acme.test",
 			Format: model.SpecFormatOpenAPI, LoadedAt: "2026-09-07T10:00:00.000Z"}
 		openapi := []byte("openapi: 3.0.3\ninfo:\n  title: Acme\n")
-		if err := s.PutSpecInfo(api, openapi); err != nil {
+		if err := PutSpecRecord(s, api, openapi); err != nil {
 			t.Fatalf("put openapi: %v", err)
 		}
 		api.LoadedAt = "2026-09-07T10:00:05.000Z"
-		if err := s.PutSpecInfo(api, openapi); err != nil {
+		if err := PutSpecRecord(s, api, openapi); err != nil {
 			t.Fatalf("re-put openapi: %v", err)
 		}
-		infos, err := s.ListSpecInfos()
+		infos, err := ListContractsAndCatalogues(s)
 		if err != nil {
 			t.Fatalf("list: %v", err)
 		}

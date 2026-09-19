@@ -26,7 +26,7 @@ const stdioSnapshot = `{"tools":[{"name":"list_charges","inputSchema":{"type":"o
 // onlySpec lists the store's contracts and returns the one row asked for.
 func onlySpec(t *testing.T, s Store, integration, when string) model.SpecInfo {
 	t.Helper()
-	infos, err := s.ListSpecInfos()
+	infos, err := ListContractsAndCatalogues(s)
 	if err != nil {
 		t.Fatalf("list %s: %v", when, err)
 	}
@@ -48,7 +48,7 @@ func onlySpec(t *testing.T, s Store, integration, when string) model.SpecInfo {
 func TestSpecInfo_ServerCommandRoundTrip(t *testing.T) {
 	forEachBackend(t, func(t *testing.T, b *testBackend) {
 		s := b.open(t, 0, 0)
-		if err := s.PutSpecInfo(stdioSpec(stdioCommand), []byte(stdioSnapshot)); err != nil {
+		if err := PutSpecRecord(s, stdioSpec(stdioCommand), []byte(stdioSnapshot)); err != nil {
 			t.Fatalf("put: %v", err)
 		}
 		if got := onlySpec(t, s, "stripe-mcp-stdio", "after put"); got.ServerCommand != stdioCommand {
@@ -65,7 +65,7 @@ func TestSpecInfo_ServerCommandRoundTrip(t *testing.T) {
 		const bumped = `["npx","-y","@stripe/mcp@0.2.2"]`
 		later := stdioSpec(bumped)
 		later.LoadedAt = "2026-09-18T11:00:00Z"
-		if err := s.PutSpecInfo(later, []byte(stdioSnapshot)); err != nil {
+		if err := PutSpecRecord(s, later, []byte(stdioSnapshot)); err != nil {
 			t.Fatalf("re-observe: %v", err)
 		}
 		got := onlySpec(t, s, "stripe-mcp-stdio", "after a re-observation")
@@ -79,7 +79,7 @@ func TestSpecInfo_ServerCommandRoundTrip(t *testing.T) {
 		// A URL-addressed server never carries one.
 		remote := stdioSpec("")
 		remote.Integration, remote.PeerHost, remote.EdgeClass = "acme-tools", "mcp.acme.test", model.EdgeClassExternal
-		if err := s.PutSpecInfo(remote, []byte(stdioSnapshot)); err != nil {
+		if err := PutSpecRecord(s, remote, []byte(stdioSnapshot)); err != nil {
 			t.Fatalf("put remote: %v", err)
 		}
 		if got := onlySpec(t, s, "acme-tools", "remote row"); got.ServerCommand != "" {
@@ -95,7 +95,7 @@ func TestSpecInfo_ServerCommandRoundTrip(t *testing.T) {
 func TestSpecInfo_ServerCommandColumnWidensAnOldDatabase(t *testing.T) {
 	forEachBackend(t, func(t *testing.T, b *testBackend) {
 		s := b.open(t, 0, 0)
-		if err := s.PutSpecInfo(stdioSpec(""), []byte(stdioSnapshot)); err != nil {
+		if err := PutSpecRecord(s, stdioSpec(""), []byte(stdioSnapshot)); err != nil {
 			t.Fatalf("put: %v", err)
 		}
 		_ = s.Close()
@@ -105,7 +105,7 @@ func TestSpecInfo_ServerCommandColumnWidensAnOldDatabase(t *testing.T) {
 		if got := onlySpec(t, s, "stripe-mcp-stdio", "pre-column row"); got.ServerCommand != "" {
 			t.Errorf("pre-column row: server_command = %q, want empty", got.ServerCommand)
 		}
-		if err := s.PutSpecInfo(stdioSpec(stdioCommand), []byte(stdioSnapshot)); err != nil {
+		if err := PutSpecRecord(s, stdioSpec(stdioCommand), []byte(stdioSnapshot)); err != nil {
 			t.Fatalf("write after widening: %v", err)
 		}
 		if got := onlySpec(t, s, "stripe-mcp-stdio", "after widening"); got.ServerCommand != stdioCommand {
@@ -127,17 +127,31 @@ func TestMigrateFromSQLite_CarriesServerCommand(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := s.PutSpecInfo(stdioSpec(stdioCommand), []byte(stdioSnapshot)); err != nil {
-			t.Fatal(err)
+		if !dropColumn {
+			if err := PutSpecRecord(s, stdioSpec(stdioCommand), []byte(stdioSnapshot)); err != nil {
+				t.Fatal(err)
+			}
 		}
 		_ = s.Close()
 		if dropColumn {
+			// A file last written before server_command (2026-09-18) also
+			// predates mcp_catalogues (2026-09-19): its stdio snapshot is a
+			// spec_infos row, in a spec_infos with no server_command column, and
+			// the catalogue table does not exist. Rebuilt to that shape.
 			raw, err := sql.Open("sqlite", "file:"+path)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := raw.Exec(`ALTER TABLE spec_infos DROP COLUMN server_command`); err != nil {
-				t.Fatalf("drop column on the legacy file: %v", err)
+			for _, stmt := range []string{
+				`DROP TABLE mcp_catalogues`,
+				`ALTER TABLE spec_infos DROP COLUMN server_command`,
+				`INSERT INTO spec_infos (integration, role, peer_host, edge_class, format, title, version, endpoints, loaded_at, doc, source)
+				 VALUES ('stripe-mcp-stdio', 'provider', 'stripe-mcp', 'local-process', 'mcp', 'stripe-mcp', '0.2.1', 1,
+				         '2026-09-18T10:00:00Z', '` + stdioSnapshot + `', 'observed')`,
+			} {
+				if _, err := raw.Exec(stmt); err != nil {
+					t.Fatalf("shape the legacy file: %v", err)
+				}
 			}
 			_ = raw.Close()
 		}

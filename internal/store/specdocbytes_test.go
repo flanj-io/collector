@@ -38,7 +38,7 @@ func TestListSpecInfos_DocBytesIsMeasuredInBytes(t *testing.T) {
 			{"acme-ascii", ascii},
 			{"acme-multibyte", multi},
 		} {
-			if err := s.PutSpecInfo(model.SpecInfo{
+			if err := PutSpecRecord(s, model.SpecInfo{
 				Integration: tc.integration,
 				Role:        model.SpecRoleProvider,
 				PeerHost:    tc.integration + ".test",
@@ -50,7 +50,7 @@ func TestListSpecInfos_DocBytesIsMeasuredInBytes(t *testing.T) {
 			}
 		}
 
-		infos, err := s.ListSpecInfos()
+		infos, err := ListContractsAndCatalogues(s)
 		if err != nil {
 			t.Fatalf("list spec infos: %v", err)
 		}
@@ -75,7 +75,7 @@ func TestListSpecInfos_DocBytesCrossesTheCap(t *testing.T) {
 	forEachBackend(t, func(t *testing.T, b *testBackend) {
 		s := b.open(t, 0, 0)
 		over := model.MaxContractDocBytes + 4096
-		if err := s.PutSpecInfo(model.SpecInfo{
+		if err := PutSpecRecord(s, model.SpecInfo{
 			Integration: "acme-tools",
 			Role:        model.SpecRoleProvider,
 			PeerHost:    "tools.acme.test",
@@ -85,7 +85,7 @@ func TestListSpecInfos_DocBytesCrossesTheCap(t *testing.T) {
 		}, []byte(strings.Repeat("x", over))); err != nil {
 			t.Fatalf("put oversized spec info: %v", err)
 		}
-		infos, err := s.ListSpecInfos()
+		infos, err := ListContractsAndCatalogues(s)
 		if err != nil {
 			t.Fatalf("list spec infos: %v", err)
 		}

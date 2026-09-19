@@ -395,13 +395,15 @@ func (e *uiExtension) handleEdgeName(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleContracts returns the provider contracts (specs) the drift processor
-// has loaded — what the Contract tab renders per provider.
+// has loaded — what the Contract tab renders per provider: the REST contracts
+// and the self row, then the observed MCP catalogues (format "mcp"). A host
+// with both is two rows sharing an integration, told apart by format.
 func (e *uiExtension) handleContracts(w http.ResponseWriter, r *http.Request) {
 	st := e.storeOrError(w)
 	if st == nil {
 		return
 	}
-	infos, err := st.ListSpecInfos()
+	infos, err := store.ListContractsAndCatalogues(st)
 	if err != nil {
 		e.storeErr(w, "list contracts", err)
 		return
@@ -409,15 +411,35 @@ func (e *uiExtension) handleContracts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"contracts": infos})
 }
 
-// handleContractSpec serves the raw contract document for one integration
-// (?integration=...), exactly as the drift processor loaded it.
+// handleContractSpec serves the raw document for one row
+// (?integration=…&format=openapi|mcp), exactly as the drift processor loaded
+// it. The format picks the row: a REST contract and an MCP catalogue for one
+// host share an integration. The UI always sends it; a request without one
+// gets the REST contract when the host has one and the MCP catalogue
+// otherwise — what that request meant before the two could coexist.
 func (e *uiExtension) handleContractSpec(w http.ResponseWriter, r *http.Request) {
 	st := e.storeOrError(w)
 	if st == nil {
 		return
 	}
 	integration := r.URL.Query().Get("integration")
-	raw, _, ok, err := st.GetSpecDoc(integration)
+	format := r.URL.Query().Get("format")
+	if format != "" && format != model.SpecFormatOpenAPI && format != model.SpecFormatMCP {
+		writeErr(w, http.StatusBadRequest, "format_invalid", msgContractFormatInvalid)
+		return
+	}
+	var (
+		raw []byte
+		ok  bool
+		err error
+	)
+	if format == "" {
+		if raw, _, ok, err = st.GetSpecDoc(integration); err == nil && !ok {
+			raw, ok, err = st.GetMCPCatalogueDoc(integration)
+		}
+	} else {
+		raw, ok, err = store.GetDoc(st, integration, format)
+	}
 	if err != nil {
 		e.storeErr(w, "get contract document", err)
 		return

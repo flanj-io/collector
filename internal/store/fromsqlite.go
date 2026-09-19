@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/flanj-io/collector/internal/model"
 )
 
 // MigrationSummary reports what the one-shot sqlite → postgres import did.
@@ -16,6 +18,10 @@ type MigrationSummary struct {
 	Edges       int
 	Settings    int
 	Contracts   int
+	// MCPCatalogues counts observed MCP catalogues imported — from the legacy
+	// file's mcp_catalogues table, and from mcp rows a file older than that
+	// table still keeps in spec_infos.
+	MCPCatalogues int
 }
 
 // MigrateFromSQLite copies the durable-value rows of a legacy embedded sqlite
@@ -89,9 +95,17 @@ func MigrateFromSQLite(dst Store, sqlitePath string) (MigrationSummary, error) {
 	if sum.Settings, err = copySettings(src, tx); err != nil {
 		return sum, err
 	}
-	if sum.Contracts, err = copySpecInfos(src, tx); err != nil {
+	// The catalogue table first: in a file written by a build that has it,
+	// it is where the catalogues live; copySpecInfos then adds any mcp row a
+	// file older than it (or a rollback) left in spec_infos, newer-wins.
+	if sum.MCPCatalogues, err = copyMCPCatalogues(src, tx); err != nil {
 		return sum, err
 	}
+	var movedMCP int
+	if sum.Contracts, movedMCP, err = copySpecInfos(src, tx); err != nil {
+		return sum, err
+	}
+	sum.MCPCatalogues += movedMCP
 	if err := tx.Commit(); err != nil {
 		return sum, fmt.Errorf("migrate-from-sqlite: commit: %w", err)
 	}
@@ -287,7 +301,11 @@ func sqliteHasColumn(src *sql.DB, table, column string) (bool, error) {
 // endpoint, so a metadata-only copy would list contracts that validate nothing.
 // prev_doc/prev_version/prev_loaded_at come too: they are the evidence behind
 // the version-diff findings that copyFindings just carried over.
-func copySpecInfos(src *sql.DB, tx *sql.Tx) (int, error) {
+//
+// An mcp row in the legacy spec_infos (every file written before the MCP
+// catalogue table existed) goes to mcp_catalogues, never spec_infos: the
+// destination's spec_infos holds contracts only. Returns the two counts apart.
+func copySpecInfos(src *sql.DB, tx *sql.Tx) (contracts, catalogues int, err error) {
 	// source_url is read only when the legacy file HAS it — the same
 	// probe-then-select shape the rest of this import uses, for the same
 	// reason. The source is opened mode=ro, so the additive widening every
@@ -321,10 +339,9 @@ func copySpecInfos(src *sql.DB, tx *sql.Tx) (int, error) {
 		        prev_doc, prev_version, prev_loaded_at
 		   FROM spec_infos`)
 	if err != nil {
-		return 0, fmt.Errorf("migrate-from-sqlite: read contracts: %w", err)
+		return 0, 0, fmt.Errorf("migrate-from-sqlite: read contracts: %w", err)
 	}
 	defer rows.Close()
-	n := 0
 	for rows.Next() {
 		var (
 			integration, format, loadedAt, doc, source   string
@@ -336,7 +353,23 @@ func copySpecInfos(src *sql.DB, tx *sql.Tx) (int, error) {
 		)
 		if err := rows.Scan(&integration, &role, &peerHost, &edgeClass, &format, &title, &version,
 			&docsURL, &endpoints, &loadedAt, &doc, &source, &sourceURL, &serverCommand, &prevDoc, &prevVersion, &prevLoadedAt); err != nil {
-			return n, fmt.Errorf("migrate-from-sqlite: scan contract: %w", err)
+			return contracts, catalogues, fmt.Errorf("migrate-from-sqlite: scan contract: %w", err)
+		}
+		if format == model.SpecFormatMCP {
+			// The 2026-09-07 repair, applied on the way: a file older than it
+			// filed observed snapshots under the column default 'config'.
+			if source == "" || source == model.SpecSourceConfig {
+				source = model.SpecSourceObserved
+			}
+			ok, err := importMCPCatalogue(tx, integration, role, peerHost, edgeClass, title, version, docsURL,
+				endpoints, loadedAt, doc, source, serverCommand)
+			if err != nil {
+				return contracts, catalogues, err
+			}
+			if ok {
+				catalogues++
+			}
+			continue
 		}
 		res, err := tx.Exec(
 			`INSERT INTO spec_infos
@@ -348,11 +381,83 @@ func copySpecInfos(src *sql.DB, tx *sql.Tx) (int, error) {
 			endpoints, loadedAt, doc, source, nullStr(sourceURL), nullStr(serverCommand), prevDoc, prevVersion, prevLoadedAt,
 		)
 		if err != nil {
-			return n, fmt.Errorf("migrate-from-sqlite: insert contract %s: %w", integration, err)
+			return contracts, catalogues, fmt.Errorf("migrate-from-sqlite: insert contract %s: %w", integration, err)
 		}
 		if c, _ := res.RowsAffected(); c > 0 {
+			contracts++
+		}
+	}
+	return contracts, catalogues, rows.Err()
+}
+
+// sqliteHasTable reports whether a legacy sqlite file has a table — a file
+// written before mcp_catalogues existed does not, and naming it would abort
+// the start (the source is opened mode=ro, so nothing ever creates it there).
+func sqliteHasTable(src *sql.DB, table string) (bool, error) {
+	var n int
+	if err := src.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&n); err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// copyMCPCatalogues carries the legacy file's mcp_catalogues table, when it
+// has one. A probe that errors reads as absent, as the column probes do.
+func copyMCPCatalogues(src *sql.DB, tx *sql.Tx) (int, error) {
+	if has, _ := sqliteHasTable(src, "mcp_catalogues"); !has {
+		return 0, nil
+	}
+	rows, err := src.Query(
+		`SELECT integration, role, peer_host, edge_class, title, version, docs_url,
+		        endpoints, loaded_at, doc, source, COALESCE(server_command,'')
+		   FROM mcp_catalogues`)
+	if err != nil {
+		return 0, fmt.Errorf("migrate-from-sqlite: read mcp catalogues: %w", err)
+	}
+	defer rows.Close()
+	n := 0
+	for rows.Next() {
+		var (
+			integration, role, loadedAt, doc, source, serverCommand string
+			peerHost, edgeClass, title, version, docsURL            sql.NullString
+			endpoints                                               int
+		)
+		if err := rows.Scan(&integration, &role, &peerHost, &edgeClass, &title, &version, &docsURL,
+			&endpoints, &loadedAt, &doc, &source, &serverCommand); err != nil {
+			return n, fmt.Errorf("migrate-from-sqlite: scan mcp catalogue: %w", err)
+		}
+		ok, err := importMCPCatalogue(tx, integration, role, peerHost, edgeClass, title, version, docsURL,
+			endpoints, loadedAt, doc, source, serverCommand)
+		if err != nil {
+			return n, err
+		}
+		if ok {
 			n++
 		}
 	}
 	return n, rows.Err()
+}
+
+// importMCPCatalogue writes one imported catalogue. Newer observation wins
+// (the same rule the open-time move applies), which keeps the import
+// retry-safe: a re-run finds every row already at its own loaded_at and
+// changes nothing.
+func importMCPCatalogue(tx *sql.Tx, integration, role string, peerHost, edgeClass, title, version, docsURL sql.NullString,
+	endpoints int, loadedAt, doc, source, serverCommand string) (bool, error) {
+	res, err := tx.Exec(
+		`INSERT INTO mcp_catalogues (`+mcpCatalogueColumns+`)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		 ON CONFLICT (integration) DO UPDATE SET
+		   role=excluded.role, peer_host=excluded.peer_host, edge_class=excluded.edge_class, title=excluded.title,
+		   version=excluded.version, docs_url=excluded.docs_url, endpoints=excluded.endpoints,
+		   loaded_at=excluded.loaded_at, doc=excluded.doc, source=excluded.source, server_command=excluded.server_command
+		 WHERE excluded.loaded_at > mcp_catalogues.loaded_at`,
+		integration, role, peerHost, edgeClass, title, version, docsURL,
+		endpoints, loadedAt, doc, source, nullStr(serverCommand),
+	)
+	if err != nil {
+		return false, fmt.Errorf("migrate-from-sqlite: insert mcp catalogue %s: %w", integration, err)
+	}
+	c, _ := res.RowsAffected()
+	return c > 0, nil
 }

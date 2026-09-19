@@ -38,12 +38,12 @@ func TestContractsServeServerCommand(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	if err := st.PutSpecInfo(stdioContract(launchLine), []byte(`{"tools":[]}`)); err != nil {
+	if err := st.PutMCPCatalogue(stdioContract(launchLine), []byte(`{"tools":[]}`)); err != nil {
 		t.Fatalf("put stdio: %v", err)
 	}
 	remote := stdioContract("")
 	remote.Integration, remote.PeerHost, remote.EdgeClass = "acme-tools", "mcp.acme.test", model.EdgeClassExternal
-	if err := st.PutSpecInfo(remote, []byte(`{"tools":[]}`)); err != nil {
+	if err := st.PutMCPCatalogue(remote, []byte(`{"tools":[]}`)); err != nil {
 		t.Fatalf("put remote: %v", err)
 	}
 
@@ -91,7 +91,7 @@ func TestFlagNeverCarriesServerCommand(t *testing.T) {
 	r.cp.contactEmail, r.cp.contactStatus, r.cp.confirmedEmail = "ops@acme.test", "confirmed", "ops@acme.test"
 	r.cp.mu.Unlock()
 
-	_ = r.st.PutSpecInfo(stdioContract(launchLine), []byte(`{"tools":[]}`))
+	_ = r.st.PutMCPCatalogue(stdioContract(launchLine), []byte(`{"tools":[]}`))
 	callID := "call_stdio_1"
 	_ = r.st.InsertCall(model.RedactedCall{SchemaVersion: 1, ID: callID, CapturedAt: "2026-09-18T10:00:00Z",
 		Integration: "acme-stdio", Direction: "client", PeerHost: "acme-stdio-mcp", EdgeClass: model.EdgeClassLocalProcess,

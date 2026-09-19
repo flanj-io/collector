@@ -57,14 +57,17 @@ const (
 //
 // It carries two kinds of row. Uploaded OpenAPI contracts fill this cache;
 // observed MCP tools/list snapshots (format "mcp") seed the MCP detector's
-// per-edge baseline (mcpbaseline.go). One listing serves both.
+// per-edge baseline (mcpbaseline.go). One listing serves both, and each row
+// keeps its format — a REST contract and an MCP catalogue for one host share an
+// integration, so a document is always asked for by (integration, format).
 type specSource interface {
 	// listSpecs returns contract METADATA only. Cheap by construction: the
 	// refresh compares it against what is cached and downloads nothing when
 	// nothing changed.
 	listSpecs() ([]model.SpecInfo, error)
-	// specDoc returns one raw contract document.
-	specDoc(integration string) ([]byte, error)
+	// specDoc returns one raw document: format "mcp" names the MCP catalogue,
+	// anything else the REST contract.
+	specDoc(integration, format string) ([]byte, error)
 	// overCap reports, from the METADATA alone, that this source will refuse
 	// the row's document for its size — nil when it will not.
 	//
@@ -80,10 +83,12 @@ type specSource interface {
 // storeSpecSource reads the co-located store directly.
 type storeSpecSource struct{ st store.Store }
 
-func (s storeSpecSource) listSpecs() ([]model.SpecInfo, error) { return s.st.ListSpecInfos() }
+func (s storeSpecSource) listSpecs() ([]model.SpecInfo, error) {
+	return store.ListContractsAndCatalogues(s.st)
+}
 
-func (s storeSpecSource) specDoc(integration string) ([]byte, error) {
-	raw, _, ok, err := s.st.GetSpecDoc(integration)
+func (s storeSpecSource) specDoc(integration, format string) ([]byte, error) {
+	raw, ok, err := store.GetDoc(s.st, integration, format)
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +236,7 @@ func (c *specCache) reconcile(infos []model.SpecInfo, src specSource) (changed [
 			errs = append(errs, oc)
 			continue
 		}
-		raw, err := src.specDoc(si.Integration)
+		raw, err := src.specDoc(si.Integration, model.SpecFormatOpenAPI)
 		if err != nil {
 			errs = append(errs, err)
 			continue

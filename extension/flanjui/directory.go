@@ -170,7 +170,7 @@ func (e *uiExtension) newNameResolver(st store.Store) nameResolver {
 // rename does — an uploaded document is operator-supplied text like any other.
 // A title the floor consumes entirely resolves nowhere, same as an empty one.
 func contractEdgeNames(st store.Store) (byDomain, byHost map[string]string) {
-	infos, err := st.ListSpecInfos()
+	infos, err := store.ListContractsAndCatalogues(st)
 	if err != nil {
 		return nil, nil
 	}

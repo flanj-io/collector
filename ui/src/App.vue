@@ -34,6 +34,7 @@ import {
   contractOrigin,
   provenanceWord,
   findingBelongsToContract,
+  mcpOnlyHosts,
   contractsByHost,
   edgeContractLine,
   humanize,
@@ -860,8 +861,14 @@ function fmtRPM(rpm?: number): string {
   return rpm >= 10 ? String(Math.round(rpm)) : rpm.toFixed(1).replace(/\.0$/, '');
 }
 
+// The format names WHICH document: one host can have both a REST contract and
+// an MCP catalogue, and they share an integration (2026-09-19).
 function specHref(s: SpecInfo): string {
-  return '/api/contracts/spec?integration=' + encodeURIComponent(s.integration);
+  return (
+    '/api/contracts/spec?integration=' +
+    encodeURIComponent(s.integration) +
+    (s.format ? '&format=' + encodeURIComponent(s.format) : '')
+  );
 }
 
 // Contract cards. Self = the contract WE publish (validates our inbound
@@ -912,7 +919,9 @@ const contractCards = computed<{ self: ContractCard[]; mcpServers: ContractCard[
       // consulted here (owner ruling 2026-08-31: naming stays on the Edges
       // panel; Traffic and Contracts keep domains). `peerHost` renders beside
       // whichever name wins, so the host is never replaced.
-      key: 'spec-' + s.integration,
+      // Format in the key: a REST contract and an MCP catalogue for one host
+      // share an integration, and are two cards.
+      key: 'spec-' + (s.format || '') + '-' + s.integration,
       name: s.title || humanize(s.integration) || s.peer_host || (s.role === 'self' ? 'Your API' : 'Provider'),
       peerHost: s.peer_host || '',
       spec: s,
@@ -943,14 +952,14 @@ const contractCards = computed<{ self: ContractCard[]; mcpServers: ContractCard[
 // collector cannot say whether a contract is loaded, and guessing "none" there
 // would invent work that may already be done.
 const uncoveredHosts = computed(() =>
-  contractsKnown.value ? uncoveredProviders(outboundEdges.value, contracts.value, mcpHosts.value) : []
+  contractsKnown.value ? uncoveredProviders(outboundEdges.value, contracts.value, mcpOnly.value) : []
 );
 const uncoveredOpen = ref(false);
 
 // The Edges roll call: one line under the outbound group's heading, counted
 // positive, below a fully rendered graph. Nothing is gated on it.
 const outboundRollCall = computed(() =>
-  contractsKnown.value ? rollCall(outboundEdges.value, contracts.value, mcpHosts.value) : ''
+  contractsKnown.value ? rollCall(outboundEdges.value, contracts.value, mcpOnly.value) : ''
 );
 
 // Provider contracts indexed by the host each is bound to — the Edges row's
@@ -1102,8 +1111,10 @@ const versionDiffFindings = computed(() => findings.value.filter((f) => f.kind =
 
 // ─── MCP (v0.5 Step D) ───────────────────────────────────────────────────
 // The MCP contract surface is SELF-DELIVERING: the server's observed
-// tools/list arrives as a spec_infos row (format "mcp"), so the Contracts tab
-// lists the server (title = serverInfo.name) and this UI needs no spec file.
+// tools/list arrives with the traffic and is stored as an MCP catalogue, apart
+// from the REST contracts (listed by /api/contracts with format "mcp"), so the
+// Contracts tab lists the server (title = serverInfo.name) and this UI needs
+// no spec file. It is not a filed contract (ruling 2026-09-19).
 const mcpContracts = computed(() => contracts.value.filter((s) => s.format === 'mcp'));
 
 const mcpFindings = computed(() => findings.value.filter((f) => isMcpFinding(f)));
@@ -1153,6 +1164,10 @@ const mcpHosts = computed(() => {
   for (const c of calls.value) if (c.transport === 'mcp' && c.peer_host) hosts.add(c.peer_host);
   return hosts;
 });
+// The hosts that are an MCP server and nothing else — the ones the roll call,
+// the uncovered list and the Edges contract line leave out. A host that also
+// serves REST keeps its REST contract (or its missing one) on all three.
+const mcpOnly = computed(() => mcpOnlyHosts(mcpHosts.value, contracts.value, calls.value));
 
 // Per-server MCP health headline (deck §2): output mismatch → definition
 // change (breaking, no calls affected yet) → nothing validated yet (neutral)
@@ -1784,7 +1799,7 @@ watch(tab, (t) => {
                          MCP rows get nothing new — their transport badge and
                          its tooltip already say "covered, self-delivering,
                          nothing for you to do". -->
-                    <span v-if="!mcpHosts.has(e.peer_host) && contractsKnown" class="edge-contract">
+                    <span v-if="!mcpOnly.has(e.peer_host) && contractsKnown" class="edge-contract">
                       <template v-if="contractByHost.get(e.peer_host)">
                         <button type="button" class="edge-contract-link" @click="goToContracts(e.peer_host)">
                           {{ edgeContractLine(contractByHost.get(e.peer_host)!) }}
@@ -1890,7 +1905,7 @@ watch(tab, (t) => {
 
         <article
           v-for="p in g.cards"
-          :id="p.peerHost ? 'contract-' + p.peerHost : undefined"
+          :id="p.peerHost ? (p.spec?.format === 'mcp' ? 'mcp-contract-' : 'contract-') + p.peerHost : undefined"
           :key="p.key"
           class="provider"
           :class="{ self: g.key === 'self' }"

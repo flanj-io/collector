@@ -286,7 +286,7 @@ func TestHealthZeroTrafficHonesty(t *testing.T) {
 func TestMcpSnapshotNamesNoEdge(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
-	_ = r.st.PutSpecInfo(model.SpecInfo{
+	_ = r.st.PutMCPCatalogue(model.SpecInfo{
 		Integration: "acme-tools", Role: model.SpecRoleProvider, Format: model.SpecFormatMCP,
 		PeerHost: "mcp.zzguava.dev", Title: "acme-tools-mcp", Source: model.SpecSourceObserved,
 	}, nil)
@@ -318,7 +318,7 @@ func TestHostWithOwnContractKeepsItsOwnName(t *testing.T) {
 		Format: model.SpecFormatOpenAPI, PeerHost: "api.zzguava.dev",
 		Title: "Guava Billing API", Source: model.SpecSourceUpload,
 	}, nil)
-	_ = r.st.PutSpecInfo(model.SpecInfo{
+	_ = r.st.PutMCPCatalogue(model.SpecInfo{
 		Integration: "zzguava-tools", Role: model.SpecRoleProvider,
 		Format: model.SpecFormatMCP, PeerHost: "mcp.zzguava.dev",
 		Title: "zzguava-tools-mcp", Source: model.SpecSourceObserved,
@@ -349,7 +349,7 @@ func TestHostWithOwnContractKeepsItsOwnName(t *testing.T) {
 func TestUserRenameStillBeatsAHostsOwnContract(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
-	_ = r.st.PutSpecInfo(model.SpecInfo{
+	_ = r.st.PutMCPCatalogue(model.SpecInfo{
 		Integration: "zzguava-tools", Role: model.SpecRoleProvider,
 		Format: model.SpecFormatMCP, PeerHost: "mcp.zzguava.dev",
 		Title: "zzguava-tools-mcp", Source: model.SpecSourceObserved,

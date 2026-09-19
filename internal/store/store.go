@@ -97,7 +97,18 @@ type Store interface {
 	CallPeerHosts(ids []string) (map[string]string, error)
 	ListEdges(externalOnly bool) ([]model.Edge, error)
 	EdgeCallCountsSince(sinceISO string) (map[string]int, error)
+	// PutSpecInfo writes a REST contract (OpenAPI) or the self/config row into
+	// spec_infos. It REFUSES format "mcp" with ErrRejected: an MCP server's
+	// tools/list is not a filed contract and has its own table
+	// (PutMCPCatalogue). The two used to share spec_infos, keyed by integration
+	// alone, so an MCP server and a REST contract on one host were one row and
+	// every snapshot overwrote the contract (ruling 2026-09-19).
 	PutSpecInfo(info model.SpecInfo, rawSpec []byte) error
+	// PutMCPCatalogue upserts an observed MCP catalogue: a tools/list snapshot,
+	// or an edge's search-learned `<integration>:search` catalogue. Keyed by
+	// integration within the MCP table only, so it can never displace a REST
+	// contract for the same host. loaded_at moves only when the document does.
+	PutMCPCatalogue(info model.SpecInfo, rawDoc []byte) error
 	// PutUploadedSpec is the UPLOAD path's write. It differs from PutSpecInfo
 	// in one way that matters: replacing a bound contract rotates the document
 	// it displaces into prev_doc rather than dropping it, and returns it, so
@@ -111,8 +122,17 @@ type Store interface {
 	// DeleteSpecInfo removes a contract. Remove ships with upload: a contract
 	// bound to the wrong host with no undo is worse than no contract.
 	DeleteSpecInfo(integration string) (existed bool, err error)
+	// ListSpecInfos lists the REST contracts and the self/config row — never
+	// an MCP catalogue. A reader that wants both asks for both
+	// (ListContractsAndCatalogues).
 	ListSpecInfos() ([]model.SpecInfo, error)
+	// GetSpecDoc returns a REST contract's (or the self row's) document.
 	GetSpecDoc(integration string) (raw []byte, format string, ok bool, err error)
+	// ListMCPCatalogues lists the observed MCP catalogues, each with Format
+	// "mcp". Metadata only, like ListSpecInfos (DocBytes is measured).
+	ListMCPCatalogues() ([]model.SpecInfo, error)
+	// GetMCPCatalogueDoc returns one MCP catalogue's document.
+	GetMCPCatalogueDoc(integration string) (raw []byte, ok bool, err error)
 	Stats() (rows int, bytes int64, err error)
 	Counts() (calls int, findings int, err error)
 	// GetSetting / PutSetting: a tiny per-DEPLOYMENT key/value store for
@@ -898,19 +918,12 @@ func (b *base) EdgeCallCountsSince(sinceISO string) (map[string]int, error) {
 }
 
 // specSourceOf is the provenance PutSpecInfo records when the writer left
-// Source empty. Both writers name their own (SpecSourceConfig for the self
-// contract, SpecSourceObserved for an MCP snapshot); this covers the record a
-// front on an image older than that sends across the tiered hop, so the store
-// pod never files an observed contract as a config one again. The rule is the
-// one the open-time repair applies to rows already stored that way: format
-// "mcp" means it was observed on the wire, anything else PutSpecInfo writes
-// came from config. Uploads never pass through here (PutUploadedSpec).
+// Source empty: config. (An MCP row, which defaults to observed, never reaches
+// PutSpecInfo — putMCPCatalogue applies its own default.) Uploads never pass
+// through here (PutUploadedSpec).
 func specSourceOf(info model.SpecInfo) string {
 	if info.Source != "" {
 		return info.Source
-	}
-	if info.Format == model.SpecFormatMCP {
-		return model.SpecSourceObserved
 	}
 	return model.SpecSourceConfig
 }
@@ -963,6 +976,170 @@ func (b *base) GetSpecDoc(integration string) (raw []byte, format string, ok boo
 		return nil, "", false, err
 	}
 	return []byte(doc), format, true, nil
+}
+
+// errMCPInSpecInfos is the refusal PutSpecInfo and PutUploadedSpec give an
+// MCP row. ErrRejected, so the exporter drops the record rather than retrying
+// a write that can never succeed; no writer in this repo sends one (the
+// exporter dispatches on format), so reaching it is a bug to surface.
+func errMCPInSpecInfos(integration string) error {
+	return fmt.Errorf("%w: %q is an MCP catalogue, not a contract: write it with PutMCPCatalogue", ErrRejected, integration)
+}
+
+// mcpCatalogueColumns is the shared column list of the MCP catalogue table.
+// No format column (it is implicitly "mcp"), no source_url (nothing fetches a
+// catalogue) and no prev_* (the drift processor keeps the previous snapshot
+// for diffing in memory; nothing replaces a catalogue by hand).
+const mcpCatalogueColumns = `integration, role, peer_host, edge_class, title, version, docs_url, endpoints, loaded_at, doc, source, server_command`
+
+// putMCPCatalogue is both backends' upsert (the sqlite one holds its mutex
+// around it). An MCP row's loaded_at moves only when its document does
+// (2026-09-08): the stamp is the UI's "since this snapshot" anchor and the
+// contract channel's change token, and every front that re-observes a list
+// writes the row again with its own first-sighting stamp — restamping on each
+// write flip-flopped the row between two fronts' stamps forever.
+func putMCPCatalogue(db execer, rebind func(string) string, info model.SpecInfo, rawDoc []byte) error {
+	role := info.Role
+	if role == "" {
+		role = model.SpecRoleProvider
+	}
+	source := info.Source
+	if source == "" {
+		source = model.SpecSourceObserved
+	}
+	_, err := db.Exec(rebind(
+		`INSERT INTO mcp_catalogues (`+mcpCatalogueColumns+`)
+		   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+		 ON CONFLICT (integration) DO UPDATE SET
+		   role=excluded.role, peer_host=excluded.peer_host, edge_class=excluded.edge_class, title=excluded.title,
+		   version=excluded.version, docs_url=excluded.docs_url, endpoints=excluded.endpoints,
+		   loaded_at=CASE WHEN mcp_catalogues.doc=excluded.doc THEN mcp_catalogues.loaded_at ELSE excluded.loaded_at END,
+		   doc=excluded.doc, source=excluded.source, server_command=excluded.server_command`),
+		info.Integration, role, nullStr(info.PeerHost), nullStr(info.EdgeClass), nullStr(info.Title),
+		nullStr(info.Version), nullStr(info.DocsURL), info.Endpoints, info.LoadedAt, string(rawDoc), source,
+		nullStr(info.ServerCommand),
+	)
+	if err != nil {
+		return fmt.Errorf("put mcp catalogue: %w", err)
+	}
+	return nil
+}
+
+// moveMCPRowsOutOfSpecInfos is the one-time split, idempotent, run at open by
+// both backends inside a transaction: every spec_infos row with format "mcp"
+// moves to mcp_catalogues, then leaves spec_infos. A row already present in
+// mcp_catalogues keeps whichever copy is newer — a rollback to an older image
+// writes snapshots into spec_infos again, and the next start on this one must
+// not let a stale copy win. It also carries the 2026-09-07 repair that used to
+// run on its own: an observed row stored with the old column default 'config'
+// is filed as observed. After the first start it matches nothing.
+func moveMCPRowsOutOfSpecInfos(tx execer) error {
+	if _, err := tx.Exec(
+		`INSERT INTO mcp_catalogues (` + mcpCatalogueColumns + `)
+		 SELECT integration, role, peer_host, edge_class, title, version, docs_url, endpoints, loaded_at, doc,
+		        CASE WHEN source IS NULL OR source='config' THEN 'observed' ELSE source END, server_command
+		   FROM spec_infos WHERE format='mcp'
+		 ON CONFLICT (integration) DO UPDATE SET
+		   role=excluded.role, peer_host=excluded.peer_host, edge_class=excluded.edge_class, title=excluded.title,
+		   version=excluded.version, docs_url=excluded.docs_url, endpoints=excluded.endpoints,
+		   loaded_at=excluded.loaded_at, doc=excluded.doc, source=excluded.source, server_command=excluded.server_command
+		 WHERE excluded.loaded_at > mcp_catalogues.loaded_at`); err != nil {
+		return fmt.Errorf("move mcp rows to mcp_catalogues: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM spec_infos WHERE format='mcp'`); err != nil {
+		return fmt.Errorf("move mcp rows to mcp_catalogues: clear spec_infos: %w", err)
+	}
+	return nil
+}
+
+// ListMCPCatalogues returns the observed MCP catalogues (metadata only, the
+// document's size measured), each marked Format "mcp" so a caller merging it
+// with ListSpecInfos keeps the two apart by format.
+func (b *base) ListMCPCatalogues() ([]model.SpecInfo, error) {
+	rows, err := b.db.Query(
+		`SELECT integration, role, COALESCE(peer_host,''), COALESCE(edge_class,''), COALESCE(title,''),
+		        COALESCE(version,''), COALESCE(docs_url,''), endpoints, loaded_at,
+		        source, COALESCE(server_command,''),
+		        ` + b.octetLength("doc") + `
+		   FROM mcp_catalogues ORDER BY integration ASC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]model.SpecInfo, 0)
+	for rows.Next() {
+		si := model.SpecInfo{Format: model.SpecFormatMCP}
+		if err := rows.Scan(&si.Integration, &si.Role, &si.PeerHost, &si.EdgeClass, &si.Title,
+			&si.Version, &si.DocsURL, &si.Endpoints, &si.LoadedAt,
+			&si.Source, &si.ServerCommand, &si.DocBytes); err != nil {
+			return nil, err
+		}
+		out = append(out, si)
+	}
+	return out, rows.Err()
+}
+
+// GetMCPCatalogueDoc returns one MCP catalogue's raw document.
+func (b *base) GetMCPCatalogueDoc(integration string) (raw []byte, ok bool, err error) {
+	var doc string
+	err = b.db.QueryRow(b.rebind(`SELECT doc FROM mcp_catalogues WHERE integration=?`), integration).Scan(&doc)
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return []byte(doc), true, nil
+}
+
+// ListContractsAndCatalogues is the listing for a reader that shows or
+// serves BOTH kinds — the Contracts tab, the store pod's contract channel, a
+// co-located drift processor: REST contracts (and the self row) first, then
+// the MCP catalogues. The rows keep their format, and a REST contract and an
+// MCP catalogue for one host are two rows with the same integration, so a
+// reader must never index this by integration alone.
+func ListContractsAndCatalogues(st interface {
+	ListSpecInfos() ([]model.SpecInfo, error)
+	ListMCPCatalogues() ([]model.SpecInfo, error)
+}) ([]model.SpecInfo, error) {
+	contracts, err := st.ListSpecInfos()
+	if err != nil {
+		return nil, err
+	}
+	catalogues, err := st.ListMCPCatalogues()
+	if err != nil {
+		return nil, err
+	}
+	return append(contracts, catalogues...), nil
+}
+
+// PutSpecRecord writes a spec_info record where its format says it belongs:
+// an MCP catalogue to its own table, anything else to the contracts table. The
+// one dispatch for a writer holding a record of either kind — the store
+// exporter on the tiered hop, whose OTLP record keeps one shape for both.
+func PutSpecRecord(st interface {
+	PutSpecInfo(model.SpecInfo, []byte) error
+	PutMCPCatalogue(model.SpecInfo, []byte) error
+}, info model.SpecInfo, raw []byte) error {
+	if info.Format == model.SpecFormatMCP {
+		return st.PutMCPCatalogue(info, raw)
+	}
+	return st.PutSpecInfo(info, raw)
+}
+
+// GetDoc returns the document for (integration, format): format "mcp" reads
+// the MCP catalogue table, anything else the contracts table. The one lookup
+// for a reader that holds a listed row and wants that row's document.
+func GetDoc(st interface {
+	GetSpecDoc(string) ([]byte, string, bool, error)
+	GetMCPCatalogueDoc(string) ([]byte, bool, error)
+}, integration, format string) ([]byte, bool, error) {
+	if format == model.SpecFormatMCP {
+		return st.GetMCPCatalogueDoc(integration)
+	}
+	raw, _, ok, err := st.GetSpecDoc(integration)
+	return raw, ok, err
 }
 
 // DeleteSpecInfo removes a contract and reports whether one was there.

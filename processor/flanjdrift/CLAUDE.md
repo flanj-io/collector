@@ -27,7 +27,7 @@ record (format `"mcp"`, raw doc = the snapshot JSON) and — when a store is
 co-located — upserted directly, so the Contracts tab lists the server.
 
 **The MCP baseline is the STORE's, not this process's** (2026-09-07). Every
-refresh offers the detector the store's `spec_infos` rows of format `"mcp"`
+refresh offers the detector the store's MCP catalogues (format `"mcp"`, the `mcp_catalogues` table)
 (`mcpbaseline.go` → `MCPDetector.Seed`), from whichever `specSource` this
 processor has — the co-located store, or the store pod's contract channel on a
 tiered FRONT, which now serves MCP rows too. So a restart re-seeds the diff
@@ -59,7 +59,7 @@ when the contract does.
 (2026-09-08 — `mcpbaseline.go`, "Local-process (stdio) rows seed nobody").
 Its `peer_host` is the server's `serverInfo.name`, not a host identity, so
 every pod running its own subprocess of a same-named stdio server shares ONE
-`spec_infos` row. #41 skipped such rows only over the store pod's channel
+catalogue row. #41 skipped such rows only over the store pod's channel
 (`mcpSeeds.remote`), on the theory that a pod's own store holds only its own:
 `storeSpecSource` reads the shared database, so on a shared-postgres
 deployment it does not, and two pods observing different lists under one name
@@ -70,7 +70,7 @@ process is always the judging process, so there is no sibling sighting to
 miss. The cost is one narrow gap: a restart no longer re-seeds a stdio
 baseline, so a list that changed while the collector was down is adopted with
 nothing to diff and the next client session re-establishes it. Closing it
-would need the row to name the observing pod (a `spec_infos` column, a wire
+would need the row to name the observing pod (an `mcp_catalogues` column, a wire
 field, a co-located filter) — deferred, because a missed diff across a
 restart is quieter than a standing stream of false ones. The row is still
 written and still listed: the Contracts tab shows the stdio server either
