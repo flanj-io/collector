@@ -56,7 +56,7 @@ func TestCanonicalizeSchemaRejectsNonSchemaValues(t *testing.T) {
 	}
 }
 
-// FromToolsList is what mcp-drift-watch pins; a boolean schema must not fail it.
+// FromToolsList is what other Flanj tooling pins; a boolean schema must not fail it.
 func TestFromToolsListAcceptsABooleanOutputSchema(t *testing.T) {
 	c, err := FromToolsList([]ToolDef{
 		{Name: "anything_goes", OutputSchema: json.RawMessage(`true`)},

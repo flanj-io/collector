@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 //
-// v1 phase 4 — the QUESTION sheet: the same FlagSheet component with an `edge`
+// The QUESTION sheet: the same FlagSheet component with an `edge`
 // and no `finding`. It exists because an edge is a registrable domain, not a
 // drift, so there is nothing local to attach and the thread carries only what
 // the operator writes.

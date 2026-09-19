@@ -10,7 +10,7 @@ import (
 )
 
 // A meta-gated server's surface: tools/list lists ONLY the search tool and
-// the dispatcher (brief 2026-09-17 §3).
+// the dispatcher.
 func metaSurface(t *testing.T, d *MCPDetector) {
 	t.Helper()
 	doc := `{"tools":[
@@ -42,7 +42,7 @@ func dispatchCall(id, inner, innerArgs, result string) model.RedactedCall {
 	return mcpCall(id, "call_tool", `{"name":"`+inner+`","arguments":`+innerArgs+`}`, result)
 }
 
-// TestDispatchedCallsAreAttributedToTheInnerTool is brief §3.6: an agent that
+// TestDispatchedCallsAreAttributedToTheInnerTool: an agent that
 // searches, then calls two tools through the dispatcher, gets findings on
 // THOSE tools — never on call_tool — with the dispatcher kept as evidence.
 func TestDispatchedCallsAreAttributedToTheInnerTool(t *testing.T) {
@@ -70,7 +70,7 @@ func TestDispatchedCallsAreAttributedToTheInnerTool(t *testing.T) {
 	}
 }
 
-// TestUnsearchedInnerNameStaysOnTheDispatcher: R-E option C — an inner name
+// TestUnsearchedInnerNameStaysOnTheDispatcher: an inner name
 // no recorded search result returned is NEVER re-attributed. The call is
 // judged as the dispatcher it literally was.
 func TestUnsearchedInnerNameStaysOnTheDispatcher(t *testing.T) {

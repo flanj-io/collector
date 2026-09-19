@@ -3,7 +3,7 @@
 // The Connected pill is the ONE door out of the local UI to the control plane,
 // and whether it is a door at all is decided by a single field: `dashboard_url`
 // on GET /api/connect. The collector omits it wherever it has no address a
-// browser can open (launch-week item 8: it used to send its own in-network
+// browser can open (it used to send its own in-network
 // cp_base_url — `http://cp-api:3001`, a k8s Service — and the pill was a dead
 // link on every split network). Which element renders is a template fact, so
 // it is asserted on the mounted App, like app-honesty.test.ts.

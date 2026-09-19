@@ -206,9 +206,9 @@ no custom protocol exists between the tiers.
    never the self contract, and it mutates nothing. The UI stays loopback
    (invariant 4), which is what lets this exist without weakening it.
 
-The e2e harness proves this shape end-to-end: `make gate-tiered` /
-`make stress-tiered` run the unchanged gate, the contracts check and the
-exact-count stress through two fronts into one store pod.
+Flanj's integration harness proves this shape end-to-end: it runs the unchanged
+gate, the contracts check and the exact-count stress through two fronts into
+one store pod.
 
 ## Settings (per-deployment key/value)
 

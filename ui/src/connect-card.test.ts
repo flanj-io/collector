@@ -3,7 +3,7 @@
 // UX review 2026-09-14: the Connected state — the one Settings state most
 // operators ever see — was a sentence ("Connected as X · y@z confirmed ·
 // replies as …") under a heading and two paragraphs that said "we", "your
-// vendor" and "network". The kit draws it as a k/v grid (Organization /
+// vendor" and "network". The design draws it as a k/v grid (Organization /
 // Contact / Collector address) the eye can scan, and the content rules
 // retire all three words. Mounted: the grid is a template fact.
 import { describe, it, expect, afterEach } from 'vitest';
@@ -34,7 +34,7 @@ function facts(w: VueWrapper): Record<string, string> {
 }
 
 describe('Connect card, connected', () => {
-  it('renders the kit’s k/v grid: collector name with Rename, organization, contact with a confirmed mark, collector address', () => {
+  it('renders the design’s k/v grid: collector name with Rename, organization, contact with a confirmed mark, collector address', () => {
     wrapper = mount(ConnectPanel, { props: { state: { ...CONNECTED, local_ui_url: 'http://localhost:5535' } } });
     const w = wrapper;
     expect(w.find('.connect-state.ok').exists()).toBe(true);

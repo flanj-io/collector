@@ -2,7 +2,7 @@
 //
 // The Connect panel's pending state, asserted on the real component. The defect (2026-09-07,
 // reproduced on sqlite, postgres and tiered): after the very FIRST Connect the panel printed the
-// deck's "Check your inbox — … went to …" line AND "Sent again to …" — a resend that never happened
+// "Check your inbox — … went to …" line AND "Sent again to …" — a resend that never happened
 // (Mailpit held exactly one mail). One string served both the Connect button and Resend.
 // connect-mail.test.ts pins the wording per branch; THIS file pins that the two call sites reach
 // the helper with the right flag — a call site passing the wrong one is invisible to a pure test.
@@ -98,7 +98,7 @@ afterEach(() => {
 });
 
 describe('Connect panel: the first send says "Check your inbox" and nothing more; only Resend says "Sent again"', () => {
-  it('first Connect → the deck line alone; Resend → "Sent again"; Change email to a new address → the deck line alone again', async () => {
+  it('first Connect → confirmation line alone; Resend → "Sent again"; Change email to a new address → confirmation line alone again', async () => {
     stubRelay();
     wrapper = mount(ConnectPanel, { props: { state: null, defaultOrg: ORG } });
     const w = wrapper;
@@ -138,7 +138,7 @@ describe('Connect panel: the first send says "Check your inbox" and nothing more
     wrapper = mount(ConnectPanel, { props: { state: null, defaultOrg: ORG } });
     const w = wrapper;
     await submitForm(w, EMAIL);
-    // The ~5s poll carries the contact's state and no mail outcome (CONTRACTS-CP §5.1).
+    // The ~5s poll carries the contact's state and no mail outcome.
     const polled: ConnectState = { ...pendingReply(EMAIL), confirmation_mail: undefined };
     await w.setProps({ state: polled });
     await settle(w);

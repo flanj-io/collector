@@ -20,3 +20,4 @@
 - [ ] The collector stays **outbound-only** (no new inbound surface; UI stays loopback).
 - [ ] Docs and `CLAUDE.md` updated if behaviour or structure changed; a config key change updates
       `docs/DEPLOYMENT.md` (CI enforces its env table).
+- [ ] The description stands alone for a stranger: no links to non-public repositories or documents, and no decision labels or attributions.

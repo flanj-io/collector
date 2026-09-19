@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-// The WHOLE deck, for the two sweeps that assert a claim appears nowhere in it.
+// The WHOLE copy module, for the two sweeps that assert a claim appears nowhere in it.
 // A per-constant list would pass the day somebody adds the forbidden sentence
 // to a new constant, which is exactly the day it needs to fail.
-import * as deck from './contracts';
+import * as copyStrings from './contracts';
 import {
   contractMeta,
   contractsByHost,
@@ -100,7 +100,7 @@ describe('contractMeta', () => {
     ).toBe('4 endpoints · v2.1.0 · uploaded 2h ago · replaced v1.0.0');
   });
 
-  // Idan, 2026-09-19: a contract with no version SAYS so. The segment used to
+  // A contract with no version SAYS so. The segment used to
   // vanish, which read the same as "this line has no version slot".
   it('says "version not specified" when the document declares no version', () => {
     expect(contractMeta(uploaded('api.acme.test', { version: undefined }), NOW))
@@ -150,7 +150,7 @@ describe('edgeContractLine', () => {
     expect(edgeContractLine(uploaded('api.acme.test'), NOW)).toBe('contract v1.0.0 · uploaded 12d ago');
   });
 
-  // Idan, 2026-09-19: the version used to drop out (`contract · uploaded 12d ago`).
+  // The version used to drop out (`contract · uploaded 12d ago`).
   it('says "version not specified" when the document declares none', () => {
     expect(edgeContractLine(uploaded('api.acme.test', { version: '' }), NOW))
       .toBe('contract · version not specified · uploaded 12d ago');
@@ -223,7 +223,7 @@ describe('rollCall', () => {
     expect(ROLL_CALL_ZERO).toContain('upload one');
   });
 
-  it('a search-learned catalog is the same server, not a second one (brief §3.5)', () => {
+  it('a search-learned catalog is the same server, not a second one', () => {
     const searched: ContractSpec = { ...mcpContract, integration: 'acme-tools:search', source: 'search_result' };
     expect(rollCall([edge('mcp.acme.test')], [mcpContract, searched], mcp)).toBe('1 MCP server self-reports theirs');
     expect(provenanceWord(searched)).toBe('searched');
@@ -323,7 +323,7 @@ describe('hostLooksRoutable', () => {
   });
 
   it('flags a bare word — the `sad` case', () => {
-    // Found by Idan in the live uploader: a bare word was accepted, and a
+    // Found in the live uploader: a bare word was accepted, and a
     // contract bound to it validates NOTHING forever while the card shows a
     // loaded contract. That is the silent failure mandatory binding exists to
     // prevent, so it has to be visible at the moment of binding.
@@ -385,7 +385,7 @@ describe('bindingTiming', () => {
 
 describe('contract identity', () => {
   // The live stack runs two MCP servers publishing the SAME serverInfo.name.
-  // The owner asked "why do I see 2 acme-tools-mcp in Contracts?" — they are
+  // An operator asked "why do I see 2 acme-tools-mcp in Contracts?" — they are
   // two real servers whose only distinguishing fact was never rendered at a
   // weight anyone reads.
   const http: ContractSpec = {
@@ -453,7 +453,7 @@ describe('rollCall counts MCP from contracts, not edges', () => {
 const evictedAll = (): string | undefined => undefined;
 
 describe('findingBelongsToContract', () => {
-  // REGRESSION, found by the blind QA walk on the sqlite lane: one provider
+  // REGRESSION, found by blind exploratory testing: one provider
   // rendered as TWO cards — the uploaded contract showing CONFORMING, and
   // beside it a second card carrying the BREAKING finding under "No contract
   // for this provider". The card denied the contract while rendering a verdict
@@ -562,14 +562,12 @@ describe('findingBelongsToContract', () => {
 
 
 describe('MCP_NEEDS_NO_SETUP — the Contracts empty state', () => {
-  // The canonical paragraph in the vault's positioning-2026-09.md §5 ends
-  // "REST providers need a spec: paste a URL, or upload one". PR #91 shipped
-  // this string WITHOUT the URL clause and this test asserted its ABSENCE,
-  // because the collector could not then fetch anything and the doc's own rule
-  // was: restore the clause in the same commit that ships the fetch, and not
-  // before.
+  // The copy ends "REST providers need a spec: paste a URL, or upload one".
+  // PR #91 shipped this string WITHOUT the URL clause and this test asserted its
+  // ABSENCE, because the collector could not then fetch anything; the rule was to
+  // restore the clause in the same commit that ships the fetch, and not before.
   //
-  // That commit is this one (ruling R5 — extension/flanjui/contracts_fetch.go),
+  // That commit is this one (extension/flanjui/contracts_fetch.go),
   // so the assertion INVERTS: the clause must now be present. The premise
   // changed, the discipline did not — this copy may only ever promise what the
   // surface actually does.
@@ -580,7 +578,7 @@ describe('MCP_NEEDS_NO_SETUP — the Contracts empty state', () => {
   // commit.
   it('offers the URL, because the collector now fetches one', () => {
     expect(MCP_NEEDS_NO_SETUP).toMatch(/paste its URL/);
-    // …and the deck's own fetch copy exists, which is the capability half of
+    // …and the fetch copy exists, which is the capability half of
     // the claim. A string promising a URL with no fetch panel behind it is the
     // false claim #91 refused to ship.
     expect(FETCH_PROMPT).toMatch(/URL/);
@@ -591,7 +589,7 @@ describe('MCP_NEEDS_NO_SETUP — the Contracts empty state', () => {
   // RETIRED, not softened: a claim that stopped being true does not get to
   // survive in a gentler form somewhere on the same tab.
   it('no longer promises anywhere that the collector never fetches', () => {
-    for (const [name, value] of Object.entries(deck)) {
+    for (const [name, value] of Object.entries(copyStrings)) {
       if (typeof value !== 'string') continue;
       expect(value, `${name} still denies the fetch`).not.toMatch(/never fetches/i);
     }
@@ -615,7 +613,7 @@ describe('the fetch is fetched-once, and says so', () => {
   });
 
   it('never implies a schedule', () => {
-    for (const [name, value] of Object.entries(deck)) {
+    for (const [name, value] of Object.entries(copyStrings)) {
       if (typeof value !== 'string') continue;
       expect(value, `${name} implies a recurring fetch`)
         .not.toMatch(/\b(kept up to date|stays up to date|re-?fetch(es|ed)? (daily|hourly|nightly|automatically)|watches the url)\b/i);
@@ -648,7 +646,7 @@ describe('the probe OFFERS and never binds', () => {
   it('shows the corroboration on the offer, not after it is taken', () => {
     expect(probeCandidateLine({ title: 'Acme', version: '1.2.0', endpoints: 4, servers_match: true }))
       .toBe('Acme · v1.2.0 · 4 endpoints · its servers list this host');
-    // Idan, 2026-09-19: no version reads "version not specified", never a gap.
+    // No version reads "version not specified", never a gap.
     expect(probeCandidateLine({ endpoints: 1, servers_match: false }))
       .toBe('OpenAPI document · version not specified · 1 endpoint · its servers don’t list this host');
     expect(probeCandidateLine({ title: 'Acme', version: ' ', endpoints: 4, servers_match: true }))
@@ -706,7 +704,7 @@ describe('fetchedSourceLine / fetchedSourceForThread — the evidence sentence',
 });
 
 describe('providerContractsEmptyText', () => {
-  // BUG (postgres-lane QA walk, 2026-09-01): the empty state told the operator
+  // BUG (found in exploratory testing, 2026-09-01): the empty state told the operator
   // to "send traffic through the SDK to discover providers first" while the
   // section immediately below it read "Providers with no contract (2)" — the
   // page instructing a step one line above the proof it was already done.

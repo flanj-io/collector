@@ -50,7 +50,7 @@ const now = ref(Date.now());
 let ticker: ReturnType<typeof setInterval> | null = null;
 const notice = computed(() => mailNotice(attempt.value, now.value));
 
-/** v1 phase 2 — what Connecting causes, stated before the operator Connects. */
+/** What Connecting causes, stated before the operator Connects. */
 const disclosure = computed(() => edgeDisclosure(props.state?.edge_sync));
 
 watch(
@@ -227,14 +227,14 @@ function cancelEdit() {
       <p class="connect-sub">A detection becomes a thread the other side can act on. Required to create thread links; viewing your own traffic and findings never needs it.</p>
     </template>
 
-    <!-- Edge-registration disclosure (v1 phase 2): what Connecting causes, said
+    <!-- Edge-registration disclosure: what Connecting causes, said
          BEFORE Connecting and in every state — and said honestly when the
          `edge_sync` switch has turned it off. -->
     <p v-if="disclosure" class="connect-disclosure" :class="disclosure.state">
       {{ disclosure.text }}
     </p>
 
-    <!-- connected: the kit's k/v grid (mono eyebrow, mono value in a hairline
+    <!-- connected: the design's k/v grid (mono eyebrow, mono value in a hairline
          frame) — facts an operator can scan, not a sentence. `confirmed` is a
          green-bolt suffix on the contact; the collector address shows the
          Add address affordance inline while it is missing. -->
@@ -360,7 +360,7 @@ function cancelEdit() {
 /* A mail that never left is a failure, not a "waiting" state — the rule must not say otherwise. */
 .connect-state.pending.mail-failed { border-left-color: var(--sev-breaking); }
 .connect-line { margin: 0; }
-/* The kit's k/v grid: mono eyebrow, mono value in a hairline frame. */
+/* The design's k/v grid: mono eyebrow, mono value in a hairline frame. */
 .connect-facts { margin: 10px 0 0; }
 .connect-field { display: grid; grid-template-columns: 130px 1fr; gap: 10px; align-items: center; margin: 0 0 8px; }
 .connect-field .k { font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); margin: 0; }

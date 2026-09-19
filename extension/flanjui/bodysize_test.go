@@ -29,7 +29,7 @@ import (
 //
 // Every one of them now goes through readJSONBody, and this pins the boundary
 // on each: exactly at the cap the body is read, one byte over it is a size
-// refusal in the deck's words.
+// refusal in the relay's fixed words.
 
 // exactBody returns prefix+pad+suffix sized to exactly n bytes, padding inside
 // a JSON string so the length is the wire length and nothing re-encodes it.
@@ -143,7 +143,7 @@ func TestSmallEnvelopeRoutesRefuseAnOversizedBodyAsTooLarge(t *testing.T) {
 				t.Errorf("a body of exactly %d bytes came back invalid_json: %s", maxSmallBodyBytes, raw)
 			}
 
-			// One byte over: a SIZE refusal, in the deck's words. Before this
+			// One byte over: a SIZE refusal, in the relay's fixed words. Before this
 			// change every one of these answered 400 "The request body is not
 			// valid JSON." — a syntax verdict on a body whose only fault was
 			// its length.
@@ -156,7 +156,7 @@ func TestSmallEnvelopeRoutesRefuseAnOversizedBodyAsTooLarge(t *testing.T) {
 				t.Errorf("error = %v, want request_too_large: %s", out["error"], raw)
 			}
 			if msg, _ := out["message"].(string); msg != msgRequestTooLarge {
-				t.Errorf("message = %q, want the deck's sentence %q", msg, msgRequestTooLarge)
+				t.Errorf("message = %q, want the fixed sentence %q", msg, msgRequestTooLarge)
 			}
 		})
 	}

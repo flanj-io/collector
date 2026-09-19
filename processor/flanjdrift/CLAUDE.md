@@ -153,7 +153,7 @@ store dedups on it — the first call creates the finding, later calls increment
 - `mcpbaseline.go` — the MCP half of the same listing: offers the store's
   `"mcp"` rows to the detector, tracked by `loaded_at` so nothing is
   re-downloaded until a row moves. Logs `mcp baseline seeded from the store`
-  on adoption — the tiered e2e lane waits on that line, since a front has no
+  on adoption — the tiered integration lane waits on that line, since a front has no
   other observable surface.
 - `remotesource.go` — the tiered topology's front-side client. Its reader
   DETECTS the 8 MiB cap (`model.MaxContractDocBytes`) instead of truncating to

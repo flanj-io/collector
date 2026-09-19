@@ -1,6 +1,6 @@
 package flanjui
 
-// The edge-name directory + resolution (v1 phase 1 — edge naming).
+// The edge-name directory + resolution (edge naming).
 //
 // Resolution precedence for an OUTBOUND edge's display name, first hit wins:
 // named-by-you (settings KV, source `user`) > contract (the title of the
@@ -24,7 +24,7 @@ package flanjui
 // in the KV with one blind put.
 //
 // The refresh SHARES that ticker with the findings sync but has its OWN switch,
-// `directory_sync` (CONTRACTS §8, default true — owner ruling 2026-08-31):
+// `directory_sync` (CONTRACTS §8, default true, its own switch since 2026-08-31):
 // this leg is a pure fetch (nothing about this collector's edges leaves), so it
 // does not answer to `finding_sync`, which governs an egress. With
 // `directory_sync: false` the pull never runs — but note it does not CLEAR
@@ -57,7 +57,7 @@ const (
 
 // directoryEntry is one directory row: `{ "<registrable_domain>": { "name",
 // "tier" } }` — the shape the seed file, the pull response and CP storage all
-// agree on (brief-common shared vocabulary).
+// agree on.
 type directoryEntry struct {
 	Name string `json:"name"`
 	Tier string `json:"tier"` // curated | claimed | community
@@ -78,7 +78,7 @@ func directorySeed() map[string]directoryEntry {
 	return seedParsed
 }
 
-// directoryEnvelope is the CP's GET /api/v1/directory response body (§5.14):
+// directoryEnvelope is the CP's GET /api/v1/directory response body:
 // `{"entries": {"<domain>": {"name","tier"}}, "count": n}` — NOT a bare map.
 // Only "entries" is read; unknown sibling fields (like "count") are tolerated
 // by construction (encoding/json ignores unknown keys).
@@ -86,7 +86,7 @@ type directoryEnvelope struct {
 	Entries map[string]directoryEntry `json:"entries"`
 }
 
-// parseDirectoryTable decodes a stored pull body — the §5.14 ENVELOPE.
+// parseDirectoryTable decodes a stored pull body — the directory ENVELOPE.
 //
 // DECISION: the KV (`directory.table`) stores the RAW envelope, byte-for-byte
 // as the CP sent it — the pull path (syncDirectoryOnce + promote.GetDirectory)

@@ -7,7 +7,7 @@
  * edge row cannot render the after-state (version, endpoint count, Replace,
  * View spec) so the operator would be bounced here anyway.
  *
- * URL FETCH, added 2026-09-17 under ruling R5 (`architecture.md` §3.4), which
+ * URL FETCH, added 2026-09-17, which
  * REVERSES the "no URL fetch, deliberately and permanently" position this
  * comment used to state. The old text is worth keeping in view, because the
  * reversal has to answer it rather than forget it:
@@ -29,8 +29,7 @@
  *       FETCH_STAYS_LOCAL says exactly that at the field.
  *   (c) "If it returns it returns as a control-plane-side fetch." Overruled on
  *       purpose. A CP-side fetch cannot reach an internal provider at all, and
- *       it would put the free single-player path behind Connect — which R5
- *       names as the roadmap hollowing out its own OSS wedge.
+ *       it would put the free single-player path behind Connect.
  *
  * What the fetch buys is not convenience, it is EVIDENCE: "your own published
  * spec at <url>, fetched <when>" is checkable by the provider reading a flagged
@@ -134,7 +133,7 @@ const chooseButton = ref<HTMLButtonElement | null>(null);
  *  never committed against a preview describing a different host. */
 const hostDirty = ref(false);
 
-/* ── From a URL (ruling R5) ────────────────────────────────────────────── */
+/* ── From a URL ─────────────────────────────────────────────────────────── */
 
 /** Which half of the panel is showing. The file path is the default: it is the
  *  one that works for a provider who publishes nothing. */

@@ -1,6 +1,6 @@
 package flanjui
 
-// Edge registration (v1 phase 2 — CONTRACTS §5, POST /api/v1/edges/sync).
+// Edge registration (CONTRACTS §5, POST /api/v1/edges/sync).
 //
 // Each unique EXTERNAL edge this deployment has discovered is registered to the
 // control plane BEFORE any finding exists, so the owner's dashboard can show

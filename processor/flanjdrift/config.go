@@ -50,7 +50,7 @@ type Config struct {
 	StorePodToken string `mapstructure:"store_pod_token"`
 
 	// MCPMetaAdapters names, per MCP peer host, the discovery meta-tools a
-	// server uses in place of a full tools/list (ruling R-E, 2026-09-17): the
+	// server uses in place of a full tools/list (2026-09-17): the
 	// search tools whose results carry tool definitions, and the dispatchers
 	// that call a tool by name. They ADD to the baked adapters (Sentry's
 	// search_sentry_tools / execute_sentry_tool, search_tools / call_tool,

@@ -6,7 +6,7 @@ import { serverCommandLine, MCP_LAUNCHED_AS } from './mcp';
 import { contractHeading, contractOrigin, ORIGIN_UNKNOWN, type ContractSpec } from './contracts';
 
 describe('serverCommandLine', () => {
-  it('joins the argv with single spaces behind the deck label', () => {
+  it('joins the argv with single spaces behind the label', () => {
     expect(MCP_LAUNCHED_AS).toBe('Launched as:');
     expect(serverCommandLine('local-process', '["npx","-y","@stripe/mcp@0.2.1"]')).toBe(
       'Launched as: npx -y @stripe/mcp@0.2.1'

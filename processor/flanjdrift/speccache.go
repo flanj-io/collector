@@ -21,7 +21,7 @@ import (
 // is expensive and the store is a database — neither belongs on the hot path.
 // A change to the contract set arrives as a NOTIFICATION from the store
 // extension (store.SpecSubscriber → an early refresh), never as a read per
-// call: the 2026-08-31 owner ruling is what shapes this file.
+// call — that is what shapes this file.
 const (
 	// specRefresh bounds how often the cache re-reads its source — the ceiling
 	// on how long a contract change stays invisible to detection.

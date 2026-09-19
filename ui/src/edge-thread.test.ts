@@ -1,9 +1,9 @@
 // @vitest-environment happy-dom
 //
-// v1 phase 4, on the Edges panel: the OUTBOUND edge row gains one cross-org
+// On the Edges panel: the OUTBOUND edge row gains one cross-org
 // action — "Start a thread" — and it opens the flag sheet in QUESTION mode
 // (no finding, no evidence block). Inbound rows do not get it: an inbound
-// `peer_host` is a forgeable XFF first hop and is never identity (v1 spec §5),
+// `peer_host` is a forgeable XFF first hop and is never identity,
 // and the relay refuses one anyway.
 //
 // The sheet's own honesty is `question-sheet.test.ts`; this file is about the

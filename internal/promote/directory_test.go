@@ -11,7 +11,7 @@ import (
 
 // TestGetDirectory proves the full-table pull: GET /api/v1/directory with the
 // collector key, the conditional If-None-Match round (304 → no body), and the
-// ETag echo on 200. The CP answers with the §5.14 ENVELOPE
+// ETag echo on 200. The CP answers with an ENVELOPE
 // `{"entries": …, "count": n}` — and GetDirectory passes the body through
 // UNTOUCHED, byte-for-byte (the collector unwraps at read time, never here).
 func TestGetDirectory(t *testing.T) {

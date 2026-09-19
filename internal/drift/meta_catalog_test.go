@@ -37,7 +37,7 @@ func rules(fs []model.Finding) []string {
 
 var metaTools = []map[string]any{listedTool("search_tools", "Search the catalog."), listedTool("call_tool", "Call a catalog tool.")}
 
-// TestCatalogMovedBehindMetaToolsIsOneEvent is R-B's catalog row in the
+// TestCatalogMovedBehindMetaToolsIsOneEvent is the catalog row in the
 // collector: a server that stops listing its tools and lists only discovery
 // meta-tools is ONE catalog/INFO event — never one BREAKING removal per tool.
 func TestCatalogMovedBehindMetaToolsIsOneEvent(t *testing.T) {
@@ -85,7 +85,7 @@ func TestSeedMovedBehindMetaToolsIsOneEvent(t *testing.T) {
 }
 
 // TestSeedReportsOnlyTheRuledSet: adopting a newer listing reports what the
-// observe path reports — additive changes are not findings (R-B). The seed
+// observe path reports — additive changes are not findings. The seed
 // path classified without that filter until 2026-09-18.
 func TestSeedReportsOnlyTheRuledSet(t *testing.T) {
 	d := NewMCPDetector()
@@ -101,7 +101,7 @@ func TestSeedReportsOnlyTheRuledSet(t *testing.T) {
 	}
 }
 
-// TestTrivialWordingIsNotAFinding is R-B's wording rule in the collector: a
+// TestTrivialWordingIsNotAFinding is the wording rule in the collector: a
 // description that differs only in whitespace, case or punctuation is nothing.
 func TestTrivialWordingIsNotAFinding(t *testing.T) {
 	d := NewMCPDetector()
@@ -115,7 +115,7 @@ func TestTrivialWordingIsNotAFinding(t *testing.T) {
 	}
 }
 
-// TestDispatchedCallIsReKeyed is brief §3.2: the judgement names the inner
+// TestDispatchedCallIsReKeyed: the judgement names the inner
 // tool and the dispatcher, which is what the processor stamps on the STORED
 // call; an unsearched inner name leaves the call on the dispatcher.
 func TestDispatchedCallIsReKeyed(t *testing.T) {
@@ -132,7 +132,7 @@ func TestDispatchedCallIsReKeyed(t *testing.T) {
 	}
 }
 
-// TestSearchCatalogIsAContractRow is brief §3.1: the tools a search returned
+// TestSearchCatalogIsAContractRow: the tools a search returned
 // are a contract row of their own — `<integration>:search`, source
 // search_result — emitted when, and only when, the learned catalog changes. A
 // later search that omits a tool leaves it in the catalog.
@@ -183,7 +183,7 @@ func TestSeededSearchCatalogSurvivesARestart(t *testing.T) {
 	}
 }
 
-// TestSearchedToolCalledDirectlyIsNotStale is brief §3.4: a tool the complete
+// TestSearchedToolCalledDirectlyIsNotStale: a tool the complete
 // listing does not declare but a search returned is judged against that
 // definition — never a stale_client for using what the server said.
 func TestSearchedToolCalledDirectlyIsNotStale(t *testing.T) {
@@ -201,7 +201,7 @@ func TestSearchedToolCalledDirectlyIsNotStale(t *testing.T) {
 	}
 }
 
-// TestToolsetEnabledListingIsTheSessions is brief §3.3: a listing observed
+// TestToolsetEnabledListingIsTheSessions: a listing observed
 // right after a toolset-enable call is that session's catalog. It is compared
 // tool by tool, its new tools are judged rather than called stale, and it does
 // not replace the baseline — so the next plain listing removes nothing.

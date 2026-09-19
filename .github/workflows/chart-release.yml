@@ -55,7 +55,7 @@ jobs:
           tag=$(helm show chart charts/flanj-collector | awk '/^appVersion:/ {gsub(/"/,"",$2); print $2}')
           echo "chart defaults to $repo:$tag"
           docker manifest inspect "$repo:$tag" >/dev/null \
-            || { echo "::error::$repo:$tag is not in the registry — publish the image first (see the launch plan's publish step), or fix the chart's appVersion"; exit 1; }
+            || { echo "::error::$repo:$tag is not in the registry — publish the image first, or fix the chart's appVersion"; exit 1; }
 
       # Before the push, not after: a publish cannot be undone, and this is the
       # only copy of exactly what went out.

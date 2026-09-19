@@ -1,6 +1,6 @@
 package promote
 
-// Edge registration (CONTRACTS §5, POST /api/v1/edges/sync — v1 phase 2): the
+// Edge registration (CONTRACTS §5, POST /api/v1/edges/sync): the
 // collector periodically registers the EXTERNAL edges it has discovered, so the
 // owner's control-plane dashboard can show the integration graph before any
 // finding exists. The payload per edge is minimal and ENUMERATED: registrable
@@ -21,7 +21,7 @@ package promote
 //     this deployment's business. IP-literal peers register the literal, which
 //     is what RegistrableDomain returns for them.
 //
-// There are NO volume or rpm aggregates here, deliberately (spec §3 Step 2):
+// There are NO volume or rpm aggregates here, deliberately:
 // call counts and drift counts stay local until something needs them.
 
 import (
@@ -36,8 +36,8 @@ import (
 // more than 200 edges in one POST is a 400.
 const EdgesSyncMaxItems = 200
 
-// Per-field length caps of the CP's sync DTO (the public CONTRACTS.md §5 caps;
-// they mirror the MaxLength decorators in the CP's sync-edge.dto.ts). The CP
+// Per-field length caps of the CP's sync DTO (the public CONTRACTS.md §5 caps; the
+// CP enforces the same maxima). The CP
 // validates the batch as a unit, so ONE oversized value would 400 the whole
 // POST on every tick forever — BuildEdgeRegistrations truncates instead.
 const (

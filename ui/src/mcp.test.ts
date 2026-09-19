@@ -63,7 +63,7 @@ import {
 } from './mcp';
 import type { Finding } from './types';
 
-// Deck placeholders: <S> acme-mcp · <V> 1.4.0 · <T> get_balance · <P> Acme Payments.
+// Copy placeholders: <S> acme-mcp · <V> 1.4.0 · <T> get_balance · <P> Acme Payments.
 function finding(overrides: Partial<Finding>): Finding {
   return {
     id: 'f1',
@@ -110,7 +110,7 @@ const descChange = (over: Partial<Finding> = {}) =>
     ...over
   });
 
-describe('kinds, classes, flaggability (spec §1/§6)', () => {
+describe('kinds, classes, flaggability', () => {
   it('classifies MCP findings and calls', () => {
     expect(isMcpFinding(finding({}))).toBe(true);
     expect(isMcpFinding({ kind: 'live-vs-spec' })).toBe(false);
@@ -130,8 +130,8 @@ describe('kinds, classes, flaggability (spec §1/§6)', () => {
     expect(isLocalNotice(finding({ kind: 'stale_client' }))).toBe(true);
     expect(isLocalNotice(defChange())).toBe(false);
     expect(isLocalNotice(finding({}))).toBe(false);
-    // qfix2-2026-08-26: DESCRIPTION left the local-notice set when the owner
-    // made it flaggable — the Overview band promises nothing in it can be
+    // qfix2-2026-08-26: DESCRIPTION left the local-notice set when it
+    // became flaggable — the Overview band promises nothing in it can be
     // flagged, so it must not hold a row that now has a Flag control.
     expect(isLocalNotice(descChange())).toBe(false);
   });
@@ -139,8 +139,8 @@ describe('kinds, classes, flaggability (spec §1/§6)', () => {
   it('warning and breaking definition changes are flaggable; info and stale_client never are', () => {
     expect(isFlaggableMcp(finding({}))).toBe(true);
     expect(isFlaggableMcp(defChange())).toBe(true);
-    // R-C (Idan, 2026-09-17): INFO stays local on every kind — it was
-    // flaggable here until the ruling.
+    // INFO stays local on every kind — it was
+    // flaggable here until that rule.
     expect(isFlaggableMcp(defChange({ severity: 'info' }))).toBe(false);
     expect(isFlaggableMcp(finding({ severity: 'info' }))).toBe(false);
     expect(staysLocalAsInfo(defChange({ severity: 'info' }))).toBe(true);
@@ -206,7 +206,7 @@ describe('badge tiers + acknowledge (qfix-2026-08-25)', () => {
   });
 });
 
-describe('deck §1 — edges', () => {
+describe('edges', () => {
   it('transport badge + tooltip', () => {
     expect(mcpBadgeLabel('external')).toBe('MCP');
     expect(mcpBadgeLabel('local-process')).toBe('MCP · stdio');
@@ -214,7 +214,7 @@ describe('deck §1 — edges', () => {
   });
 });
 
-describe('deck §2 — health', () => {
+describe('health', () => {
   const server = { name: 'acme-mcp', version: '1.4.0' };
   const t = (iso: string) => (iso ? '14:02' : '');
 
@@ -236,7 +236,7 @@ describe('deck §2 — health', () => {
     expect(h.text).toBe('Server: acme-mcp v1.4.0 — no drift detected.');
   });
 
-  // qfix2-2026-08-26 (§7 risk 3): a description change left the Local notices
+  // qfix2-2026-08-26: a description change left the Local notices
   // band when it became flaggable. If the headline had no clause for it, a
   // server whose ONLY drift is a wording change would say "no drift detected"
   // here while the Contracts tab showed a row with a primary `Flag this` — and
@@ -269,7 +269,7 @@ describe('deck §2 — health', () => {
     expect(h.text).toBe('Server: acme-mcp v1.4.0 — definition change on get_balance — breaking, no calls affected yet.');
   });
 
-  // 2026-09-07 (the second QA walk): the REST headline's neutral zero state,
+  // 2026-09-07 (the second exploratory pass): the REST headline's neutral zero state,
   // per server. A tools/list that has arrived lists the server on the
   // Contracts tab and renders this line — and may still have validated
   // nothing: every call so far hit a tool with no outputSchema, or came back
@@ -335,16 +335,16 @@ describe('deck §2 — health', () => {
   });
 });
 
-describe('deck §3 — contracts', () => {
+describe('contracts', () => {
   it('server meta + no-spec copy', () => {
     expect(MCP_NO_SPEC_NEEDED).toBe('No spec file needed — the server publishes its own contract on tools/list.');
-    // With a version the line is unchanged — the version is the card heading's chip, and e2e
-    // (mcp.spec.ts) pins `3 tools · contract observed from tools/list`.
+    // With a version the line is unchanged — the version is the card heading's chip, and the
+    // integration tests pin `3 tools · contract observed from tools/list`.
     expect(mcpContractMeta(3, 'Aug 24, 14:02', '1.2.0')).toBe('3 tools · contract observed from tools/list · updated Aug 24, 14:02');
     expect(mcpContractMeta(1, 'now', '1.2.0')).toBe('1 tool · contract observed from tools/list · updated now');
   });
 
-  // Idan, 2026-09-19: serverInfo.version is optional; a server that sends none SAYS so,
+  // serverInfo.version is optional; a server that sends none SAYS so,
   // instead of the card carrying no version anywhere.
   it('server meta says "version not specified" when serverInfo carries no version', () => {
     expect(mcpContractMeta(3, 'now', undefined)).toBe('3 tools · version not specified · contract observed from tools/list · updated now');
@@ -352,7 +352,7 @@ describe('deck §3 — contracts', () => {
     expect(mcpContractMeta(3, 'now', '   ')).toBe('3 tools · version not specified · contract observed from tools/list · updated now');
   });
 
-  it('a catalog behind meta-tools is labelled as what was observed (brief §3.5)', () => {
+  it('a catalog behind meta-tools is labelled as what was observed', () => {
     expect(metaCatalogLabel(2)).toBe('MCP · catalog behind meta-tools — observed 2 tools');
     expect(metaCatalogLabel(1)).toBe('MCP · catalog behind meta-tools — observed 1 tool');
     expect(isSearchCatalog({ source: 'search_result' })).toBe(true);
@@ -365,7 +365,7 @@ describe('deck §3 — contracts', () => {
     expect(metaCatalogMeta(2, 'now', '1.2.0')).toBe('MCP · catalog behind meta-tools — observed 2 tools · updated now');
   });
 
-  // Idan, 2026-09-19: a catalog whose server sends no version says so.
+  // A catalog whose server sends no version says so.
   it('a catalog card says "version not specified" when serverInfo carries no version', () => {
     for (const none of [undefined, '', '  ']) {
       expect(metaCatalogMeta(2, 'now', none))
@@ -404,7 +404,7 @@ describe('deck §3 — contracts', () => {
   });
 });
 
-describe('deck §4 — traffic', () => {
+describe('traffic', () => {
   it('tool name, status and honest id title', () => {
     expect(toolNameOf({ mcp_tool_name: 'get_balance', route: '/x' })).toBe('get_balance');
     expect(toolNameOf({ mcp_tool_name: '', route: '/create_refund' })).toBe('create_refund');
@@ -442,7 +442,7 @@ describe('deck §4 — traffic', () => {
   });
 });
 
-describe('deck §5 — flag sheet', () => {
+describe('flag sheet', () => {
   it('renders declared/got types and values from the finding strings', () => {
     expect(typeOf('type=number')).toBe('number');
     expect(typeOf('type=string ("1200.00")')).toBe('string');
@@ -473,8 +473,8 @@ describe('deck §5 — flag sheet', () => {
     expect(mcpCorrelationCount(null)).toBe(0);
   });
 
-  it("IDs line: the deck's JSON-RPC line only while the client id is the SOLE key", () => {
-    // Sole client-generated id → the deck line verbatim.
+  it("IDs line: the JSON-RPC line only while the client id is the SOLE key", () => {
+    // Sole client-generated id → the fixed line verbatim.
     expect(mcpIdsLineFor({ client_request_id: '42' }, 'Acme Payments')).toBe(mcpIdsLine('Acme Payments'));
     // Mixed keys → the standard count line + the honest client-id note.
     expect(mcpIdsLineFor({ client_request_id: '42', request_id: 'req_9' }, 'Acme Payments')).toBe(
@@ -513,10 +513,10 @@ describe('deck §5 — flag sheet', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// qfix2-2026-08-26 — ux-design-v2 §2.8: the ack key
+// qfix2-2026-08-26: the ack key
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('an ack binds to the evidence version it acknowledged (§2.8, §7 risk 2)', () => {
+describe('an ack binds to the evidence version it acknowledged', () => {
   it('a SECOND change on the same tool + field arrives UN-acknowledged', () => {
     // Both rows carry the IDENTICAL finding signature
     // (integration|endpoint|kind|rule|field_path) — that is the whole problem.
@@ -557,10 +557,10 @@ describe('an ack binds to the evidence version it acknowledged (§2.8, §7 risk 
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// qfix2-2026-08-26 — ux-design-v2 §2.7.4: the DESCRIPTION flag sheet
+// qfix2-2026-08-26: the DESCRIPTION flag sheet
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('flag sheet, DESCRIPTION variant (§2.7.4)', () => {
+describe('flag sheet, DESCRIPTION variant', () => {
   const d = (iso: string) => (iso === '2026-08-19T09:00:00Z' ? 'Aug 19' : iso);
 
   it('evidence line claims the provider own two published versions', () => {
@@ -615,7 +615,7 @@ describe('flag sheet, DESCRIPTION variant (§2.7.4)', () => {
 describe('the Overview headline distinguishes servers that share a name', () => {
   // REGRESSION: the live stack runs two MCP servers publishing the SAME
   // serverInfo.name, so Overview rendered two byte-identical health lines and
-  // the owner reasonably read it as a duplicate.
+  // an operator reasonably read it as a duplicate.
   it('two servers with one name produce two different lines', () => {
     const http = mcpHeadline({ name: 'acme-tools-mcp', version: '1.2.0', origin: 'mcp.acme.test' }, [], () => '', 1);
     const stdio = mcpHeadline({ name: 'acme-tools-mcp', version: '1.2.0', origin: 'stdio' }, [], () => '', 1);

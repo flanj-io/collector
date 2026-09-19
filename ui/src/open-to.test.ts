@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 //
-// thread-domain-gate — "Who can open it" (open-to-v2 §6, 2026-09-15). The sheet
+// thread-domain-gate — "Who can open it". The sheet
 // offers three modes, always in this order — Only specific people, Anyone at a
 // domain (checked), Anyone with the link — each followed by its own input and
 // help, and only the selected option's are on the page. This file holds, on the

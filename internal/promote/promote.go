@@ -190,7 +190,7 @@ func HumanizeIntegration(id string) string {
 // an emptied textarea lands HERE — the default is a shipped user-facing string,
 // not a fallback nobody sees.
 func defaultMessage(f model.Finding) string {
-	// DESCRIPTION definition changes (ux-design-v2 §2.7.4) ask a question; they
+	// DESCRIPTION definition changes ask a question; they
 	// never make a defect claim. "Contract drift on <tool>. Definition change
 	// (DESCRIPTION): …" would file a wording change at the provider as a defect
 	// — the exact mute risk the sheet's guard line ("This isn't a bug report —

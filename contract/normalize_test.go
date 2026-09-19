@@ -43,12 +43,12 @@ func loadFixtureContracts(t *testing.T) (openapiC, mcpC *contract.Contract) {
 	return oc, mc
 }
 
-// TestNormalization_OpenAPIvsMCP is the Step A acceptance battery (spec §4.A
-// accept (1)): the same JSON Schema arriving via an OpenAPI fixture and via an
-// MCP tools/list fixture must normalize to deep-equal Operations — same
-// description, deep-equal inputSchema, deep-equal outputSchema. The transport
-// identity (id, kind, match) differs by definition of the transports and is
-// asserted explicitly instead.
+// TestNormalization_OpenAPIvsMCP is the Step A acceptance battery: the same JSON
+// Schema arriving via an OpenAPI fixture and via an MCP tools/list fixture must
+// normalize to deep-equal Operations — same description, deep-equal
+// inputSchema, deep-equal outputSchema. The transport identity (id, kind,
+// match) differs by definition of the transports and is asserted explicitly
+// instead.
 func TestNormalization_OpenAPIvsMCP(t *testing.T) {
 	oc, mc := loadFixtureContracts(t)
 

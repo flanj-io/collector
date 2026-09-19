@@ -6,7 +6,7 @@ import (
 	"github.com/flanj-io/collector/internal/model"
 )
 
-// TestDriftIsPerCallNotPerEndpoint is the regression for the bug Idan hit:
+// TestDriftIsPerCallNotPerEndpoint is the regression for the reported bug:
 // "once I sent a single drifted API call, all previous conforming calls are
 // also marked as drifted."
 //

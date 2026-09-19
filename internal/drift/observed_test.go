@@ -13,7 +13,7 @@ func rejected(id, tool, args string) model.RedactedCall {
 	return c
 }
 
-// TestInputRejectionOnPreviouslyAcceptedArguments is R-B's observed_failure
+// TestInputRejectionOnPreviouslyAcceptedArguments is the observed_failure
 // row: -32602 on arguments of a shape that previously SUCCEEDED fires
 // input_rejection at BREAKING — provider-side, so flaggable.
 func TestInputRejectionOnPreviouslyAcceptedArguments(t *testing.T) {
@@ -95,7 +95,7 @@ func repeat(n int, body string) []string {
 	return out
 }
 
-// TestValueFormatChange is R-B's value row: a field whose format held and then
+// TestValueFormatChange is the value row: a field whose format held and then
 // changed and held again is ONE value_change at WARNING.
 func TestValueFormatChange(t *testing.T) {
 	for _, tc := range []struct{ name, before, after, from, to, path string }{

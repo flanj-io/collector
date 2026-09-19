@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Threads tab (READ-ONLY since slice 2): the compact state-only list of the
 // threads this collector created. The list comes from the CP (`GET
-// /api/threads` relays CONTRACTS-CP §5.5a, most-recently-active first) with the
+// /api/threads` relays the control plane's thread-list contract, most-recently-active first) with the
 // collector's own local fields joined on. Close, reopen and link changes moved
 // to the thread page — the one muted line under the header says so — and View
 // thread (the owner handoff in a new tab) is the ONLY row action. The local
@@ -34,7 +34,7 @@ const props = defineProps<{
    *  plane configured). Shown in place of the empty state, because "no threads"
    *  would be a claim this collector is in no position to make. */
   notice: string;
-  /** §5.5a has no cursor: total is the control plane's count, hasMore says the
+  /** The list has no cursor: total is the control plane's count, hasMore says the
    *  list on screen is short of it. */
   total: number;
   hasMore: boolean;
@@ -90,7 +90,7 @@ watch(
          thread page now. Always visible, so nobody hunts for the buttons that
          used to be here. -->
     <p class="th-readonly">{{ THREADS_READ_ONLY_NOTE }}</p>
-    <!-- v1 phase 3: the one line out to the person's own workspace. This list is
+    <!-- The one line out to the person's own workspace. This list is
          the threads THIS collector created; the workspace is every thread they
          are part of, which for anyone who has also answered someone else's
          thread is a strictly larger set. Rendered only when there is somewhere
@@ -159,7 +159,7 @@ watch(
       </div>
     </div>
 
-    <!-- §5.5a has no cursor, so the list stops at the control plane's cap. Say
+    <!-- The list has no cursor, so it stops at the control plane's cap. Say
          what is on screen and what is not, rather than dropping rows silently. -->
     <p v-if="hasMore && rows.length" class="th-truncated">{{ truncationNote(rows.length, total) }}</p>
   </section>
@@ -182,7 +182,7 @@ watch(
 .th-head + .th-row { border-top: 0; }
 .th-row.highlight { box-shadow: inset var(--border-w-stripe) 0 0 var(--accent); background: var(--surface-sunk); }
 /* A closed thread dims in place, like an acknowledged finding — with the
-   palette, never opacity: the kit's `opacity: .6` put the row's 12–13px facts
+   palette, never opacity: the design's `opacity: .6` put the row's 12–13px facts
    at 2.9:1. Facts drop to --ink-soft, the provider loses its weight; the
    accent status (`Closed · new reply`) keeps its own -ink role, which reads
    at full strength. */

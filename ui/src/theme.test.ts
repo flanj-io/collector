@@ -28,7 +28,7 @@ function fakeRoot() {
   };
 }
 
-describe('theme preference (Light / Dark, default Light — ux-design-v2 §3)', () => {
+describe('theme preference (Light / Dark, default Light)', () => {
   it('normalizes: unknown, missing and the legacy "system" value are Light', () => {
     expect(normalizeTheme('light')).toBe('light');
     expect(normalizeTheme('dark')).toBe('dark');
@@ -74,7 +74,7 @@ describe('theme preference (Light / Dark, default Light — ux-design-v2 §3)', 
   });
 });
 
-describe('the one-time light-default notice is gated on BOTH conditions (§3.4)', () => {
+describe('the one-time light-default notice is gated on BOTH conditions', () => {
   const base = { storedChoice: false, heldPriorData: true, dismissed: false };
 
   it('shows for a System user on a collector that held prior data', () => {

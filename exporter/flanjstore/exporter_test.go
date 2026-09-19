@@ -29,7 +29,7 @@ import (
 	"github.com/flanj-io/collector/internal/store"
 )
 
-// These are the regression tests for launch-week item 5 (2026-09-07): the
+// These are the regression tests for the 2026-09-07 durability fix: the
 // store exporter used to hand consumeLogs' error straight back to the
 // pipeline, so a store write that failed after the receiver had ACKed the
 // batch — postgres away mid-write, a locked sqlite file — lost the batch: the

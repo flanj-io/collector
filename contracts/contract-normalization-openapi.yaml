@@ -1,4 +1,4 @@
-# Step A normalization fixture — OpenAPI side (v0.5 spec §4.A acceptance (1)).
+# Step A normalization fixture — OpenAPI side.
 #
 # The SAME logical contract as contract-normalization-tools-list.json, expressed
 # as OpenAPI: two payment-shaped operations. contract/normalize_test.go loads
@@ -7,7 +7,7 @@
 # kind, match — differs by design).
 #
 # COLLECTOR-OWNED for now (like golden-otlp-server-call.json); promote to the
-# canonical e2e/contracts set when another repo consumes it.
+# canonical contract set when another repo consumes it.
 openapi: 3.0.3
 info:
   title: Contract Normalization Fixture (payment-shaped)

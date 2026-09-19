@@ -330,7 +330,7 @@ func derefStr(p *string) string {
 }
 
 // TestDefinitionChangeRefreshesEvidence is the regression oracle for
-// ux-design-v2 §2.8, run against the REAL store (a fake that keys findings by
+// the evidence-version key, run against the REAL store (a fake that keys findings by
 // id instead of signature cannot see this bug at all).
 //
 // A second description change on the same tool and field dedups onto the row
@@ -719,7 +719,7 @@ func specSources(t *testing.T, s Store) map[string]string {
 // provenance ListSpecInfos returns — on both backends, across a restart. Until
 // 2026-09-07 PutSpecInfo never wrote the column, so every observed MCP
 // snapshot was listed, filtered and conflict-checked as a CONFIG-loaded
-// contract (the card's format branch hid it; e2e saw `source: config` on both
+// contract (the card's format branch hid it; the integration suite saw `source: config` on both
 // acme-tools cards on all three lanes). Also the two repairs for what that
 // left behind: a record with no Source at all — what a front on an older image
 // sends over the tiered hop — is classified by its format, and rows already
@@ -1059,7 +1059,7 @@ func TestSettings_RoundTrip(t *testing.T) {
 	})
 }
 
-// TestSettings_EdgeNameKeys (v1 phase 1 — edge naming): the rename KV shape —
+// TestSettings_EdgeNameKeys (edge naming): the rename KV shape —
 // per-domain records `edge.name.<registrable_domain>` + the `edge.names` index
 // array — persists across a reopen (the restart simulation; on the postgres
 // backend the same reopen is a second pod sharing the deployment's database,

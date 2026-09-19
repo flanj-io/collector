@@ -380,7 +380,7 @@ func TestSpecDocServesOnlyWhatTheListAdmits(t *testing.T) {
 }
 
 // mcpSnapshotOfSize builds a valid observed-MCP document of exactly n bytes.
-// Valid JSON on purpose: the point of these two tests is the SIZE ruling, so
+// Valid JSON on purpose: the point of these two tests is the SIZE rule, so
 // nothing about the content may be what decides them.
 func mcpSnapshotOfSize(t *testing.T, n int) []byte {
 	t.Helper()

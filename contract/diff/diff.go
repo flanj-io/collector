@@ -1,15 +1,15 @@
 // Package diff is the transport-neutral definition-diff classifier
-// (v0.5 spec §4 Step A). It compares two revisions of a Contract and gives
+// (Step A). It compares two revisions of a Contract and gives
 // every change TWO separate fields — a Kind (what moved) and a Severity (how
-// much it matters) — per ruling R-A/R-B (Idan, 2026-09-17) and the rule table
+// much it matters) — per the rule table
 // in contracts/CONTRACTS.md §4. It is the SINGLE implementation, imported by
-// the collector's findings pipeline (Step C) and by mcp-drift-watch (Step F).
+// the collector's findings pipeline (Step C) and by other Flanj tooling (Step F).
 //
 // The single `Class` label it used to emit (BREAKING / NON_BREAKING /
 // DESCRIPTION) mixed the two axes in one vocabulary — "DESCRIPTION" named a
 // kind while "BREAKING" named a severity — so neither could be read without
 // the other. Every severity now comes from the one table in severity.go and
-// from nowhere else; see the R-A/R-B notes there for each cell and its
+// from nowhere else; see the notes there for each cell and its
 // argument.
 //
 // The classifier is generic over contract.Contract: it never looks at the
@@ -25,7 +25,7 @@
 //
 //   - input widened is the one additive cell — every argument a caller sends
 //     today still validates, so it is not reported at all;
-//   - input narrowed / changed keep their own rule ids, and R-B grades the
+//   - input narrowed / changed keep their own rule ids, and the table grades the
 //     whole input family INFO: a caller controls their own arguments, so a
 //     moved input surface is information for them rather than a promise broken
 //     to them. The Detail still names the consequence; the severity does not
@@ -43,13 +43,13 @@
 //     Changed: both at once.
 //
 // Not every output cell is breaking, though, and this prose used to say so.
-// Two output cells sit below BREAKING in R-B, and the blanket claim
-// contradicted the ruled table until 2026-09-17:
+// Two output cells sit below BREAKING, and the blanket claim
+// contradicted the rule table until 2026-09-17:
 //
-//   - an output enum that GAINED a value is WARNING (Idan, 2026-09-17): a
+//   - an output enum that GAINED a value is WARNING: a
 //     consumer may now receive a value it has no branch for, which is worth
 //     telling them, but nothing they already handle stopped being valid;
-//   - an OPTIONAL declared output field removed is WARNING. Before R-B that
+//   - an OPTIONAL declared output field removed is WARNING. Before that
 //     cell emitted nothing at all, so a provider could stop declaring a field
 //     consumers were reading and the diff stayed silent.
 //
@@ -61,9 +61,9 @@
 // Removal of an input property still carries its own rule id by whether
 // callers were REQUIRED to send it, and the Detail still states the
 // consequence (an optional removal under `additionalProperties: false` means a
-// caller still sending it now fails validation). R-B grades every one of them
+// caller still sending it now fails validation). The table grades every one of them
 // INFO — see the input-family note above. Optional OUTPUT removals are WARNING
-// since R-B; they were unclassified before it, on the standing posture that
+// now; they were unclassified before, on the standing posture that
 // they are a value consumers were never promised.
 //
 // An enum whose value set moved is ONE change per field per comparison,
@@ -74,7 +74,7 @@
 // severities live in severity.go; the replaced cell follows the REMOVED half,
 // which is the worse one.
 //
-// Rename pairing — a DELIBERATE strengthening of spec §4.A: the spec's table
+// Rename pairing — a DELIBERATE strengthening of the MCP rename rule: that rule
 // pairs "removed + added with identical inputSchema" as one rename. This
 // implementation additionally requires that shared identical inputSchema to
 // declare at least one property (len(properties) > 0). Two schema-less or
@@ -124,9 +124,9 @@ const (
 	RuleInputEnumValueReplaced       = "input-enum-value-replaced"
 
 	RuleOutputRequiredPropertyRemoved = "output-required-property-removed"
-	// RuleOutputOptionalPropertyRemoved exists only because R-B gives the cell
+	// RuleOutputOptionalPropertyRemoved exists only because the table gives the cell
 	// a severity ("OPTIONAL declared output field removed ... WARNING"). Before
-	// that ruling this classifier deliberately emitted NOTHING here — the
+	// that this classifier deliberately emitted NOTHING here — the
 	// standing posture was that an optional output field is "a value consumers
 	// were never promised" — so a consumer reading a field the provider had
 	// quietly stopped declaring got no finding at all.
@@ -134,7 +134,7 @@ const (
 	RuleOutputOptionalPropertyAdded   = "output-optional-property-added"
 	RuleOutputPropertyRenamed         = "output-property-renamed"
 	// RuleOutputOptionalPropertyRenamed is the rename of an output property
-	// consumers were NOT promised (Idan, 2026-09-17): ONE row, WARNING — the
+	// consumers were NOT promised: ONE row, WARNING — the
 	// same grade as that property simply disappearing, because to a consumer
 	// reading the old name it did disappear; the row also says where it went.
 	RuleOutputOptionalPropertyRenamed = "output-optional-property-renamed"
@@ -157,9 +157,9 @@ const (
 // a caller, in the vocabulary of the schema, never of the business.
 type Change struct {
 	// Kind is WHAT moved and Severity is HOW MUCH it matters — two separate
-	// fields per ruling R-A. Reported is false for R-B's additive cells. All
+	// fields. Reported is false for the additive cells. All
 	// three are stamped from the single table in severity.go; no construction
-	// site in this file sets them, so none can disagree with the ruling.
+	// site in this file sets them, so none can disagree with it.
 	Kind     Kind     `json:"kind"`
 	Severity Severity `json:"severity,omitempty"`
 	Reported bool     `json:"reported"`
@@ -273,7 +273,7 @@ func Classify(before, after *contract.Contract) []Change {
 			}
 		}
 	}
-	// R-A/R-B are applied HERE and only here: every change above carries a
+	// Kind, severity and reported are applied HERE and only here: every change above carries a
 	// rule id and nothing else about its gravity, and the table in
 	// severity.go turns that into (Kind, Severity, Reported).
 	stamp(out)
@@ -316,7 +316,7 @@ func diffDescription(id string, o, n *contract.Operation, out *[]Change) {
 	}
 }
 
-// diffOutput: presence transitions are contract-level per the spec's table.
+// diffOutput: presence transitions are contract-level per the rule table.
 func diffOutput(id string, o, n *contract.Operation, out *[]Change) {
 	switch {
 	case o.OutputSchema == nil && n.OutputSchema == nil:
@@ -401,9 +401,9 @@ func diffSchema(opID string, s side, path string, old, new map[string]any, out *
 			if s == sideInput {
 				*out = append(*out, inputPropertyRemoved(opID, child, name, oldProps[name], oldReq[name], new))
 			} else {
-				// R-B grades an output removal by whether consumers were
+				// An output removal is graded by whether consumers were
 				// PROMISED the value: required is BREAKING, optional is
-				// WARNING. Before R-B the optional cell emitted nothing at
+				// WARNING. Before that the optional cell emitted nothing at
 				// all, so a provider could quietly stop declaring a field
 				// consumers were reading and the diff stayed silent.
 				rule := RuleOutputOptionalPropertyRemoved
@@ -569,14 +569,13 @@ func inputPropertyRemoved(opID, child, name string, before any, wasRequired bool
 
 // pairRenamedProperties pairs each removed property with the first added
 // property (both in name order, deterministic) whose name normalises to the
-// same key and whose declared type set is equal and non-empty. This is the
-// rule Idan ruled on 2026-09-17: same tool, same comparison, same side, same
+// same key and whose declared type set is equal and non-empty. Same tool, same comparison, same side, same
 // declared type set, names equal after folding case and dropping `_`/`-`.
 //
-// The rule is the same on both sides (Idan, 2026-09-17: "reuse the input
-// rename pairing" for outputs). A REQUIRED output property renamed is
+// The rule is the same on both sides (the input rename pairing is
+// reused for outputs). A REQUIRED output property renamed is
 // output-property-renamed (BREAKING); an OPTIONAL one is
-// output-optional-property-renamed (WARNING). Until that ruling an optional
+// output-optional-property-renamed (WARNING). Before this an optional
 // output rename did not pair at all and read as a WARNING removal plus an
 // unreported addition — the consumer was told the field was gone but not
 // where it went.

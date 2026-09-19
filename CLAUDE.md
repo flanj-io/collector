@@ -43,7 +43,7 @@ inbound off-host.
 (`peer.host`, `direction`), classified external vs internal (external-only surfaced on `/api/edges`). Drift
 detection is an OPTIONAL enhancer, and **provider contracts are BOUND BY A HUMAN IN THE UI, never configured**
 (2026-08-31 — `spec_path`/`spec_v2_path`/`peer_host` removed from CONTRACTS §8). Two ways in, both a press:
-**uploaded** from a file, or — since 2026-09-17, ruling R5 — **fetched** from a URL
+**uploaded** from a file, or — since 2026-09-17 — **fetched** from a URL
 (`POST /api/contracts/fetch`, guarded exactly like upload; `source: "fetched"` + `spec_infos.source_url`,
 and `loaded_at` IS the fetch time). Fetch is TWO STEPS on one route: the first fetches, parses and stages the
 bytes SERVER-SIDE and answers the usual preview plus a token; the second binds that token — so the row's
@@ -115,12 +115,12 @@ extension/flanjui/              # localhost HTTP: embed.FS Vue SPA + read API + 
                                    # loopback listener (mcp.go — drift_summary / list_edges / list_findings / get_finding)
 ui/                                # Vue/Vite SPA (Overview incl. MCP server health + local notices, Traffic live-tail incl.
                                    # MCP TOOL rows/facets, Contracts + Flag sheet — HTTP and MCP, Threads, Settings/Connect;
-                                   # ui/src/mcp.ts = the v0.5 MCP deck copy, pure + vitest-covered)
+                                   # ui/src/mcp.ts = the v0.5 MCP copy, pure + vitest-covered)
 contract/                          # PUBLIC transport-neutral Contract model + MCP tools/list loader;
                                    # contract/openapi — the OpenAPI loader (kin-openapi stays OUT of package contract, so an
                                    # MCP-only importer links none of it); contract/diff — the definition-diff classifier
                                    # (BREAKING/NON_BREAKING/DESCRIPTION).
-                                   # v0.5 Step A; deliberately NOT internal/ — imported by mcp-drift-watch (one classifier, ever)
+                                   # v0.5 Step A; deliberately NOT internal/ — imported by other Flanj tooling (one classifier, ever)
 internal/                          # redact | drift | store | edge | promote | model | otlpattr — the unit-tested logic (internal/CLAUDE.md)
 config/config.example.yaml         # annotated example config (every key frozen in CONTRACTS §8)
 config/config.default.yaml         # what the IMAGE bakes at /etc/flanj/config.yaml — NEUTRAL: no identity,
@@ -190,3 +190,13 @@ then `golden-otlp-mcp-call.json` must produce exactly one `output_mismatch` (v0.
 
 `docs/CONCEPTS.md` (public-safe overview). Deeper per-component context in each component's `CLAUDE.md`.
 `git commit -s` (DCO — see CONTRIBUTING.md).
+
+## This repo is public — write for a stranger
+
+Everything here, and everything written about it on GitHub (PR titles and descriptions, issues, comments),
+is read by people outside the project. Do not point them at things they cannot open: no non-public
+repositories or their PRs, no non-public design, planning or strategy documents, no labels for decisions
+taken elsewhere, and no attribution of a decision to a person. Say the rule and the reason in place, in the
+comment or doc that needs it. Cite only what a stranger can open: files in this repo, `contracts/CONTRACTS.md`,
+and other public repos and their PRs. A vendored file's header says "Vendored — do not edit here" and
+nothing more. A PR description stands alone: it links only to public repos.

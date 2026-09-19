@@ -44,9 +44,9 @@ package flanjui
 // ─── Protocol ────────────────────────────────────────────────────────────────
 //
 // github.com/modelcontextprotocol/go-sdk speaks 2026-07-28 and negotiates down
-// through 2025-11-25 (what @modelcontextprotocol/sdk 1.30.0 — the version the
-// e2e org-app and mock-mcp harnesses pin — speaks) to 2024-11-05, so the
-// harnesses and this server meet on 2025-11-25 with no pin of our own.
+// through 2025-11-25 (what @modelcontextprotocol/sdk 1.30.0 — the version
+// test servers pin — speaks) to 2024-11-05, so the
+// test servers and this server meet on 2025-11-25 with no pin of our own.
 // Stateless: a read-only server keeps nothing between calls, so there is no
 // session to lose and GET/DELETE answer 405.
 

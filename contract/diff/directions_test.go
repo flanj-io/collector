@@ -11,7 +11,7 @@ import (
 
 // The cells of the rule table (contracts/CONTRACTS.md §4), one test case
 // each. Every case here defends a defect the drift record surfaced on
-// 2026-09-13 (mcp-drift-watch, data/changes.jsonl):
+// 2026-09-13, from observed MCP catalogue changes:
 //
 //   - any moved type set was BREAKING under one id with no direction —
 //     apify's `number` -> `["number","string"]` widenings and
@@ -62,7 +62,7 @@ func prop(name, schema string) string {
 // wantOne asserts exactly one change, by (severity, rule, fieldPath). The
 // direction table's whole point is which SEVERITY a (side, direction) cell
 // carries, so severity is what these cases assert; Kind follows from the rule
-// and is covered exhaustively by TestRBTableIsTotal.
+// and is covered exhaustively by TestSeverityTableIsTotal.
 func wantOne(t *testing.T, got []Change, sev Severity, rule, fieldPath string) Change {
 	t.Helper()
 	if len(got) != 1 {
@@ -101,9 +101,9 @@ func TestTypeDirection_Cells(t *testing.T) {
 		fragAfter     any
 		noChangeAtAll bool
 	}{
-		// ── input: INFO except the additive cells (R-B; Idan 2026-09-17) ────
+		// ── input: INFO except the additive cells (rule table) ────
 		// The class of these cells USED to vary (narrowed/changed breaking,
-		// widened non-breaking). R-B moved the whole input family to INFO and
+		// widened non-breaking). The severity table moved the whole input family to INFO and
 		// reserved WARNING for a new REQUIRED param: the caller controls their
 		// own arguments, so a moved input surface is information for them, not
 		// a promise broken to them. Direction still decides the RULE ID, which
@@ -205,9 +205,9 @@ func TestInputPropertyRemoved_RequiredVsOptional(t *testing.T) {
 		detailHas    string
 		detailAbsent bool
 	}{
-		// Every cell here is INFO under R-B. The DETAIL still states the
+		// Every cell here is INFO. The DETAIL still states the
 		// consequence, and it is the only thing that separates these cells now
-		// — which is the point of R-A: the rule id and the detail say WHAT
+		// — which is the point of the split: the rule id and the detail say WHAT
 		// happened, the severity says how much it matters, and they are not the
 		// same question. A caller whose argument now fails validation reads the
 		// detail; the published severity does not inflate on their behalf.
@@ -248,12 +248,12 @@ func TestInputPropertyRemoved_RequiredVsOptional(t *testing.T) {
 
 	// OVERTURNED 2026-09-17. This case used to assert that an optional OUTPUT
 	// removal produced no change at all — the standing posture that it is "a
-	// value consumers were never promised". R-B gives the cell a severity
+	// value consumers were never promised". The table gives the cell a severity
 	// (WARNING), so the silence was the bug: a provider could stop declaring a
 	// field consumers were reading and the diff said nothing. The premise
 	// changed, so the assertion changed with it; the case is kept rather than
 	// deleted so the reversal stays on the record.
-	t.Run("output optional removal is WARNING (R-B; was unclassified before 2026-09-17)", func(t *testing.T) {
+	t.Run("output optional removal is WARNING (was unclassified before 2026-09-17)", func(t *testing.T) {
 		before := mkTools(t, oneTool("", `{"type":"object","properties":{"a":{"type":"string"},"b":{"type":"string"}},"required":["a"]}`))
 		after := mkTools(t, oneTool("", `{"type":"object","properties":{"a":{"type":"string"}},"required":["a"]}`))
 		wantOne(t, Classify(before, after), SeverityWarning, RuleOutputOptionalPropertyRemoved, "output.b")
@@ -364,7 +364,7 @@ func TestPropertyRenamed(t *testing.T) {
 			t.Errorf("fragments: %v -> %v", c.Before, c.After)
 		}
 	})
-	// Idan, 2026-09-17: an OPTIONAL output property renamed pairs exactly like
+	// An OPTIONAL output property renamed pairs exactly like
 	// an input one — ONE row, output-optional-property-renamed at WARNING,
 	// "renamed X → Y". It used to read as a WARNING removal plus an unreported
 	// addition, telling the consumer the field was gone but not where it went.

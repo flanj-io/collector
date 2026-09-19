@@ -5,7 +5,7 @@ export type ThreadTurn = 'waiting_on_provider' | 'provider_replied' | 'fix_repor
 export type ThreadState = 'open' | 'closed';
 export type LinkStatus = 'active' | 'replaced' | 'expired';
 
-/** One row of the control plane's thread list (CONTRACTS-CP §5.5a) — the SAME
+/** One row of the control plane's thread list — the SAME
  *  object `GET /api/v1/threads/{id}/summary` returns. It is thread STATE only:
  *  no finding id, no thread_url, and never a token. */
 export interface ThreadSummary {
@@ -27,7 +27,7 @@ export interface ThreadSummary {
   link?: { status: LinkStatus; expires_at?: string } | null;
   archived?: boolean;
   created_at?: string;
-  /** Last activity — what the §5.5a order sorts on (a reply, a close/reopen, a
+  /** Last activity — what the list order sorts on (a reply, a close/reopen, a
    *  link replace). The archive sweep deliberately does not move it. */
   updated_at?: string;
 }
@@ -56,7 +56,7 @@ export interface ThreadRow {
 }
 
 /** The collector's own `GET /api/threads` envelope (its internal shape, not a
- *  published contract). `total` / `has_more` are the control plane's: §5.5a has
+ *  published contract). `total` / `has_more` are the control plane's: the list has
  *  no cursor, so a collector with more threads than the hard cap gets a short
  *  list, and the tab has to say so instead of quietly dropping rows. */
 export interface ThreadListResponse {
@@ -69,17 +69,17 @@ export interface ThreadListResponse {
 
 /** The Threads tab is READ-ONLY (slice 2, D1): thread operations live on the
  *  thread page, and View thread is the only row action. This muted line under
- *  the tab header says so — always visible, exact deck copy. */
+ *  the tab header says so — always visible, exact copy. */
 export const THREADS_READ_ONLY_NOTE = 'Close, reopen and link changes happen on the thread page — View thread opens it.';
 
-/** The workspace link-out (v1 phase 3). This tab lists the threads THIS collector
+/** The workspace link-out. This tab lists the threads THIS collector
  *  created; the CP workspace lists every thread the person is part of, including
  *  ones they answered as a respondent at someone else's collector — which is a
  *  different set, and the reason the line is worth having at all.
  *
  *  It is one muted line under an existing list, shown only when the collector
  *  already offers a `dashboard_url` (Connected, with an address a browser can
- *  actually open). The brief's rule for this slice is NO NEW NAG SURFACES: no
+ *  actually open). The rule for this slice is NO NEW NAG SURFACES: no
  *  banner, no dismissable card, nothing that appears before there is anything on
  *  the other end. */
 export const WORKSPACE_LINK_OUT = 'See all your threads — create your workspace.';
@@ -162,11 +162,11 @@ export interface ConnectState {
   /** Whether this collector registers its external edges to the control plane
    *  (`edge_sync`, CONTRACTS §8 — default true). Drives the Connect panel's
    *  disclosure line, which must state what actually leaves: with the switch
-   *  off the on-copy would be a lie. Absent on a collector predating v1 phase 2
+   *  off the on-copy would be a lie. Absent on a collector predating edge registration
    *  — the panel then renders no disclosure rather than guessing. */
   edge_sync?: boolean;
   error?: string;
-  /** What actually happened to the confirmation mail on THIS request (CONTRACTS-CP §5.1):
+  /** What actually happened to the confirmation mail on THIS request:
    *  `sent` | `failed` | `cooldown`. Present only when a send was attempted — absent on a poll,
    *  on an already-confirmed contact, and from a control plane predating the field. Absent is
    *  "no send was attempted here", NEVER "it went out": a 2xx is the registration's verdict, not
@@ -176,7 +176,7 @@ export interface ConnectState {
   confirmation_mail_retry_after_s?: number;
 }
 
-/** Status column / chip label from the derived `turn` + state (copy deck). */
+/** Status column / chip label from the derived `turn` + state. */
 export function turnLabel(summary: ThreadSummary | null | undefined, provider: string): string {
   const p = provider || summary?.provider_display_name || 'the provider';
   if (!summary) return 'Waiting on ' + p;
@@ -195,7 +195,7 @@ export function turnLabel(summary: ThreadSummary | null | undefined, provider: s
   }
 }
 
-/** Link-strip label (copy deck): `Active · expires <D>` · `Replaced` ·
+/** Link-strip label: `Active · expires <D>` · `Replaced` ·
  *  `Expired · N tried to open`. Knocks on a LIVE link are NOT part of the
  *  label — they get their own muted knock note (see knockNote). */
 export function linkLabel(summary: ThreadSummary | null | undefined, fmtDate: (iso: string) => string = shortDate): string {
@@ -268,7 +268,7 @@ export const CALL_LESS_DISCLOSURE_LEAD = 'This finding, the endpoint, your messa
 export const CALL_LESS_DISCLOSURE_TAIL =
   'No call is attached — this was found by comparing two versions of the contract, not by a call.';
 
-// ─── Question-only threads (v1 phase 4) ───────────────────────────────────
+// ─── Question-only threads ───────────────────────────────────
 // A thread started from an EDGE row carries no call and no finding. Every
 // string below exists because the evidence-bearing equivalent would be a false
 // claim on a thread that holds no evidence.
@@ -321,7 +321,7 @@ export function defaultFlagMessage(f: {
   // WHICH spec, when the answer is checkable. A fetched contract can name the
   // provider's own published URL and the moment it was read, so the person
   // reading this thread can go and look — which is the difference between a
-  // claim and evidence, and the whole reason ruling R5's fetch exists.
+  // claim and evidence, and the whole reason the contract URL fetch exists.
   //
   // An uploaded contract says nothing here. "Spec says X" already implies a
   // spec; adding "from a file we have" would be words without a fact in them,
@@ -416,7 +416,7 @@ export function findingIdFromHash(hash: string): string | null {
 // the wire it is always BOTH keys: the chosen list and null, or both null for
 // anyone. The relay refuses a create that carries neither key, and this sheet
 // refuses an unusable list before anything is posted. Every string here is
-// final copy (open-to-v2 §6).
+// final copy.
 
 export type OpenToMode = 'emails' | 'domains' | 'anyone';
 /** What a sheet is sharing: a flag's redacted evidence, or a question's message. */
@@ -480,14 +480,14 @@ export function openToDomainInEmailsNote(entry: string, domain: string): string 
 /** A bare domain: labels of letters, digits and hyphens, at least one dot. */
 const DOMAIN_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
 
-/** Domain normalizing (§1): trim, lower-case, drop a leading `@` and a trailing `.`. */
+/** Domain normalizing: trim, lower-case, drop a leading `@` and a trailing `.`. */
 function normalizeDomain(entry: string): string {
   return entry.trim().toLowerCase().replace(/^@+/, '').replace(/\.+$/, '');
 }
 function isBareDomain(d: string): boolean {
   return d.length <= 253 && DOMAIN_RE.test(d);
 }
-/** Address normalizing (§1): trim, lower-case. */
+/** Address normalizing: trim, lower-case. */
 function normalizeEmail(entry: string): string {
   return entry.trim().toLowerCase();
 }
@@ -563,7 +563,7 @@ export function parseOpenTo(text: string, kind: 'emails' | 'domains'): ParsedOpe
   return { list, guard: '' };
 }
 
-/** The request fields (§1): always BOTH keys — the chosen list and null, or both null for anyone. */
+/** The request fields: always BOTH keys — the chosen list and null, or both null for anyone. */
 export function openToBody(
   mode: OpenToMode,
   emails: string[],

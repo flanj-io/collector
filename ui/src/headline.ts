@@ -4,7 +4,7 @@
 // It lived as a computed inside App.vue, where vitest cannot see it, and it
 // said `No drift detected` whenever the live-finding list was empty. Nothing
 // gated that on whether there were any calls, whether a contract was bound, or
-// whether a single call had actually been validated. The first-launch QA walk
+// whether a single call had actually been validated. The first-launch exploratory pass
 // hit it on all three lanes:
 //   - a store with zero calls and no contract: green
 //   - after traffic, with `0 of 2 providers checked against a contract`
@@ -18,15 +18,14 @@
 // is actually in. So the zero state is now NEUTRAL — neither the green
 // all-clear nor the red drift banner — and says nothing has been validated yet.
 //
-// This is known-open item A6 in docs/contract-upload-ux.md ("Open — owner
-// calls", 4), whose ruling is the WORDING, not whether the branch exists. The
-// branch ships; the string is one constant so the owner's call is a one-line
-// change here and nowhere else.
+// The WORDING of this zero state is still open, not whether the branch exists.
+// The branch ships; the string is one constant so a wording change is a
+// one-line change here and nowhere else.
 //
 // ─── Evidence is per EDGE (2026-09-07) ───────────────────────────────────
 //
 // The neutral gate above was fed a count of validated calls from the whole
-// window, and the window holds two kinds of edge. The second QA walk drove one
+// window, and the window holds two kinds of edge. The second exploratory pass drove one
 // REST provider (no contract uploaded) and one MCP server (which delivers its
 // own contract on tools/list) on a fresh install, reloaded, and read — on
 // sqlite, postgres and tiered alike:
@@ -54,13 +53,13 @@
 // whole coverage story sits underneath, and App.vue logic is invisible to the
 // suite.
 
-/** The neutral zero state. A6's owner ruling changes THIS and nothing else. */
+/** The neutral zero state. A wording change edits THIS and nothing else. */
 export const NOTHING_VALIDATED_YET = 'Nothing validated yet';
 
 /**
  * The same zero state in clause position, for a headline that reads
  * `Server: <name> — <clause>` — the per-server MCP line. Derived, not
- * retyped, so A6's ruling moves both lines with one edit.
+ * retyped, so a wording change moves both lines with one edit.
  */
 export const NOTHING_VALIDATED_YET_CLAUSE =
   NOTHING_VALIDATED_YET.charAt(0).toLowerCase() + NOTHING_VALIDATED_YET.slice(1) + '.';

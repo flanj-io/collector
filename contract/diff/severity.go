@@ -6,7 +6,7 @@ import (
 )
 
 // Kind and Severity are the two SEPARATE fields every classified change
-// carries (ruling R-A, Idan 2026-09-17). They replace the single `Class`
+// carries. They replace the single `Class`
 // label, which mixed the two axes in one vocabulary: "DESCRIPTION" named WHAT
 // moved while "BREAKING" named HOW MUCH it mattered, so the two could never be
 // read independently and a wording change could not be told from a harmless
@@ -41,8 +41,8 @@ const (
 // BREAKING / NON_BREAKING / DESCRIPTION that the published drift dataset used.
 // The collector's FINDING wire (model.Severity*) stays lower-case and is
 // mapped at that boundary — see internal/drift.severityOf — because changing
-// the case of a field the control plane, the dashboard and e2e all read would
-// be a breaking wire change for no gain.
+// the case of a field the control plane, the dashboard and the integration suite
+// all read would be a breaking wire change for no gain.
 type Severity string
 
 const (
@@ -53,110 +53,109 @@ const (
 
 // RuleCatalogMovedBehindMetaTools is the ONE change emitted when a server's
 // catalog moves behind discovery meta-tools. It is never a removal per hidden
-// tool (R-B). Classify cannot detect it — it is a property of HOW a catalog
+// tool. Classify cannot detect it — it is a property of HOW a catalog
 // was obtained, which only the snapshot/expansion layer knows — so no code in
 // this package emits it. It lives here because the rule table is the single
 // place the vocabulary is defined, and a rule missing from the table is a test
 // failure rather than a silent unknown.
 const RuleCatalogMovedBehindMetaTools = "catalog-moved-behind-meta-tools"
 
-// verdict is one row of R-B's severity table.
+// verdict is one row of the severity table.
 type verdict struct {
 	kind Kind
 	sev  Severity
 	// reported is false for the ADDITIVE cells: a new tool, a new optional
-	// param, a widened input, a newly declared output schema. R-B's last row
+	// param, a widened input, a newly declared output schema. The table's last row
 	// reads "additive: not reported (unchanged)". Such a change is real and
 	// Classify still returns it — callers that want the whole diff get it —
 	// but it is not a finding and must never reach a published count.
 	reported bool
 }
 
-// rbTable IS ruling R-B. Every rule this package can emit has exactly one row
-// here, and TestRBTableIsTotal asserts that. Severity is read off this table
-// and nowhere else, so no construction site can disagree with it.
+// severityTable maps every rule this package can emit to its (kind, severity,
+// reported) verdict, exactly one row per rule; TestSeverityTableIsTotal asserts
+// that. Severity is read off this table and nowhere else, so no construction
+// site can disagree with it.
 //
-// Where R-B names a cell outright the comment says "R-B"; where the cell had
-// to be read off the nearest row the comment says "R-B, by family" and names
-// the row it follows. Those readings were put to Idan on 2026-09-17 and the
-// input family (every input change is INFO except a new REQUIRED param) was
-// ruled explicitly.
-var rbTable = map[string]verdict{
+// Where the table names a cell outright the comment says so; where the cell had
+// to be read off the nearest row the comment says "by family" and names the
+// row it follows. The input family (every input change is INFO except a new
+// REQUIRED param) is explicit.
+var severityTable = map[string]verdict{
 	// --- catalog -----------------------------------------------------------
-	RuleOperationRemoved: {KindCatalog, SeverityBreaking, true}, // R-B: "tool removed"
+	RuleOperationRemoved: {KindCatalog, SeverityBreaking, true}, // "tool removed"
 	// A tool under a new name breaks callers of the old name exactly as a
-	// removal does. R-B, by family: the "tool removed" row.
+	// removal does. By family: the "tool removed" row.
 	RuleOperationRenamed:            {KindCatalog, SeverityBreaking, true},
-	RuleCatalogMovedBehindMetaTools: {KindCatalog, SeverityInfo, true}, // R-B: the meta-tools row
-	RuleOperationAdded:              {KindCatalog, "", false},          // R-B: additive ("new tool")
+	RuleCatalogMovedBehindMetaTools: {KindCatalog, SeverityInfo, true}, // the meta-tools row
+	RuleOperationAdded:              {KindCatalog, "", false},          // additive ("new tool")
 
 	// --- input -------------------------------------------------------------
-	// R-B: "new REQUIRED param" is the ONE input cell above INFO.
+	// "new REQUIRED param" is the ONE input cell above INFO.
 	RuleInputRequiredPropertyAdded: {KindInput, SeverityWarning, true},
-	RuleInputOptionalPropertyAdded: {KindInput, "", false}, // R-B: additive ("new optional param")
-	// R-B: "param renamed" — and ruled explicitly on 2026-09-17, including
-	// that a rename stays INFO even when the new name is REQUIRED: it is the
-	// same parameter under a new spelling, not a new obligation.
+	RuleInputOptionalPropertyAdded: {KindInput, "", false}, // additive ("new optional param")
+	// "param renamed" — a rename stays INFO even when the new name is REQUIRED:
+	// it is the same parameter under a new spelling, not a new obligation.
 	RuleInputPropertyRenamed: {KindInput, SeverityInfo, true},
-	// Idan, 2026-09-17: a removed input property is input/INFO. R-B's input
+	// A removed input property is input/INFO. The input
 	// rows name "param renamed, type narrowed, enum value removed" and a bare
 	// removal is the unpaired half of the first of those.
 	RuleInputRequiredPropertyRemoved: {KindInput, SeverityInfo, true},
 	RuleInputOptionalPropertyRemoved: {KindInput, SeverityInfo, true},
-	RuleInputTypeNarrowed:            {KindInput, SeverityInfo, true}, // R-B: "type narrowed"
-	// R-B, by family: the "type narrowed" row. A swapped type set is a
+	RuleInputTypeNarrowed:            {KindInput, SeverityInfo, true}, // "type narrowed"
+	// By family: the "type narrowed" row. A swapped type set is a
 	// narrowing in every direction a caller can observe.
 	RuleInputTypeChanged: {KindInput, SeverityInfo, true},
 	// A widened input accepts everything it accepted before: additive.
-	// R-B, by family: the additive row.
+	// By family: the additive row.
 	RuleInputTypeWidened:      {KindInput, "", false},
-	RuleInputEnumValueRemoved: {KindInput, SeverityInfo, true}, // R-B: "enum value removed"
-	// R-B, by family: the additive row — a caller's existing value still
+	RuleInputEnumValueRemoved: {KindInput, SeverityInfo, true}, // "enum value removed"
+	// By family: the additive row — a caller's existing value still
 	// validates.
 	RuleInputEnumValueAdded: {KindInput, "", false},
 	// Contains a removal, so it follows the removal row, not the additive one.
 	RuleInputEnumValueReplaced: {KindInput, SeverityInfo, true},
 
 	// --- output ------------------------------------------------------------
-	// R-B: "declared output field removed/renamed ... BREAKING".
+	// "declared output field removed/renamed ... BREAKING".
 	RuleOutputRequiredPropertyRemoved: {KindOutput, SeverityBreaking, true},
 	RuleOutputPropertyRenamed:         {KindOutput, SeverityBreaking, true},
-	// R-B: "OPTIONAL declared output field removed ... WARNING". This cell is
-	// why RuleOutputOptionalPropertyRemoved exists at all — before R-B the
+	// "OPTIONAL declared output field removed ... WARNING". This cell is
+	// why RuleOutputOptionalPropertyRemoved exists at all — before that the
 	// classifier deliberately emitted NOTHING for it ("a value consumers were
 	// never promised"), so the cell had no rule to hang on.
 	RuleOutputOptionalPropertyRemoved: {KindOutput, SeverityWarning, true},
-	// Idan, 2026-09-17: an OPTIONAL output property renamed is ONE row at
+	// An OPTIONAL output property renamed is ONE row at
 	// WARNING — the grade of that property being removed, which is what it is
 	// to a consumer still reading the old name — never a removal plus an
 	// addition.
 	RuleOutputOptionalPropertyRenamed: {KindOutput, SeverityWarning, true},
-	RuleOutputOptionalPropertyAdded:   {KindOutput, "", false}, // R-B, by family: additive
-	// R-B: "output type changed". Direction does not matter on the output
+	RuleOutputOptionalPropertyAdded:   {KindOutput, "", false}, // By family: additive
+	// "output type changed". Direction does not matter on the output
 	// side: widened hands the consumer a type it never handled, narrowed makes
 	// a branch it wrote dead, and this classifier cannot tell which hurts more
 	// without a business judgement it is not allowed to make.
 	RuleOutputPropertyTypeWidened:  {KindOutput, SeverityBreaking, true},
 	RuleOutputPropertyTypeNarrowed: {KindOutput, SeverityBreaking, true},
 	RuleOutputPropertyTypeChanged:  {KindOutput, SeverityBreaking, true},
-	// R-B, by family: the "output type changed" row — a value the consumer's
+	// By family: the "output type changed" row — a value the consumer's
 	// code may branch on has disappeared from the declared set.
 	RuleOutputEnumValueRemoved: {KindOutput, SeverityBreaking, true},
-	// Idan, 2026-09-17: output/WARNING. A consumer may now receive a value it
+	// output/WARNING. A consumer may now receive a value it
 	// has no branch for, which is worth telling them; it is not BREAKING
 	// because nothing they already handle stopped being valid.
 	RuleOutputEnumValueAdded: {KindOutput, SeverityWarning, true},
 	// Both at once; follows the removal, which is the worse half.
 	RuleOutputEnumValueReplaced: {KindOutput, SeverityBreaking, true},
 	// The whole declared response surface withdrawn — every declared field
-	// removed at once. R-B, by family: the "declared output field removed" row.
+	// removed at once. By family: the "declared output field removed" row.
 	RuleOutputSchemaRemoved: {KindOutput, SeverityBreaking, true},
 	// A surface that was never declared becoming declared promises more, not
-	// less. R-B, by family: additive.
+	// less. By family: additive.
 	RuleOutputSchemaDeclared: {KindOutput, "", false},
 
 	// --- wording -----------------------------------------------------------
-	// R-B: "tool or param description changed ... WARNING". The one-per-tool-
+	// "tool or param description changed ... WARNING". The one-per-tool-
 	// per-day cap and the whitespace/case/punctuation filter are NOT applied
 	// here: this package diffs ONE pair of revisions and has no notion of a
 	// day. TrivialWordingChange below is the filter; the cap belongs to
@@ -164,21 +163,22 @@ var rbTable = map[string]verdict{
 	RuleDescriptionChanged: {KindWording, SeverityWarning, true},
 }
 
-// lookup returns R-B's verdict for a rule, and whether the rule is known.
+// lookup returns the severity table's verdict for a rule, and whether
+// the rule is known.
 func lookup(rule string) (verdict, bool) {
-	v, ok := rbTable[rule]
+	v, ok := severityTable[rule]
 	return v, ok
 }
 
-// stamp applies R-B to every change in place. Classify builds its changes
+// stamp applies the table to every change in place. Classify builds its changes
 // carrying a rule id and calls this once, so Kind, Severity and Reported are
 // derived from the table at exactly one point in the program.
 func stamp(changes []Change) {
 	for i := range changes {
 		v, ok := lookup(changes[i].Rule)
 		if !ok {
-			// Unreachable while TestRBTableIsTotal passes. Left explicit
-			// rather than defaulting to a severity: a rule with no ruled
+			// Unreachable while TestSeverityTableIsTotal passes. Left explicit
+			// rather than defaulting to a severity: a rule with no
 			// severity must not be published as though it had one.
 			changes[i].Kind, changes[i].Severity, changes[i].Reported = "", "", false
 			continue
@@ -187,7 +187,7 @@ func stamp(changes []Change) {
 	}
 }
 
-// Reportable filters a change list down to the findings R-B reports, dropping
+// Reportable filters a change list down to the findings the table reports, dropping
 // the additive cells. Published counts are computed over this, never over the
 // raw diff.
 func Reportable(changes []Change) []Change {
@@ -204,7 +204,7 @@ func Reportable(changes []Change) []Change {
 }
 
 // Rank orders severities for "the highest severity in this set" questions —
-// the R-D change event carries the highest severity of its findings.
+// a change event carries the highest severity of its findings.
 func Rank(s Severity) int {
 	switch s {
 	case SeverityInfo:
@@ -230,7 +230,7 @@ func Highest(changes []Change) Severity {
 }
 
 // TrivialWordingChange reports whether two descriptions differ ONLY in
-// whitespace, letter case or punctuation — the diffs R-B says to ignore.
+// whitespace, letter case or punctuation — the diffs the table says to ignore.
 //
 // The comparison keeps letters and digits (in any script — a Unicode category
 // test, not an ASCII one) and drops everything else, then folds case. So an em
@@ -256,7 +256,7 @@ func foldWording(s string) string {
 	return b.String()
 }
 
-// Grade returns R-B's verdict for a rule id: its kind, its severity (empty for
+// Grade returns the severity table's verdict for a rule id: its kind, its severity (empty for
 // an additive rule), whether it is reported, and whether the rule is known.
 //
 // Exported for the one caller that must emit a rule Classify cannot: the
