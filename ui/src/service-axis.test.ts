@@ -185,18 +185,24 @@ describe('the Traffic service filter', () => {
     expect(select.exists()).toBe(true);
     expect(select.findAll('option').map((o) => o.text())).toEqual(['service: all', 'org-app', 'org-app-py']);
     expect(w.findAll('.tr-row')).toHaveLength(3);
+    // A Service column beside counterparty, on every row.
+    const head = w.findAll('.tr-head > span').map((h) => h.text());
+    expect(head.indexOf('service')).toBe(head.indexOf('counterparty') - 1);
+    expect(w.findAll('.tr-row .c-svc').map((c) => c.text()).sort()).toEqual(['org-app', 'org-app-py', 'org-app-py']);
     await select.setValue('org-app-py');
     expect(w.findAll('.tr-row')).toHaveLength(2);
     await select.setValue('org-app');
     expect(w.findAll('.tr-row')).toHaveLength(1);
   });
 
-  it('is not shown when no call carries a service', async () => {
+  it('is not shown when no call carries a service — the column shows a dash', async () => {
     window.location.hash = '#traffic';
     stub([], [call('mcp-acme-test', undefined, 'clean')]);
     const w = await mountApp();
     expect(w.findAll('.tr-row')).toHaveLength(1);
     expect(w.find('select[aria-label="Filter by service"]').exists()).toBe(false);
+    // The column is still there; the cell says so rather than going blank.
+    expect(w.find('.tr-row .c-svc').text()).toBe('—');
   });
 });
 

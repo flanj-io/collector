@@ -2387,6 +2387,7 @@ watch(tab, (t) => {
           <div class="tr-head">
             <span class="c-when">captured</span>
             <span class="c-call">call</span>
+            <span class="c-svc">service</span>
             <span class="c-peer">counterparty</span>
             <span class="c-status">status</span>
             <span class="c-corr">correlation</span>
@@ -2426,6 +2427,13 @@ watch(tab, (t) => {
                   <span class="method" :class="c.method.toLowerCase()">{{ c.method }}</span>
                   <span class="route mono">{{ c.route || c.url }}</span>
                 </template>
+              </span>
+              <!-- The caller's service.name, Datadog-style: which of this
+                   deployment's services the call belongs to, beside the
+                   counterparty it went to or came from. Local only. -->
+              <span class="c-svc" :title="c.service_name || 'no service.name on this call'">
+                <span v-if="c.service_name" class="svc-name mono">{{ c.service_name }}</span>
+                <span v-else class="svc-name none">—</span>
               </span>
               <span class="c-peer" :title="c.peer_addr ? 'peer address ' + c.peer_addr : undefined">
                 <span class="dir-chip" :class="c.direction === 'server' ? 'in' : 'out'">{{ dirLabel(c.direction) }}</span>
@@ -2801,7 +2809,7 @@ h2 small { font: 400 12.5px/1.5 var(--f-sans); letter-spacing: 0.04em; text-tran
 .traffic { border: var(--border-w) solid var(--rule); border-radius: var(--radius); background: var(--surface); }
 .tr-head, .tr-row {
   display: grid;
-  grid-template-columns: 1.15fr 1.9fr 1.35fr 0.55fr 1.4fr 0.9fr;
+  grid-template-columns: 1.15fr 1.9fr 1fr 1.35fr 0.55fr 1.4fr 0.9fr;
   gap: 10px;
   align-items: center;
   padding: 10px 14px;
@@ -2846,6 +2854,11 @@ h2 small { font: 400 12.5px/1.5 var(--f-sans); letter-spacing: 0.04em; text-tran
 .dir-chip.out { color: var(--accent-ink); }
 .dir-chip.in { color: var(--ink-soft); }
 .peer-host { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-size: 12.5px; }
+/* Traffic service cell: the caller's own service, in the same ink as the host
+   it talks to; a call that carried none is muted, never blank. */
+.tr-row .c-svc { min-width: 0; }
+.svc-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-size: 12.5px; }
+.svc-name.none { color: var(--ink-soft); }
 
 /* Expanded call: headers and bodies on the sunk surface, framed. */
 .tr-detail { border-top: var(--border-w-hair) solid var(--rule-soft); background: var(--surface-sunk); padding: 14px 14px 18px; }
@@ -3115,11 +3128,14 @@ pre.body { background: var(--surface); border: var(--border-w) solid var(--rule)
      beside a stranger. */
   .tr-row {
     grid-template-columns: minmax(0, 1fr) max-content;
-    grid-template-areas: "call call" "peer status" "when mark" "corr corr";
+    grid-template-areas: "call call" "svc svc" "peer status" "when mark" "corr corr";
     gap: 6px 10px;
   }
   .tr-row .c-call { grid-area: call; flex-wrap: wrap; }
   .tr-row .route { white-space: normal; overflow: visible; text-overflow: clip; word-break: break-word; }
+  .tr-row .c-svc { grid-area: svc; display: flex; gap: 6px; font-size: 12.5px; }
+  /* The header is hidden here, so the service line names itself. */
+  .tr-row .c-svc::before { content: 'service'; color: var(--ink-soft); }
   .tr-row .c-peer { grid-area: peer; }
   /* The host is an identity: it wraps at natural breaks rather than ellipsizing. */
   .tr-row .peer-host { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
