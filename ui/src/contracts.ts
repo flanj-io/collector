@@ -831,24 +831,26 @@ export interface ProviderEdge {
  * The name the flag sheet addresses and the flag sends for a finding — the
  * "New thread with <name>" title, the default message, the paste text.
  *
- * Two kinds of `integration` reach this from `GET /api/findings`:
+ * It resolves to something the collector actually KNOWS, never to prose built
+ * out of a key. Since the collector derives a record's integration, every key
+ * reaching here is a host slug (`mcp-acme-test`) or, for an inbound call, the
+ * service it reached — and humanize() turned those into title-cased
+ * pseudo-names: `Mcp Acme Test`, a company that does not exist, pasted to the
+ * other organization while the card above read the real title (QA 2026-09-14,
+ * and the composed lane 2026-09-20).
  *
- *   - a call-evidenced finding (live-vs-spec, the MCP kinds) carries its
- *     call's integration — derived by the collector (the host slug, or for an
- *     inbound call the service it reached); a row from an older collector
- *     carries the id its SDK sent (`acme-payments`, `acme-tools`);
- *   - a version-diff carries the CONTRACT's id, and an uploaded contract is
- *     keyed by the host it was bound to (`api-acme-test` for `api.acme.test`) —
- *     a slug nobody chose. humanize() turned it into `Api Acme Test`, a
- *     title-cased pseudo-name the Edges panel already forbids (its unnamed rows
- *     show the host itself), and the sheet pasted it to the other organization
- *     while the card above read `Acme Payments API` (QA 2026-09-14).
+ * The order is the one the whole product uses, ending at the counterparty's
+ * domain — what the Edges panel shows for an unnamed row, and what the flag
+ * sheet now addresses:
  *
- * So a version-diff resolves through the contract it came from, to the host
- * that contract is bound to, and takes — in order — the Edges panel's display
- * name for that host, the contract's own title, then the host itself. Never a
- * humanized host slug. The configured `provider_display_name` still wins for
- * the integration it names, as before.
+ *   1. the configured `provider_display_name`, for a call-evidenced REST
+ *      finding only (the v0 one-provider shape);
+ *   2. the Edges panel's display name for the finding's host;
+ *   3. for a version diff, the contract's own title (a document the operator
+ *      uploaded names itself);
+ *   4. the HOST ITSELF, as written — for a stdio MCP server that is its
+ *      self-reported name, so one rule covers both transports;
+ *   5. the raw key, when even the host is unknown.
  */
 export function providerNameForFinding(
   f: { kind: string; integration: string; peer_host?: string },
@@ -860,22 +862,15 @@ export function providerNameForFinding(
 ): string {
   // The configured `provider_display_name` is a REST provider's name — the v0
   // one-provider shape — and it names ONLY a call-evidenced REST finding. Never
-  // an MCP server, which
-  // names itself through its tools/list (`New thread with Acme Tools`, pinned
-  // by the integration tests), and never a version diff, which resolves through
-  // its contract below. Until 2026-09-14 the scope was the config
-  // `integration_id` (the name applied to findings under that slug alone); with
-  // the key gone, the KIND is the scope.
+  // an MCP server, and never a version diff, which resolves through its
+  // contract below.
   if (ctx.providerDisplayName && f.kind === 'live-vs-spec') {
     return ctx.providerDisplayName;
   }
-  if (f.kind === 'version-diff') {
-    const spec = ctx.contracts.find((s) => s.integration === f.integration);
-    const host = spec?.peer_host || f.peer_host || '';
-    const edge = host ? ctx.edges.find((e) => e.peer_host === host) : undefined;
-    const named = edge?.display_name || spec?.title || host;
-    if (named) return named;
-    return f.integration || 'the provider';
-  }
-  return humanize(f.integration) || f.integration || 'the provider';
+  const spec = ctx.contracts.find((s) => s.integration === f.integration);
+  const host = f.peer_host || spec?.peer_host || '';
+  const edge = host ? ctx.edges.find((e) => e.peer_host === host) : undefined;
+  if (edge?.display_name) return edge.display_name;
+  if (f.kind === 'version-diff' && spec?.title) return spec.title;
+  return host || f.integration || 'the provider';
 }
