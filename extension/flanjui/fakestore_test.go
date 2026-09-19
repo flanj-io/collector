@@ -1,6 +1,7 @@
 package flanjui
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/flanj-io/collector/internal/model"
@@ -21,6 +22,10 @@ type fakeStore struct {
 	edges     []model.Edge
 	specInfos []model.SpecInfo
 	specDocs  map[string][]byte
+	// mcpInfos + mcpDocs are the MCP catalogue table, apart from the
+	// contracts exactly as the real backends keep it.
+	mcpInfos []model.SpecInfo
+	mcpDocs  map[string][]byte
 	// afterPut, when set, runs (unlocked) right after a PutSetting write —
 	// tests use it to simulate a concurrent writer clobbering the key.
 	afterPut func(key, value string)
@@ -113,6 +118,9 @@ func (f *fakeStore) ListEdges(externalOnly bool) ([]model.Edge, error) {
 }
 func (f *fakeStore) EdgeCallCountsSince(string) (map[string]int, error) { return map[string]int{}, nil }
 func (f *fakeStore) PutSpecInfo(si model.SpecInfo, raw []byte) error {
+	if si.Format == model.SpecFormatMCP {
+		return fmt.Errorf("%w: %q is an MCP catalogue (fake mirrors the real refusal)", store.ErrRejected, si.Integration)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.specDocs == nil {
@@ -137,6 +145,46 @@ func (f *fakeStore) ListSpecInfos() ([]model.SpecInfo, error) {
 	}
 	return out, nil
 }
+
+// PutMCPCatalogue upserts by integration within the MCP table only.
+func (f *fakeStore) PutMCPCatalogue(si model.SpecInfo, raw []byte) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.mcpDocs == nil {
+		f.mcpDocs = map[string][]byte{}
+	}
+	si.Format = model.SpecFormatMCP
+	if si.Source == "" {
+		si.Source = model.SpecSourceObserved
+	}
+	f.mcpDocs[si.Integration] = raw
+	for i := range f.mcpInfos {
+		if f.mcpInfos[i].Integration == si.Integration {
+			f.mcpInfos[i] = si
+			return nil
+		}
+	}
+	f.mcpInfos = append(f.mcpInfos, si)
+	return nil
+}
+
+func (f *fakeStore) ListMCPCatalogues() ([]model.SpecInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := append([]model.SpecInfo(nil), f.mcpInfos...)
+	for i := range out {
+		out[i].DocBytes = len(f.mcpDocs[out[i].Integration])
+	}
+	return out, nil
+}
+
+func (f *fakeStore) GetMCPCatalogueDoc(integration string) ([]byte, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	doc, ok := f.mcpDocs[integration]
+	return doc, ok, nil
+}
+
 func (f *fakeStore) GetSpecDoc(integration string) ([]byte, string, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

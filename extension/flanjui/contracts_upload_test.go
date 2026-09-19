@@ -887,45 +887,61 @@ func TestAnnouncingWithNoStoreExtensionIsANoOp(t *testing.T) {
 	}
 }
 
-// TestRemoveRefusesAnObservedMCPSnapshotInItsOwnWords is the #45 review's copy
-// defect. An observed MCP snapshot is not an upload, so Remove refuses it — but
-// it answered the CONFIG sentence, "This contract comes from the collector's
-// config file, not an upload — remove it there." There is no file to remove it
-// in: the server delivered the snapshot as its own tools/list, the next one
-// replaces it, and the operator was sent hunting for a mount that does not
-// exist.
-//
-// App.vue hides Remove on an mcp row, which is why nobody met this through the
-// UI; the route is reachable by a hand-crafted request all the same, and a
-// refusal has to be true on its own rather than because a button is hidden.
-func TestRemoveRefusesAnObservedMCPSnapshotInItsOwnWords(t *testing.T) {
+// TestRemoveNeverTouchesAnMCPCatalogue replaces the #45 test that pinned the
+// observed-snapshot refusal sentence. Its premise — an MCP snapshot stored as a
+// spec_infos row the remove route could reach — is gone (ruling 2026-09-19:
+// the collector files REST contracts only; an MCP catalogue has its own
+// table). Its claim stands, rebuilt on the new fixture: a hand-crafted Remove
+// never deletes an observed MCP catalogue — not on an MCP-only host, and not
+// on a host that also has a REST contract, where only the contract goes.
+func TestRemoveNeverTouchesAnMCPCatalogue(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
-	_ = r.st.PutSpecInfo(model.SpecInfo{
+	if err := r.st.PutMCPCatalogue(model.SpecInfo{
 		Integration: "acme-tools", Role: model.SpecRoleProvider, PeerHost: "mcp.acme.test",
 		Format: model.SpecFormatMCP, Source: model.SpecSourceObserved, LoadedAt: "t0",
-	}, []byte(`{"tools":[]}`))
-
+	}, []byte(`{"tools":[]}`)); err != nil {
+		t.Fatal(err)
+	}
 	resp, out, raw := r.do(t, http.MethodPost, "/api/contracts/remove", map[string]string{
 		"integration": "acme-tools",
 	})
-	if resp.StatusCode != http.StatusConflict {
-		t.Fatalf("status = %d, want 409: %s", resp.StatusCode, raw)
+	if resp.StatusCode != http.StatusOK || out["removed"] != false {
+		t.Fatalf("remove on an MCP-only host = %d %s, want 200 removed:false", resp.StatusCode, raw)
 	}
-	// The CODE is the class of refusal and stays what every client already
-	// switches on; the SENTENCE is what changed.
-	if out["error"] != "not_removable" {
-		t.Errorf("error = %v, want not_removable", out["error"])
+	if cats, _ := r.st.ListMCPCatalogues(); len(cats) != 1 {
+		t.Fatalf("the MCP catalogue was removed: %+v", cats)
 	}
-	msg, _ := out["message"].(string)
-	if msg != msgContractNotRemovableObserved {
-		t.Errorf("message = %q, want the observed sentence %q", msg, msgContractNotRemovableObserved)
+
+	// The same host with a REST contract too: Remove takes the contract only.
+	upload := func(host string) {
+		t.Helper()
+		resp, _, raw := r.do(t, http.MethodPost, "/api/contracts/upload", map[string]string{
+			"peer_host": host, "document": specV1Doc(t),
+		})
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("upload %s = %d: %s", host, resp.StatusCode, raw)
+		}
 	}
-	if msg == msgContractNotRemovable {
-		t.Error("an observed MCP snapshot was refused with the config-file sentence — there is no config file to remove it in")
+	upload("api.acme.test")
+	if err := r.st.PutMCPCatalogue(model.SpecInfo{
+		Integration: integrationForHost("api.acme.test"), Role: model.SpecRoleProvider, PeerHost: "api.acme.test",
+		Format: model.SpecFormatMCP, LoadedAt: "t0",
+	}, []byte(`{"tools":[]}`)); err != nil {
+		t.Fatal(err)
 	}
-	if infos, _ := r.st.ListSpecInfos(); len(infos) != 1 {
-		t.Errorf("the snapshot was removed anyway: %+v", infos)
+	resp, out, raw = r.do(t, http.MethodPost, "/api/contracts/remove", map[string]string{
+		"integration": integrationForHost("api.acme.test"),
+	})
+	if resp.StatusCode != http.StatusOK || out["removed"] != true {
+		t.Fatalf("remove the REST contract = %d %s, want 200 removed:true", resp.StatusCode, raw)
+	}
+	if infos, _ := r.st.ListSpecInfos(); len(infos) != 0 {
+		t.Errorf("the REST contract survived its removal: %+v", infos)
+	}
+	cats, _ := r.st.ListMCPCatalogues()
+	if len(cats) != 2 {
+		t.Errorf("removing the REST contract took an MCP catalogue with it: %+v", cats)
 	}
 }
 

@@ -802,3 +802,42 @@ func TestServiceName_FromResourceOntoTheStoredCall(t *testing.T) {
 		}
 	}
 }
+
+// TestSpecInfoRecords_EachKindToItsOwnTable: the tiered hop's spec_info record
+// keeps ONE shape for both kinds (no wire change), and the store pod files it
+// by its format. A front forwarding an MCP snapshot for a host the store pod
+// also holds an uploaded REST contract for must leave that contract whole —
+// before the split the forwarded snapshot upserted over it. Proved red by
+// sending every spec_info record to PutSpecInfo (the MCP record is refused
+// and dropped).
+func TestSpecInfoRecords_EachKindToItsOwnTable(t *testing.T) {
+	exp, flaky := newExporter(t, fastRetry(t))
+	defer func() { _ = exp.Shutdown(context.Background()) }()
+
+	openapi := []byte("openapi: 3.0.0\ninfo: {title: Acme, version: '1'}\npaths: {}\n")
+	if _, err := flaky.Store.PutUploadedSpec(model.SpecInfo{
+		Integration: "api-acme-test", Role: model.SpecRoleProvider, PeerHost: "api.acme.test",
+		Format: model.SpecFormatOpenAPI, LoadedAt: "2026-09-19T10:00:00Z",
+	}, openapi); err != nil {
+		t.Fatal(err)
+	}
+	ld := plog.NewLogs()
+	lr := ld.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
+	if err := otlpattr.SpecInfoToRecord(lr, model.SpecInfo{
+		Integration: "api-acme-test", Role: model.SpecRoleProvider, PeerHost: "api.acme.test",
+		Format: model.SpecFormatMCP, Source: model.SpecSourceObserved, LoadedAt: "2026-09-19T10:05:00Z",
+	}, []byte(`{"tools":[]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := exp.ConsumeLogs(context.Background(), ld); err != nil {
+		t.Fatalf("ConsumeLogs: %v", err)
+	}
+	waitFor(t, "the forwarded MCP catalogue", func() bool {
+		cats, _ := flaky.Store.ListMCPCatalogues()
+		return len(cats) == 1
+	})
+	raw, format, ok, err := flaky.Store.GetSpecDoc("api-acme-test")
+	if err != nil || !ok || format != model.SpecFormatOpenAPI || string(raw) != string(openapi) {
+		t.Fatalf("REST contract after the forwarded snapshot = %q (format %q ok %v err %v), want it untouched", raw, format, ok, err)
+	}
+}

@@ -20,13 +20,8 @@ import type { Correlation, Finding, RedactedCall } from './types';
 
 // ─── Kind / class helpers ────────────────────────────────────────────────────
 
-export const MCP_FINDING_KINDS = [
-  'output_mismatch',
-  'definition_change',
-  'stale_client',
-  'value_change',
-  'input_rejection',
-] as const;
+import { MCP_FINDING_KINDS } from './mcp-kinds';
+export { MCP_FINDING_KINDS };
 
 export function isMcpFinding(f: Pick<Finding, 'kind'>): boolean {
   return (MCP_FINDING_KINDS as readonly string[]).includes(f.kind);

@@ -63,9 +63,13 @@ func (r *remoteSpecSource) listSpecs() ([]model.SpecInfo, error) {
 	return payload.Contracts, nil
 }
 
-// specDoc fetches one raw contract document.
-func (r *remoteSpecSource) specDoc(integration string) ([]byte, error) {
-	raw, err := r.get(r.base+"/internal/contracts/doc?integration="+url.QueryEscape(integration),
+// specDoc fetches one raw contract document, naming its format: a host's REST
+// contract and its MCP catalogue share an integration, and the format is what
+// tells the store pod which one this is. A store pod on an older image ignores
+// the parameter and answers by integration, as it always did.
+func (r *remoteSpecSource) specDoc(integration, format string) ([]byte, error) {
+	raw, err := r.get(r.base+"/internal/contracts/doc?integration="+url.QueryEscape(integration)+
+		"&format="+url.QueryEscape(format),
 		fmt.Sprintf("the contract document for %q", integration))
 	if errors.Is(err, errPastTheCap) {
 		// Re-shape the refusal as the typed condition the reconcilers key on,
@@ -74,7 +78,7 @@ func (r *remoteSpecSource) specDoc(integration string) ([]byte, error) {
 		// stays zero here; the LISTING is where a front normally learns it
 		// (overCap below), and this path is the fallback for a store pod on an
 		// image that predates doc_bytes.
-		return nil, &overCapError{integration: integration}
+		return nil, &overCapError{integration: integration, format: format}
 	}
 	return raw, err
 }
@@ -94,7 +98,7 @@ func (r *remoteSpecSource) overCap(si model.SpecInfo) *overCapError {
 	if si.DocBytes <= maxSpecBytes {
 		return nil
 	}
-	return &overCapError{integration: si.Integration, peerHost: si.PeerHost, bytes: si.DocBytes}
+	return &overCapError{integration: si.Integration, format: si.Format, peerHost: si.PeerHost, bytes: si.DocBytes}
 }
 
 // get fetches u. `what` names the thing being fetched, so a refusal reads as a
@@ -169,6 +173,7 @@ var errPastTheCap = errors.New("past the contract document cap")
 // not.
 type overCapError struct {
 	integration string
+	format      string
 	peerHost    string
 	// bytes is the stored document's size, or 0 when only a refusal said so.
 	bytes int
@@ -184,6 +189,15 @@ func (e *overCapError) Error() string {
 }
 
 func (e *overCapError) Unwrap() error { return errPastTheCap }
+
+// key names the row in the over-cap condition set: format and integration,
+// because a REST contract and an MCP catalogue for one host share the latter.
+func (e *overCapError) key() string { return e.format + "|" + e.integration }
+
+func splitOverCapKey(k string) (format, integration string) {
+	format, integration, _ = strings.Cut(k, "|")
+	return format, integration
+}
 
 // asOverCap reports whether err is the document-cap condition, and for which
 // row. Every other error the refresh loop can produce reports on every tick.

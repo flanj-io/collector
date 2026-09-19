@@ -32,6 +32,9 @@ import {
   serversLine,
   uncoveredHeading,
   uncoveredProviders,
+  mcpOnlyHosts,
+  ADD_CONTRACT,
+  UPLOAD_PROMPT,
   ROLL_CALL_ZERO,
   NO_CONTRACT_ROW,
   NO_CONTRACT_SECTION,
@@ -725,5 +728,45 @@ describe('providerContractsEmptyText', () => {
     expect(text).toContain('1 provider below');
     expect(text).not.toContain('providers below');
     expect(text).toContain('validating your calls to it.');
+  });
+});
+
+// One host can serve BOTH a REST API and an MCP server (2026-09-19). Every MCP
+// host used to be read as "self-reporting, no contract needed", which hid the
+// host's REST contract from the roll call and the Edges row, and its missing
+// REST contract from the uncovered list.
+describe('mcpOnlyHosts — a host that also serves REST is not MCP-only', () => {
+  const mcp = new Set(['mcp.acme.test', 'api.acme.test', 'api.globex.test']);
+  const mcpRow = (peer_host: string): ContractSpec => ({ ...uploaded(peer_host), format: 'mcp', source: 'observed' });
+
+  it('keeps a host with a REST contract or a REST call out of the MCP-only set', () => {
+    const specs = [uploaded('api.acme.test'), mcpRow('api.acme.test'), mcpRow('mcp.acme.test')];
+    const calls = [{ peer_host: 'api.globex.test', transport: 'http' }, { peer_host: 'mcp.acme.test', transport: 'mcp' }];
+    expect([...mcpOnlyHosts(mcp, specs, calls)]).toEqual(['mcp.acme.test']);
+  });
+
+  it('counts the shared host’s REST contract in the roll call', () => {
+    const specs = [uploaded('api.acme.test'), mcpRow('api.acme.test')];
+    const only = mcpOnlyHosts(new Set(['api.acme.test']), specs, []);
+    expect(rollCall([edge('api.acme.test')], specs, only)).toBe(
+      '1 of 1 provider checked against a contract · 1 MCP server self-reports theirs'
+    );
+  });
+
+  it('lists the shared host as uncovered when its REST traffic has no contract', () => {
+    const only = mcpOnlyHosts(new Set(['api.acme.test']), [mcpRow('api.acme.test')], [{ peer_host: 'api.acme.test', transport: 'http' }]);
+    expect(uncoveredProviders([edge('api.acme.test')], [mcpRow('api.acme.test')], only)).toEqual(['api.acme.test']);
+  });
+});
+
+// The ruling (Idan, 2026-09-19): the collector files REST contracts only, and
+// says so wherever a document is asked for.
+describe('the uploader asks for a REST contract by name', () => {
+  it('names REST and the format on the button and both prompts', () => {
+    expect(ADD_CONTRACT).toBe('Add REST contract');
+    for (const s of [FETCH_PROMPT, UPLOAD_PROMPT]) {
+      expect(s).toContain('REST contract');
+      expect(s).toContain('OpenAPI document');
+    }
   });
 });

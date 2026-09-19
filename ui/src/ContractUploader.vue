@@ -54,6 +54,7 @@ import {
   CONTRACT_TOO_LARGE,
   FETCH_ACTION,
   FETCH_ONCE_ONLY,
+  ADD_CONTRACT,
   FETCH_PROMPT,
   FETCH_STAYS_LOCAL,
   FETCH_TAB_FILE,
@@ -701,7 +702,7 @@ function switchSource(to: 'file' | 'url') {
           :title="hostDirty ? 'Re-reading the document against the new host…' : ''"
           @click="confirmingFetch ? confirmFetched() : confirm()"
         >
-          {{ warned ? BIND_ANYWAY : 'Add contract' }}
+          {{ warned ? BIND_ANYWAY : ADD_CONTRACT }}
         </button>
         <button type="button" class="btn ghost" :disabled="busy" @click="startOver">
           {{ confirmingFetch ? 'Fetch a different document' : 'Choose a different file' }}

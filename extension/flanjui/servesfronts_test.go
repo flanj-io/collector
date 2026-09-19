@@ -80,7 +80,7 @@ func TestContractsCarryTheDocumentSize(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
 	doc := []byte(`{"tools":[{"name":"pad","description":"` + strings.Repeat("p", model.MaxContractDocBytes) + `"}]}`)
-	if err := r.st.PutSpecInfo(model.SpecInfo{
+	if err := r.st.PutMCPCatalogue(model.SpecInfo{
 		Integration: "acme-tools",
 		Role:        model.SpecRoleProvider,
 		PeerHost:    "mcp.acme.test",

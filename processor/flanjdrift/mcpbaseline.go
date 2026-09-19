@@ -143,7 +143,7 @@ func (s *mcpSeeds) reconcile(infos []model.SpecInfo, src specSource, det *drift.
 			errs = append(errs, oc)
 			continue
 		}
-		raw, err := src.specDoc(si.Integration)
+		raw, err := src.specDoc(si.Integration, model.SpecFormatMCP)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("mcp snapshot %q: %w", si.Integration, err))
 			continue // transient: the row stays unoffered and is retried next tick

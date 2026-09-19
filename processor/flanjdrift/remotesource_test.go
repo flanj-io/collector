@@ -123,7 +123,7 @@ func TestRemoteSourceHidesTheStorePodResponse(t *testing.T) {
 // it forever.
 func TestRemoteSourceMissingDocIsNotAnError(t *testing.T) {
 	srv := fakeStorePod(t, "", map[string][]byte{})
-	raw, err := newRemoteSpecSource(srv.URL, "").specDoc("vanished")
+	raw, err := newRemoteSpecSource(srv.URL, "").specDoc("vanished", model.SpecFormatOpenAPI)
 	if err != nil {
 		t.Errorf("404 became an error: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestRemoteSourceRefusesADocumentPastTheCap(t *testing.T) {
 	oversized := bytes.Repeat([]byte("x"), maxSpecBytes+1)
 	srv := fakeStorePod(t, "", map[string][]byte{"acme": oversized})
 
-	raw, err := newRemoteSpecSource(srv.URL, "").specDoc("acme")
+	raw, err := newRemoteSpecSource(srv.URL, "").specDoc("acme", model.SpecFormatOpenAPI)
 	if err == nil {
 		t.Fatalf("an oversized document read clean as %d bytes — the front parses that fragment "+
 			"and reports a PARSE error for a SIZE problem", len(raw))
@@ -214,7 +214,7 @@ func TestRemoteSourceAcceptsADocumentAtTheCap(t *testing.T) {
 	atCap := bytes.Repeat([]byte("x"), maxSpecBytes)
 	srv := fakeStorePod(t, "", map[string][]byte{"acme": atCap})
 
-	raw, err := newRemoteSpecSource(srv.URL, "").specDoc("acme")
+	raw, err := newRemoteSpecSource(srv.URL, "").specDoc("acme", model.SpecFormatOpenAPI)
 	if err != nil {
 		t.Fatalf("a document exactly at the cap was refused: %v", err)
 	}
@@ -291,7 +291,7 @@ func TestRemoteSourceReadsTheStorePodsOwnRefusal(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	raw, err := newRemoteSpecSource(srv.URL, "").specDoc("acme-tools")
+	raw, err := newRemoteSpecSource(srv.URL, "").specDoc("acme-tools", model.SpecFormatOpenAPI)
 	if err == nil {
 		t.Fatal("a 413 from the store pod was not an error")
 	}

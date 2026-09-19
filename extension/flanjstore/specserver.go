@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -102,7 +103,10 @@ func (e *storeExtension) handleSpecList(w http.ResponseWriter, _ *http.Request) 
 		http.Error(w, "store not ready", http.StatusServiceUnavailable)
 		return
 	}
-	infos, err := st.ListSpecInfos()
+	// Both kinds cross this hop, each row carrying its format: the front routes
+	// REST contracts to its OpenAPI cache and MCP catalogues to its MCP
+	// baseline, and asks for each document BY format (handleSpecDoc).
+	infos, err := store.ListContractsAndCatalogues(st)
 	if err != nil {
 		e.specError(w, "list contracts", err)
 		return
@@ -144,11 +148,12 @@ const (
 // reasons entirely and its size decides nothing.
 func (e *storeExtension) reportOverCap(servable []model.SpecInfo) {
 	now := make(map[string]int64)
-	hosts := make(map[string]string)
+	rows := make(map[string]model.SpecInfo)
 	for _, si := range servable {
 		if si.DocBytes > specMaxDoc {
-			now[si.Integration] = int64(si.DocBytes)
-			hosts[si.Integration] = si.PeerHost
+			k := overCapKey(si.Format, si.Integration)
+			now[k] = int64(si.DocBytes)
+			rows[k] = si
 		}
 	}
 	raised, cleared := e.overCap.Observe(now)
@@ -157,16 +162,30 @@ func (e *storeExtension) reportOverCap(servable []model.SpecInfo) {
 	}
 	for _, c := range raised {
 		e.logger.Warn(msgSpecOverCap,
-			zap.String("integration", c.Key),
-			zap.String("peer_host", hosts[c.Key]),
+			zap.String("integration", rows[c.Key].Integration),
+			zap.String("format", rows[c.Key].Format),
+			zap.String("peer_host", rows[c.Key].PeerHost),
 			zap.Int64("bytes", c.Detail),
 			zap.Int("cap_bytes", specMaxDoc))
 	}
 	for _, c := range cleared {
+		format, integration := splitOverCapKey(c.Key)
 		e.logger.Info(msgSpecOverCapCleared,
-			zap.String("integration", c.Key),
+			zap.String("integration", integration),
+			zap.String("format", format),
 			zap.Int("cap_bytes", specMaxDoc))
 	}
+}
+
+// overCapKey names one row in the over-cap condition set. The format is part
+// of it because a REST contract and an MCP catalogue for one host share an
+// integration: keyed by integration alone, one row's refusal would clear or
+// mask the other's.
+func overCapKey(format, integration string) string { return format + "|" + integration }
+
+func splitOverCapKey(k string) (format, integration string) {
+	format, integration, _ = strings.Cut(k, "|")
+	return format, integration
 }
 
 // servableContract is the ONE rule for what may cross this hop, applied by the
@@ -197,7 +216,13 @@ func servableContract(si model.SpecInfo) bool {
 		(si.Format == model.SpecFormatOpenAPI || si.Format == model.SpecFormatMCP)
 }
 
-// handleSpecDoc returns one raw contract document.
+// handleSpecDoc returns one raw contract document: `?integration=…&format=…`.
+//
+// The format is what makes the lookup unambiguous — a REST contract and an MCP
+// catalogue for one host share an integration — and every front on this image
+// sends it. A request WITHOUT one (a front on an older image, mid-rollout)
+// gets the REST contract when the host has one and the MCP catalogue
+// otherwise: exactly what that request meant before the two could coexist.
 func (e *storeExtension) handleSpecDoc(w http.ResponseWriter, r *http.Request) {
 	st := e.Store()
 	if st == nil {
@@ -209,22 +234,20 @@ func (e *storeExtension) handleSpecDoc(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "integration is required", http.StatusBadRequest)
 		return
 	}
+	format := r.URL.Query().Get("format")
+	if format != "" && format != model.SpecFormatOpenAPI && format != model.SpecFormatMCP {
+		http.Error(w, "format must be openapi or mcp", http.StatusBadRequest)
+		return
+	}
 	// Resolve the metadata FIRST and apply the same admission rule as the list.
 	// A withheld contract answers exactly like an absent one — a 403 here would
 	// confirm that `self` exists to anyone holding the token.
-	infos, err := st.ListSpecInfos()
+	infos, err := store.ListContractsAndCatalogues(st)
 	if err != nil {
 		e.specError(w, "list contracts", err)
 		return
 	}
-	servable := false
-	var row model.SpecInfo
-	for _, si := range infos {
-		if si.Integration == integration && servableContract(si) {
-			servable, row = true, si
-			break
-		}
-	}
+	row, servable := pickServable(infos, integration, format)
 	if !servable {
 		http.Error(w, "no such contract", http.StatusNotFound)
 		return
@@ -234,10 +257,10 @@ func (e *storeExtension) handleSpecDoc(w http.ResponseWriter, r *http.Request) {
 	// heap on every request only to refuse it is the cost the cap exists to
 	// avoid — one that grows with the number of fronts asking.
 	if row.DocBytes > specMaxDoc {
-		e.refuseOverCap(w, row.Integration, row.PeerHost, row.DocBytes)
+		e.refuseOverCap(w, row, row.DocBytes)
 		return
 	}
-	raw, _, ok, err := st.GetSpecDoc(integration)
+	raw, ok, err := store.GetDoc(st, integration, row.Format)
 	if err != nil {
 		e.specError(w, "read contract", err)
 		return
@@ -267,11 +290,27 @@ func (e *storeExtension) handleSpecDoc(w http.ResponseWriter, r *http.Request) {
 		// present" and "this edge is unchecked on every front" stop
 		// contradicting each other. Reaching here past the metadata check above
 		// means the row was replaced between the list and the read.
-		e.refuseOverCap(w, integration, row.PeerHost, len(raw))
+		e.refuseOverCap(w, row, len(raw))
 		return
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
 	_, _ = w.Write(raw)
+}
+
+// pickServable finds the servable row a doc request names. With a format, the
+// row of that format or nothing; without one (an older front), the REST row
+// first and the MCP row only when the host has no REST contract — the rows
+// come REST-first from ListContractsAndCatalogues, so the first match is it.
+func pickServable(infos []model.SpecInfo, integration, format string) (model.SpecInfo, bool) {
+	for _, si := range infos {
+		if si.Integration != integration || !servableContract(si) {
+			continue
+		}
+		if format == "" || si.Format == format {
+			return si, true
+		}
+	}
+	return model.SpecInfo{}, false
 }
 
 // refuseOverCap answers a document past the cap: 413, and a log line the FIRST
@@ -280,14 +319,15 @@ func (e *storeExtension) handleSpecDoc(w http.ResponseWriter, r *http.Request) {
 // time, which is what the front needs; the store pod's operator needs the event,
 // not the repetition, so the line rides condition.Standing — the same set the
 // listing sweep clears, so the two routes cannot each log the row once.
-func (e *storeExtension) refuseOverCap(w http.ResponseWriter, integration, peerHost string, bytes int) {
-	if e.overCap.Raise(integration, int64(bytes)) && e.logger != nil {
+func (e *storeExtension) refuseOverCap(w http.ResponseWriter, row model.SpecInfo, bytes int) {
+	if e.overCap.Raise(overCapKey(row.Format, row.Integration), int64(bytes)) && e.logger != nil {
 		// Int64, matching reportOverCap's field exactly: the two routes write
 		// the SAME line, and a reader (or a test) must not have to know which
 		// one produced it.
 		e.logger.Warn(msgSpecOverCap,
-			zap.String("integration", integration),
-			zap.String("peer_host", peerHost),
+			zap.String("integration", row.Integration),
+			zap.String("format", row.Format),
+			zap.String("peer_host", row.PeerHost),
 			zap.Int64("bytes", int64(bytes)),
 			zap.Int("cap_bytes", specMaxDoc))
 	}
@@ -318,5 +358,7 @@ func (e *storeExtension) stopSpecServer() {
 // compile-time assertion: the endpoint only ever needs the read surface.
 var _ interface {
 	ListSpecInfos() ([]model.SpecInfo, error)
+	ListMCPCatalogues() ([]model.SpecInfo, error)
 	GetSpecDoc(string) ([]byte, string, bool, error)
+	GetMCPCatalogueDoc(string) ([]byte, bool, error)
 } = (store.Store)(nil)

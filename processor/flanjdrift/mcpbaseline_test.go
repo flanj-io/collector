@@ -302,7 +302,7 @@ func TestRestartSeedsTheMCPBaselineFromTheStore(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	if err := st.PutSpecInfo(model.SpecInfo{
+	if err := st.PutMCPCatalogue(model.SpecInfo{
 		Integration: "acme-payments", Role: model.SpecRoleProvider, Format: model.SpecFormatMCP,
 		PeerHost: "mcp.acme.test", EdgeClass: "external", Source: model.SpecSourceObserved,
 		LoadedAt: "2026-09-07T10:00:00.000Z",
@@ -595,7 +595,7 @@ func TestTwoPodsSharingAStoreNeverPingPongStdioBaselines(t *testing.T) {
 
 	// The row is still written and still listed — skipping the SEED must not
 	// take the stdio server off the Contracts tab.
-	infos, err := st.ListSpecInfos()
+	infos, err := store.ListContractsAndCatalogues(st)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -668,9 +668,9 @@ type countingSource struct {
 	fetches map[string]int
 }
 
-func (c *countingSource) specDoc(integration string) ([]byte, error) {
+func (c *countingSource) specDoc(integration, format string) ([]byte, error) {
 	c.fetches[integration]++
-	return c.specSource.specDoc(integration)
+	return c.specSource.specDoc(integration, format)
 }
 
 // forwardSpecInfos plays the front→store hop: every spec_info record a front
@@ -692,7 +692,7 @@ func forwardSpecInfos(t *testing.T, st store.Store, ld plog.Logs) (forwarded []m
 				if err != nil {
 					t.Fatalf("decode spec_info: %v", err)
 				}
-				if err := st.PutSpecInfo(info, raw); err != nil {
+				if err := store.PutSpecRecord(st, info, raw); err != nil {
 					t.Fatalf("store spec_info: %v", err)
 				}
 				forwarded = append(forwarded, info)
@@ -740,7 +740,7 @@ func TestTwoFrontsObservingTheSameListNeverMoveTheRow(t *testing.T) {
 	}
 	rowStamp := func() string {
 		t.Helper()
-		infos, err := st.ListSpecInfos()
+		infos, err := store.ListContractsAndCatalogues(st)
 		if err != nil {
 			t.Fatalf("list: %v", err)
 		}

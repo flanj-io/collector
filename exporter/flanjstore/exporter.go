@@ -124,15 +124,18 @@ func (e *storeExporter) writeOne(res pcommon.Resource, lr plog.LogRecord) (strin
 		}
 		return "finding", f.ID, e.st.InsertFinding(f)
 	case otlpattr.RecordTypeSpecInfo:
-		// Contract metadata from a front collector (tiered topology);
-		// PutSpecInfo is an upsert, so the single-pod double write (direct at
-		// Start + this record) is harmless.
+		// Contract metadata from a front collector (tiered topology). Both
+		// writes are upserts, so the single-pod double write (direct at Start
+		// + this record) is harmless. The record's shape is unchanged on the
+		// wire; its format decides the table — an observed MCP catalogue is
+		// not a filed contract and never lands in spec_infos, where it would
+		// overwrite the REST contract for the same host.
 		info, raw, err := otlpattr.SpecInfoFromRecord(lr)
 		if err != nil {
 			e.logger.Warn("drop malformed spec_info record", zap.Error(err))
 			return "spec_info", "", nil
 		}
-		return "spec_info", info.Integration, e.st.PutSpecInfo(info, raw)
+		return "spec_info", info.Integration, store.PutSpecRecord(e.st, info, raw)
 	default:
 		// Stamp the id onto the RECORD before decoding it. The SDK never emits
 		// flanj.call.id and only the drift processor stamps it, so a call

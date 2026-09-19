@@ -179,6 +179,19 @@ no custom protocol exists between the tiers.
   adopted with nothing to diff. The row is still written and still listed, so
   the Contracts tab shows the stdio server either way. An MCP call to an edge a
   front has no baseline for asks for an early refresh, like an uncovered host.
+- **MCP catalogues are stored apart from REST contracts** (2026-09-19). An
+  observed `tools/list` (and an edge's search-learned catalogue) lives in its
+  own `mcp_catalogues` table; `spec_infos` holds REST (OpenAPI) contracts and
+  the self contract only. Both are keyed by the host-derived integration, so a
+  host serving a REST API and an MCP server used to be ONE row that every
+  snapshot overwrote. The `spec_info` record on the tiered hop keeps its shape
+  and the store pod files it by its format; the channel lists both kinds (each
+  row carries `format`) and a front asks for each document by format
+  (`/internal/contracts/doc?integration=…&format=openapi|mcp` — a request with
+  no format, from a front on an older image, gets the REST contract when there
+  is one and the catalogue otherwise). The first start on this version moves
+  the `mcp` rows out of `spec_infos` in one transaction, newer observation
+  winning; the sqlite → postgres import carries both shapes of legacy file.
 
 ### Tiered: invariants
 

@@ -50,19 +50,14 @@ const (
 	msgContractHostTooLong         = "That host is too long to be a domain name."
 	msgContractHostPunycode        = "Enter the host as it appears in the traffic (ASCII, punycode for international domains)."
 	msgContractHostBadPort         = "That port isn't a number between 1 and 65535. Enter the host as the traffic carries it, e.g. api.acme.test:8080."
-	msgContractDocumentRequired    = "Choose an OpenAPI document to upload."
+	msgContractDocumentRequired    = "Choose a REST contract (an OpenAPI document) to upload."
 	msgContractTooLarge            = "That document is larger than 8 MB. Contracts this size are usually a bundle — upload the API's own document."
-	msgContractUnparseable         = "Couldn't read that as an OpenAPI document."
+	msgContractUnparseable         = "Couldn't read that as a REST contract (an OpenAPI document)."
 	msgContractStoreFailed         = "Couldn't save the contract to the local store."
 	msgContractIntegrationRequired = "integration is required."
 	msgContractNotRemovable        = "This contract comes from the collector's config file, not an upload — remove it there."
-	// An observed MCP snapshot is not a file anywhere: the server delivered it
-	// as its own tools/list and the next one replaces it. Answering the config
-	// sentence sent the operator looking for a mounted file that does not
-	// exist. App.vue hides Remove on an mcp row, but the route is reachable by
-	// a hand-crafted request and the refusal has to be true on its own.
-	msgContractNotRemovableObserved = "This is an observed MCP snapshot, not an upload — it refreshes from the server's tools/list."
-	msgContractNotLoaded            = "No contract is loaded for that integration."
+	msgContractNotLoaded           = "No contract is loaded for that integration."
+	msgContractFormatInvalid       = "format must be openapi or mcp."
 
 	// Contract FETCH and PROBE (ruling R5, 2026-09-16). Every one of these is a
 	// STATED state: a fetch that fails must say what failed, because the

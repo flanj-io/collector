@@ -14,6 +14,7 @@
 // operator's own file, and a localhost debugging tool has no business nagging.
 
 import { timeAgo } from './threads';
+import { isMcpFindingKind } from './mcp-kinds';
 
 /** The contract row shape this module reads (spec_infos, `GET /api/contracts`). */
 export interface ContractSpec {
@@ -57,7 +58,11 @@ export interface CoverageEdge {
 
 /* ── Copy deck ─────────────────────────────────────────────────────────── */
 
-export const ADD_CONTRACT = 'Add contract';
+/** The collector files REST contracts only — an OpenAPI document, uploaded or
+ *  fetched. An MCP server's tools/list arrives with the traffic and is not
+ *  filed (ruling, 2026-09-19), so every string that asks for a document says
+ *  REST, and names the format it means. */
+export const ADD_CONTRACT = 'Add REST contract';
 export const REPLACE_CONTRACT = 'Replace';
 export const MCP_SELF_REPORTS = 'An MCP server — its tools/list is the contract.';
 /** On a single provider's card. */
@@ -115,7 +120,7 @@ export const FETCH_STAYS_LOCAL =
  *  and it is not one. */
 export const FETCH_ONCE_ONLY =
   'Fetched once, now. Nothing re-checks the URL later — replace the contract when you want a newer document.';
-export const FETCH_PROMPT = 'Paste the URL of the provider’s OpenAPI document.';
+export const FETCH_PROMPT = 'Paste the URL of the provider’s REST contract (an OpenAPI document).';
 export const FETCH_ACTION = 'Fetch';
 export const FETCH_TAB_URL = 'From a URL';
 export const FETCH_TAB_FILE = 'From a file';
@@ -174,7 +179,7 @@ export function probeCandidateLine(c: {
   parts.push(c.servers_match ? 'its servers list this host' : 'its servers don’t list this host');
   return parts.join(' · ');
 }
-export const UPLOAD_PROMPT = 'Drop the provider’s OpenAPI document here, or choose a file.';
+export const UPLOAD_PROMPT = 'Drop the provider’s REST contract (an OpenAPI document) here, or choose a file.';
 export const UPLOAD_FORMATS = 'JSON or YAML.';
 export const UPLOAD_TAKES_EFFECT = 'Validating from now on. Calls already captured aren’t re-checked.';
 export const BIND_ANYWAY = 'Bind anyway';
@@ -473,6 +478,23 @@ export function contractsByHost(specs: readonly ContractSpec[]): Map<string, Con
   return out;
 }
 
+/** The hosts that are MCP servers and NOTHING else: an MCP host with neither a
+ *  bound REST contract nor a single non-MCP call. One host can serve both a
+ *  REST API and an MCP server (2026-09-19); treating every MCP host as
+ *  "self-reporting, no contract needed" hid that host's REST contract from the
+ *  roll call and the Edges row, and its missing contract from the uncovered
+ *  list. `calls` is whatever page of calls the UI holds — a REST call that aged
+ *  out of it leaves the host MCP-only, which is the pre-split behaviour. */
+export function mcpOnlyHosts(
+  mcpHosts: ReadonlySet<string>,
+  specs: readonly ContractSpec[],
+  calls: readonly { peer_host?: string; transport?: string }[]
+): Set<string> {
+  const rest = new Set(contractsByHost(specs).keys());
+  for (const c of calls) if (c.peer_host && c.transport !== 'mcp') rest.add(c.peer_host);
+  return new Set([...mcpHosts].filter((h) => !rest.has(h)));
+}
+
 /** Outbound providers with no contract bound, in the order the edges arrived.
  *  MCP hosts are excluded — their tools/list IS the contract, so listing them
  *  as needing one would invent a job that does not exist. */
@@ -697,6 +719,9 @@ export function contractHeading(spec: ContractSpec): string {
 /** The minimum a finding needs to be attributed to a contract. */
 export interface AttributableFinding {
   integration: string;
+  /** The finding's kind: an MCP kind belongs to an MCP catalogue's card, any
+   *  other to a REST contract's — never across, even on one host. */
+  kind?: string;
   source_call_id?: string | null;
   /** The host of the finding's source call, pinned server-side by
    *  GET /api/findings. Present whenever the store still holds that call —
@@ -737,6 +762,13 @@ export function findingBelongsToContract(
   spec: ContractSpec,
   hostOfCall: (callId: string) => string | undefined
 ): boolean {
+  // One host can serve BOTH a REST API with an uploaded contract and an MCP
+  // server with an observed catalogue — two cards (2026-09-19). The host alone
+  // would hand every finding on it to whichever card is listed first, so the
+  // KIND decides the card first: an MCP finding goes to the MCP catalogue, any
+  // other finding to a REST contract. A finding with no kind (an older
+  // collector's row) is judged on host and integration alone, as before.
+  if (finding.kind !== undefined && isMcpFindingKind(finding.kind) !== (spec.format === 'mcp')) return false;
   const callHost =
     finding.peer_host || (finding.source_call_id ? hostOfCall(finding.source_call_id) : undefined);
   if (callHost && spec.peer_host) return callHost === spec.peer_host;

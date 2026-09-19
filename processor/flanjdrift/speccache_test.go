@@ -62,13 +62,19 @@ func (f *fakeSource) overCap(si model.SpecInfo) *overCapError {
 	if !f.enforcesCap || si.DocBytes <= maxSpecBytes {
 		return nil
 	}
-	return &overCapError{integration: si.Integration, peerHost: si.PeerHost, bytes: si.DocBytes}
+	return &overCapError{integration: si.Integration, format: si.Format, peerHost: si.PeerHost, bytes: si.DocBytes}
 }
 
-func (f *fakeSource) specDoc(integration string) ([]byte, error) {
+// specDoc serves docs keyed "<format>|<integration>" when the test registered
+// one that way (a host with BOTH a REST contract and an MCP catalogue), and
+// otherwise the doc registered under the bare integration.
+func (f *fakeSource) specDoc(integration, format string) ([]byte, error) {
 	f.fetches[integration]++
 	if f.docErrOn == integration {
 		return nil, errors.New("boom")
+	}
+	if raw, ok := f.docs[format+"|"+integration]; ok {
+		return raw, nil
 	}
 	return f.docs[integration], nil
 }

@@ -302,8 +302,10 @@ func (p *driftProcessor) reportOverCap(errs, seedErrs []error) (restErrs, restSe
 				out = append(out, err)
 				continue
 			}
-			now[oc.integration] = int64(oc.bytes)
-			rows[oc.integration] = oc
+			// Keyed by format too: a host's REST contract and its MCP
+			// catalogue share an integration, and each is its own condition.
+			now[oc.key()] = int64(oc.bytes)
+			rows[oc.key()] = oc
 		}
 		return out
 	}
@@ -314,8 +316,10 @@ func (p *driftProcessor) reportOverCap(errs, seedErrs []error) (restErrs, restSe
 		return restErrs, restSeedErrs
 	}
 	for _, c := range raised {
+		format, integration := splitOverCapKey(c.Key)
 		fields := []zap.Field{
-			zap.String("integration", c.Key),
+			zap.String("integration", integration),
+			zap.String("format", format),
 			zap.Int("cap_bytes", maxSpecBytes),
 		}
 		if oc := rows[c.Key]; oc != nil {
@@ -332,8 +336,10 @@ func (p *driftProcessor) reportOverCap(errs, seedErrs []error) (restErrs, restSe
 		p.logger.Warn(msgSpecOverCap, fields...)
 	}
 	for _, c := range cleared {
+		format, integration := splitOverCapKey(c.Key)
 		p.logger.Info(msgSpecOverCapCleared,
-			zap.String("integration", c.Key),
+			zap.String("integration", integration),
+			zap.String("format", format),
 			zap.Int("cap_bytes", maxSpecBytes))
 	}
 	return restErrs, restSeedErrs
@@ -442,7 +448,7 @@ func (p *driftProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.Logs
 					// store pod); the emitted spec_info record covers the
 					// tiered hop — the double write is a harmless upsert.
 					if p.st != nil {
-						if err := p.st.PutSpecInfo(info, raw); err != nil && p.logger != nil {
+						if err := p.st.PutMCPCatalogue(info, raw); err != nil && p.logger != nil {
 							p.logger.Warn("persist mcp contract snapshot failed", zap.Error(err))
 						}
 					}
@@ -495,7 +501,7 @@ func (p *driftProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.Logs
 					if j.SearchSpec != nil {
 						mcpSpecs = append(mcpSpecs, specInfoRecord{info: j.SearchSpec.Info, raw: j.SearchSpec.Raw})
 						if p.st != nil {
-							if err := p.st.PutSpecInfo(j.SearchSpec.Info, j.SearchSpec.Raw); err != nil && p.logger != nil {
+							if err := p.st.PutMCPCatalogue(j.SearchSpec.Info, j.SearchSpec.Raw); err != nil && p.logger != nil {
 								p.logger.Warn("persist mcp search catalog failed", zap.Error(err))
 							}
 						}
