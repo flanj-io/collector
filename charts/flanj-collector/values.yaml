@@ -132,7 +132,7 @@ collector:
   # extraVolumeMounts and name the path here; empty disables self validation.
   selfSpecPath: ""
   # selfIntegrationId: DEPRECATED and IGNORED (2026-09-14, with integration_id):
-  # self-spec findings are always labelled `self`. Accepted so an existing
+  # the collector derives every key itself. Accepted so an existing
   # values file still installs; nothing is rendered from it.
   selfIntegrationId: ""
 

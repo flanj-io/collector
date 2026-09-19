@@ -34,9 +34,9 @@ type Config struct {
 	// problem that moved provider contracts into the UI.
 	SelfSpecPath string `mapstructure:"self_spec_path"`
 	// SelfIntegrationID is DEPRECATED and IGNORED (2026-09-14, with
-	// integration_id): self-spec findings are always labelled "self", which
-	// no SDK-stamped integration is, so self and provider findings never
-	// merge without a knob. Decodable so an old config boots.
+	// integration_id): self-spec findings carry their inbound call's key, the
+	// service the call reached, while provider findings key by host, so the two
+	// never merge without a knob. Decodable so an old config boots.
 	SelfIntegrationID string `mapstructure:"self_integration_id"`
 
 	// StorePodEndpoint is the tiered topology's spec channel: the base URL of

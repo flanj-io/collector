@@ -508,7 +508,8 @@ type findingView struct {
 	// The Contracts tab pairs a finding with the contract card for its host,
 	// because host is the only thing the two genuinely share — an uploaded
 	// contract's integration id is derived from the host it binds to while a
-	// finding's integration comes from the call, stamped by the SDK. The SPA
+	// finding's integration comes from its call (derived at ingest; an older
+	// collector stored whatever id the SDK sent). The SPA
 	// used to resolve that host by looking the source call up in GET /api/calls,
 	// which returns the 200 newest rows: source_call_id is frozen at the FIRST
 	// occurrence, so once that call aged out of the page the finding detached

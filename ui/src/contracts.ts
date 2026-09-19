@@ -738,9 +738,11 @@ export interface AttributableFinding {
  *
  * An uploaded contract's integration id is DERIVED from the host it binds to
  * (`api.acme.test` → `api-acme-test`), because the operator is never asked for
- * one. A finding's integration comes from the CALL, stamped by the SDK
- * (`acme-payments`). Those two are unrelated strings for the same provider, so
- * an integration-only join split one provider into two cards: the contract card
+ * one. A finding's integration comes from the CALL — derived from the same
+ * host by the collector today, but a row stored by an older collector carries
+ * whatever id the SDK sent (`acme-payments`). Those two are unrelated strings
+ * for the same provider, so an integration-only join split one provider into
+ * two cards: the contract card
  * claiming CONFORMING, and beside it a second card carrying the BREAKING
  * finding under "No contract for this provider" — denying the contract while
  * rendering a verdict only that contract could produce.
@@ -831,10 +833,10 @@ export interface ProviderEdge {
  *
  * Two kinds of `integration` reach this from `GET /api/findings`:
  *
- *   - a call-evidenced finding (live-vs-spec, the MCP kinds) carries the SDK's
- *     own integration id (`acme-payments`, `acme-tools`) — a slug the operator
- *     chose, which humanizes honestly and which the relay humanizes the same
- *     way;
+ *   - a call-evidenced finding (live-vs-spec, the MCP kinds) carries its
+ *     call's integration — derived by the collector (the host slug, or for an
+ *     inbound call the service it reached); a row from an older collector
+ *     carries the id its SDK sent (`acme-payments`, `acme-tools`);
  *   - a version-diff carries the CONTRACT's id, and an uploaded contract is
  *     keyed by the host it was bound to (`api-acme-test` for `api.acme.test`) —
  *     a slug nobody chose. humanize() turned it into `Api Acme Test`, a
