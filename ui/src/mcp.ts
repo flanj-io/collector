@@ -190,6 +190,9 @@ export interface McpServerRef {
   /** Where this server is: its host, or `stdio` for a local process. Two
    *  servers sharing a name rendered two IDENTICAL health lines without it. */
   origin?: string;
+  /** The contract row's integration id — rendered only when another line's
+   *  lead would otherwise match this one (identifiableServerRefs). */
+  integration?: string;
 }
 
 /**
@@ -208,7 +211,28 @@ export interface McpServerRef {
 function serverLead(s: McpServerRef): string {
   const version = s.version ? ' v' + s.version : '';
   const origin = s.origin ? ' · ' + s.origin : '';
-  return `Server: ${s.name}${version}${origin} — `;
+  const integration = s.integration ? ' · integration: ' + s.integration : '';
+  return `Server: ${s.name}${version}${origin}${integration} — `;
+}
+
+/**
+ * The Overview's server refs, each keeping its integration id only when its
+ * lead (name, version, origin) matches another's. Two integrations calling the
+ * SAME server at the SAME host — the e2e stack's TS and Python tenants both on
+ * `acme-tools-mcp v1.2.0 · mcp.acme.test` — otherwise rendered two identical
+ * lines. A lone server's line is left exactly as it was.
+ *
+ * Keyed on the lead, not the whole line: two same-lead lines whose clauses
+ * differ are just as unattributable (which one drifted?), and a whole-line key
+ * would add and drop the id as verdicts change. The id is spelled
+ * `integration: <id>`, as the Contracts card captions it, so the two surfaces
+ * cross-reference.
+ */
+export function identifiableServerRefs(refs: (McpServerRef & { integration: string })[]): McpServerRef[] {
+  const lead = (s: McpServerRef) => serverLead({ name: s.name, version: s.version, origin: s.origin });
+  const count = new Map<string, number>();
+  for (const s of refs) count.set(lead(s), (count.get(lead(s)) || 0) + 1);
+  return refs.map((s) => ((count.get(lead(s)) || 0) > 1 ? s : { name: s.name, version: s.version, origin: s.origin }));
 }
 
 /** One MCP server's Overview health line, and its tone — three of them, like

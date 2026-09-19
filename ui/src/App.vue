@@ -83,6 +83,7 @@ import {
   isAcked,
   isBreakingFinding,
   isLocalNotice,
+  identifiableServerRefs,
   isMcpCall,
   isMcpFinding,
   localNoticesSubFor,
@@ -1128,14 +1129,18 @@ const mcpHosts = computed(() => {
 // Per-server MCP health headline (deck §2): output mismatch → definition
 // change (breaking, no calls affected yet) → nothing validated yet (neutral)
 // → clean. Three tones, like the REST line above it.
-const mcpOverview = computed(() =>
-  mcpContracts.value.map((s) => ({
+const mcpOverview = computed(() => {
+  // Same origin rule as the Contracts card, from the same function — so the
+  // two surfaces cannot drift apart and render two identical health lines
+  // for two different servers again. Two integrations on ONE server at one
+  // origin still would: those lines carry their integration id (ui/src/mcp.ts).
+  const refs = identifiableServerRefs(
+    mcpContracts.value.map((s) => ({ name: s.title || s.integration, version: s.version, origin: contractOrigin(s), integration: s.integration }))
+  );
+  return mcpContracts.value.map((s, i) => ({
     key: s.integration,
     headline: mcpHeadline(
-      // Same origin rule as the Contracts card, from the same function — so the
-      // two surfaces cannot drift apart and render two identical health lines
-      // for two different servers again.
-      { name: s.title || s.integration, version: s.version, origin: contractOrigin(s) },
+      refs[i],
       mcpFindings.value.filter((f) => f.integration === s.integration),
       humanTime,
       // Evidence for THIS server only: its own validated tool calls. Zero is
@@ -1143,8 +1148,8 @@ const mcpOverview = computed(() =>
       // all-clear, however complete the Contracts card beside it looks.
       calls.value.filter((c) => isMcpCall(c) && c.integration === s.integration && isValidated(c)).length
     )
-  }))
-);
+  }));
+});
 
 // Local notices (deck §2): stale_client ONLY since qfix2-2026-08-26. A
 // DESCRIPTION definition change is now flaggable, so it cannot sit under a band
