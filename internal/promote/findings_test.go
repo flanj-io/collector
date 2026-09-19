@@ -53,7 +53,7 @@ var shapeAllowedKeys = map[string]bool{
 // body content — asserted on the BYTES, not the struct, so an accidental
 // embed or rename cannot sneak an observed value out.
 func TestBuildFindingShapesWireBytes(t *testing.T) {
-	shapes := BuildFindingShapes([]model.Finding{shapeSentinelFinding("f_1")})
+	shapes := BuildFindingShapes([]model.Finding{shapeSentinelFinding("f_1")}, nil)
 	raw, err := json.Marshal(FindingsRequest{Findings: shapes})
 	if err != nil {
 		t.Fatal(err)
@@ -112,7 +112,7 @@ func TestBuildFindingShapesNormalization(t *testing.T) {
 		Endpoint: "GET /v1/things", Rule: "undocumented-enum", DetectedAt: "2026-08-01T00:00:00Z",
 		Expected: "x", Actual: "y",
 	}
-	shapes := BuildFindingShapes([]model.Finding{old})
+	shapes := BuildFindingShapes([]model.Finding{old}, nil)
 	if len(shapes) != 1 {
 		t.Fatalf("shapes = %d", len(shapes))
 	}
@@ -135,7 +135,7 @@ func TestBuildFindingShapesNormalization(t *testing.T) {
 	for i := range many {
 		many[i] = shapeSentinelFinding(fmt.Sprintf("f_%d", i))
 	}
-	if got := len(BuildFindingShapes(many)); got != FindingsSyncMaxItems {
+	if got := len(BuildFindingShapes(many, nil)); got != FindingsSyncMaxItems {
 		t.Errorf("builder emitted %d rows, cap is %d", got, FindingsSyncMaxItems)
 	}
 }
@@ -148,7 +148,7 @@ func TestBuildFindingShapesTruncatesToCaps(t *testing.T) {
 	oversized.FieldPath = model.Ptr(strings.Repeat("a", 300) + "é") // 301 runes, 303 bytes
 	oversized.Signature = strings.Repeat("s", 2000)
 
-	shapes := BuildFindingShapes([]model.Finding{oversized, shapeSentinelFinding("f_ok")})
+	shapes := BuildFindingShapes([]model.Finding{oversized, shapeSentinelFinding("f_ok")}, nil)
 	if len(shapes) != 2 {
 		t.Fatalf("shapes = %d, want 2", len(shapes))
 	}
@@ -164,7 +164,7 @@ func TestBuildFindingShapesTruncatesToCaps(t *testing.T) {
 	// A multi-byte rune straddling the cut is dropped whole — never split.
 	multi := shapeSentinelFinding("f_multi")
 	multi.FieldPath = model.Ptr(strings.Repeat("a", capFieldPath-1) + "é") // é starts at byte 255, ends past the cap
-	if got := BuildFindingShapes([]model.Finding{multi})[0].FieldPath; got != strings.Repeat("a", capFieldPath-1) {
+	if got := BuildFindingShapes([]model.Finding{multi}, nil)[0].FieldPath; got != strings.Repeat("a", capFieldPath-1) {
 		t.Errorf("rune-straddling cut produced %d bytes ending %q", len(got), got[len(got)-1:])
 	}
 
@@ -212,7 +212,7 @@ func TestPostFindings(t *testing.T) {
 	}))
 	t.Cleanup(s.srv.Close)
 
-	shapes := BuildFindingShapes([]model.Finding{shapeSentinelFinding("f_1"), shapeSentinelFinding("f_2")})
+	shapes := BuildFindingShapes([]model.Finding{shapeSentinelFinding("f_1"), shapeSentinelFinding("f_2")}, nil)
 	out, status, err := NewClient(s.srv.URL, "deploy_secret", "v-test").WithCollectorKey("ckey_secret").
 		PostFindings(context.Background(), FindingsRequest{Findings: shapes})
 	if err != nil || status != 200 {

@@ -210,6 +210,10 @@ ALTER TABLE calls ADD COLUMN IF NOT EXISTS drifted INTEGER NOT NULL DEFAULT 0;
 -- every pre-existing row and nothing else ever writes '' (InsertCall always
 -- supplies the column) — see the sqlite backend's callsAddedColumns note.
 ALTER TABLE calls ADD COLUMN IF NOT EXISTS validated TEXT NOT NULL DEFAULT '';
+-- findings.inbound: the finding's source call was inbound, so its key is a
+-- service name that never leaves the collector (Store.InboundFindingIDs). A
+-- row from before the column is 0, and was keyed by the constant 'self'.
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS inbound INTEGER NOT NULL DEFAULT 0;
 `
 	tx, err := p.db.Begin()
 	if err != nil {
@@ -426,6 +430,9 @@ func (p *postgresStore) InsertFinding(f model.Finding) (err error) {
 				return fmt.Errorf("pin source call: %w", err)
 			}
 			if err := bumpEdgeDrift(tx, p.rebind, *sourceCallID); err != nil {
+				return err
+			}
+			if err := markFindingInbound(tx, p.rebind, f.ID, *sourceCallID); err != nil {
 				return err
 			}
 		}

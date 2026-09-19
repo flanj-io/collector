@@ -16,6 +16,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/flanj-io/collector/internal/integration"
 	"github.com/flanj-io/collector/internal/model"
 	"github.com/flanj-io/collector/internal/redact"
 )
@@ -102,6 +103,11 @@ type Input struct {
 	AllowedDomains []string
 	// AllowedEmails: exact addresses; at most one of the two lists is set.
 	AllowedEmails []string
+	// Inbound: the store recorded that the finding's source call was inbound
+	// (store.Store.InboundFindingIDs) — a self-spec finding, keyed locally by
+	// the service the call reached. Build also reads it off Call when there is
+	// one; this covers the finding whose call has aged out.
+	Inbound bool
 }
 
 // QuestionInput is what the UI hands the promoter for one "Start a thread" click
@@ -136,12 +142,22 @@ func Build(in Input) FlagRequest {
 	finding := in.Finding
 	// The caller's service.name names this org's internal topology and stays
 	// on this collector (CONTRACTS §3). The call rides the body whole, so strip
-	// it from a copy — never from the caller's call.
+	// it from a copy — never from the caller's call. An inbound call and a
+	// finding raised against the self spec are KEYED by that name locally, so
+	// both copies carry "self" instead, and the finding's signature (which
+	// starts with the key) is recomputed with it.
+	selfKeyed := in.Inbound || (in.Call != nil && in.Call.Direction == integration.DirectionServer)
 	var call *model.RedactedCall
 	if in.Call != nil {
 		c := *in.Call
 		c.ServiceName = ""
+		if selfKeyed {
+			c.Integration = integration.Self
+		}
 		call = &c
+	}
+	if selfKeyed {
+		finding = wireSelf(finding)
 	}
 	return FlagRequest{
 		IdempotencyKey:      "flag_" + in.Finding.ID,
@@ -152,6 +168,14 @@ func Build(in Input) FlagRequest {
 		Call:                call,
 		Finding:             &finding,
 	}
+}
+
+// wireSelf returns a copy of a self-keyed finding as it crosses to the control
+// plane: integration "self", and the signature recomputed with it.
+func wireSelf(f model.Finding) model.Finding {
+	f.Integration = integration.Self
+	f.Signature = f.ComputeSignature()
+	return f
 }
 
 // BuildQuestion assembles a schema-valid message-only FlagRequest: no call, no

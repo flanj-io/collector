@@ -90,6 +90,25 @@ func (f *fakeStore) ListFindings(limit int) ([]model.Finding, error) {
 	}
 	return out, nil
 }
+
+// InboundFindingIDs: a finding whose source call is held and inbound. The real
+// backends record it on the finding row so it outlives the call; this fake
+// keeps every call, so the join is the same answer.
+func (f *fakeStore) InboundFindingIDs() (map[string]bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := map[string]bool{}
+	for _, fd := range f.findings {
+		if fd.SourceCallID == nil {
+			continue
+		}
+		if c, ok := f.calls[*fd.SourceCallID]; ok && c.Direction == "server" {
+			out[fd.ID] = true
+		}
+	}
+	return out, nil
+}
+
 func (f *fakeStore) CallPeerHosts(ids []string) (map[string]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

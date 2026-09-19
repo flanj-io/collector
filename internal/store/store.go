@@ -34,6 +34,7 @@ import (
 	sqlite3 "modernc.org/sqlite/lib"
 
 	"github.com/flanj-io/collector/internal/edge"
+	"github.com/flanj-io/collector/internal/integration"
 	"github.com/flanj-io/collector/internal/model"
 )
 
@@ -90,6 +91,16 @@ type Store interface {
 	GetFinding(id string) (model.Finding, bool, error)
 	ListCalls(limit int) ([]model.RedactedCall, error)
 	ListFindings(limit int) ([]model.Finding, error)
+	// InboundFindingIDs names the findings whose source call was INBOUND — a
+	// finding raised against the self spec, keyed locally by the service the
+	// call reached. That service name never crosses to the control plane
+	// (CONTRACTS §3): the flag relay and the findings sync send "self" in its
+	// place, and they read the fact here because the call itself does not
+	// last — a flagged finding's call is unpinned and ages out, and the sync
+	// never has one in hand. Recorded on the finding row (findings.inbound, a
+	// local column that never leaves) when the store first holds both the
+	// finding and its call, whichever arrived first.
+	InboundFindingIDs() (map[string]bool, error)
 	// CallPeerHosts resolves call ids to the peer host each call was captured
 	// against. Ids with no stored call — and calls stored without a host, e.g.
 	// a local-process MCP server — are absent from the map rather than present
@@ -424,6 +435,39 @@ func evictOldest(ex execer, rebind func(string) string, keepID string, batch int
 // identical bodies modulo rebind until 2026-09-08). A call with no row, or one
 // captured without a peer host (a local-process MCP server), attributes to no
 // edge and is a no-op.
+// markFindingInbound records on a NEW finding row that its source call was
+// inbound, when the store already holds that call (latePin covers the other
+// order). Idempotent.
+func markFindingInbound(ex execer, rebind func(string) string, findingID, sourceCallID string) error {
+	if _, err := ex.Exec(rebind(
+		`UPDATE findings SET inbound=1
+		  WHERE id=? AND inbound=0
+		    AND EXISTS (SELECT 1 FROM calls WHERE id=? AND direction=?)`),
+		findingID, sourceCallID, integration.DirectionServer,
+	); err != nil {
+		return fmt.Errorf("mark inbound finding: %w", err)
+	}
+	return nil
+}
+
+// inboundFindingIDs is Store.InboundFindingIDs for both backends.
+func inboundFindingIDs(q queryExecer) (map[string]bool, error) {
+	rows, err := q.Query(`SELECT id FROM findings WHERE inbound=1`)
+	if err != nil {
+		return nil, fmt.Errorf("list inbound findings: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("list inbound findings: %w", err)
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
+
 func bumpEdgeDrift(q queryExecer, rebind func(string) string, sourceCallID string) error {
 	var peerHost, direction sql.NullString
 	err := q.QueryRow(rebind(`SELECT peer_host, direction FROM calls WHERE id=?`), sourceCallID).Scan(&peerHost, &direction)
@@ -510,6 +554,15 @@ func latePin(ex execer, rebind func(string) string, c model.RedactedCall) (pinne
 		args...,
 	); err != nil {
 		return false, fmt.Errorf("late pin: repair drifted: %w", err)
+	}
+	// The finding arrived first, so InsertFinding could not tell whether its
+	// call was inbound: record it now (findings.inbound — see
+	// Store.InboundFindingIDs). Before the pin, which returns early when there
+	// is nothing to pin.
+	if c.Direction == integration.DirectionServer {
+		if _, err := ex.Exec(rebind(`UPDATE findings SET inbound=1 WHERE source_call_id=? AND inbound=0`), c.ID); err != nil {
+			return false, fmt.Errorf("late pin: mark inbound finding: %w", err)
+		}
 	}
 	res, err := ex.Exec(rebind(
 		`UPDATE calls SET pinned=1
@@ -681,6 +734,11 @@ func (b *base) ListFindings(limit int) ([]model.Finding, error) {
 		limit = 100
 	}
 	return b.scanFindings(`SELECT doc, occurrence_count, last_seen FROM findings ORDER BY seq DESC LIMIT ?`, limit)
+}
+
+// InboundFindingIDs: see Store.InboundFindingIDs.
+func (b *base) InboundFindingIDs() (map[string]bool, error) {
+	return inboundFindingIDs(b.db)
 }
 
 // callPeerHostBatch caps how many ids go into one IN list. A read-API page asks

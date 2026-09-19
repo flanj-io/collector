@@ -181,6 +181,13 @@ CREATE INDEX IF NOT EXISTS idx_calls_captured_edge ON calls(captured_at, peer_ho
 			return fmt.Errorf("migrate calls: add %s: %w", col, err)
 		}
 	}
+	// findings.inbound — same additive widening (findingsAddedColumns).
+	for _, col := range findingsAddedColumns {
+		if _, err := s.db.Exec(`ALTER TABLE findings ADD COLUMN ` + col); err != nil &&
+			!strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("migrate findings: add %s: %w", col, err)
+		}
+	}
 	// The MCP rows move out of spec_infos (moveMCPRowsOutOfSpecInfos), in one
 	// transaction so a crash never leaves a catalogue in both tables or in
 	// neither. Runs blind on every start; after the first it matches nothing.
@@ -211,6 +218,15 @@ CREATE INDEX IF NOT EXISTS idx_calls_captured_edge ON calls(captured_at, peer_ho
 var callsAddedColumns = []string{
 	`drifted INTEGER NOT NULL DEFAULT 0`,
 	`validated TEXT NOT NULL DEFAULT ''`,
+}
+
+// findingsAddedColumns are the findings columns introduced after the table
+// shipped. `inbound` records that the finding's source call was inbound (see
+// Store.InboundFindingIDs); LOCAL only — no read path puts it on the wire. A
+// row from before the column is 0, and that is right: such a finding was keyed
+// by the constant "self", never by a service name.
+var findingsAddedColumns = []string{
+	`inbound INTEGER NOT NULL DEFAULT 0`,
 }
 
 var specInfoAddedColumns = []string{
@@ -395,6 +411,9 @@ func (s *sqliteStore) InsertFinding(f model.Finding) (err error) {
 			}
 			// Attribute the drift to the source call's edge (one per signature).
 			if err := bumpEdgeDrift(tx, s.rebind, *sourceCallID); err != nil {
+				return err
+			}
+			if err := markFindingInbound(tx, s.rebind, f.ID, *sourceCallID); err != nil {
 				return err
 			}
 		}
