@@ -228,7 +228,7 @@ func parseHeaders(s string) map[string]string {
 // ResourceServiceName is the OTel semantic-convention RESOURCE attribute naming
 // the service that emitted a batch — the caller, for a call record. Not a
 // flanj.* key: both SDKs set it on the OTLP resource from their service-name
-// option / OTEL_SERVICE_NAME (default "flanj-consumer"). CONTRACTS §2.
+// option, else OTEL_SERVICE_NAME, else their own default (CONTRACTS §2).
 const ResourceServiceName = "service.name"
 
 // ServiceNameOf reads the caller's service.name off a record's RESOURCE (one
