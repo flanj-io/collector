@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 
 	"github.com/flanj-io/collector/contract/diff"
@@ -77,7 +78,7 @@ func goldenSnapshot(t *testing.T) otlpattr.ContractSnapshot {
 // goldenMCPCall decodes contracts/golden-otlp-mcp-call.json.
 func goldenMCPCall(t *testing.T) model.RedactedCall {
 	t.Helper()
-	call := otlpattr.CallFromRecord(loadFixtureRecord(t, "golden-otlp-mcp-call.json"))
+	call := otlpattr.CallFromRecord(pcommon.NewResource(), loadFixtureRecord(t, "golden-otlp-mcp-call.json"))
 	if call.ID == "" {
 		call.ID = "call_mcp_1"
 	}
@@ -117,7 +118,7 @@ func tool(t *testing.T, doc map[string]any, name string) map[string]any {
 func mcpCall(id, toolName, reqBody, respBody string) model.RedactedCall {
 	return model.RedactedCall{
 		SchemaVersion: 1, ID: id, CapturedAt: "2026-08-24T10:00:00.000Z",
-		Integration: "acme-payments", Direction: "client", PeerHost: "mcp.acme.test", EdgeClass: "external",
+		Integration: "mcp-acme-test", Direction: "client", PeerHost: "mcp.acme.test", EdgeClass: "external",
 		Method: "tools/call", Route: "/" + toolName, URL: "mcp://mcp.acme.test/" + toolName,
 		RequestBody: reqBody, RequestContentType: "application/json",
 		ResponseBody: respBody, ResponseContentType: "application/json",
@@ -141,7 +142,7 @@ func TestMCPGolden_OutputMismatch(t *testing.T) {
 	if len(findings) != 0 {
 		t.Fatalf("first snapshot must yield no findings, got %d", len(findings))
 	}
-	if info.Format != model.SpecFormatMCP || info.Integration != "acme-payments" || info.PeerHost != "mcp.acme.test" ||
+	if info.Format != model.SpecFormatMCP || info.Integration != "mcp-acme-test" || info.PeerHost != "mcp.acme.test" ||
 		info.Title != "acme-payments-mcp" || info.Version != "3.2.0" || info.Endpoints != 3 {
 		t.Errorf("spec info = %+v", info)
 	}
@@ -179,7 +180,7 @@ func TestMCPGolden_OutputMismatch(t *testing.T) {
 	if f.SourceCallID == nil || *f.SourceCallID != call.ID {
 		t.Errorf("source_call_id = %v, want the representative call %q", f.SourceCallID, call.ID)
 	}
-	wantSig := "acme-payments|create_refund|output_mismatch|type-mismatch|refund.amount"
+	wantSig := "mcp-acme-test|create_refund|output_mismatch|type-mismatch|refund.amount"
 	if f.Signature != wantSig {
 		t.Errorf("signature = %q, want %q", f.Signature, wantSig)
 	}
@@ -467,7 +468,7 @@ func TestDefinitionChange_Classes(t *testing.T) {
 
 	check := func(op, rule, fieldPath, severity string, flaggable bool) model.Finding {
 		t.Helper()
-		sig := "acme-payments|" + op + "|definition_change|" + rule + "|" + fieldPath
+		sig := "mcp-acme-test|" + op + "|definition_change|" + rule + "|" + fieldPath
 		f, ok := bySig[sig]
 		if !ok {
 			t.Fatalf("missing finding %q; have %v", sig, sigs(findings))
@@ -738,7 +739,7 @@ func TestSnapshotVersioning(t *testing.T) {
 // previous; the next observed change then diffs against what the STORE held.
 func TestSeed(t *testing.T) {
 	v1 := goldenSnapshot(t)
-	info := model.SpecInfo{Integration: "acme-payments", Role: model.SpecRoleProvider,
+	info := model.SpecInfo{Integration: "mcp-acme-test", Role: model.SpecRoleProvider,
 		PeerHost: "mcp.acme.test", Format: model.SpecFormatMCP, LoadedAt: v1.ObservedAt}
 	edge := mcpEdgeRef(v1.PeerHost, "client")
 

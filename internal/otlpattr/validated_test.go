@@ -3,6 +3,7 @@ package otlpattr
 import (
 	"testing"
 
+	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 
 	"github.com/flanj-io/collector/internal/model"
@@ -15,7 +16,7 @@ import (
 // is from before verdicts existed", and lets the UI refuse CONFORMING for both.
 func TestCallFromRecord_AbsentVerdictIsUnknown(t *testing.T) {
 	for _, fixture := range []string{"golden-otlp-call.json", "golden-otlp-server-call.json", "golden-otlp-mcp-call.json"} {
-		call := CallFromRecord(recordFromFixture(t, fixture))
+		call := CallFromRecord(pcommon.NewResource(), recordFromFixture(t, fixture))
 		if call.Validated != model.ValidatedUnknown {
 			t.Errorf("%s: validated = %q, want %q for a record carrying no verdict", fixture, call.Validated, model.ValidatedUnknown)
 		}
@@ -40,7 +41,7 @@ func TestStampValidated_RoundTrip(t *testing.T) {
 	for _, v := range cases {
 		lr := recordFromFixture(t, "golden-otlp-call.json")
 		StampValidated(lr, v)
-		got := CallFromRecord(lr)
+		got := CallFromRecord(pcommon.NewResource(), lr)
 		if got.Validated != v.Verdict || got.ValidatedReason != v.Reason {
 			t.Errorf("stamp %+v round-tripped as validated=%q reason=%q", v, got.Validated, got.ValidatedReason)
 		}
@@ -60,7 +61,7 @@ func TestStampValidated_ReplacesAStaleReason(t *testing.T) {
 	if v, ok := lr.Attributes().Get(AttrValidatedReason); ok {
 		t.Fatalf("stale reason %q survived a clean stamp", v.Str())
 	}
-	got := CallFromRecord(lr)
+	got := CallFromRecord(pcommon.NewResource(), lr)
 	if got.Validated != model.ValidatedClean || got.ValidatedReason != "" {
 		t.Errorf("after re-stamp: validated=%q reason=%q, want clean with no reason", got.Validated, got.ValidatedReason)
 	}

@@ -412,6 +412,9 @@ func (p *driftProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.Logs
 
 	rls := ld.ResourceLogs()
 	for i := 0; i < rls.Len(); i++ {
+		// The resource names the service an inbound call reached, which is
+		// that call's integration (CONTRACTS §2) — decoded with the record.
+		res := rls.At(i).Resource()
 		sls := rls.At(i).ScopeLogs()
 		for j := 0; j < sls.Len(); j++ {
 			recs := sls.At(j).LogRecords()
@@ -442,6 +445,9 @@ func (p *driftProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.Logs
 					findings = append(findings, fs...)
 					// A listing that follows a toolset-enable call is the
 					// session's, not the server's catalog: it changes no row.
+					// (The decoder has already derived the snapshot's key, and
+					// that is never "", so this skips the session listing and
+					// nothing else.)
 					if info.Integration == "" {
 						continue
 					}
@@ -479,7 +485,7 @@ func (p *driftProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.Logs
 						otlpattr.StampValidated(lr, model.NotValidated(model.NotValidatedNoContract))
 						continue
 					}
-					call := otlpattr.CallFromRecord(lr)
+					call := otlpattr.CallFromRecord(res, lr)
 					// No baseline for this edge yet: on a tiered front the store pod
 					// may well hold the tools/list a sibling front observed, so ask
 					// for an early refresh — the same first-sight kick the REST path
@@ -524,7 +530,7 @@ func (p *driftProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.Logs
 					otlpattr.StampValidated(lr, model.NotValidated(model.NotValidatedNoContract))
 					continue
 				}
-				call := otlpattr.CallFromRecord(lr)
+				call := otlpattr.CallFromRecord(res, lr)
 
 				if call.Direction == "server" {
 					// INBOUND: we are the provider — validate OUR responses
@@ -537,14 +543,10 @@ func (p *driftProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.Logs
 					if verdict.Verdict == model.ValidatedNot && p.logger != nil {
 						p.logger.Debug("self live-vs-spec skipped", zap.String("route", call.Route), zap.String("reason", verdict.Reason), zap.NamedError("cause", jerr))
 					}
-					// Findings label with the call's integration (the org id) by
-					// default; relabel to the self contract's id so self and
-					// provider findings never share a signature.
-					selfID := p.cfg.selfIntegration()
-					for i := range fs {
-						fs[i].Integration = selfID
-						fs[i].Signature = fs[i].ComputeSignature()
-					}
+					// The findings carry the call's own key: the service the
+					// call reached (integration.Derive). Provider findings key
+					// by host, so the two never share a signature, and the flag
+					// relay sends "self" in place of the service name.
 					findings = append(findings, fs...)
 					otlpattr.StampValidated(lr, verdict)
 					continue

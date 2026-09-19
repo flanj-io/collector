@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 
 	"github.com/flanj-io/collector/internal/drift"
@@ -71,7 +72,7 @@ func TestDispatchedCallIsStoredAsTheInnerTool(t *testing.T) {
 	if got := str(inner, otlpattr.AttrReqBody); got != `{"name":"get_balance","arguments":{"account_id":"a1"}}` {
 		t.Errorf("request body = %q, want the literal dispatcher call", got)
 	}
-	if call := otlpattr.CallFromRecord(inner); call.ViaDispatch != "call_tool" || call.MCPToolName != "get_balance" {
+	if call := otlpattr.CallFromRecord(pcommon.NewResource(), inner); call.ViaDispatch != "call_tool" || call.MCPToolName != "get_balance" {
 		t.Errorf("reconstructed call = tool %q via %q", call.MCPToolName, call.ViaDispatch)
 	}
 	if str(stray, otlpattr.AttrMCPToolName) != "call_tool" || str(stray, otlpattr.AttrMCPViaDispatch) != "" {
@@ -92,7 +93,7 @@ func TestDispatchedCallIsStoredAsTheInnerTool(t *testing.T) {
 			search = &rows[i]
 		}
 	}
-	if len(rows) != 2 || search == nil || search.Integration != "acme-payments:search" || search.Endpoints != 1 {
+	if len(rows) != 2 || search == nil || search.Integration != "mcp-acme-test:search" || search.Endpoints != 1 {
 		t.Fatalf("spec_info rows = %+v, want the tools/list row and ONE search row with 1 tool", rows)
 	}
 }

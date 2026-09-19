@@ -14,7 +14,7 @@ import (
 func listing(t *testing.T, d *MCPDetector, at string, tools ...map[string]any) []model.Finding {
 	t.Helper()
 	b, _ := json.Marshal(map[string]any{"tools": tools})
-	fs, _, _, err := d.LoadSnapshot(otlpattr.ContractSnapshot{Integration: "acme-payments", PeerHost: "mcp.acme.test",
+	fs, _, _, err := d.LoadSnapshot(otlpattr.ContractSnapshot{Integration: "mcp-acme-test", PeerHost: "mcp.acme.test",
 		Direction: "client", ObservedAt: at, SnapshotJSON: string(b)})
 	if err != nil {
 		t.Fatal(err)
@@ -74,7 +74,7 @@ func TestSeedMovedBehindMetaToolsIsOneEvent(t *testing.T) {
 	d := NewMCPDetector()
 	listing(t, d, "2026-08-24T09:00:00Z", listedTool("get_balance", "Balance."), listedTool("create_refund", "Refund."))
 	b, _ := json.Marshal(map[string]any{"tools": metaTools})
-	fs, ok, err := d.Seed(model.SpecInfo{Integration: "acme-payments", Format: model.SpecFormatMCP, PeerHost: "mcp.acme.test",
+	fs, ok, err := d.Seed(model.SpecInfo{Integration: "mcp-acme-test", Format: model.SpecFormatMCP, PeerHost: "mcp.acme.test",
 		LoadedAt: "2026-08-25T09:00:00Z"}, b)
 	if err != nil || !ok {
 		t.Fatalf("seed: ok=%v err=%v", ok, err)
@@ -91,7 +91,7 @@ func TestSeedReportsOnlyTheRuledSet(t *testing.T) {
 	d := NewMCPDetector()
 	listing(t, d, "2026-08-24T09:00:00Z", listedTool("get_balance", "Balance."))
 	b, _ := json.Marshal(map[string]any{"tools": []map[string]any{listedTool("get_balance", "Balance."), listedTool("get_statement", "Statement.")}})
-	fs, ok, err := d.Seed(model.SpecInfo{Integration: "acme-payments", Format: model.SpecFormatMCP, PeerHost: "mcp.acme.test",
+	fs, ok, err := d.Seed(model.SpecInfo{Integration: "mcp-acme-test", Format: model.SpecFormatMCP, PeerHost: "mcp.acme.test",
 		LoadedAt: "2026-08-25T09:00:00Z"}, b)
 	if err != nil || !ok {
 		t.Fatalf("seed: ok=%v err=%v", ok, err)
@@ -145,7 +145,7 @@ func TestSearchCatalogIsAContractRow(t *testing.T) {
 		t.Fatal("first search: no contract row")
 	}
 	info := j.SearchSpec.Info
-	if info.Integration != "acme-payments:search" || info.Source != model.SpecSourceSearchResult || info.Format != model.SpecFormatMCP ||
+	if info.Integration != "mcp-acme-test:search" || info.Source != model.SpecSourceSearchResult || info.Format != model.SpecFormatMCP ||
 		info.Endpoints != 2 || info.PeerHost != "mcp.acme.test" || info.LoadedAt != s1.CapturedAt {
 		t.Errorf("row = %+v", info)
 	}

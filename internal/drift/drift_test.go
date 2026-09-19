@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 
 	"github.com/flanj-io/collector/internal/model"
@@ -59,7 +60,7 @@ func loadGoldenCall(t *testing.T) model.RedactedCall {
 			lr.Attributes().PutBool(a.Key, *a.Value.BoolValue)
 		}
 	}
-	return otlpattr.CallFromRecord(lr)
+	return otlpattr.CallFromRecord(pcommon.NewResource(), lr)
 }
 
 // TestLiveVsSpec_GoldenCall is the flagship drift test: the golden call's

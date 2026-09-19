@@ -147,8 +147,9 @@ func (e *storeExporter) writeOne(res pcommon.Resource, lr plog.LogRecord) (strin
 		// including into the partial batch remainingFrom copies, which is taken
 		// from THIS pdata, after the stamp (consumerCaps: MutatesData).
 		otlpattr.EnsureCallID(lr)
-		call := otlpattr.CallFromRecord(lr)
-		call.ServiceName = otlpattr.ServiceNameOf(res)
+		// The decoder reads service.name off the resource and derives the
+		// integration from it and the record (never the SDK's flanj.integration).
+		call := otlpattr.CallFromRecord(res, lr)
 		if !validCall(call) {
 			return "call", call.ID, nil
 		}

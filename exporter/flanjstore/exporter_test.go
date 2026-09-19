@@ -841,3 +841,54 @@ func TestSpecInfoRecords_EachKindToItsOwnTable(t *testing.T) {
 		t.Fatalf("REST contract after the forwarded snapshot = %q (format %q ok %v err %v), want it untouched", raw, format, ok, err)
 	}
 }
+
+// TestIntegration_DerivedAtTheStorePod: the store pod derives a stored call's
+// integration exactly as the drift processor does — outbound by the peer host,
+// inbound by the service the call reached (the resource's service.name, else
+// "unknown-integration") — and never keeps an SDK-sent flanj.integration. A
+// tiered front forwards the SDK's record untouched, so this is the path that
+// decides what the store holds there.
+func TestIntegration_DerivedAtTheStorePod(t *testing.T) {
+	exp, flaky := newExporter(t, fastRetry(t))
+	defer func() { _ = exp.Shutdown(context.Background()) }()
+
+	const (
+		outID      = "01920000-0000-7000-8000-0000000000d1"
+		inID       = "01920000-0000-7000-8000-0000000000d2"
+		inNoSvcID  = "01920000-0000-7000-8000-0000000000d3"
+		sdkSentKey = "sdk-sent-id"
+	)
+	ld := plog.NewLogs()
+	for _, g := range []struct {
+		service, id, direction string
+	}{
+		{"orders-svc", outID, "client"},
+		{"orders-svc", inID, "server"},
+		{"", inNoSvcID, "server"},
+	} {
+		rl := ld.ResourceLogs().AppendEmpty()
+		if g.service != "" {
+			rl.Resource().Attributes().PutStr("service.name", g.service)
+		}
+		lr := rl.ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
+		goldenCall(t, g.id).CopyTo(lr)
+		lr.Attributes().PutStr(otlpattr.AttrIntegration, sdkSentKey)
+		lr.Attributes().PutStr(otlpattr.AttrDirection, g.direction)
+	}
+	if err := exp.ConsumeLogs(context.Background(), ld); err != nil {
+		t.Fatalf("ConsumeLogs: %v", err)
+	}
+	waitFor(t, "three calls", func() bool {
+		calls, _, _ := flaky.Store.Counts()
+		return calls == 3
+	})
+	for id, want := range map[string]string{outID: "api-acme-test", inID: "orders-svc", inNoSvcID: "unknown-integration"} {
+		c, ok, err := flaky.Store.GetCall(id)
+		if err != nil || !ok {
+			t.Fatalf("GetCall(%s) = ok %v, err %v", id, ok, err)
+		}
+		if c.Integration != want {
+			t.Errorf("call %s (%s): integration = %q, want %q", id, c.Direction, c.Integration, want)
+		}
+	}
+}

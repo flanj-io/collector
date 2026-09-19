@@ -3,6 +3,7 @@ package otlpattr
 import (
 	"testing"
 
+	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 )
 
@@ -19,7 +20,7 @@ func TestMCPRevisionAttributesRoundTrip(t *testing.T) {
 	lr.Attributes().PutStr(AttrCorrTraceID, "4bf92f3577b34da6a3ce929d0e0e4736")
 	lr.Attributes().PutStr(AttrCorrSpanID, "00f067aa0ba902b7")
 
-	call := CallFromRecord(lr)
+	call := CallFromRecord(pcommon.NewResource(), lr)
 	if call.MCPResultType != "input_required" {
 		t.Fatalf("resultType: got %q", call.MCPResultType)
 	}
@@ -38,7 +39,7 @@ func TestMCPRevisionAttributesAbsentStayEmpty(t *testing.T) {
 	lr.Attributes().PutStr(AttrTransport, TransportMCP)
 	lr.Attributes().PutStr(AttrMCPToolName, "get_balance")
 
-	call := CallFromRecord(lr)
+	call := CallFromRecord(pcommon.NewResource(), lr)
 	if call.MCPResultType != "" {
 		t.Fatalf("an older server's record must leave resultType empty, got %q", call.MCPResultType)
 	}

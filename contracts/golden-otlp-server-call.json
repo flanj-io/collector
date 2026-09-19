@@ -27,7 +27,6 @@
                 { "key": "flanj.peer.host", "value": { "stringValue": "partner.acme.test" } },
                 { "key": "flanj.edge.class", "value": { "stringValue": "external" } },
                 { "key": "flanj.capture.bodies", "value": { "boolValue": true } },
-                { "key": "flanj.integration", "value": { "stringValue": "our-orders-api" } },
                 { "key": "flanj.http.method", "value": { "stringValue": "GET" } },
                 { "key": "flanj.http.route", "value": { "stringValue": "/v1/orders/{id}" } },
                 { "key": "flanj.http.target", "value": { "stringValue": "/v1/orders/ord_123" } },

@@ -80,9 +80,10 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// selfIntegration is the label for self-spec findings: always "self" since
-// 2026-09-14 (self_integration_id is ignored). Kept as a method so the two call
-// sites read the rule from one place.
+// selfIntegration is the key of the self contract's own row: always "self"
+// (self_integration_id is ignored). The findings it produces are NOT keyed by
+// it: each carries its inbound call's key, the service the call reached
+// (integration.Derive), and the flag relay sends "self" in its place.
 func (c *Config) selfIntegration() string {
 	return "self"
 }
