@@ -30,6 +30,7 @@ package drift
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -49,6 +50,12 @@ import (
 type MCPDetector struct {
 	mu    sync.Mutex
 	edges map[string]*mcpEdgeState
+	// adapters are operator-configured discovery meta-tools per peer host
+	// (meta.go); the baked adapters apply without them.
+	adapters map[string]MetaAdapter
+	// traffic is what the observed-traffic detectors learned (observed.go),
+	// keyed edge|tool.
+	traffic map[string]*observedState
 }
 
 // mcpEdgeState is one MCP edge's snapshot pair. Versioning is by content hash
@@ -57,6 +64,15 @@ type mcpEdgeState struct {
 	integration string
 	current     *contract.Contract
 	previous    *contract.Contract
+	// tools is the CURRENT snapshot's tool list, kept so a toolset-enabled
+	// listing can be compared tool by tool against it (LoadSnapshot).
+	tools []contract.ToolDef
+	// searched is the edge's PARTIAL catalog (meta.go): definitions learned from
+	// search results and from toolset-enabled listings — partial by nature,
+	// never a source of removals.
+	searched map[string]*searchedTool
+	// enabledAt is when a toolset-enable call last succeeded on this edge.
+	enabledAt string
 }
 
 // NewMCPDetector returns an empty detector. It needs no configuration: MCP
@@ -122,17 +138,30 @@ func (d *MCPDetector) LoadSnapshot(snap otlpattr.ContractSnapshot) ([]model.Find
 		d.edges[edgeRef] = st
 	}
 	st.integration = snap.Integration
+	// A listing right after a toolset was enabled (brief §3.3) is the SESSION's
+	// catalog: the toolset is in it because this client asked, and the next
+	// session will not see it. Rotating it in as the baseline would read the
+	// toolset appearing as a catalog change now and the next plain listing as
+	// its removal. So it is compared tool by tool, its new tools join the
+	// partial catalog, and the baseline stays.
+	if st.current != nil && st.current.Version.ContentHash != c.Version.ContentHash && enabledJustBefore(st.enabledAt, snap.ObservedAt) {
+		base, baseAt := st.tools, st.current.Version.ObservedAt
+		d.mu.Unlock()
+		return d.loadEnabledListing(snap, base, baseAt, tools), model.SpecInfo{}, nil, nil
+	}
 	var prev *contract.Contract
+	var prevTools []contract.ToolDef
 	switch {
 	case st.current == nil:
 		// First snapshot for this edge: it becomes the baseline; nothing to diff.
-		st.current = c
+		st.current, st.tools = c, tools
 	case st.current.Version.ContentHash == c.Version.ContentHash:
 		// Unchanged surface: keep the versions as they are (re-observations of
 		// the same list must not produce findings or rotate the baseline).
 	default:
+		prevTools = st.tools
 		st.previous = st.current
-		st.current = c
+		st.current, st.tools = c, tools
 		prev = st.previous
 	}
 	cur := st.current
@@ -153,11 +182,200 @@ func (d *MCPDetector) LoadSnapshot(snap otlpattr.ContractSnapshot) ([]model.Find
 	var findings []model.Finding
 	if prev != nil {
 		now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00")
-		for _, ch := range diff.Classify(prev, cur) {
-			findings = append(findings, definitionChangeFinding(snap.Integration, ch, prev, cur, now))
-		}
+		findings = d.classifyListing(snap.Integration, snap.PeerHost, prevTools, tools, prev, cur, now)
 	}
 	return findings, info, []byte(snap.SnapshotJSON), nil
+}
+
+// reportable is the ruled finding set of one comparison: R-B's reported cells
+// (additive changes — a new tool, a new optional param, a widened input, a
+// newly declared output schema — are real but never findings), minus wording
+// changes that differ only in whitespace, letter case or punctuation (R-B's
+// wording rule). The other half of that rule, at most one wording finding per
+// tool per day, holds by construction here: a tool's description change has
+// ONE signature, so every later edit bumps that finding rather than adding one.
+func reportable(changes []diff.Change) []diff.Change {
+	out := make([]diff.Change, 0, len(changes))
+	for _, ch := range diff.Reportable(changes) {
+		if ch.Rule == diff.RuleDescriptionChanged {
+			b, _ := ch.Before.(string)
+			a, _ := ch.After.(string)
+			if diff.TrivialWordingChange(b, a) {
+				continue
+			}
+		}
+		out = append(out, ch)
+	}
+	return out
+}
+
+// classifyListing turns one tools/list comparison into findings. When the
+// server moved its catalog behind discovery meta-tools, that is ONE
+// catalog/INFO event (R-B) and never a removal per hidden tool: the tools did
+// not go away, they stopped being listed.
+func (d *MCPDetector) classifyListing(integration, peerHost string, prevTools, curTools []contract.ToolDef, prev, cur *contract.Contract, now string) []model.Finding {
+	changes := reportable(diff.Classify(prev, cur))
+	if hidden, meta := d.movedBehindMetaTools(peerHost, prevTools, curTools); hidden > 0 {
+		// Only a tool BOTH listings carry can have changed. The hidden tools'
+		// removals are not removals, and the classifier may pair a hidden tool
+		// with a newly listed meta-tool whose input schema matches — a rename
+		// that never happened, and a wording change riding on it.
+		both := map[string]bool{}
+		for _, t := range prevTools {
+			both[t.Name] = true
+		}
+		kept := []diff.Change{catalogMovedChange(hidden, meta)}
+		for _, t := range curTools {
+			if !both[t.Name] {
+				continue
+			}
+			for _, ch := range changes {
+				if ch.OperationID == t.Name && ch.Kind != diff.KindCatalog {
+					kept = append(kept, ch)
+				}
+			}
+		}
+		changes = kept
+	}
+	findings := make([]model.Finding, 0, len(changes))
+	for _, ch := range changes {
+		findings = append(findings, definitionChangeFinding(integration, ch, prev, cur, now))
+	}
+	return findings
+}
+
+// movedBehindMetaTools reports how many tools the previous listing carried
+// that the current one hides behind discovery meta-tools, and those
+// meta-tools' names. Zero unless the current listing is ONLY meta-tools, with
+// at least one search or dispatcher among them.
+func (d *MCPDetector) movedBehindMetaTools(peerHost string, prevTools, curTools []contract.ToolDef) (int, []string) {
+	if len(curTools) == 0 || len(prevTools) == 0 {
+		return 0, nil
+	}
+	a := d.adapterFor(peerHost)
+	entry := false
+	names := make([]string, 0, len(curTools))
+	listed := map[string]bool{}
+	for _, t := range curTools {
+		if !a.isMeta(t.Name) {
+			return 0, nil
+		}
+		if _, dispatch := a.dispatch[t.Name]; a.search[t.Name] || dispatch {
+			entry = true
+		}
+		names = append(names, t.Name)
+		listed[t.Name] = true
+	}
+	if !entry {
+		return 0, nil
+	}
+	hidden := 0
+	for _, t := range prevTools {
+		if !listed[t.Name] && !a.isMeta(t.Name) {
+			hidden++
+		}
+	}
+	sort.Strings(names)
+	return hidden, names
+}
+
+// catalogMovedChange is the ONE change a catalog moving behind meta-tools is.
+func catalogMovedChange(hidden int, meta []string) diff.Change {
+	kind, sev, reported, _ := diff.Grade(diff.RuleCatalogMovedBehindMetaTools)
+	return diff.Change{
+		Kind: kind, Severity: sev, Reported: reported,
+		Rule:   diff.RuleCatalogMovedBehindMetaTools,
+		Before: fmt.Sprintf("%d tools listed directly", hidden),
+		After:  "discovery meta-tools only: " + strings.Join(meta, ", "),
+		Detail: fmt.Sprintf("The catalog moved behind discovery meta-tools (%s): %d tools are no longer listed directly. They were not removed — calls reach them through search and dispatch.", strings.Join(meta, ", "), hidden),
+	}
+}
+
+// enableWindow is how long after a toolset-enable call a listing on the same
+// edge is read as that session's expanded catalog. A client re-lists on the
+// server's tools/list_changed, which follows the enable at once.
+const enableWindow = 2 * time.Minute
+
+func enabledJustBefore(enabledAt, observedAt string) bool {
+	if enabledAt == "" {
+		return false
+	}
+	e, errE := time.Parse(time.RFC3339Nano, enabledAt)
+	o, errO := time.Parse(time.RFC3339Nano, observedAt)
+	if errE != nil || errO != nil {
+		return false
+	}
+	return !o.Before(e) && o.Sub(e) <= enableWindow
+}
+
+// loadEnabledListing handles a listing observed right after a toolset was
+// enabled: tools the baseline also lists are compared like any
+// re-observation; tools only this session sees join the partial catalog
+// (source toolset_enable), so calls to them are judged, not called stale; the
+// baseline is not replaced; nothing is ever reported removed from it.
+func (d *MCPDetector) loadEnabledListing(snap otlpattr.ContractSnapshot, base []contract.ToolDef, baseAt string, listed []contract.ToolDef) []model.Finding {
+	edgeRef := mcpEdgeRef(snap.PeerHost, snap.Direction)
+	byName := make(map[string]contract.ToolDef, len(base))
+	for _, t := range base {
+		byName[t.Name] = t
+	}
+	var before, after []contract.ToolDef
+	for _, t := range listed {
+		if b, ok := byName[t.Name]; ok {
+			before, after = append(before, b), append(after, t)
+			continue
+		}
+		c, err := contract.FromToolsList([]contract.ToolDef{t}, edgeRef, snap.ObservedAt, "toolset-enabled tools/list at "+snap.ObservedAt)
+		if err != nil {
+			continue
+		}
+		d.mu.Lock()
+		st := d.edges[edgeRef]
+		if st.searched == nil {
+			st.searched = map[string]*searchedTool{}
+		}
+		if cur := st.searched[t.Name]; (cur == nil && len(st.searched) < maxPartialTools) || (cur != nil && cur.source == partialFromEnable) {
+			st.searched[t.Name] = &searchedTool{def: t, contract: c, observedAt: snap.ObservedAt, changedAt: snap.ObservedAt, source: partialFromEnable}
+		}
+		d.mu.Unlock()
+	}
+	if len(before) == 0 {
+		return nil
+	}
+	prev, err := contract.FromToolsList(before, edgeRef, baseAt, "observed tools/list at "+baseAt)
+	if err != nil {
+		return nil
+	}
+	cur, err := contract.FromToolsList(after, edgeRef, snap.ObservedAt, "toolset-enabled tools/list at "+snap.ObservedAt)
+	if err != nil || prev.Version.ContentHash == cur.Version.ContentHash {
+		return nil
+	}
+	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00")
+	var findings []model.Finding
+	for _, ch := range reportable(diff.Classify(prev, cur)) {
+		f := definitionChangeFinding(snap.Integration, ch, prev, cur, now)
+		f.Source, f.Completeness = partialFromEnable, "partial"
+		f.Signature = f.ComputeSignature()
+		findings = append(findings, f)
+	}
+	return findings
+}
+
+// noteEnable records a successful toolset-enable call on its edge.
+func (d *MCPDetector) noteEnable(call model.RedactedCall) {
+	at := call.CapturedAt
+	if at == "" {
+		at = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	edgeRef := mcpEdgeRef(call.PeerHost, call.Direction)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	st := d.edges[edgeRef]
+	if st == nil {
+		st = &mcpEdgeState{}
+		d.edges[edgeRef] = st
+	}
+	st.enabledAt = at
 }
 
 // dropUndecodableSchemas blanks any tool schema contract.CanonicalizeSchema
@@ -262,8 +480,12 @@ func (d *MCPDetector) Seed(info model.SpecInfo, raw []byte) ([]model.Finding, bo
 	}
 	d.mu.Lock()
 	st := d.edges[edgeRef]
-	if st == nil || st.current == nil {
-		d.edges[edgeRef] = &mcpEdgeState{integration: info.Integration, current: c}
+	if st == nil {
+		st = &mcpEdgeState{}
+		d.edges[edgeRef] = st
+	}
+	if st.current == nil {
+		st.integration, st.current, st.tools = info.Integration, c, tools
 		d.mu.Unlock()
 		return nil, true, nil
 	}
@@ -281,17 +503,17 @@ func (d *MCPDetector) Seed(info model.SpecInfo, raw []byte) ([]model.Finding, bo
 		return nil, false, nil // live is newer (or the order is unknowable): live wins
 	}
 	st.integration = info.Integration
+	prevTools := st.tools
 	st.previous = st.current
-	st.current = c
+	st.current, st.tools = c, tools
 	prev, cur := st.previous, st.current
 	d.mu.Unlock()
 
+	// The same ruled set the observe path reports: before 2026-09-18 this
+	// path classified without R-B's reported filter, so a front adopting a
+	// sibling's newer listing reported ADDITIVE changes too.
 	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00")
-	var findings []model.Finding
-	for _, ch := range diff.Classify(prev, cur) {
-		findings = append(findings, definitionChangeFinding(info.Integration, ch, prev, cur, now))
-	}
-	return findings, true, nil
+	return d.classifyListing(info.Integration, info.PeerHost, prevTools, tools, prev, cur, now), true, nil
 }
 
 // observedAfter reports whether a was observed strictly later than b. Both are
@@ -342,27 +564,115 @@ func (d *MCPDetector) DetectCall(call model.RedactedCall) []model.Finding {
 // applied. The stale_client checks on the ARGUMENTS run regardless and never
 // move the verdict: they are about the consumer, not the provider's response.
 func (d *MCPDetector) JudgeCall(call model.RedactedCall) ([]model.Finding, model.Validation) {
-	cur := d.currentContract(call.PeerHost, call.Direction)
-	if cur == nil {
-		return nil, model.NotValidated(model.NotValidatedNoContract)
-	}
+	j := d.Judge(call)
+	return j.Findings, j.Validation
+}
+
+// Judgement is everything judging one tools/call yields.
+type Judgement struct {
+	Findings   []model.Finding
+	Validation model.Validation
+	// InnerTool / ViaDispatch are set when a dispatcher call was re-attributed
+	// to the inner tool it named (R-E, brief §3.2): the processor re-keys the
+	// stored call to InnerTool and keeps the dispatcher as its via_dispatch.
+	InnerTool, ViaDispatch string
+	// SearchSpec is the edge's search-learned catalog when this call (a search)
+	// changed it — a contract row to persist (brief §3.1).
+	SearchSpec *SpecDoc
+}
+
+// Judge is JudgeCall with the rest of what the processor needs.
+func (d *MCPDetector) Judge(call model.RedactedCall) Judgement {
 	toolName := call.MCPToolName
 	if toolName == "" {
 		toolName = strings.TrimPrefix(call.Route, "/")
 	}
+	var j Judgement
+
+	// Discovery meta-tools (meta.go, R-E). A search result teaches the edge
+	// tool definitions; a dispatcher call whose inner name exactly matches one
+	// a SEARCH returned is judged as THAT tool, with the dispatcher kept as
+	// evidence; a successful toolset-enable call marks the listing that follows
+	// it as the session's. None of this needs the tools/list baseline, so all
+	// of it runs before its check.
+	a := d.adapterFor(call.PeerHost)
+	if a.search[toolName] && !call.MCPIsError && !call.ResponseBodyTruncated {
+		j.Findings, j.SearchSpec = d.ingestSearchResult(call)
+	}
+	if a.enable[toolName] && !call.MCPIsError && call.MCPErrorCode == 0 {
+		d.noteEnable(call)
+	}
+	if t, ok := a.dispatch[toolName]; ok && !call.RequestBodyTruncated {
+		if inner, args, ok := dispatchInner(t, call.RequestBody); ok {
+			if op, seen, src := d.partialOpAt(call.PeerHost, call.Direction, inner, true); op != nil {
+				innerCall := call
+				innerCall.RequestBody = string(args)
+				fs, v := judgeOp(innerCall, op, inner, seen)
+				for i := range fs {
+					fs[i].ViaDispatch = toolName
+					fs[i].Source, fs[i].Completeness = src, "partial"
+					fs[i].Signature = fs[i].ComputeSignature()
+				}
+				fs = append(fs, d.observeTraffic(call, inner, string(args), toolName)...)
+				j.Findings = append(j.Findings, fs...)
+				j.Validation, j.InnerTool, j.ViaDispatch = v, inner, toolName
+				return j
+			}
+			// An inner name no search result named stays attributed to the
+			// dispatcher. Nothing is guessed from the shape of the call.
+		}
+	}
+
+	// The observed-traffic detectors need no contract at all: they compare
+	// the server with its own earlier behaviour.
+	j.Findings = append(j.Findings, d.observeTraffic(call, toolName, call.RequestBody, "")...)
+
+	cur := d.currentContract(call.PeerHost, call.Direction)
+	if cur == nil {
+		j.Validation = model.NotValidated(model.NotValidatedNoContract)
+		return j
+	}
 	if toolName == "" {
-		return nil, model.NotValidated(model.NotValidatedToolNotListed)
+		j.Validation = model.NotValidated(model.NotValidatedToolNotListed)
+		return j
 	}
 	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00")
 
 	op := cur.Op(toolName)
 	if op == nil {
+		// A tool the complete listing does not declare but the PARTIAL catalog
+		// does — a searched tool called directly, or a toolset this session
+		// enabled — is judged against that definition (brief §3.4), never
+		// called stale: the agent is using what the server told it.
+		if pop, seen, src := d.partialOpAt(call.PeerHost, call.Direction, toolName, false); pop != nil {
+			fs, v := judgeOp(call, pop, toolName, seen)
+			for i := range fs {
+				fs[i].Source, fs[i].Completeness = src, "partial"
+				fs[i].Signature = fs[i].ComputeSignature()
+			}
+			j.Findings = append(j.Findings, fs...)
+			j.Validation = v
+			return j
+		}
 		// stale_client: the agent is calling a tool the CURRENT list no longer
 		// declares (renamed/removed server-side, or the client cached an old
 		// list). Consumer-side — LOCAL ONLY, never flaggable.
-		return []model.Finding{staleToolFinding(call, toolName, now)},
-			model.NotValidated(model.NotValidatedToolNotListed)
+		j.Findings = append(j.Findings, staleToolFinding(call, toolName, now))
+		j.Validation = model.NotValidated(model.NotValidatedToolNotListed)
+		return j
 	}
+	fs, v := judgeOp(call, op, toolName, cur.Version.ObservedAt)
+	j.Findings = append(j.Findings, fs...)
+	j.Validation = v
+	return j
+}
+
+// judgeOp validates one call against one operation: the arguments against its
+// inputSchema (stale_client) and the result against its outputSchema
+// (output_mismatch). snapshotObservedAt is when that operation's definition
+// was observed — the tools/list snapshot, or the search result it came from.
+func judgeOp(call model.RedactedCall, op *contract.Operation, toolName, snapshotObservedAt string) ([]model.Finding, model.Validation) {
+	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00")
 
 	// MCP revision 2026-07-28, `resultType: "input_required"`. The server is
 	// asking the caller for more input; the exchange is MID-FLIGHT. Neither half
@@ -391,7 +701,8 @@ func (d *MCPDetector) JudgeCall(call model.RedactedCall) ([]model.Finding, model
 		for _, v := range violations {
 			findings = append(findings, mcpFinding(mcpFindingSpec{
 				kind:           model.KindStaleClient,
-				severity:       model.SeverityWarning,
+				changeKind:     string(diff.KindObservedFailure),
+				severity:       model.SeverityBreaking,
 				locationPrefix: "$.request.arguments",
 				detailNoun:     "argument",
 			}, v, call, toolName, now))
@@ -433,12 +744,13 @@ func (d *MCPDetector) JudgeCall(call model.RedactedCall) ([]model.Finding, model
 	for _, v := range violations {
 		findings = append(findings, mcpFinding(mcpFindingSpec{
 			kind:           model.KindOutputMismatch,
+			changeKind:     string(diff.KindOutput),
 			severity:       model.SeverityBreaking,
 			locationPrefix: "$.response.structuredContent",
 			detailNoun:     "result field",
-			// The optional snapshot_observed_at (CONTRACTS §4): the CURRENT
-			// snapshot this call was validated against.
-			snapshotObservedAt: cur.Version.ObservedAt,
+			// The optional snapshot_observed_at (CONTRACTS §4): when the
+			// definition this call was validated against was observed.
+			snapshotObservedAt: snapshotObservedAt,
 		}, v, call, toolName, now))
 	}
 	return findings, model.VerdictOf(findings)
@@ -501,7 +813,10 @@ func validateAgainstSchema(schema contract.Schema, body string, call model.Redac
 // mcpFindingSpec parametrizes the shared call-scoped finding builder over the
 // two call-evidence kinds (output_mismatch / stale_client args).
 type mcpFindingSpec struct {
-	kind           string
+	kind string
+	// changeKind is R-A's axis (output for output_mismatch, observed_failure
+	// for stale_client) — see model.Finding.ChangeKind.
+	changeKind     string
 	severity       string
 	locationPrefix string
 	detailNoun     string
@@ -534,6 +849,7 @@ func mcpFinding(spec mcpFindingSpec, v schemaViolation, call model.RedactedCall,
 		SchemaVersion:      model.SchemaVersion,
 		ID:                 otlpattr.NewID(),
 		Kind:               spec.kind,
+		ChangeKind:         spec.changeKind,
 		Severity:           spec.severity,
 		Integration:        call.Integration,
 		Endpoint:           toolName,
@@ -558,10 +874,15 @@ func mcpFinding(spec mcpFindingSpec, v schemaViolation, call model.RedactedCall,
 func staleToolFinding(call model.RedactedCall, toolName, now string) model.Finding {
 	sourceID := call.ID
 	f := model.Finding{
-		SchemaVersion:   model.SchemaVersion,
-		ID:              otlpattr.NewID(),
-		Kind:            model.KindStaleClient,
-		Severity:        model.SeverityWarning,
+		SchemaVersion: model.SchemaVersion,
+		ID:            otlpattr.NewID(),
+		Kind:          model.KindStaleClient,
+		ChangeKind:    string(diff.KindObservedFailure),
+		// R-B (Idan, 2026-09-17): stale_client on a real call is
+		// observed_failure / BREAKING — the call the agent just made fails.
+		// Still LOCAL ONLY: it is consumer-side, and the kind rule
+		// (model.Finding.Flaggable) is unchanged.
+		Severity:        model.SeverityBreaking,
 		Integration:     call.Integration,
 		Endpoint:        toolName,
 		FieldPath:       model.Ptr(""),
@@ -584,27 +905,45 @@ func staleToolFinding(call model.RedactedCall, toolName, now string) model.Findi
 // the CURRENT tools/list.
 const RuleToolNotListed = "tool-not-listed"
 
+// severityOf maps the classifier's ruled severity (R-B's upper-case
+// vocabulary) onto the finding wire's lower-case one. The two spellings exist
+// on purpose: R-B is written in upper case and the drift dataset publishes it
+// that way, while model.Severity* is a field the control plane, the dashboard
+// and e2e all already read, so re-casing it would be a breaking wire change
+// for no gain. This function is the only place the two meet.
+//
+// Additive (unreported) changes never reach here: LoadSnapshot builds
+// findings from diff.Reportable. An empty severity is therefore a programming
+// error, not a data case; it maps to info (never flaggable) rather than
+// silently inheriting a severity nobody ruled.
+func severityOf(s diff.Severity) string {
+	switch s {
+	case diff.SeverityBreaking:
+		return model.SeverityBreaking
+	case diff.SeverityWarning:
+		return model.SeverityWarning
+	case diff.SeverityInfo:
+		return model.SeverityInfo
+	}
+	return model.SeverityInfo
+}
+
 // definitionChangeFinding maps one classified change onto the finding shape:
 // one finding per (edge, operation.id, rule, fieldPath) — the signature
 // convention — with the classifier's before/after FRAGMENTS as evidence and
 // both snapshot versions + timestamps. No source call (the evidence is the
 // snapshot pair, exactly like version-diff).
 func definitionChangeFinding(integration string, ch diff.Change, prev, cur *contract.Contract, now string) model.Finding {
-	severity := model.SeverityBreaking
-	switch ch.Class {
-	case diff.ClassNonBreaking:
-		severity = model.SeverityInfo
-	case diff.ClassDescription:
-		// Informational: a wording change is not a severity claim. Flaggable
-		// since qfix2-2026-08-26 (the evidence is the provider's own published
-		// text) — but only ever by a human pressing the control; the detector
-		// never flags anything.
-		severity = model.SeverityWarning
-	}
+	severity := severityOf(ch.Severity)
 	f := model.Finding{
-		SchemaVersion:   model.SchemaVersion,
-		ID:              otlpattr.NewID(),
-		Kind:            model.KindDefinitionChange,
+		SchemaVersion: model.SchemaVersion,
+		ID:            otlpattr.NewID(),
+		Kind:          model.KindDefinitionChange,
+		// ChangeKind is R-A's kind (wording | input | output | catalog): WHAT
+		// moved, a finer axis than Kind, which names WHICH DETECTOR spoke
+		// (definition_change here). The two are separate fields because they
+		// answer different questions and one cannot be derived from the other.
+		ChangeKind:      string(ch.Kind),
 		Severity:        severity,
 		Integration:     integration,
 		Endpoint:        ch.OperationID,
@@ -619,8 +958,8 @@ func definitionChangeFinding(integration string, ch diff.Change, prev, cur *cont
 		// off the rule id — the optional-removal cells) goes BEFORE the
 		// timestamp tail, which two UIs regex out of the end of this string
 		// (TestDefinitionChangeDetailTail_UIRegex).
-		Detail: fmt.Sprintf("Definition change (%s): %s on `%s`%s%s — tools/list observed %s → %s.",
-			ch.Class, ch.Rule, ch.OperationID, atFieldPath(ch.FieldPath), consequence(ch.Detail),
+		Detail: fmt.Sprintf("Definition change (%s/%s): %s on `%s`%s%s — tools/list observed %s → %s.",
+			ch.Kind, ch.Severity, ch.Rule, ch.OperationID, atFieldPath(ch.FieldPath), consequence(ch.Detail),
 			prev.Version.ObservedAt, cur.Version.ObservedAt),
 		// The optional snapshot_observed_at (CONTRACTS §4): the AFTER snapshot.
 		SnapshotObservedAt: cur.Version.ObservedAt,

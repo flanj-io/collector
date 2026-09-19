@@ -432,6 +432,11 @@ func (p *driftProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.Logs
 						continue
 					}
 					findings = append(findings, fs...)
+					// A listing that follows a toolset-enable call is the
+					// session's, not the server's catalog: it changes no row.
+					if info.Integration == "" {
+						continue
+					}
 					mcpSpecs = append(mcpSpecs, specInfoRecord{info: info, raw: raw})
 					// Direct persist when a store is co-located (single-pod /
 					// store pod); the emitted spec_info record covers the
@@ -474,9 +479,27 @@ func (p *driftProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.Logs
 					if !p.mcp.HasBaseline(call.PeerHost, call.Direction) {
 						p.kickRefresh()
 					}
-					fs, verdict := p.mcp.JudgeCall(call)
-					findings = append(findings, fs...)
-					otlpattr.StampValidated(lr, verdict)
+					j := p.mcp.Judge(call)
+					findings = append(findings, j.Findings...)
+					otlpattr.StampValidated(lr, j.Validation)
+					// R-E, brief §3.2: a dispatcher call judged as the inner
+					// tool it named is STORED as that tool too, the dispatcher
+					// kept as via_dispatch — the call record and its findings
+					// name the same tool.
+					if j.InnerTool != "" {
+						otlpattr.StampDispatchTarget(lr, j.InnerTool, j.ViaDispatch)
+					}
+					// Brief §3.1: the edge's search-learned catalog is a
+					// contract row, persisted and forwarded like an observed
+					// tools/list, so a restart or a sibling front starts from it.
+					if j.SearchSpec != nil {
+						mcpSpecs = append(mcpSpecs, specInfoRecord{info: j.SearchSpec.Info, raw: j.SearchSpec.Raw})
+						if p.st != nil {
+							if err := p.st.PutSpecInfo(j.SearchSpec.Info, j.SearchSpec.Raw); err != nil && p.logger != nil {
+								p.logger.Warn("persist mcp search catalog failed", zap.Error(err))
+							}
+						}
+					}
 					continue
 				}
 				// Nothing to validate against → pass-through (capture + edge

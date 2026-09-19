@@ -14,7 +14,9 @@ import App from './App.vue';
 const DESCRIPTION = {
   id: 'fnd_desc_1',
   kind: 'definition_change',
-  severity: 'info',
+  // R-B (2026-09-17): a reworded description is wording / WARNING.
+  severity: 'warning',
+  change_kind: 'wording',
   integration: 'acme-tools',
   endpoint: 'list_transactions',
   expected: 'List transactions',
@@ -101,10 +103,13 @@ describe('a DESCRIPTION change wears one vocabulary from the tab to the row', ()
     expect(w.find('.provider .tag.desc').exists()).toBe(true);
     expect(w.find('.provider .tag.desc').text()).toBe('1 DESCRIPTION');
     expect(w.find('.provider .tag.warn').exists()).toBe(false);
-    // The row badge is the same word.
-    const badge = w.find(`#finding-${DESCRIPTION.id} .badge`);
-    expect(badge.text()).toContain('DESCRIPTION');
-    expect(badge.classes()).toContain('description');
+    // The row carries TWO labels (R-A): the severity, coloured, and the
+    // change kind, neutral — where one mixed DESCRIPTION badge used to be.
+    const badges = w.findAll(`#finding-${DESCRIPTION.id} .badge`);
+    expect(badges[0].text()).toContain('WARNING');
+    expect(badges[0].classes()).toContain('warning');
+    expect(badges[1].text()).toBe('wording');
+    expect(badges[1].classes()).toContain('kind');
   });
 
   it('a genuine NON-BREAKING schema class keeps the copper fill, and the two chips add up to the pill', async () => {
@@ -129,5 +134,61 @@ describe('a DESCRIPTION change wears one vocabulary from the tab to the row', ()
     expect(labels[1].text()).toMatch(/^after \(snapshot sha256:bbbb33334444 · \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\)$/);
     // The diff of a wording change is plain ink on both sides.
     expect(w.find(`#finding-${DESCRIPTION.id} .drift-row`).classes()).toContain('plain');
+  });
+});
+
+// R-C (Idan, 2026-09-17): INFO stays local. An info finding is SHOWN on its
+// card, with its two labels, and carries NO Flag control — the relay and the
+// control plane refuse it server-side as well.
+describe('an INFO finding stays local', () => {
+  const RENAME = {
+    ...DESCRIPTION,
+    id: 'fnd_rename_1',
+    severity: 'info',
+    change_kind: 'input',
+    rule: 'input-property-renamed',
+    field_path: 'input.branchId',
+  };
+  it('renders with its labels and a stays-local hint, and no Flag this', async () => {
+    const w = await mountApp([RENAME]);
+    const row = w.find(`#finding-${RENAME.id}`);
+    expect(row.exists()).toBe(true);
+    const badges = row.findAll('.badge');
+    expect(badges[0].text()).toContain('INFO');
+    expect(badges[1].text()).toBe('input');
+    expect(row.find('button.flag').exists()).toBe(false);
+    expect(row.text()).not.toContain('Flag this');
+    expect(row.find('.info-local').text()).toContain('never flagged to another organisation');
+  });
+  it('a WARNING finding beside it keeps its Flag control', async () => {
+    const w = await mountApp([DESCRIPTION]);
+    expect(w.find(`#finding-${DESCRIPTION.id} button.flag`).exists()).toBe(true);
+  });
+});
+
+// R-B's collector-only rows (2026-09-17) are provider-side evidence and sit on
+// the same cards as output_mismatch and definition_change.
+describe('value_change and input_rejection render on the contract card', () => {
+  it('a value_change shows WARNING + value and can be flagged', async () => {
+    const VALUE = {
+      ...DESCRIPTION,
+      id: 'fnd_value_1',
+      kind: 'value_change',
+      severity: 'warning',
+      change_kind: 'value',
+      rule: 'value-format-changed',
+      field_path: 'created',
+      expected: 'timestamp:iso-8601',
+      actual: 'timestamp:epoch-seconds',
+      source_call_id: 'call_1',
+    };
+    const w = await mountApp([VALUE]);
+    const row = w.find(`#finding-${VALUE.id}`);
+    expect(row.exists()).toBe(true);
+    const badges = row.findAll('.badge');
+    expect(badges[0].text()).toContain('WARNING');
+    expect(badges[1].text()).toBe('value');
+    expect(row.text()).toContain('held before (value format)');
+    expect(row.find('button.flag').exists()).toBe(true);
   });
 });

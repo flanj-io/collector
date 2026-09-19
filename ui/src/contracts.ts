@@ -29,7 +29,8 @@ export interface ContractSpec {
    *  field. The only fact that separates two servers publishing the same name.
    *  `unknown` (Python SDK): an MCP server whose transport the SDK never saw. */
   edge_class?: string;
-  /** How the contract got here: 'upload' | 'fetched' | 'config' | 'observed'. */
+  /** How the contract got here: 'upload' | 'fetched' | 'config' | 'observed' |
+   *  'search_result' (an MCP catalog learned from discovery search results). */
   source?: string;
   /** Where a 'fetched' contract came from. Empty for every other source.
    *  Evidence, not a handle — nothing re-reads it, and nothing re-fetches. */
@@ -346,6 +347,7 @@ export function serversLine(servers: readonly string[], host: string): string {
  *  have shown it — said "observed" regardless (2026-09-07). */
 export function provenanceWord(spec: ContractSpec): string {
   if (spec.source === 'observed') return 'observed';
+  if (spec.source === 'search_result') return 'searched';
   if (spec.source === 'config') return 'loaded';
   if (spec.source === 'upload') return 'uploaded';
   // 'fetched' is the word the finding and the thread repeat verbatim, so it is
@@ -521,7 +523,9 @@ export function rollCall(
   // whole roll call exists to prevent. The `N of M providers` clause keeps its
   // edge-based count, which is right: a REST provider with no traffic is
   // genuinely not on the roll call yet.
-  const mcp = specs.filter((s) => s.format === 'mcp' && s.role !== 'self').length;
+  // A search-learned catalog is a second row for a server already counted by
+  // its tools/list row — one server, one count.
+  const mcp = specs.filter((s) => s.format === 'mcp' && s.role !== 'self' && s.source !== 'search_result').length;
 
   if (checked === 0 && mcp === 0) return ROLL_CALL_ZERO;
 

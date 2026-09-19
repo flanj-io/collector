@@ -36,6 +36,10 @@ func (e *uiExtension) routes() http.Handler {
 	// registrable domain a CLAIMED directory entry? Read-only, local table only.
 	mux.HandleFunc("/api/directory/hint", e.handleDirectoryHint)
 	mux.HandleFunc("/api/calls", e.handleCalls)
+	// One stored call by id — what a finding's source_call_id names. The list
+	// above is the newest 200, and a deduplicated finding keeps its FIRST
+	// call as evidence, so on a busy collector that call is often not in it.
+	mux.HandleFunc("/api/calls/{id}", e.handleCall)
 	mux.HandleFunc("/api/findings", e.handleFindings)
 	// Local acknowledge (never a relay route — guarded WITHOUT the CP check).
 	mux.HandleFunc("/api/findings/{id}/ack", e.handleFindingAck)
@@ -444,6 +448,24 @@ func (e *uiExtension) handleCalls(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"calls": calls})
 }
 
+// handleCall serves one stored call by id; 404 when the store holds none.
+func (e *uiExtension) handleCall(w http.ResponseWriter, r *http.Request) {
+	st := e.storeOrError(w)
+	if st == nil {
+		return
+	}
+	call, ok, err := st.GetCall(r.PathValue("id"))
+	if err != nil {
+		e.storeErr(w, "get call", err)
+		return
+	}
+	if !ok {
+		writeErr(w, http.StatusNotFound, "call_not_found", msgCallNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, call)
+}
+
 // findingView decorates a stored finding for the UI with its LOCAL ack state
 // and the host of its source call — read-API joins only. model.Finding itself
 // gains neither (it mirrors the frozen schema and is what promotes to the CP;
@@ -639,9 +661,15 @@ func (e *uiExtension) handleFlag(w http.ResponseWriter, r *http.Request) {
 	}
 	// Evidence rule (v0.5 §6, amended qfix2-2026-08-26), enforced SERVER-SIDE —
 	// not just by UI absence: stale_client is consumer-side and never leaves
-	// this collector as a flag. It is the only local-only kind.
+	// this collector as a flag. It is the only local-only kind. R-C
+	// (2026-09-17) adds a second refusal on another axis: an info finding, of
+	// any kind, stays local too. Same code, each with a sentence true of it.
 	if !finding.Flaggable() {
-		writeErr(w, http.StatusForbidden, "not_flaggable", msgNotFlaggable)
+		msg := msgNotFlaggable
+		if finding.Kind != model.KindStaleClient {
+			msg = msgInfoNotFlaggable
+		}
+		writeErr(w, http.StatusForbidden, "not_flaggable", msg)
 		return
 	}
 	// CALL-LESS flagging. qfix2-2026-08-26 (ux-design-v2 §2.7.5) lifted

@@ -60,12 +60,27 @@ export type FindingKind =
   // v0.5 MCP finding kinds (spec §1/§4.C).
   | 'output_mismatch'
   | 'definition_change'
-  | 'stale_client';
+  | 'stale_client'
+  // 2026-09-17 (R-B's collector-only rows): a value in observed responses
+  // changed meaning (change_kind `value`), and a call with arguments that
+  // previously succeeded was rejected with -32602 (change_kind
+  // `observed_failure`).
+  | 'value_change'
+  | 'input_rejection';
+
+/** R-A: WHAT moved. A finer axis than `kind`, independent of `severity`. */
+export type ChangeKind = 'wording' | 'input' | 'output' | 'catalog' | 'value' | 'observed_failure';
 
 export interface Finding {
   id: string;
   kind: FindingKind;
+  /** R-A (2026-09-17), additive + optional: absent on HTTP kinds and on
+   *  findings from older collectors. */
+  change_kind?: ChangeKind;
   severity: string;
+  /** R-E: the dispatcher a call went through when it was re-attributed to
+   *  the inner tool — the original request, kept as evidence. */
+  via_dispatch?: string;
   integration: string;
   endpoint: string;
   field_path?: string | null;
