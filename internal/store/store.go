@@ -257,6 +257,17 @@ func (b *base) PutSetting(key, value string) error {
 // retryable.
 var ErrRejected = errors.New("store: record rejected")
 
+// ErrSpecInfoHeld is PutSpecInfo's answer when an MCP catalogue would overwrite
+// a contract row of another format under the same id. MCP ids and uploaded
+// contracts' ids are both derived from the host, so an MCP server at
+// api.acme.com/mcp and a REST contract bound to api.acme.com share one. The
+// row is left exactly as it was: a server's self-delivered tools/list never
+// displaces a contract someone bound (upload, fetch or config). The server's
+// drift is still detected, since that state is per host, not per row. It is a
+// normal outcome, not a failure, so it is NOT an ErrRejected: callers log it
+// once and carry on, and a store pod never drops the rest of a batch for it.
+var ErrSpecInfoHeld = errors.New("store: contract row held by a contract of another format")
+
 // classify wraps a deterministic driver rejection in ErrRejected and returns
 // every other error unchanged. The two drivers spell "the record, not the
 // store" differently:
@@ -1000,18 +1011,25 @@ func (b *base) GetSpecPrevDoc(integration string) (raw []byte, ok bool, err erro
 // caller's transaction.
 func readSpecForReplace(q interface {
 	QueryRow(string, ...any) *sql.Row
-}, rebind func(string) string, integration string) (UploadedSpecPrevious, error) {
+}, rebind func(string) string, integration, format string) (UploadedSpecPrevious, error) {
 	var (
-		doc, version, loadedAt sql.NullString
-		prev                   UploadedSpecPrevious
+		doc, version, loadedAt, prevFormat sql.NullString
+		prev                               UploadedSpecPrevious
 	)
-	err := q.QueryRow(rebind(`SELECT doc, COALESCE(version,''), loaded_at FROM spec_infos WHERE integration=?`),
-		integration).Scan(&doc, &version, &loadedAt)
+	err := q.QueryRow(rebind(`SELECT doc, COALESCE(version,''), loaded_at, format FROM spec_infos WHERE integration=?`),
+		integration).Scan(&doc, &version, &loadedAt, &prevFormat)
 	if err == sql.ErrNoRows {
 		return prev, nil
 	}
 	if err != nil {
 		return prev, err
+	}
+	// Only a document of the same format is this contract's previous version.
+	// An upload that takes the id over from an observed MCP catalogue (same
+	// host, see replaceableByOperator) is a FIRST bind: keeping the tool list
+	// as prev_doc would diff a tools/list against an OpenAPI document.
+	if prevFormat.String != format {
+		return prev, nil
 	}
 	prev.Existed = true
 	prev.Raw = []byte(doc.String)

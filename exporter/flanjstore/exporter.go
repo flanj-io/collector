@@ -3,6 +3,7 @@ package flanjstore
 import (
 	"context"
 	"errors"
+	"sync"
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/consumer"
@@ -26,6 +27,10 @@ func consumerCaps() consumer.Capabilities {
 type storeExporter struct {
 	logger *zap.Logger
 	st     store.Store
+
+	// heldWarned: ids whose MCP catalogue the store held (ErrSpecInfoHeld),
+	// each warned about once.
+	heldWarned sync.Map
 }
 
 // start locates the single-owner store extension via host.GetExtensions().
@@ -128,7 +133,19 @@ func (e *storeExporter) writeOne(lr plog.LogRecord) (string, string, error) {
 			e.logger.Warn("drop malformed spec_info record", zap.Error(err))
 			return "spec_info", "", nil
 		}
-		return "spec_info", info.Integration, e.st.PutSpecInfo(info, raw)
+		err = e.st.PutSpecInfo(info, raw)
+		if errors.Is(err, store.ErrSpecInfoHeld) {
+			// A front's MCP catalogue met a contract bound to the same host
+			// under the same id: the store kept the contract. It's an expected
+			// outcome, so the record is done. It isn't a rejection that would
+			// drop the rest of the batch.
+			if _, seen := e.heldWarned.LoadOrStore(info.Integration, true); !seen {
+				e.logger.Warn("mcp catalogue not stored: a contract bound to the same host holds this name",
+					zap.String("integration", info.Integration), zap.String("peer", info.PeerHost))
+			}
+			return "spec_info", info.Integration, nil
+		}
+		return "spec_info", info.Integration, err
 	default:
 		// Stamp the id onto the RECORD before decoding it. The SDK never emits
 		// flanj.call.id and only the drift processor stamps it, so a call

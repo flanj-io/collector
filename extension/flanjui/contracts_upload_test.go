@@ -1026,3 +1026,50 @@ func TestContractTooLargeMirrorInSync(t *testing.T) {
 			"maxDocBytes here is %d bytes and the guard must match it exactly", maxDocBytes)
 	}
 }
+
+// TestUploadTakesOverAnObservedMCPCatalogueOnTheSameHost: an MCP endpoint at
+// api.acme.test/mcp beside the REST API at api.acme.test puts its tools/list on
+// the id the REST contract needs. An observed row can't be removed (the next
+// tools/list would bring it back), so a 409 here left no way to bind the REST
+// contract at all.
+func TestUploadTakesOverAnObservedMCPCatalogueOnTheSameHost(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	if err := r.st.PutSpecInfo(model.SpecInfo{
+		Integration: "api-acme-test", Role: model.SpecRoleProvider, Format: model.SpecFormatMCP,
+		PeerHost: "api.acme.test", Source: model.SpecSourceObserved, LoadedAt: "t0",
+	}, []byte("tools-doc")); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, out, _ := r.do(t, http.MethodPost, "/api/contracts/upload", map[string]string{
+		"peer_host": "api.acme.test", "document": specV1Doc(t),
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d (%v), want 200", resp.StatusCode, out["error"])
+	}
+	infos, _ := r.st.ListSpecInfos()
+	if len(infos) != 1 || infos[0].Format != model.SpecFormatOpenAPI || infos[0].PrevVersion != "" {
+		t.Errorf("row = %+v, want the uploaded contract as a first bind", infos)
+	}
+}
+
+// TestUploadStillRefusesAnMCPCatalogueOnAnotherHost: the takeover is for the
+// SAME host only. A different host that happens to slug the same is still the
+// wrong-contract case the 409 exists for.
+func TestUploadStillRefusesAnMCPCatalogueOnAnotherHost(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	if err := r.st.PutSpecInfo(model.SpecInfo{
+		Integration: "api-acme-test", Role: model.SpecRoleProvider, Format: model.SpecFormatMCP,
+		PeerHost: "api-acme.test", Source: model.SpecSourceObserved, LoadedAt: "t0",
+	}, []byte("tools-doc")); err != nil {
+		t.Fatal(err)
+	}
+	resp, out, _ := r.do(t, http.MethodPost, "/api/contracts/upload", map[string]string{
+		"peer_host": "api.acme.test", "document": specV1Doc(t),
+	})
+	if resp.StatusCode != http.StatusConflict || out["error"] != "integration_conflict" {
+		t.Fatalf("status = %d error = %v, want 409 integration_conflict", resp.StatusCode, out["error"])
+	}
+}

@@ -302,7 +302,7 @@ func (e *uiExtension) bindStagedFetch(w http.ResponseWriter, st store.Store, tok
 	// a differently-spelled host that slugs the same, is the wrong-contract
 	// failure this whole phase exists to prevent.
 	if existing, found, err := specInfoFor(st, integration); err == nil && found {
-		if !isOperatorBound(existing.Source) || existing.PeerHost != staged.peerHost {
+		if !replaceableByOperator(existing, staged.peerHost) {
 			writeErr(w, http.StatusConflict, "integration_conflict",
 				fmt.Sprintf("A contract already uses the name %q on this collector. Remove it before binding a new one to %s.",
 					integration, staged.peerHost))
@@ -347,6 +347,25 @@ func (e *uiExtension) bindStagedFetch(w http.ResponseWriter, st store.Store, tok
 // replacing one through this path would overwrite something no operator chose.
 func isOperatorBound(source string) bool {
 	return source == model.SpecSourceUpload || source == model.SpecSourceFetched
+}
+
+// replaceableByOperator reports whether a contract someone binds to host may
+// replace the row that already holds its host-derived id: one they bound
+// before (upload or fetch) for the same host, or a server's OBSERVED MCP
+// catalogue for that host. The catalogue shares the id only because both are
+// derived from the host (an MCP endpoint at api.acme.com/mcp beside the REST
+// API at api.acme.com). Nobody chose it, and refusing here left no way
+// forward, because an observed row is not removable. After the bind, the
+// store holds the name against that server's later snapshots
+// (store.ErrSpecInfoHeld), while its drift is still detected per host.
+func replaceableByOperator(existing model.SpecInfo, host string) bool {
+	if existing.PeerHost != host {
+		return false
+	}
+	if isOperatorBound(existing.Source) {
+		return true
+	}
+	return existing.Source == model.SpecSourceObserved && existing.Format == model.SpecFormatMCP
 }
 
 /* ── The fetch itself ──────────────────────────────────────────────────── */

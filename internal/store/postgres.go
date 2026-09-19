@@ -546,21 +546,27 @@ func (p *postgresStore) PutSpecInfo(info model.SpecInfo, rawSpec []byte) (err er
 	}
 	// `source` is written, and rewritten on conflict, so the row's provenance
 	// always describes the document in it — see the sqlite twin.
-	_, err = p.db.Exec(p.rebind(
+	res, err := p.db.Exec(p.rebind(
 		`INSERT INTO spec_infos (integration, role, peer_host, edge_class, format, title, version, docs_url, endpoints, loaded_at, doc, source, source_url, server_command)
 		   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		 ON CONFLICT (integration) DO UPDATE SET
 		   role=excluded.role, peer_host=excluded.peer_host, edge_class=excluded.edge_class, format=excluded.format, title=excluded.title,
 		   version=excluded.version, docs_url=excluded.docs_url, endpoints=excluded.endpoints,
 		   loaded_at=CASE WHEN excluded.format=? AND spec_infos.doc=excluded.doc THEN spec_infos.loaded_at ELSE excluded.loaded_at END,
-		   doc=excluded.doc, source=excluded.source, source_url=excluded.source_url, server_command=excluded.server_command`),
+		   doc=excluded.doc, source=excluded.source, source_url=excluded.source_url, server_command=excluded.server_command
+		 WHERE spec_infos.format = excluded.format OR excluded.format <> ?`),
 		info.Integration, role, nullStr(info.PeerHost), nullStr(info.EdgeClass), info.Format, nullStr(info.Title),
 		nullStr(info.Version), nullStr(info.DocsURL), info.Endpoints, info.LoadedAt, string(rawSpec), specSourceOf(info),
 		nullStr(info.SourceURL), nullStr(info.ServerCommand),
-		model.SpecFormatMCP,
+		model.SpecFormatMCP, model.SpecFormatMCP,
 	)
 	if err != nil {
 		return fmt.Errorf("put spec info: %w", err)
+	}
+	// The WHERE above holds a row of another format against an MCP write:
+	// nothing changed, and the caller is told why (ErrSpecInfoHeld).
+	if n, rerr := res.RowsAffected(); rerr == nil && n == 0 {
+		return ErrSpecInfoHeld
 	}
 	return nil
 }
@@ -580,7 +586,7 @@ func (p *postgresStore) PutUploadedSpec(info model.SpecInfo, rawSpec []byte) (Up
 	if _, err := tx.Exec(p.rebind(`SELECT pg_advisory_xact_lock(?, hashtext(?))`), pgLockNSSpecUpload, info.Integration); err != nil {
 		return prev, fmt.Errorf("put uploaded spec: lock: %w", err)
 	}
-	prev, err = readSpecForReplace(tx, p.rebind, info.Integration)
+	prev, err = readSpecForReplace(tx, p.rebind, info.Integration, info.Format)
 	if err != nil {
 		return UploadedSpecPrevious{}, fmt.Errorf("put uploaded spec: read previous: %w", err)
 	}

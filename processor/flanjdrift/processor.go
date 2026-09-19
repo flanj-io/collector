@@ -2,6 +2,7 @@ package flanjdrift
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -20,6 +21,10 @@ import (
 type driftProcessor struct {
 	cfg    *Config
 	logger *zap.Logger
+
+	// heldWarned: ids whose MCP catalogue the store held against a bound
+	// contract (store.ErrSpecInfoHeld), each warned about once.
+	heldWarned sync.Map
 
 	// The org's own contract (we-as-provider), validated against INBOUND calls.
 	selfDoc     *openapi3.T
@@ -147,11 +152,29 @@ func (p *driftProcessor) start(_ context.Context, host component.Host) error {
 		return nil
 	}
 	for _, si := range p.specInfos {
-		if err := p.st.PutSpecInfo(si.info, si.raw); err != nil && p.logger != nil {
-			p.logger.Warn("record spec info failed", zap.String("role", si.info.Role), zap.Error(err))
-		}
+		p.persistSpecInfo(si.info, si.raw, "record spec info failed")
 	}
 	return nil
+}
+
+// persistSpecInfo writes one contract row. A row held by a contract of another
+// format (store.ErrSpecInfoHeld: an MCP catalogue meeting an uploaded REST
+// contract under the same host-derived id) is an expected outcome, said once
+// per id. It is not a failure logged on every snapshot.
+func (p *driftProcessor) persistSpecInfo(info model.SpecInfo, raw []byte, failMsg string) {
+	err := p.st.PutSpecInfo(info, raw)
+	if err == nil || p.logger == nil {
+		return
+	}
+	if errors.Is(err, store.ErrSpecInfoHeld) {
+		if _, seen := p.heldWarned.LoadOrStore(info.Integration, true); !seen {
+			p.logger.Warn("mcp catalogue not stored: a contract bound to the same host holds this name; "+
+				"the server's drift is still detected, it just has no contract card",
+				zap.String("integration", info.Integration), zap.String("peer", info.PeerHost))
+		}
+		return
+	}
+	p.logger.Warn(failMsg, zap.String("role", info.Role), zap.Error(err))
 }
 
 // shutdown stops the refresh loop and waits for it, so a restarting collector
@@ -442,9 +465,7 @@ func (p *driftProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.Logs
 					// store pod); the emitted spec_info record covers the
 					// tiered hop — the double write is a harmless upsert.
 					if p.st != nil {
-						if err := p.st.PutSpecInfo(info, raw); err != nil && p.logger != nil {
-							p.logger.Warn("persist mcp contract snapshot failed", zap.Error(err))
-						}
+						p.persistSpecInfo(info, raw, "persist mcp contract snapshot failed")
 					}
 					continue
 				}
@@ -495,9 +516,7 @@ func (p *driftProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.Logs
 					if j.SearchSpec != nil {
 						mcpSpecs = append(mcpSpecs, specInfoRecord{info: j.SearchSpec.Info, raw: j.SearchSpec.Raw})
 						if p.st != nil {
-							if err := p.st.PutSpecInfo(j.SearchSpec.Info, j.SearchSpec.Raw); err != nil && p.logger != nil {
-								p.logger.Warn("persist mcp search catalog failed", zap.Error(err))
-							}
+							p.persistSpecInfo(j.SearchSpec.Info, j.SearchSpec.Raw, "persist mcp search catalog failed")
 						}
 					}
 					continue

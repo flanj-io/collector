@@ -184,7 +184,7 @@ func (e *uiExtension) handleContractUpload(w http.ResponseWriter, r *http.Reques
 	// wearing that id. Silently replacing the org's own contract with a
 	// vendor's would be a bad way to find out.
 	if existing, found, err := specInfoFor(st, integration); err == nil && found {
-		if !isOperatorBound(existing.Source) || existing.PeerHost != req.PeerHost {
+		if !replaceableByOperator(existing, req.PeerHost) {
 			writeErr(w, http.StatusConflict, "integration_conflict",
 				fmt.Sprintf("A contract already uses the name %q on this collector. Remove it before binding a new one to %s.",
 					integration, req.PeerHost))
