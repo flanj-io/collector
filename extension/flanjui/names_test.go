@@ -150,7 +150,7 @@ func TestEdgeNamePrecedence(t *testing.T) {
 	if row := edgeRowFor(t, r, "api.stripe.com"); row["display_name"] != "Our PSP" || row["name_source"] != "user" {
 		t.Errorf("user tier = %v, want the rename over the contract's title", row)
 	}
-	// Inbound rows never resolve a name (outbound only — ruling 6).
+	// Inbound rows never resolve a name (outbound only).
 	r.st.mu.Lock()
 	r.st.edges = append(r.st.edges, model.Edge{PeerHost: "api.stripe.com", Direction: "server", Role: "provider", Class: "external"})
 	r.st.mu.Unlock()

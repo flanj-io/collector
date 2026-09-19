@@ -43,7 +43,7 @@ Built to static assets; no runtime server of its own.
   **Copy link + message** (fixed template, request ID first) and **Open thread** (owner handoff in
   a new tab). Not Connected yet? The sheet shows the Connect prompt inline and unlocks the moment
   the contact confirms. A flagged finding keeps a chip: `In thread · <turn> · opened ×N`.
-  MCP findings swap in the deck's MCP evidence / disclosure / prefill copy; the IDs line uses the
+  MCP findings swap in the MCP evidence / disclosure / prefill copy; the IDs line uses the
   JSON-RPC wording only while the client-generated id is the **sole** correlation key (mixed keys
   → the standard count line + an honest client-id note). Flaggable definition changes keep a
   disabled Flag control (call-less — a known v0.5 limit); local notices never show one.
@@ -68,36 +68,36 @@ write carries `X-Flanj-UI: 1` + JSON (`src/api.ts`). Findings link to their sour
   `src/ConnectPanel.vue` — Connect. `src/ThreadsTab.vue` — the Threads list.
 - `src/threads.ts` — pure helpers (turn/link labels, chip, paste text, prefilled message) with
   `src/threads.test.ts` (vitest: `npm test`). `src/api.ts`, `src/clipboard.ts`, `src/types.ts`.
-- `src/contracts.ts` — the contract-coverage copy deck and pure helpers (roll call, provenance +
+- `src/contracts.ts` — the contract-coverage copy and pure helpers (roll call, provenance +
   recency, binding checks, finding→card attribution, the document-cap row state) with
   `src/contracts.test.ts` + `src/contract-over-cap.test.ts`.
-- `src/mcp.ts` — the v0.5 MCP pure helpers (verbatim deck copy: badges, headlines, local notices,
+- `src/mcp.ts` — the v0.5 MCP pure helpers (fixed copy: badges, headlines, local notices,
   tool rows, traffic facets, flag-sheet lines; `snapshotTimes` parses the definition_change detail
   tail — its regex is pinned by a collector Go test, `internal/drift`) with `src/mcp.test.ts`.
-- `src/tokens.css` — the Flanj token layer, **vendored** from `docs/design/tokens.css` (Blueprint,
+- `src/tokens.css` — the Flanj token layer, **vendored** (Blueprint,
   locked 2026-09-09) below a do-not-edit preamble; `src/theme.ts` — the Light / Dark preference
   (storage key `flanj.theme`, stamped as `data-flanj-theme` on `<html>`); `public/favicon.svg` —
-  `docs/design/favicon.svg` verbatim, copied into `dist/` by Vite.
+  the Flanj favicon verbatim, copied into `dist/` by Vite.
 
 ## Design tokens and theme
 
-The surface is the **Blueprint collector kit** (`docs/design/kits/collector` in the vault: a 2px
+The surface follows the **Blueprint collector design** (a 2px
 `--rule` frame around a 24px grid-paper ground; sheet header with the inline colour mark, the text
 wordmark, `localhost:<port> · <version>` in mono, the org pill and a green-bolt Connected pill;
 mono uppercase tabs with a 2px ink underline over a copper hairline and square count chips;
 headline cards with a 6px left rule in their tone and a leading hex bolt, no "You:" prefix — the
 subline carries scope; findings as framed cards with `expected ≠ actual ≠ location` in mono cells;
 2px-outline buttons that lift under the hard offset shadow, primary = ink fill; a Light / Dark
-segmented control). The kit's classes are bound straight to the canonical tokens — its alias layer
+segmented control). The design's classes are bound straight to the canonical tokens — its alias layer
 (`--bg`, `--panel`, `--cu` …) and font-name literals are not vendored. The hex bolt ships once, as
 the inline `<symbol id="hxbolt">` at the top of `App.vue`'s template; every bolt is
 `<svg class="hx [sm] tone-ok|tone-breaking|tone-warning|tone-accent|tone-info"><use href="#hxbolt"/>`
 and no bolt carries an inline style (a bolt is a mark, so it takes the bare family colour). The
-states the kit does not draw — the uploader, the question sheet, the validated stamp, the MCP
+states the design does not draw — the uploader, the question sheet, the validated stamp, the MCP
 headline and tool rows, the edge-registration and connect-disclosure panels, the theme-flip
 notice, the load-error and relay banners, the flag sheet's three branches, the Threads rows — are
-extrapolated in the same idiom. The MCP headline keeps the deck's whole `Server: … You: …` sentence
-(`src/mcp.ts`): e2e pins its lowercase clause, so it is the one line that keeps its pivot. A
+extrapolated in the same idiom. The MCP headline keeps the whole `Server: … You: …` sentence
+(`src/mcp.ts`): the integration tests pin its lowercase clause, so it is the one line that keeps its pivot. A
 description-only definition change names itself in that clause but never takes the drift tone —
 the line rides the verdict its validated calls earned (`ok`, or `neutral` with none) — and the
 DESCRIPTION class wears one vocabulary end to end: the row's steel badge, a steel `N DESCRIPTION`
@@ -113,7 +113,7 @@ the full RFC 3339 instant on the captured cell's title. A traffic row is a contr
 `tabindex="0"`, `aria-expanded`, Enter / Space toggle the detail, the token focus ring). At phone
 width the Traffic table renders each call as a stacked card (route whole on its own line; direction,
 host, time and status on the second; correlation and contract on the third), the toolbar stops being
-sticky, and the Threads rows label every fact inline. The Edges tables carry the kit's evidence —
+sticky, and the Threads rows label every fact inline. The Edges tables carry the design's evidence —
 calls in the window (with the observed rate as a muted suffix only when non-zero), drifted calls in
 red mono when any, last seen — stacked as two group rules rather than two half-width boxes.
 
@@ -123,9 +123,9 @@ below 14px never uses `--ink-faint` (the muted text role is `--ink-soft`). Motio
 hover and colour fades; `prefers-reduced-motion` keeps only the fades. The rules
 `src/tokens.test.ts` enforces:
 
-- the body below the preamble is the vault file byte for byte (a pinned sha256, plus a direct
-  comparison when the docs vault is checked out above this repo) — change the vault copy, then
-  re-vendor and update the digest;
+- the body below the preamble is the canonical file byte for byte (a pinned sha256, plus a direct
+  comparison only when `FLANJ_TOKENS_SOURCE` points at a copy of the canonical file) — change the
+  canonical copy, then re-vendor and update the digest;
 - no SFC or ui CSS declares a custom property whose name the canonical file also defines, and no
   hex or rgb literal lives in an SFC;
 - the theme attribute is `data-flanj-theme` (never `data-theme`): `index.html` stamps
@@ -145,7 +145,7 @@ hover and colour fades; `prefers-reduced-motion` keeps only the fades. The rules
 
 No webfont is loaded — the page makes no outbound request — so the Space Grotesk stack renders as
 `system-ui` and the mono stack as the platform monospace face. The mark in the topbar is
-`docs/design/flanj-mark.svg` — the colour mark — inlined: the pipes and the outline bind
+`docs/brand/flanj-mark.svg` — the colour mark — inlined: the pipes and the outline bind
 `--logo-steel` / `--logo-outline` by class so they switch with the scheme, and the F/J threads
 reference one `#brandcu` copper gradient in the shared defs holder beside `#hxbolt`, its three
 stops the asset's own hex as `stop-color` attributes (no token for the copper yet). The wordmark

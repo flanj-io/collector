@@ -2,7 +2,7 @@ package flanjui
 
 import "github.com/flanj-io/collector/internal/store"
 
-// Prior-data probe (qfix2-2026-08-26, ux-design-v2 §3.4).
+// Prior-data probe (qfix2-2026-08-26).
 //
 // The collector's default theme flips from "follow the OS" to LIGHT. Anyone who
 // had explicitly chosen Dark keeps Dark; everyone who was on the (now deleted)

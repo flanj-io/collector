@@ -147,12 +147,12 @@ type Provider interface {
 }
 
 // The contract set is CACHED in memory by the drift processor and refreshed on
-// a ticker — the 2026-08-31 owner ruling: no store read per call. That leaves a
+// a ticker — no store read per call (2026-08-31). That leaves a
 // window between the moment a contract is uploaded, replaced or removed and the
 // moment detection acts on it, and the UI's copy ("Validating from now on")
 // promises there is none. These two halves close it in-process: the component
 // that CHANGES the contract set announces it, and the component that CACHES it
-// refreshes early. A notification, never a read — the ruling stands.
+// refreshes early. A notification, never a read — the no-store-read rule stands.
 //
 // In-process only, by construction. A tiered front runs the drift processor in
 // a DIFFERENT process from the store pod that owns the uploads, and each pod of
@@ -735,7 +735,7 @@ func (b *base) CallPeerHosts(ids []string) (map[string]string, error) {
 // findingEvidenceVersion is the content hash a finding's EVIDENCE is bound to:
 // the AFTER snapshot hash of a definition_change — the same hash the UI renders
 // as "AFTER (snapshot sha256:…)" and that a local acknowledgement keys on
-// (ux-design-v2 §2.8). Empty for every other kind, whose evidence is a call and
+// (evidence-version key). Empty for every other kind, whose evidence is a call and
 // whose recurrence is counted rather than re-evidenced.
 func findingEvidenceVersion(f model.Finding) string {
 	if f.Kind != model.KindDefinitionChange || f.SpecVersionTo == nil {
@@ -763,13 +763,13 @@ func evidenceOrder(f model.Finding) string {
 // has two consequences, both wrong:
 //
 //   - spec_version_to would never advance, so an acknowledgement keyed on the
-//     evidence version (ux-design-v2 §2.8) could never stop matching: the
+//     evidence version could never stop matching: the
 //     second change would render silently PRE-acknowledged, which is exactly
 //     the hole the evidence-version key exists to close.
 //   - a flag on the row would disclose the FIRST change's two definition
 //     fragments, snapshot hashes and observed-at times to the provider as
 //     "your own published text" — the wrong evidence, on the one claim the
-//     amended evidence rule (§2.7.3) rests on.
+//     amended evidence rule rests on.
 //
 // So when the after-hash moves FORWARD, the doc is rewritten with the new
 // evidence and only the identity the rest of the system keys on is carried

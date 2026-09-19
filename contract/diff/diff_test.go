@@ -84,8 +84,8 @@ func sortKeys(ks []key) {
 	})
 }
 
-// TestClassify_FixtureBattery is the Step A classifier acceptance battery
-// (spec §4.A accept (2)): >=2 fixture cases per class, including a rename.
+// TestClassify_FixtureBattery is the Step A classifier acceptance battery:
+// >=2 fixture cases per class, including a rename.
 func TestClassify_FixtureBattery(t *testing.T) {
 	cs := loadCases(t)
 	perSeverity := map[Severity]int{}
@@ -146,8 +146,7 @@ func TestClassify_FixtureBattery(t *testing.T) {
 				}
 				// Two kinds of row carry a Detail and no other: the optional
 				// input removal (its consequence is not readable off the rule
-				// id) and every property rename ("renamed <old> → <new>",
-				// Idan 2026-09-17).
+				// id) and every property rename ("renamed <old> → <new>").
 				rename := c.Rule == RuleInputPropertyRenamed || c.Rule == RuleOutputPropertyRenamed || c.Rule == RuleOutputOptionalPropertyRenamed
 				if (c.Rule == RuleInputOptionalPropertyRemoved || rename) != (c.Detail != "") {
 					t.Errorf("%s at %s: Detail %q — only the optional input removal and renames carry a Detail", c.Rule, c.FieldPath, c.Detail)
@@ -175,11 +174,11 @@ func TestClassify_FixtureBattery(t *testing.T) {
 	// silently promoted out of additive is caught here.
 	for _, sev := range []Severity{SeverityBreaking, SeverityWarning, SeverityInfo, ""} {
 		if perSeverity[sev] < 2 {
-			t.Errorf("battery covers severity %q only %d time(s); spec requires >=2 cases", sev, perSeverity[sev])
+			t.Errorf("battery covers severity %q only %d time(s); at least 2 cases per severity are required", sev, perSeverity[sev])
 		}
 	}
 	if !sawRename {
-		t.Error("battery has no rename case; spec requires one")
+		t.Error("battery has no rename case; one is required")
 	}
 }
 

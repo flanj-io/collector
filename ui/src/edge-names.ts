@@ -1,4 +1,4 @@
-// Edge naming (v1 phase 1) — the copy deck and the inline rename editor's
+// Edge naming — the copy and the inline rename editor's
 // state machine, pure and vitest-covered (App.vue only renders it).
 //
 // Poll-clobber discipline (the connect-form precedent, connect-form.ts): once
@@ -18,15 +18,15 @@ export interface NamedEdgeRow {
   name_source?: string;
 }
 
-// ─── Copy (exact strings from the v1p1 copy deck) ─────────────────────────
+// ─── Copy (exact strings) ─────────────────────────────────────────────────
 //
-// NO PROVENANCE BADGE, on any tier (owner ruling 2026-09-01). `named by you`
+// NO PROVENANCE BADGE, on any tier. `named by you`
 // was the last one standing and it earned its removal the same way the other
 // three did: it is redundant beside the name it sits on — you are the one who
 // typed it — and a chip in the name slot competes with the name for the eye.
 // The `Edit name` / `Remove name` controls on the row already say the name is
 // yours, and say it where you can act on it.
-/** v1 phase 4 — the edge row's one cross-org action: a message-only thread. */
+/** The edge row's one cross-org action: a message-only thread. */
 export const START_THREAD_LABEL = 'Start a thread';
 export const RENAME_LABEL = 'Rename';
 export const EDIT_NAME_LABEL = 'Edit name';
@@ -138,7 +138,7 @@ export function cancelEdit(s: EdgeNameEdit | null): EdgeNameEdit | null {
 }
 
 // ─── Host → name resolution for the OTHER surfaces ────────────────────────
-// Owner ruling 2026-08-31: a display name substitutes for the raw host
+// A display name substitutes for the raw host
 // everywhere a host is shown, not only on the Edges panel — Traffic (the calls
 // table's counterparty cell + the counterparty facet) and the Contracts
 // provider cards resolve the same names.

@@ -121,7 +121,7 @@ func (e *storeExtension) handleSpecList(w http.ResponseWriter, _ *http.Request) 
 	writeSpecJSON(w, map[string]any{"contracts": out})
 }
 
-// Log lines for the document cap. Named constants because the tiered e2e lane
+// Log lines for the document cap. Named constants because the tiered integration lane
 // waits on them: a front and a store pod have no other observable surface for
 // a condition that produces no finding and no record.
 const (

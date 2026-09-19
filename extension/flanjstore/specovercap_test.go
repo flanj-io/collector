@@ -137,7 +137,7 @@ func TestSpecOverCapLogsTheStartNotEveryTick(t *testing.T) {
 
 // TestSpecOverCapLineIsTheSameFromEitherRoute: the doc route and the listing
 // sweep write ONE line, with one field shape. They are two paths to the same
-// sentence, and a reader — or the e2e lane waiting on it — must not have to
+// sentence, and a reader — or the integration lane waiting on it — must not have to
 // know which one produced it.
 func TestSpecOverCapLineIsTheSameFromEitherRoute(t *testing.T) {
 	e, base, logs := startObservedStorePod(t)

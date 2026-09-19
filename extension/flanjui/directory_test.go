@@ -19,7 +19,7 @@ func (r *testRig) startBare(t *testing.T) {
 }
 
 // TestDirectorySyncPullThenConditional: the first tick pulls the full table
-// (the §5.14 ENVELOPE, stored raw with one blind put, ETag remembered); the
+// (the directory ENVELOPE, stored raw with one blind put, ETag remembered); the
 // next tick sends If-None-Match and a 304 is a no-op. Asserted at the wire.
 func TestDirectorySyncPullThenConditional(t *testing.T) {
 	r := newRig(t)
@@ -301,7 +301,7 @@ func TestMcpSnapshotNamesNoEdge(t *testing.T) {
 // TestHostWithOwnContractKeepsItsOwnName: the domain-wide rule above must not
 // reach a host that has a contract of its OWN.
 //
-// BUG (tiered-lane QA walk, 2026-09-01): an MCP server at `mcp.zzguava.dev`
+// BUG (found 2026-09-01): an MCP server at `mcp.zzguava.dev`
 // carrying its own `tools/list` contract rendered as "Guava Billing API" on
 // Overview — the title of the OpenAPI document uploaded for the sibling host
 // `api.zzguava.dev` — while the Contracts tab called the same server

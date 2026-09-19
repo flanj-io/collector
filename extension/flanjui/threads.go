@@ -11,8 +11,8 @@ import (
 )
 
 // Threads (v0.1a; list source moved to the CP in slice-inbox): every
-// conversation lives on the control plane, and since CONTRACTS-CP §5.5a the
-// LIST does too. `GET /api/threads` makes ONE call to `GET /api/v1/threads`
+// conversation lives on the control plane, and the
+// LIST lives there too. `GET /api/threads` makes ONE call to `GET /api/v1/threads`
 // (Bearer collector key, scoped on the CP by collector id) and joins the local
 // fields the UI needs onto each row.
 //
@@ -255,7 +255,7 @@ type threadView struct {
 
 // threadListView is the GET /api/threads envelope. It is the collector's OWN
 // internal shape, not a published contract, and it exists so the tab can be
-// honest: §5.5a has no cursor, so a collector with more threads than the hard
+// honest: the CP list has no cursor, so a collector with more threads than the hard
 // cap is silently truncated unless total/has_more are relayed.
 type threadListView struct {
 	Threads []threadView `json:"threads"`
@@ -267,7 +267,7 @@ type threadListView struct {
 
 // mergeThreadRow builds one row from a CP summary plus the local record the
 // reverse pointer resolved to (a minimal record when there is none). The CP wins
-// on everything it reports; the local record only fills what a §5.5a row cannot
+// on everything it reports; the local record only fills what a CP list row cannot
 // carry — and a row with no local record still renders, with an empty
 // thread_url the UI turns into a disabled Copy thread link.
 func mergeThreadRow(sum promote.ThreadSummary, rec threadRecord) threadView {
@@ -301,7 +301,7 @@ func mergeThreadRow(sum promote.ThreadSummary, rec threadRecord) threadView {
 	return threadView{threadRecord: out, Summary: &s}
 }
 
-// handleThreads is GET /api/threads: ONE call to the control plane's §5.5a list
+// handleThreads is GET /api/threads: ONE call to the control plane's thread list
 // (most-recently-active first) joined to the local records by thread id.
 //
 // There is no local enumeration any more, so there is no stale list to fall

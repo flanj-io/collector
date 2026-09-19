@@ -1,15 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 
 /**
  * The token layer is only a design system for as long as nobody re-introduces a
  * literal. These are cheap structural guards, not style opinions:
  *
- *  - `tokens.css` is a VENDORED copy of docs/design/tokens.css and carries the
+ *  - `tokens.css` is a VENDORED copy of the canonical token file and carries the
  *    same do-not-edit header as CONTRACTS.md. Editing it here is the failure
- *    mode: the vault copy is canonical, and a local tweak silently forks the
+ *    mode: the canonical copy is the source, and a local tweak silently forks the
  *    palette away from the peek page and the drift dataset page.
  *  - no colour literal may live in an SFC any more.
  *  - the severity triad is product-fixed: `breaking`, never `error`, and the
@@ -33,25 +33,17 @@ export function collidingDeclarations(css: string, canonical: Set<string>): stri
   return [...customPropertyNames(css)].filter((n) => canonical.has(n)).sort();
 }
 
-/** docs/design/tokens.css when the docs vault sits somewhere above this repo. */
-function findVaultTokens(): string | null {
-  let dir = src;
-  for (let i = 0; i < 10; i++) {
-    const candidate = join(dir, 'docs', 'design', 'tokens.css');
-    if (existsSync(candidate)) return candidate;
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return null;
+/** The canonical token file, when FLANJ_TOKENS_SOURCE names a copy of it; otherwise null. */
+function findCanonicalTokens(): string | null {
+  const p = process.env.FLANJ_TOKENS_SOURCE;
+  return p && existsSync(p) ? p : null;
 }
 
 describe('design tokens', () => {
   const tokens = read('tokens.css');
 
   it('tokens.css is vendored, not authored here', () => {
-    expect(tokens.startsWith('/* vendored from docs/design/tokens.css — do not edit here.')).toBe(true);
-    expect(tokens).toContain('Canonical source lives in the docs vault');
+    expect(tokens.startsWith('/* Vendored — do not edit here; re-vendor from the canonical source.')).toBe(true);
     // The canonical file's own banner must survive the copy — its absence means
     // somebody hand-wrote a palette into this file instead of re-vendoring.
     expect(tokens).toContain(CANONICAL_BANNER);
@@ -164,7 +156,7 @@ describe('design tokens', () => {
   it('no surface rule declares a custom property the canonical file already defines', () => {
     // peek.css once declared `--ok-ink: #1f6d3a` on the same :root as the
     // vendored file and, loaded second, silently shadowed the canonical value.
-    // Any name the vault defines belongs to the vault: a surface may READ it
+    // Any name the canonical file defines belongs to it: a surface may READ it
     // and may declare its own names, never redeclare one of these.
     const canonical = customPropertyNames(tokens);
     expect(canonical.has('--ok-ink')).toBe(true);
@@ -182,25 +174,24 @@ describe('design tokens', () => {
     }
   });
 
-  it('the vendored body below the header is the vault file, byte for byte', () => {
+  it('the vendored body below the header is the canonical file, byte for byte', () => {
     const body = tokens.slice(tokens.indexOf(CANONICAL_BANNER));
-    // The digest of the vault file as vendored. It changes only on a deliberate
+    // The digest of the canonical file as vendored. It changes only on a deliberate
     // re-vendor, which is the one place this line is edited; anywhere else, a
     // changed digest means somebody hand-edited the palette here.
     expect(createHash('sha256').update(body).digest('hex')).toBe(
       '45515ff6d45f7e7e31269b4ca001ae62811c309d9a6d16c12a106cb968657ffe'
     );
-    // Where the docs vault is checked out beside this repo (the workspace
-    // layout), compare the bytes directly as well — CI has no vault, so the
-    // digest above is what it enforces.
-    const vault = findVaultTokens();
-    if (vault) expect(body).toBe(readFileSync(vault, 'utf8'));
+    // When FLANJ_TOKENS_SOURCE names a copy of the canonical file, compare the
+    // bytes directly as well; without one the digest above is what is enforced.
+    const canonical = findCanonicalTokens();
+    if (canonical) expect(body).toBe(readFileSync(canonical, 'utf8'));
   });
 
   it('the hex bolt is one inline symbol per document, and no bolt tone is an inline style', () => {
     // Blueprint port rule: the bolt ships ONCE as <symbol id="hxbolt"> and every
     // use is a class-toned <use>. A second symbol duplicates an id; an inline
-    // style="color:…;--l:…" on a bolt (the kit's own idiom) is a palette
+    // style="color:…;--l:…" on a bolt (the design's own idiom) is a palette
     // literal the tokens cannot reach. Comments are stripped first — both the
     // template and this file's own prose mention the symbol by name.
     const templateOf = (f: string) => {
@@ -217,12 +208,12 @@ describe('design tokens', () => {
     for (const [f, t] of templates) {
       expect(t.match(/\sstyle="/g), `inline style attribute in ${f}'s template`).toBeNull();
     }
-    // The scanner must bite before it is trusted: the kit's own bolt markup.
+    // The scanner must bite before it is trusted: the design's own bolt markup.
     expect('<svg class="hx" style="color:var(--red)"><use href="#hxbolt"/></svg>'.match(/\sstyle="/g)).not.toBeNull();
   });
 
   it('dimmed states dim with the palette, never with opacity', () => {
-    // The kit dims an acknowledged finding (`.cx-find.acked { opacity: .55 }`)
+    // The design dims an acknowledged finding (`.cx-find.acked { opacity: .55 }`)
     // and a closed thread row (`.cx-th-row.closed { opacity: .6 }`); the port
     // inherited both, plus its own `.meta-line .dim { opacity: .5 }`. At those
     // opacities 12–13px --ink-soft text measured 2.2–2.9:1 (UX review
@@ -236,7 +227,7 @@ describe('design tokens', () => {
       const bad = rules.filter((r) => dimmed.test(r.slice(0, r.indexOf('{'))) && /(^|[\s;{])opacity\s*:/.test(r));
       expect(bad, `opacity on a dimmed state in ${f}`).toEqual([]);
     }
-    // The scanner must bite before it is trusted: the kit's own rule.
+    // The scanner must bite before it is trusted: the design's own rule.
     expect(/(^|[\s;{])opacity\s*:/.test('.cx-find.acked{opacity:.55}')).toBe(true);
   });
 

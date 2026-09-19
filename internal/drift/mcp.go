@@ -4,7 +4,8 @@
 // own tools/list and emits one contract_snapshot record per complete list —
 // nothing is loaded manually. This file turns those snapshots into a versioned
 // per-edge contract (contract.FromToolsList) and produces the three v0.5
-// findings with the spec §1 flaggability table:
+// findings with the flaggability column of the MCP finding-kinds table in
+// CONTRACTS.md §4:
 //
 //   - output_mismatch  (FLAGGABLE): a tools/call structuredContent violates the
 //     tool's declared outputSchema. A tool WITHOUT outputSchema produces NO
@@ -19,7 +20,7 @@
 //     CURRENT inputSchema. Consumer-side — it fails the evidence rule.
 //
 // Validation uses the SAME JSON Schema validator as the HTTP path (kin-openapi
-// — spec §5 "do not add a second") and the SAME token-aware + captured-props
+// — deliberately no second validator) and the SAME token-aware + captured-props
 // rules: a schema error whose offending scalar is a ⟦REDACTED:…⟧ token is
 // skipped (redacted = unknown), unless the call carries a matching
 // redaction.fields record whose captured props DECIDE the constraint.
@@ -120,7 +121,7 @@ func (d *MCPDetector) LoadSnapshot(snap otlpattr.ContractSnapshot) ([]model.Find
 		// A tools/list arrived on the wire; nobody configured or uploaded it.
 		// Left unset, the store's column default made every snapshot a
 		// CONFIG-loaded contract to every consumer of `source` but the one
-		// card whose format branch hid it (launch-week item 7, 2026-09-07).
+		// card whose format branch hid it (2026-09-07).
 		Source:    model.SpecSourceObserved,
 		Title:     snap.ServerName,
 		Version:   snap.ServerVersion,
@@ -138,7 +139,7 @@ func (d *MCPDetector) LoadSnapshot(snap otlpattr.ContractSnapshot) ([]model.Find
 		d.edges[edgeRef] = st
 	}
 	st.integration = snap.Integration
-	// A listing right after a toolset was enabled (brief §3.3) is the SESSION's
+	// A listing right after a toolset was enabled is the SESSION's
 	// catalog: the toolset is in it because this client asked, and the next
 	// session will not see it. Rotating it in as the baseline would read the
 	// toolset appearing as a catalog change now and the next plain listing as
@@ -187,10 +188,10 @@ func (d *MCPDetector) LoadSnapshot(snap otlpattr.ContractSnapshot) ([]model.Find
 	return findings, info, []byte(snap.SnapshotJSON), nil
 }
 
-// reportable is the ruled finding set of one comparison: R-B's reported cells
+// reportable is the reportable finding set of one comparison: the reported cells
 // (additive changes — a new tool, a new optional param, a widened input, a
 // newly declared output schema — are real but never findings), minus wording
-// changes that differ only in whitespace, letter case or punctuation (R-B's
+// changes that differ only in whitespace, letter case or punctuation (the
 // wording rule). The other half of that rule, at most one wording finding per
 // tool per day, holds by construction here: a tool's description change has
 // ONE signature, so every later edit bumps that finding rather than adding one.
@@ -211,7 +212,7 @@ func reportable(changes []diff.Change) []diff.Change {
 
 // classifyListing turns one tools/list comparison into findings. When the
 // server moved its catalog behind discovery meta-tools, that is ONE
-// catalog/INFO event (R-B) and never a removal per hidden tool: the tools did
+// catalog/INFO event and never a removal per hidden tool: the tools did
 // not go away, they stopped being listed.
 func (d *MCPDetector) classifyListing(integration, peerHost string, prevTools, curTools []contract.ToolDef, prev, cur *contract.Contract, now string) []model.Finding {
 	changes := reportable(diff.Classify(prev, cur))
@@ -509,8 +510,8 @@ func (d *MCPDetector) Seed(info model.SpecInfo, raw []byte) ([]model.Finding, bo
 	prev, cur := st.previous, st.current
 	d.mu.Unlock()
 
-	// The same ruled set the observe path reports: before 2026-09-18 this
-	// path classified without R-B's reported filter, so a front adopting a
+	// The same reportable set the observe path reports: before 2026-09-18 this
+	// path classified without the reported filter, so a front adopting a
 	// sibling's newer listing reported ADDITIVE changes too.
 	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00")
 	return d.classifyListing(info.Integration, info.PeerHost, prevTools, tools, prev, cur, now), true, nil
@@ -573,11 +574,11 @@ type Judgement struct {
 	Findings   []model.Finding
 	Validation model.Validation
 	// InnerTool / ViaDispatch are set when a dispatcher call was re-attributed
-	// to the inner tool it named (R-E, brief §3.2): the processor re-keys the
+	// to the inner tool it named: the processor re-keys the
 	// stored call to InnerTool and keeps the dispatcher as its via_dispatch.
 	InnerTool, ViaDispatch string
 	// SearchSpec is the edge's search-learned catalog when this call (a search)
-	// changed it — a contract row to persist (brief §3.1).
+	// changed it — a contract row to persist.
 	SearchSpec *SpecDoc
 }
 
@@ -589,7 +590,7 @@ func (d *MCPDetector) Judge(call model.RedactedCall) Judgement {
 	}
 	var j Judgement
 
-	// Discovery meta-tools (meta.go, R-E). A search result teaches the edge
+	// Discovery meta-tools (meta.go). A search result teaches the edge
 	// tool definitions; a dispatcher call whose inner name exactly matches one
 	// a SEARCH returned is judged as THAT tool, with the dispatcher kept as
 	// evidence; a successful toolset-enable call marks the listing that follows
@@ -642,7 +643,7 @@ func (d *MCPDetector) Judge(call model.RedactedCall) Judgement {
 	if op == nil {
 		// A tool the complete listing does not declare but the PARTIAL catalog
 		// does — a searched tool called directly, or a toolset this session
-		// enabled — is judged against that definition (brief §3.4), never
+		// enabled — is judged against that definition, never
 		// called stale: the agent is using what the server told it.
 		if pop, seen, src := d.partialOpAt(call.PeerHost, call.Direction, toolName, false); pop != nil {
 			fs, v := judgeOp(call, pop, toolName, seen)
@@ -695,7 +696,7 @@ func judgeOp(call model.RedactedCall, op *contract.Operation, toolName, snapshot
 
 	var findings []model.Finding
 
-	// stale_client: arguments vs the CURRENT inputSchema (spec §4.C.3).
+	// stale_client: arguments vs the CURRENT inputSchema.
 	if op.InputSchema != nil && call.RequestBody != "" && !call.RequestBodyTruncated {
 		violations, _ := validateAgainstSchema(op.InputSchema, call.RequestBody, call, "request")
 		for _, v := range violations {
@@ -712,7 +713,7 @@ func judgeOp(call model.RedactedCall, op *contract.Operation, toolName, snapshot
 	// output_mismatch: structuredContent vs the declared outputSchema.
 	// No outputSchema → NO output_mismatch (the honest limit; never synthesize).
 	// isError results carry error output, not contract evidence — they feed the
-	// error-rate metric instead (spec §1 "Schema-vs-implementation").
+	// error-rate metric instead.
 	// structuredContent is stored with content-type application/json; the
 	// content[] text fallback (text/plain) is not governed by outputSchema.
 	// A Tasks handle (revision 2026-07-28) is an ENVELOPE: the call returned
@@ -814,7 +815,7 @@ func validateAgainstSchema(schema contract.Schema, body string, call model.Redac
 // two call-evidence kinds (output_mismatch / stale_client args).
 type mcpFindingSpec struct {
 	kind string
-	// changeKind is R-A's axis (output for output_mismatch, observed_failure
+	// changeKind is the finer axis (output for output_mismatch, observed_failure
 	// for stale_client) — see model.Finding.ChangeKind.
 	changeKind     string
 	severity       string
@@ -878,7 +879,7 @@ func staleToolFinding(call model.RedactedCall, toolName, now string) model.Findi
 		ID:            otlpattr.NewID(),
 		Kind:          model.KindStaleClient,
 		ChangeKind:    string(diff.KindObservedFailure),
-		// R-B (Idan, 2026-09-17): stale_client on a real call is
+		// stale_client on a real call is
 		// observed_failure / BREAKING — the call the agent just made fails.
 		// Still LOCAL ONLY: it is consumer-side, and the kind rule
 		// (model.Finding.Flaggable) is unchanged.
@@ -905,17 +906,17 @@ func staleToolFinding(call model.RedactedCall, toolName, now string) model.Findi
 // the CURRENT tools/list.
 const RuleToolNotListed = "tool-not-listed"
 
-// severityOf maps the classifier's ruled severity (R-B's upper-case
+// severityOf maps the classifier's severity (upper-case
 // vocabulary) onto the finding wire's lower-case one. The two spellings exist
-// on purpose: R-B is written in upper case and the drift dataset publishes it
+// on purpose: the classifier is written in upper case and the drift dataset publishes it
 // that way, while model.Severity* is a field the control plane, the dashboard
-// and e2e all already read, so re-casing it would be a breaking wire change
-// for no gain. This function is the only place the two meet.
+// and the integration suite all already read, so re-casing it would be a
+// breaking wire change for no gain. This function is the only place the two meet.
 //
 // Additive (unreported) changes never reach here: LoadSnapshot builds
 // findings from diff.Reportable. An empty severity is therefore a programming
 // error, not a data case; it maps to info (never flaggable) rather than
-// silently inheriting a severity nobody ruled.
+// silently inheriting a severity the rule table never assigned.
 func severityOf(s diff.Severity) string {
 	switch s {
 	case diff.SeverityBreaking:
@@ -939,7 +940,7 @@ func definitionChangeFinding(integration string, ch diff.Change, prev, cur *cont
 		SchemaVersion: model.SchemaVersion,
 		ID:            otlpattr.NewID(),
 		Kind:          model.KindDefinitionChange,
-		// ChangeKind is R-A's kind (wording | input | output | catalog): WHAT
+		// ChangeKind is the kind (wording | input | output | catalog): WHAT
 		// moved, a finer axis than Kind, which names WHICH DETECTOR spoke
 		// (definition_change here). The two are separate fields because they
 		// answer different questions and one cannot be derived from the other.

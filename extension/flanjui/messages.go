@@ -1,8 +1,8 @@
 package flanjui
 
-// User-facing relay messages (the UX copy deck, v0.1a). Every error the relay
+// User-facing relay messages (v0.1a). Every error the relay
 // returns to the local UI is `{ "error": "<code>", "message": "<human>" }`; the
-// codes are stable identifiers the UI switches on, the messages are the deck's
+// codes are stable identifiers the UI switches on, the messages are the fixed
 // strings. Naming rule: no "peek / magic link / minting / invite / invitee /
 // previewer" in anything user-facing — the naming denylist test scans this file
 // together with the UI sources.
@@ -64,7 +64,7 @@ const (
 	msgContractNotRemovableObserved = "This is an observed MCP snapshot, not an upload — it refreshes from the server's tools/list."
 	msgContractNotLoaded            = "No contract is loaded for that integration."
 
-	// Contract FETCH and PROBE (ruling R5, 2026-09-16). Every one of these is a
+	// Contract FETCH and PROBE (2026-09-16). Every one of these is a
 	// STATED state: a fetch that fails must say what failed, because the
 	// alternative — a shrug, and a card that quietly shows no contract — is
 	// indistinguishable from the operator never having tried. Each sentence
@@ -93,8 +93,8 @@ const (
 	// refusal says so rather than pretending the host was malformed.
 	msgContractProbeUnknownHost = "Flanj only looks for a spec on a provider it already sees traffic to. This collector has no calls to that host."
 	msgNotFlaggable             = "This finding is a local notice — stale-client calls stay on this collector and can't be flagged to the provider."
-	// R-C (Idan, 2026-09-17): an info finding is refused by the same 403, but
-	// the stale-client sentence above is false about it, so it has its own.
+	// An info finding is refused by the same 403, but the
+	// stale-client sentence above is false about it, so it has its own.
 	msgInfoNotFlaggable = "This finding is informational — info findings stay on this collector and are never flagged to another organisation."
 	msgNotAckable       = "Only non-breaking informational findings can be acknowledged — breaking findings need a fix or a thread."
 	msgFindingNotFound  = "That finding is no longer in the local store."
@@ -110,15 +110,15 @@ const (
 	msgThreadNotFound = "No thread with that id was created from this collector."
 	msgWrongOrigin    = "This thread was created by another collector key — it can only be changed from there."
 	msgKeyMissing     = "The control plane already knows this collector, but this store never received its key. Connect again under a different collector name, or set a new cp_deploy_token."
-	// Edge naming (v1 phase 1).
+	// Edge naming.
 	msgEdgeHostRequired = "host is required."
 	msgEdgeNotFound     = "No outbound edge with that host has been discovered."
 	msgNameTooLong      = "The name is too long."
 	msgNameEmpty        = "The name is empty."
 	// The distinct partial-success copy: the local save landed, only the
-	// OPT-IN directory suggestion did not go out (brief-common copy deck).
+	// OPT-IN directory suggestion did not go out.
 	msgNameSavedSuggestFailed = "Name saved. The suggestion didn't reach the directory — it stays local."
-	// Question-only threads (v1 phase 4). A message-only thread has NOTHING but
+	// Question-only threads: a message-only thread has NOTHING but
 	// the message, so an empty one is refused HERE — the operator sees it in the
 	// sheet rather than as a control-plane round-trip that answers 400.
 	msgEdgeThreadMessageRequired = "Write your question first — a thread started from an edge carries no evidence, only what you say."

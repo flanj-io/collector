@@ -2,7 +2,7 @@ package edge
 
 import "testing"
 
-// TestRegistrableDomain covers the naming key (v1 phase 1): names key on the
+// TestRegistrableDomain covers the naming key: names key on the
 // registrable domain — eTLD+1 via the public-suffix list, computed locally.
 // IP literals key on the literal; a host the PSL cannot reduce (single-label,
 // a bare public suffix) falls back to the normalized host, never an error.

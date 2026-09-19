@@ -365,7 +365,7 @@ Flow specifics:
   legs, each with its own key in the `flanjui` block (all default `true`):
   `finding_sync` posts the SHAPE of current findings (never `expected` /
   `actual` / `detail`); `directory_sync` is a pure FETCH of the display-name
-  table (nothing about your edges is sent); and — since v1 phase 2 —
+  table (nothing about your edges is sent); and
   `edge_sync` registers each **external** edge as `{registrable_domain,
   direction, first_seen, last_seen}` and nothing more. No calls, no bodies, no
   payloads, no call counts, and **no internal edge, ever** — the classification
@@ -426,10 +426,9 @@ postgres tier all have to fail.
 Run it against a locally built image with
 `bash scripts/helm-smoke.sh flanj-collector:<tag>`.
 
-## Proven by the e2e harness
+## Proven by the integration harness
 
-The three shapes are exercised end-to-end in `flanj-io/e2e`: `make gate` /
-`make stress` (single pod), `make gate-postgres` / `make stress-postgres` (N
-pods, shared postgres), `make gate-tiered` / `make stress-tiered` (2 fronts → 1
-store pod) — the same gate-2 loop, the contracts check and the exact-count
-capture stress on every shape.
+The three shapes are exercised end-to-end by Flanj's integration harness: a
+single pod, N pods sharing one postgres, and 2 fronts → 1 store pod — the same
+end-to-end loop, the contracts check and the exact-count capture stress on
+every shape.

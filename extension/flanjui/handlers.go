@@ -27,7 +27,7 @@ func (e *uiExtension) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", e.handleHealth)
 	mux.HandleFunc("/api/edges", e.handleEdges)
-	// Edge rename (v1 phase 1) — LOCAL mutation (guarded WITHOUT the CP check:
+	// Edge rename — LOCAL mutation (guarded WITHOUT the CP check:
 	// naming an edge works on a disconnected collector; only the opt-in
 	// directory suggestion needs a Connected one, and its failure never fails
 	// the save).
@@ -57,7 +57,7 @@ func (e *uiExtension) routes() http.Handler {
 	mux.HandleFunc("/api/contracts/remove", e.handleContractRemove)
 	mux.HandleFunc("/api/connect", e.handleConnect)
 	mux.HandleFunc("/api/flag", e.handleFlag)
-	// Start a thread from an edge row (v1 phase 4) — a MESSAGE-ONLY thread. A
+	// Start a thread from an edge row — a MESSAGE-ONLY thread. A
 	// relay route like /api/flag, and behind the same Connect gate.
 	mux.HandleFunc("/api/edges/thread", e.handleEdgeThread)
 	mux.HandleFunc("/api/threads", e.handleThreads)
@@ -101,7 +101,7 @@ func (e *uiExtension) storeOrError(w http.ResponseWriter) store.Store {
 // DSN in prose — `failed to connect to user=flanj database=flanj … lookup
 // postgres …` — and the read routes used to hand that verbatim to the browser
 // as `{"error": "<the whole thing>"}`, on unauthenticated localhost GETs, while
-// every mutating route answered the deck's one sentence. The operator learns
+// every mutating route answered the one fixed sentence. The operator learns
 // nothing from the DSN they cannot read off their own config; a log line is
 // where it belongs.
 //
@@ -147,7 +147,7 @@ func (e *uiExtension) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"collector_version": collectorVersion,
 		// Did this collector hold data before the light-default upgrade? The
 		// second of the two gates on the one-time theme-flip notice
-		// (ux-design-v2 §3.4) — the first is "this browser has no stored theme
+		// — the first is "this browser has no stored theme
 		// choice", which only the browser can answer.
 		"held_prior_data": heldPriorData(st),
 		// consumer_display_name names the INSTALLER, not a discovery — it may
@@ -159,7 +159,7 @@ func (e *uiExtension) handleHealth(w http.ResponseWriter, r *http.Request) {
 		// oversized document is read in-process, bound, and validating.
 		"serves_fronts": e.servesFronts(),
 	}
-	// Pre-traffic honesty (v1 phase 1): `provider_display_name` describes a
+	// Pre-traffic honesty: `provider_display_name` describes a
 	// DISCOVERY, so it emits only once at least one external outbound edge (or
 	// a finding) exists — never from bare config at zero traffic. (The
 	// `integration` slug that rode beside it is gone with the config key.)
@@ -188,12 +188,12 @@ func hasObservedProvider(st store.Store, findings int) bool {
 }
 
 // edgeWithRPM decorates a discovered edge with its observed request rate
-// (calls captured over the trailing 60 seconds, i.e. calls/minute) and — v1
-// phase 1 — its naming fields: the registrable domain (the naming key), the
+// (calls captured over the trailing 60 seconds, i.e. calls/minute) and its
+// naming fields: the registrable domain (the naming key), the
 // resolved display name and its provenance (`user | config | directory |
 // auto`). display_name is empty when the source is auto (the UI humanizes the
 // host itself). Names resolve for OUTBOUND rows only; inbound rows carry the
-// domain but always source auto (inbound naming is deferred — ruling 6).
+// domain but always source auto (inbound naming is deferred).
 type edgeWithRPM struct {
 	model.Edge
 	RPM               float64 `json:"rpm"`
@@ -477,8 +477,7 @@ type findingView struct {
 	// AckedEvidenceVersion is the evidence hash the ack covers (the AFTER
 	// snapshot hash on a definition_change; absent otherwise). Surfaced so the
 	// SPA can apply the SAME match rule client-side — a second, independent
-	// check that a new change can never inherit an old acknowledgement
-	// (ux-design-v2 §2.8 / §7 risk 2).
+	// check that a new change can never inherit an old acknowledgement.
 	AckedEvidenceVersion string `json:"acked_evidence_version,omitempty"`
 	// PeerHost is the provider host this finding is ABOUT: the peer host of its
 	// pinned source call, resolved here rather than in the browser.
@@ -592,7 +591,7 @@ func humanizeIntegration(id string) string { return promote.HumanizeIntegration(
 // shares: a key AND a confirmed contact. The gate is "a confirmed contact
 // exists" (`confirmed_contact_email` from `me`), not "the latest contact is
 // confirmed" — while a NEW email is pending the previously confirmed one keeps
-// Create thread available (CONTRACTS-CP §5.3). With none confirmed yet the CP is
+// Create thread available. With none confirmed yet the CP is
 // re-asked right now (bypassing the me-cache) so Create thread works the moment
 // the confirmation click lands.
 //
@@ -659,10 +658,10 @@ func (e *uiExtension) handleFlag(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "finding_not_found", msgFindingNotFound)
 		return
 	}
-	// Evidence rule (v0.5 §6, amended qfix2-2026-08-26), enforced SERVER-SIDE —
+	// Evidence rule (amended qfix2-2026-08-26), enforced SERVER-SIDE —
 	// not just by UI absence: stale_client is consumer-side and never leaves
-	// this collector as a flag. It is the only local-only kind. R-C
-	// (2026-09-17) adds a second refusal on another axis: an info finding, of
+	// this collector as a flag. It is the only local-only kind. A second
+	// refusal on another axis (2026-09-17): an info finding, of
 	// any kind, stays local too. Same code, each with a sentence true of it.
 	if !finding.Flaggable() {
 		msg := msgNotFlaggable
@@ -672,10 +671,10 @@ func (e *uiExtension) handleFlag(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, "not_flaggable", msg)
 		return
 	}
-	// CALL-LESS flagging. qfix2-2026-08-26 (ux-design-v2 §2.7.5) lifted
+	// CALL-LESS flagging. qfix2-2026-08-26 lifted
 	// 400 finding_has_no_call for a definition_change — no failing call exists
 	// by nature; the evidence is the provider's own tools/list, before and after.
-	// v1p4-2026-09-08 (v1-build-spec §3 Step 4, ruling 3) widens it to EVERY
+	// v1p4-2026-09-08 widens it to EVERY
 	// kind, because the reason it was narrow was never good: a version-diff has
 	// no source call by construction either, and answering its Flag control with
 	// a 400 is worse than having no control. `call` is optional on the wire
@@ -792,7 +791,7 @@ func (e *uiExtension) handleFlag(w http.ResponseWriter, r *http.Request) {
 }
 
 // edgeThreadRequestBody is the UI -> collector payload for "Start a thread" on
-// an edge row (v1 phase 4). No finding id: an edge is a registrable domain, not
+// an edge row. No finding id: an edge is a registrable domain, not
 // a drift, so there is nothing local to attach.
 //
 // RequestID is minted by the SHEET, once, when it opens — it is what makes the
@@ -809,7 +808,7 @@ type edgeThreadRequestBody struct {
 	AllowedEmails  json.RawMessage `json:"allowed_emails"`
 }
 
-// handleEdgeThread = Start a thread from an edge row (v1 phase 4, CONTRACTS §5):
+// handleEdgeThread = Start a thread from an edge row (CONTRACTS §5):
 // a MESSAGE-ONLY thread. Same Connect gate as a flag (the same 412s, from the
 // same helper), same relay, same thread record — the only difference is what is
 // on the wire: no call, no finding, `provider_host` naming the edge so the
@@ -849,7 +848,7 @@ func (e *uiExtension) handleEdgeThread(w http.ResponseWriter, r *http.Request) {
 
 	// The host must resolve to a discovered external OUTBOUND edge — the same
 	// rule the rename route enforces, for the same reason: inbound `peer_host`
-	// is a forgeable XFF first hop and is never identity (v1 spec §5), and an
+	// is a forgeable XFF first hop and is never identity, and an
 	// internal edge never crosses the org boundary at all.
 	edges, err := st.ListEdges(true)
 	if err != nil {
@@ -989,7 +988,7 @@ func (e *uiExtension) handleDirectoryHint(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, out)
 }
 
-// contactUnconfirmedMessage is the deck's 412 line, naming the pending address.
+// contactUnconfirmedMessage is the fixed 412 line, naming the pending address.
 func contactUnconfirmedMessage(email string) string {
 	if email == "" {
 		return msgContactUnconfirmed

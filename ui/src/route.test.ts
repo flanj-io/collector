@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_TAB, TABS, hashForFinding, hashForTab, hashForThread, isTab, routeFromHash } from './route';
 
-// Launch-week item 10 (postgres walk, 2026-09-07): Back stripped the hash but
+// Postgres walk, 2026-09-07: Back stripped the hash but
 // the tab stayed on Threads, because the tab buttons never wrote the hash while
 // two programmatic paths did. This module is the one mapping both directions
 // now use; App.vue reads it on load / hashchange and writes it on every setTab.

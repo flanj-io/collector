@@ -62,18 +62,18 @@ type Config struct {
 	// that rides the same ticker has its own switch, DirectorySync.
 	FindingSync bool `mapstructure:"finding_sync"`
 	// DirectorySync enables the periodic directory display-name refresh
-	// (GET /api/v1/directory — CONTRACTS §8, CONTRACTS-CP §5.14). ON by default
+	// (GET /api/v1/directory — CONTRACTS §8). ON by default
 	// (the factory default is true, so an omitted key means on);
 	// `directory_sync: false` disables the refresh only. It rides the same
 	// ticker as FindingSync but is gated independently: two different egresses
-	// with two different privacy stories do not share one switch (owner ruling
-	// 2026-08-31). The refresh is a pure FETCH — a conditional (ETag) full-table
-	// GET; this collector's edges, peer hosts and domains are NEVER sent, and
-	// there is no per-miss lookup. With it off, the baked directory seed still
-	// resolves names offline.
+	// with two different privacy stories do not share one switch (since
+	// 2026-08-31). The refresh is a pure FETCH — a conditional (ETag)
+	// full-table GET; this collector's edges, peer hosts and domains are NEVER
+	// sent, and there is no per-miss lookup. With it off, the baked directory
+	// seed still resolves names offline.
 	DirectorySync bool `mapstructure:"directory_sync"`
 	// EdgeSync enables the periodic edge REGISTRATION to the control plane
-	// (POST /api/v1/edges/sync — CONTRACTS §5/§8, v1 phase 2). ON by default
+	// (POST /api/v1/edges/sync — CONTRACTS §5/§8). ON by default
 	// (the factory default is true, so an omitted key means on); `edge_sync:
 	// false` disables the POST entirely. It rides the same ticker as
 	// FindingSync and DirectorySync and is gated independently, for the same

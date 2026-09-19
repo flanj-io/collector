@@ -10,12 +10,12 @@ import (
 	"github.com/flanj-io/collector/internal/promote"
 )
 
-// The dashboard door (launch-week item 8). `dashboard_url` on GET /api/connect
+// The dashboard door. `dashboard_url` on GET /api/connect
 // is the ONE link the local UI offers out to the control plane, and it is
 // rendered in the OPERATOR'S BROWSER — so it must be minted from an address a
 // browser can open, not from where this collector's own requests go. The
 // first version read it off the promote client, which is right for the API
-// client and wrong for a link: on the e2e stack cp_base_url is
+// client and wrong for a link: on the integration stack cp_base_url is
 // `http://cp-api:3001` (docker DNS), in a cluster it is a Service name or a
 // VPC-private ingress, and a laptop resolves none of them — a dead pill.
 
@@ -30,7 +30,7 @@ func TestDashboardURLComposition(t *testing.T) {
 		// cp_public_url set: authoritative, whatever the client's base is.
 		{"public wins over a docker DNS base", "https://cp.flanj.io", "http://cp-api:3001", "https://cp.flanj.io/d"},
 		{"public trailing slash is not doubled", "https://cp.flanj.io/", "http://cp-api:3001", "https://cp.flanj.io/d"},
-		{"public may be loopback — explicit is explicit (the e2e stack's host-published port)", "http://localhost:3001", "http://cp-api:3001", "http://localhost:3001/d"},
+		{"public may be loopback — explicit is explicit (the integration stack's host-published port)", "http://localhost:3001", "http://cp-api:3001", "http://localhost:3001/d"},
 		{"public keeps a path prefix", "https://acme.example.com/flanj/", "http://cp-api:3001", "https://acme.example.com/flanj/d"},
 		{"public never carries userinfo into the link", "https://ops:secret@cp.flanj.io", "http://cp-api:3001", "https://cp.flanj.io/d"},
 		{"public query and fragment are dropped", "https://cp.flanj.io/?x=1#f", "http://cp-api:3001", "https://cp.flanj.io/d"},

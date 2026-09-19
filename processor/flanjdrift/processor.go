@@ -275,7 +275,7 @@ func (p *driftProcessor) refreshSpecs() {
 }
 
 // Log lines for the front's half of the document cap. Named constants because
-// the tiered e2e lane waits on them: a front runs no UI and owns no store, so a
+// the tiered integration lane waits on them: a front runs no UI and owns no store, so a
 // condition that produces no finding and no record has the log and nothing else.
 const (
 	msgSpecOverCap        = "contract refresh: the store pod holds a document past the cap, so this edge keeps whatever baseline this front already had"
@@ -482,14 +482,14 @@ func (p *driftProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.Logs
 					j := p.mcp.Judge(call)
 					findings = append(findings, j.Findings...)
 					otlpattr.StampValidated(lr, j.Validation)
-					// R-E, brief §3.2: a dispatcher call judged as the inner
+					// A dispatcher call judged as the inner
 					// tool it named is STORED as that tool too, the dispatcher
 					// kept as via_dispatch — the call record and its findings
 					// name the same tool.
 					if j.InnerTool != "" {
 						otlpattr.StampDispatchTarget(lr, j.InnerTool, j.ViaDispatch)
 					}
-					// Brief §3.1: the edge's search-learned catalog is a
+					// The edge's search-learned catalog is a
 					// contract row, persisted and forwarded like an observed
 					// tools/list, so a restart or a sibling front starts from it.
 					if j.SearchSpec != nil {

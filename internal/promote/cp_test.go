@@ -35,7 +35,7 @@ func newStubCP(t *testing.T, status int, reply string) *stubCP {
 }
 
 // TestRegister proves Connect: POST register with the DEPLOY token (never the
-// key), the §5 body, and the once-returned collector key decoded.
+// key), the CONTRACTS §5 body, and the once-returned collector key decoded.
 func TestRegister(t *testing.T) {
 	cp := newStubCP(t, http.StatusCreated, `{"collector_id":"c1","collector_public_id":"pub_c1","collector_key":"ckey_secret","contact_status":"pending"}`)
 	c := NewClient(cp.srv.URL, "deploy_tok", "v").WithCollectorKey("old_key_must_not_be_used")
@@ -67,7 +67,7 @@ func TestRegister(t *testing.T) {
 	}
 }
 
-// TestRegisterWithKey proves the re-register path (CONTRACTS-CP §5.1): once a
+// TestRegisterWithKey proves the re-register path: once a
 // collector key exists, resend / change-of-contact POST register with Bearer
 // <collector key> — never the deploy token — and keep the key.
 func TestRegisterWithKey(t *testing.T) {
@@ -171,9 +171,9 @@ func TestThreadMutations(t *testing.T) {
 	})
 }
 
-// TestListThreads is CONTRACTS-CP §5.5a: GET /api/v1/threads?limit=<n>, Bearer
+// TestListThreads proves GET /api/v1/threads?limit=<n>, Bearer
 // collector key, an ENVELOPE (never a bare array), rows that are byte-for-byte
-// the §5.5 summary object, and never a token.
+// the thread summary object, and never a token.
 func TestListThreads(t *testing.T) {
 	const body = `{"threads":[` +
 		`{"id":"t2","thread_public_id":"pub2","state":"closed","closed_at":"2026-08-24T09:00:00Z","reopened_at":null,"turn":"replied_while_closed",` +
@@ -223,7 +223,7 @@ func TestListThreads(t *testing.T) {
 		t.Errorf("limit<=0 must send no query, got %q", cp2.query)
 	}
 	if ListThreadsMaxLimit != 200 {
-		t.Errorf("§5.5a hard cap is 200, got %d", ListThreadsMaxLimit)
+		t.Errorf("list hard cap is 200, got %d", ListThreadsMaxLimit)
 	}
 
 	// A CP error is typed, and the key never reaches the error string.

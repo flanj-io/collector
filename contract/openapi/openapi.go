@@ -1,10 +1,10 @@
 // Package openapi is the OpenAPI loader for the transport-neutral contract
-// model (v0.5 spec §4 Step A): it validates an OpenAPI document and
+// model (Step A): it validates an OpenAPI document and
 // normalizes it into a contract.Contract.
 //
 // It is a SUBPACKAGE of contract on purpose: every kin-openapi type stays
 // here, so package contract's public surface is transport-lean and an
-// MCP-only importer (mcp-drift-watch imports only contract + contract/diff)
+// MCP-only importer (other Flanj tooling imports only contract + contract/diff)
 // links none of the OpenAPI machinery. The collector's drift detector
 // (internal/drift) delegates its spec loading here; behavior is identical to
 // the pre-split loader.

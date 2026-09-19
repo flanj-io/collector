@@ -5,7 +5,7 @@
 // verdict, not the mail's — the control plane answers 200/201 whether or not SMTP accepted
 // anything — so the panel was claiming a delivery on evidence it never had.
 //
-// `confirmation_mail` (CONTRACTS-CP §5.1) carries the mail's own outcome, and describes ONE
+// `confirmation_mail` carries the mail's own outcome, and describes ONE
 // request: it is absent from a background poll, from an already-confirmed contact, and from a
 // control plane predating the field. So the panel holds the outcome of the last attempt it made
 // rather than reading it off the polled state — otherwise the next poll (~5s) would silently

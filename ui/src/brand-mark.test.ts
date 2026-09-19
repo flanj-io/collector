@@ -3,9 +3,9 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
- * The topbar mark is docs/design/flanj-mark.svg — the COLOUR mark — inlined.
+ * The topbar mark is docs/brand/flanj-mark.svg — the COLOUR mark — inlined.
  * It shipped as the mono variant once (two paths on currentColor) because the
- * vault rule said mono for product surfaces; the kits show the colour mark, and
+ * rule said mono for product surfaces; the designs show the colour mark, and
  * the rule was wrong. These are structural guards on the port, not style
  * opinions:
  *
@@ -28,7 +28,7 @@ const PIPES =
 const OUTLINE = 'M198.5 407.5V256M317 41H198.5V256M198.5 256H133M316.5 104.5V256M198 471H316.5V256M316.5 256H382';
 const F_THREAD = 'M198.5 407.5V256M317 41H198.5V256M198.5 256H133';
 const J_THREAD = 'M316.5 104.5V256M198 471H316.5V256M316.5 256H382';
-/** The copper stops of docs/design/flanj-mark.svg, in offset order. */
+/** The copper stops of docs/brand/flanj-mark.svg, in offset order. */
 const COPPER: ReadonlyArray<readonly [string, string]> = [
   ['0', '#e0b077'],
   ['0.55', '#a86b2d'],
@@ -75,7 +75,7 @@ describe('the brand mark is the colour mark', () => {
   const style = styleOf('App.vue');
   const paths = brandMarkPaths(template);
 
-  it('carries the four paths of docs/design/flanj-mark.svg, in order', () => {
+  it('carries the four paths of docs/brand/flanj-mark.svg, in order', () => {
     expect(paths.map((p) => p.d)).toEqual([PIPES, OUTLINE, F_THREAD, J_THREAD]);
     expect(paths.map((p) => p['stroke-width'])).toEqual(['15', '26', '18', '18']);
     for (const p of paths) {

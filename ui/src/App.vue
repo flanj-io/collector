@@ -215,7 +215,7 @@ const loadError = ref('');
 // polled every 5s while a confirmation is pending (or the Settings tab / a Flag
 // sheet is open) and on focus, so "Create thread" unlocks the moment the
 // contact clicks the confirmation. Threads come from `GET /api/threads` — one
-// relayed call to the control plane's §5.5a list, most-recently-active first,
+// relayed call to the control plane's list, most-recently-active first,
 // with the collector's local join fields merged on — and feed both the Threads
 // tab and the finding chips.
 const connect = ref<ConnectState | null>(null);
@@ -234,7 +234,7 @@ const threadsKnown = ref(false);
 const threadsTotal = ref(0);
 const threadsHasMore = ref(false);
 const sheetFinding = ref<Finding | null>(null);
-/** v1 phase 4 — the edge "Start a thread" was pressed on. Mutually exclusive
+/** The edge "Start a thread" was pressed on. Mutually exclusive
  *  with `sheetFinding`: the sheet reads QUESTION mode off the missing finding. */
 const sheetEdge = ref<{ host: string; domain: string; name: string } | null>(null);
 const sheetOpen = computed(() => sheetFinding.value !== null || sheetEdge.value !== null);
@@ -295,7 +295,7 @@ function toneClass(tone: 'drift' | 'ok' | 'neutral'): string {
 }
 /** The bolt inside a severity chip follows the chip's severity. */
 function badgeTone(f: Finding): string {
-  // Severity alone decides the tone (R-A): a kind never implies a severity.
+  // Severity alone decides the tone: a kind never implies a severity.
   return f.severity === 'breaking' ? 'tone-breaking' : f.severity === 'warning' ? 'tone-warning' : 'tone-info';
 }
 /** A thread chip lifts to the accent when the turn is ours to act on. */
@@ -325,11 +325,11 @@ function loadConnect(): Promise<void> {
   return connectInFlight;
 }
 
-// The list is the control plane's (CONTRACTS-CP §5.5a), relayed by the
+// The list is the control plane's, relayed by the
 // collector and joined to its local records. There is no local enumeration to
 // fall back on any more, so a failure is an honest error state — never a stale
-// list — and the 5s poll is the retry. The relay's own message (the deck's
-// "Couldn't reach the control plane.") is shown when it sent one.
+// list — and the 5s poll is the retry. The relay's own message ("Couldn't reach
+// the control plane.") is shown when it sent one.
 async function loadThreads() {
   // Do not ask for a list this collector cannot produce. `GET /api/threads`
   // answers 412 not_connected for exactly the state `/api/connect` reports as
@@ -434,7 +434,7 @@ function openSheet(f: Finding) {
 }
 
 /**
- * "Start a thread" on an outbound edge row (v1 phase 4): the SAME sheet, minus
+ * "Start a thread" on an outbound edge row: the SAME sheet, minus
  * the evidence block. Connect-gated identically — the sheet shows the inline
  * Connect prompt and unlocks the moment the confirmation click lands, which is
  * why this starts the same poll the flag path does.
@@ -481,10 +481,10 @@ async function openChipThread(threadId: string) {
 
 // Tab selection is the single source of truth in BOTH directions (route.ts):
 // every tab change goes through here and writes the hash the tab owns, and the
-// hash drives the tab (applyHash, below). Launch-week item 10: the tab buttons
-// used to write nothing while "Add address" and "Threads ›" did, so the URL
-// drifted from the screen — Threads → Add address (`#settings`) → Overview
-// (nothing) → reload landed on Settings, and Back moved the URL but not the tab.
+// hash drives the tab (applyHash, below). The tab buttons used to write
+// nothing while "Add address" and "Threads ›" did, so the URL drifted from
+// the screen — Threads → Add address (`#settings`) → Overview (nothing) →
+// reload landed on Settings, and Back moved the URL but not the tab.
 //
 // A change PUSHES a history entry, so Back returns to the previous tab: every
 // navigation in the app today is a user gesture. `replace` is for a redirect
@@ -532,7 +532,7 @@ const tab = ref<Tab>('overview');
 const expanded = ref<Record<string, boolean>>({});
 
 // ─── Appearance (Settings): Light / Dark, default LIGHT ───────────────────
-// ux-design-v2 §3: the collector matches the thread page — light by default,
+// The collector matches the thread page — light by default,
 // dark opt-in, NO System option. Persisted as `flanj.theme` and applied as
 // data-flanj-theme on <html>; the dark palette lives under [data-flanj-theme="dark"] only
 // and the prefers-color-scheme media query is gone from the stylesheet.
@@ -547,7 +547,7 @@ function setTheme(pref: ThemePref) {
   themeNoticeDismissed.value = true;
 }
 
-// The one-time light-default notice (§3.4). BOTH gates: this browser never
+// The one-time light-default notice. BOTH gates: this browser never
 // chose a theme (i.e. it was on the deleted System setting) AND the collector
 // reports it held data before this upgrade — so a fresh install never sees it,
 // and a dark-OS user who wakes up to a light UI is told why exactly once.
@@ -602,7 +602,7 @@ const outboundEdges = computed(() => edges.value.filter((e) => e.direction === '
 const inboundEdges  = computed(() => edges.value.filter((e) => e.direction === 'server').slice().sort(byDomain));
 
 // ─── One host → name index, shared by every surface that shows a host ─────
-// Owner ruling 2026-08-31: display names substitute for raw hosts everywhere a
+// Display names substitute for raw hosts everywhere a
 // host is shown — Traffic (the calls table + the counterparty facet) and the
 // Contracts provider cards, not only the Edges panel. They all read THIS
 // index, built from the edges list already loaded for the Edges panel: one
@@ -909,7 +909,7 @@ const contractCards = computed<{ self: ContractCard[]; mcpServers: ContractCard[
       // The spec's own `info.title` wins: it is the provider's own words for the
       // contract, read out of the document the operator loaded — declared, and
       // inspectable in this very tab. Edge display names are deliberately NOT
-      // consulted here (owner ruling 2026-08-31: naming stays on the Edges
+      // consulted here (naming stays on the Edges
       // panel; Traffic and Contracts keep domains). `peerHost` renders beside
       // whichever name wins, so the host is never replaced.
       key: 'spec-' + s.integration,
@@ -1078,7 +1078,7 @@ const cardGroups = computed(() => [
     cards: contractCards.value.providers,
     emptyText: providerContractsEmptyText(uncoveredHosts.value.length),
     // The MCP contrast, said where a new operator stands when they wonder what
-    // to do next (positioning-2026-09.md §5). On the PROVIDER section rather
+    // to do next. On the PROVIDER section rather
     // than the MCP one: the reader with nothing here is the one asking why one
     // half of the tab needed an upload and the other half filled itself in.
     emptyNote: MCP_NEEDS_NO_SETUP
@@ -1137,7 +1137,7 @@ function mcpServerName(integration: string): string {
 
 // Hosts that are MCP edges: known from mcp contracts and from observed MCP
 // calls — drives the transport badge on the Edges overview.
-// Brief 2026-09-17 §3.5: hosts whose catalog sits behind discovery meta-tools,
+// Hosts whose catalog sits behind discovery meta-tools,
 // with how many tools the agent's searches have shown us. Both of a server's
 // cards say so — its tools/list lists only the meta-tools, and the search row
 // is only what was looked up — so neither implies full coverage.
@@ -1154,7 +1154,7 @@ const mcpHosts = computed(() => {
   return hosts;
 });
 
-// Per-server MCP health headline (deck §2): output mismatch → definition
+// Per-server MCP health headline: output mismatch → definition
 // change (breaking, no calls affected yet) → nothing validated yet (neutral)
 // → clean. Three tones, like the REST line above it.
 const mcpOverview = computed(() => {
@@ -1188,7 +1188,7 @@ const mcpOverview = computed(() => {
   }));
 });
 
-// Local notices (deck §2): stale_client ONLY since qfix2-2026-08-26. A
+// Local notices: stale_client ONLY since qfix2-2026-08-26. A
 // DESCRIPTION definition change is now flaggable, so it cannot sit under a band
 // whose sub-line promises "Nothing here can be flagged" — it lives on the
 // Contracts tab with a Flag control, like every other definition change.
@@ -1212,7 +1212,7 @@ const localNoticesProviders = computed(() =>
 // MCP contract findings shown on the Contracts tab: output_mismatch +
 // definition_change (stale_client stays a Health-band notice only).
 const mcpContractFindings = computed(() =>
-  // value_change and input_rejection (2026-09-17, R-B's collector-only rows)
+  // value_change and input_rejection (2026-09-17, the collector-only rows)
   // are provider-side contract evidence like the other two, so they sit on the
   // same cards; stale_client stays a local notice.
   mcpFindings.value.filter((f) =>
@@ -1229,7 +1229,7 @@ const contractInfoCount = computed(
   () => contractTabRows.value.filter((f) => !isBreakingFinding(f) && !isAcked(f)).length
 );
 // Every un-acked informational row is a DESCRIPTION change: the pill keeps its
-// class and its count (e2e reads `.tab-count.warn`) but wears the steel
+// class and its count (tests read `.tab-count.warn`) but wears the steel
 // outline, not the copper fill — a wording change is not a warning.
 const contractDescOnly = computed(
   () =>
@@ -1430,9 +1430,9 @@ async function refresh() {
     edges.value = e.edges || [];
     loadError.value = '';
   } catch (e) {
-    // The relay's own one-sentence message when it answered, and the deck's
+    // The relay's own one-sentence message when it answered, and the fixed
     // line when it did not answer at all. `String(e)` put a raw
-    // `TypeError: Failed to fetch` in front of the operator (QA walk,
+    // `TypeError: Failed to fetch` in front of the operator (exploratory testing,
     // 2026-09-02) — the same string the ack path already refuses to show.
     loadError.value = e instanceof ApiError ? e.message : COLLECTOR_UNREACHABLE;
   }
@@ -1552,7 +1552,7 @@ watch(tab, (t) => {
       </symbol>
       <!-- The copper thread of the brand mark, defined ONCE per document here
            and referenced by url(#brandcu) from every instance of the mark. The
-           three stops are docs/design/flanj-mark.svg's own values, identical in
+           three stops are docs/brand/flanj-mark.svg's own values, identical in
            light and dark — the copper has no token yet (an upstream Claude
            Design ask is filed), so they stay as stop-color attributes on the
            asset's stops, never in a style block. -->
@@ -1565,8 +1565,8 @@ watch(tab, (t) => {
       </defs>
     </svg>
     <header class="topbar">
-      <!-- The mark is docs/design/flanj-mark.svg inlined — the COLOUR mark (the
-           kits show it; the mono variant was a wrong vault rule). The pipes and
+      <!-- The mark is docs/brand/flanj-mark.svg inlined — the COLOUR mark (the
+           designs show it; the mono variant was wrong). The pipes and
            the outline under the threads bind var(--logo-steel) and
            var(--logo-outline) by class in the style block, so they switch with
            the scheme like the dark file does; the F and J threads take the
@@ -1620,7 +1620,7 @@ watch(tab, (t) => {
 
     <p v-if="loadError" class="error banner">Failed to load: {{ loadError }}</p>
 
-    <!-- One-time light-default notice (ux-design-v2 §3.4). Reuses the shipped
+    <!-- One-time light-default notice. Reuses the shipped
          dismissible-banner component — no new component, no modal, no
          interstitial. Above the tab strip so it shows on whichever tab is
          opened first, exactly once per browser. -->
@@ -1675,7 +1675,7 @@ watch(tab, (t) => {
         </div>
       </section>
 
-      <!-- MCP servers (v0.5): one headline per observed server (deck §2), on
+      <!-- MCP servers (v0.5): one headline per observed server, on
            the same three tones as the REST line: a server whose snapshot has
            validated nothing yet is neutral, not green (ui/src/mcp.ts). -->
       <section
@@ -1685,8 +1685,8 @@ watch(tab, (t) => {
         :class="m.headline.tone"
       >
         <svg class="hx" :class="toneClass(m.headline.tone)" aria-hidden="true" focusable="false"><use href="#hxbolt" /></svg>
-        <!-- The deck's sentence stays whole (`Server: … — …`): its clause is
-             pinned lowercase by e2e headline-fresh. A description-only change
+        <!-- The sentence stays whole (`Server: … — …`): its clause is
+             pinned lowercase by tests. A description-only change
              names itself in the clause but never takes the drift tone
              (ui/src/mcp.ts). -->
         <div class="hl-you">
@@ -1695,7 +1695,7 @@ watch(tab, (t) => {
         </div>
       </section>
 
-      <!-- Local notices band (deck §2): stale-client items ONLY since
+      <!-- Local notices band: stale-client items ONLY since
            qfix2-2026-08-26 — description-only changes moved to the Contracts
            tab when they became flaggable. Visible to you only; NO flag control
            here, ever, and nothing here is ackable either. -->
@@ -1726,7 +1726,7 @@ watch(tab, (t) => {
             </h3>
             <p v-if="inboundEdges.length === 0" class="empty small">No inbound edges.</p>
             <div v-else class="edge-table">
-              <!-- The evidence the kit's table carries: calls in the window, drifted
+              <!-- The evidence the design's table carries: calls in the window, drifted
                    calls (red mono when any), last seen. The observed rate rides as a
                    muted suffix on the call count and only when it is non-zero — a
                    column of `0 /min` made a live install look dead. -->
@@ -1799,7 +1799,7 @@ watch(tab, (t) => {
                   <span class="num drift-n" :class="{ some: e.drift_count > 0 }">{{ e.drift_count }}</span>
                   <span class="num seen">{{ timeAgo(e.last_seen) }}</span>
                   <span class="edge-actions">
-                    <!-- v1 phase 4. It sits FIRST because it is the only action
+                    <!-- It sits FIRST because it is the only action
                          on this row that reaches the other org; Rename is
                          local housekeeping beside it. -->
                     <button type="button" class="btn ghost small" @click="openEdgeSheet(e)">{{ START_THREAD_LABEL }}</button>
@@ -2013,7 +2013,7 @@ watch(tab, (t) => {
           <p v-if="!p.spec && mcpHosts.has(p.peerHost)" class="prov-nospec">{{ MCP_NO_SPEC_NEEDED }}</p>
           <p v-else-if="!p.spec" class="prov-nospec">{{ NO_CONTRACT_ROW }}</p>
 
-          <!-- MCP per-tool rows (deck §3): the server's tools ARE the contract surface. -->
+          <!-- MCP per-tool rows: the server's tools ARE the contract surface. -->
           <div v-if="p.spec?.format === 'mcp' && mcpToolRows(p.spec.integration).length" class="tool-rows">
             <div v-for="t in mcpToolRows(p.spec.integration)" :key="t.name" class="tool-row">
               <div class="tool-line">
@@ -2031,7 +2031,7 @@ watch(tab, (t) => {
                control plane's findings index lands on this exact row. -->
           <article v-for="f in p.findings" :id="'finding-' + f.id" :key="f.id" class="finding nested" :class="{ acked: isAcked(f), highlight: f.id === highlightFindingId }">
             <div class="finding-head">
-              <!-- R-A (2026-09-17): TWO labels — the severity (coloured:
+              <!-- TWO labels — the severity (coloured:
                    BREAKING red · WARNING copper · INFO steel) and, separately,
                    the change kind (neutral). They replace the single class
                    badge, which mixed the two ("DESCRIPTION" was a kind,
@@ -2055,7 +2055,7 @@ watch(tab, (t) => {
                 <span v-else class="occ single">1 call</span>
               </template>
             </div>
-            <!-- definition_change: their tools/list at T1 vs at T2 (deck §3).
+            <!-- definition_change: their tools/list at T1 vs at T2.
                  DESCRIPTION rows render the diff PLAIN — a wording change is
                  not a severity diff. -->
             <!-- The snapshot labels carry a digest and a timestamp — machine
@@ -2152,7 +2152,7 @@ watch(tab, (t) => {
                 <button type="button" class="btn ghost small" :disabled="ackBusy[f.id]" :title="UNDO_TITLE" @click="setAck(f, false)">{{ UNDO_LABEL }}</button>
                 <span v-if="ackError[f.id]" class="error small-err">{{ ackError[f.id] }}</span>
               </template>
-              <!-- Evidence rule (v0.5 §6): local notices NEVER carry a flag control.
+              <!-- Evidence rule: local notices NEVER carry a flag control.
                    stale_client only — and it never reaches the Contracts tab
                    (mcpContractFindings excludes it), so this branch is a GUARD,
                    not a surface: it renders nothing, and its whole job is to
@@ -2163,7 +2163,7 @@ watch(tab, (t) => {
                    Until the list has been answered once, this finding may well
                    already be in a thread — offering Create thread would be a
                    claim we cannot make. Say what we don't know instead. -->
-              <!-- R-C (2026-09-17): INFO stays local, on every kind. Shown, never
+              <!-- INFO stays local, on every kind. Shown, never
                    flaggable — the relay and the control plane refuse it too.
                    Acknowledge stays available: it is local-only. -->
               <template v-else-if="staysLocalAsInfo(f)">
@@ -2172,8 +2172,8 @@ watch(tab, (t) => {
                 <span v-if="ackError[f.id]" class="error small-err">{{ ackError[f.id] }}</span>
               </template>
               <template v-else-if="!threadsKnown"><span class="hint-inline">{{ THREAD_STATE_UNKNOWN }}</span></template>
-              <!-- definition_change, EVERY class incl. DESCRIPTION (ux-design-v2
-                   §2.7): flaggable and CALL-LESS. The control is never born
+              <!-- definition_change, EVERY class incl. DESCRIPTION:
+                   flaggable and CALL-LESS. The control is never born
                    disabled — the relay lifted 400 finding_has_no_call for this
                    kind. `Flag this` keeps primary styling; the shared hint says
                    what stands in for the call. -->
@@ -2304,7 +2304,7 @@ watch(tab, (t) => {
         <h2>Appearance</h2>
         <div class="theme-field">
           <span class="theme-label">Theme</span>
-          <!-- Exactly two segments (ux-design-v2 §3.2). The System segment and
+          <!-- Exactly two segments. The System segment and
                the OS-setting helper line beside it are DELETED, not re-worded —
                the replacement states the two consequences that matter: what the
                default is, and that the choice is per-browser. -->
@@ -2422,7 +2422,7 @@ watch(tab, (t) => {
                 {{ humanTime(c.captured_at) }}
               </span>
               <span class="c-call">
-                <!-- MCP tool calls: the tool rides the method/path slot (deck §4). -->
+                <!-- MCP tool calls: the tool rides the method/path slot. -->
                 <template v-if="c.transport === 'mcp'">
                   <span class="method tool" :title="MCP_BADGE_TOOLTIP">{{ MCP_TOOL_CHIP }}</span>
                   <span class="route mono">{{ toolNameOf(c) }}</span>
@@ -2578,12 +2578,12 @@ watch(tab, (t) => {
 </template>
 
 <style>
-/* Blueprint collector kit (docs/design/kits/collector), bound straight to the
+/* Blueprint collector design, bound straight to the
    canonical tokens. Palette: NONE of it lives here. `src/tokens.css` is the
-   vendored copy of docs/design/tokens.css and is imported ahead of this block in
+   vendored copy of the canonical tokens and is imported ahead of this block in
    main.ts. This file holds layout and component rules only — a hex literal
    below is a bug, and so is a custom property whose name the canonical file
-   already defines (src/tokens.test.ts scans for both). The kit's alias layer
+   already defines (src/tokens.test.ts scans for both). The design's alias layer
    (--bg, --panel, --cu …) and its font-name literals are dropped: every class
    reads var(--ground), var(--surface), var(--accent), var(--f-mono) … directly.
 
@@ -2609,7 +2609,7 @@ watch(tab, (t) => {
    --accent*. Text takes the -ink role of its family; text at or below 14px
    never uses --ink-faint (the muted text role here is --ink-soft).
 
-   Theme (ux-design-v2 §3.3): LIGHT is the base, dark applies under
+   Theme: LIGHT is the base, dark applies under
    [data-flanj-theme="dark"] ONLY, and there is no OS-following state —
    index.html stamps data-flanj-theme="light" so tokens.css's
    prefers-color-scheme block never fires here. Corners are square (--radius:
@@ -2651,7 +2651,7 @@ code { font-family: var(--f-mono); }
 .brand-mark { width: 30px; height: 30px; flex: none; }
 /* The colour mark's two token-bound strokes: the pipes in steel, the outline
    under the copper threads in the outline ink. Both tokens switch under
-   [data-flanj-theme="dark"] (docs/design/flanj-mark-dark.svg differs from the
+   [data-flanj-theme="dark"] (the dark mark differs from the
    light file in exactly these two colours). The threads are attribute-coloured
    in the template — see the #brandcu gradient in the hx-defs holder. */
 .brand-pipes { stroke: var(--logo-steel); }
@@ -2666,7 +2666,7 @@ code { font-family: var(--f-mono); }
 .pill.warn { color: var(--accent-ink); border-color: var(--accent-ink); }
 /* A pill that carries a NAME someone typed (the org pill) keeps that name's own
    case: the uppercase mono treatment is for labels. "CustomerX" is how the
-   provider sees it on every thread, and e2e reads it verbatim. */
+   provider sees it on every thread, and tests read it verbatim. */
 .pill-name { text-transform: none; letter-spacing: 0.02em; }
 /* Connected is a reached state: green, with the green bolt leading it. */
 .pill.ok { color: var(--ok-ink); border-color: var(--ok); }
@@ -2737,7 +2737,7 @@ h2 small { font: 400 12.5px/1.5 var(--f-sans); letter-spacing: 0.04em; text-tran
 .headline.neutral .hl-you strong { color: var(--ink-soft); }
 .hl-sub { color: var(--ink-soft); font-size: 12.5px; margin-top: 4px; }
 .hl-sub code { background: var(--surface-sunk); padding: 1px 6px; }
-/* The MCP line is the deck's whole sentence, so it steps down one size. */
+/* The MCP line is the whole sentence, so it steps down one size. */
 .mcp-headline .hl-you { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 15px; }
 .mcp-headline .mcp-badge { margin-left: 0; }
 
@@ -2932,7 +2932,7 @@ pre.body { background: var(--surface); border: var(--border-w) solid var(--rule)
 .finding { background: var(--surface); border: var(--border-w) solid var(--rule); border-radius: var(--radius); margin-bottom: 14px; transition: border-color var(--dur) var(--ease), color var(--dur) var(--ease); }
 .finding.nested { margin: 12px 0 0; }
 /* Acknowledged: dimmed IN PLACE with the palette, never with opacity — the
-   kit's `opacity: .55` put 12–13px evidence at 2.6:1, which hides it for
+   design's `opacity: .55` put 12–13px evidence at 2.6:1, which hides it for
    low-vision readers while promising it is never hidden. Text drops to
    --ink-soft, the frame to --rule-soft, the chip and its bolts to steel; every
    pair stays at or above 4.5:1 in both schemes. */
@@ -2950,7 +2950,7 @@ pre.body { background: var(--surface); border: var(--border-w) solid var(--rule)
    the tier's bare colour, text in its -ink role. Each tier uses its own family
    and the accent never carries one (src/tokens.test.ts pins all three). */
 .badge { display: inline-flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 104px; font: 600 10.5px/1 var(--f-mono); letter-spacing: 0.1em; text-transform: uppercase; padding: 4px 7px; border: var(--border-w-hair) solid currentColor; border-radius: var(--radius); }
-/* The change-kind label (R-A): neutral, never a severity colour — only the
+/* The change-kind label: neutral, never a severity colour — only the
    severity chip beside it is coloured. */
 .badge.kind { min-width: 0; color: var(--ink-soft); border-color: var(--rule); }
 .badge.breaking { color: var(--sev-breaking-ink); border-color: var(--sev-breaking); }

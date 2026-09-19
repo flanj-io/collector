@@ -68,7 +68,7 @@ type RegisterRequest struct {
 	LocalUIURL         string `json:"local_ui_url,omitempty"`
 }
 
-// Confirmation-mail outcomes (CONTRACTS-CP §5.1, additive). A 2xx says the
+// Confirmation-mail outcomes (additive). A 2xx says the
 // REGISTRATION succeeded; it says nothing about the mail, which is why this
 // field exists. Empty means the CP reported no outcome — either no mail was
 // warranted (the contact is already confirmed) or the CP predates the field.
@@ -104,7 +104,7 @@ type RegisterResponse struct {
 // MeResponse is GET /api/v1/collectors/me (Bearer collector key).
 type MeResponse struct {
 	// CollectorName is the stored name after any rename — the dashboard's
-	// rename (CONTRACTS-CP §5.21) reaches the panel through this field.
+	// rename reaches the panel through this field.
 	CollectorName       string `json:"collector_name"`
 	CollectorID         string `json:"collector_id"`
 	CollectorPublicID   string `json:"collector_public_id"`
@@ -114,7 +114,7 @@ type MeResponse struct {
 	ContactStatus       string `json:"contact_status"`
 	// ConfirmedContactEmail is the contact currently usable for threads — null
 	// until the first confirmation; it STAYS set while a newer contact is pending
-	// (CONTRACTS-CP §5.3: the relay must not 412 a flag while it is non-null).
+	// (the relay must not 412 a flag while it is non-null).
 	// nil also when an older CP omits the field.
 	ConfirmedContactEmail *string `json:"confirmed_contact_email"`
 	RegisteredAt          string  `json:"registered_at"`
@@ -149,8 +149,8 @@ type LinkStatus struct {
 
 // ThreadSummary is GET /api/v1/threads/{id}/summary — thread STATE only; the
 // conversation itself is read on the control plane. The SAME object is one row
-// of GET /api/v1/threads (CONTRACTS-CP §5.5a: "byte-for-byte the §5.5 summary
-// object"), so this struct serves both the per-thread poll and the list.
+// of GET /api/v1/threads (byte-for-byte the same summary
+// object), so this struct serves both the per-thread poll and the list.
 //
 // It carries NO finding id, NO thread_url and NO token — a row is a state row,
 // never a way to re-obtain access. The collector joins its own local fields on
@@ -174,13 +174,13 @@ type ThreadSummary struct {
 	Link                *LinkStatus `json:"link"`
 	Archived            bool        `json:"archived"`
 	CreatedAt           string      `json:"created_at"`
-	// UpdatedAt is last activity — what the §5.5a order sorts on. A reply, a
+	// UpdatedAt is last activity — what the list order sorts on. A reply, a
 	// close/reopen, a link replace and a deletion move it; the archive sweep
 	// does not.
 	UpdatedAt string `json:"updated_at"`
 }
 
-// ThreadListResponse is GET /api/v1/threads (CONTRACTS-CP §5.5a) — an ENVELOPE,
+// ThreadListResponse is GET /api/v1/threads — an ENVELOPE,
 // not a bare array. `total` is what the collector has before the limit, so
 // has_more (total > count) means "ask again with a bigger limit"; there is no
 // cursor.
@@ -226,7 +226,7 @@ func (c *Client) Register(ctx context.Context, req RegisterRequest) (RegisterRes
 }
 
 // RegisterWithKey re-registers an already-Connected collector: POST
-// /api/v1/collectors/register with Bearer <collector key> (CONTRACTS-CP §5.1).
+// /api/v1/collectors/register with Bearer <collector key>.
 // The same email = resend of the confirmation; a different email = a new
 // pending contact on the SAME collector. The key is unchanged either way (the
 // response carries none; callers keep the key they hold). 200 (201 tolerated).
@@ -276,7 +276,7 @@ func (c *Client) Summary(ctx context.Context, threadID string) (ThreadSummary, i
 }
 
 // ListThreads fetches the threads this collector created: GET
-// /api/v1/threads?limit=<n> (CONTRACTS-CP §5.5a), Bearer collector key, scoped
+// /api/v1/threads?limit=<n>, Bearer collector key, scoped
 // on the CP by `collector_id = auth.collector.id` — the caller never names a
 // collector. Rows come back most-recently-active first (`updated_at DESC,
 // created_at DESC, id ASC`); the order is fixed and there is no cursor.
@@ -294,7 +294,7 @@ func (c *Client) ListThreads(ctx context.Context, limit int) (ThreadListResponse
 	return out, status, err
 }
 
-// ListThreadsMaxLimit is §5.5a's hard cap — the biggest limit the CP accepts.
+// ListThreadsMaxLimit is the list's hard cap — the biggest limit the CP accepts.
 const ListThreadsMaxLimit = 200
 
 // ReplaceLink = Replace thread link: revoke every outstanding thread-link token
@@ -326,7 +326,7 @@ func (c *Client) do(ctx context.Context, method, path, bearer string, req any, o
 	httpReq.Header.Set("Accept", "application/json")
 	// No credential at all → no header at all. A `Bearer ` with nothing after
 	// it is a MALFORMED credential, and the CP refuses it with a 401 rather
-	// than treating it as "no credential" (CONTRACTS-CP §5.1).
+	// than treating it as "no credential".
 	if bearer != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+bearer)
 	}

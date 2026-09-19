@@ -15,14 +15,13 @@ package flanjui
 // inline. Log lines carry only status + counts: never the bearer, never any
 // finding content.
 //
-// ONE ticker, THREE independently gated legs (owner ruling 2026-08-31,
-// extended by v1 phase 2): the directory display-name refresh (directory.go)
-// rides this same ticker under its own key `directory_sync`, and edge
-// registration (edges.go) under `edge_sync`. Three different egresses with
-// three different privacy stories — findings go OUT, the directory only comes
-// IN, registration sends the external DOMAINS and nothing else — so no switch
-// may silently turn another off. With ALL THREE false the goroutine is never
-// started at all: no ticker, no work, nothing.
+// ONE ticker, THREE independently gated legs (2026-08-31): the directory
+// display-name refresh (directory.go) rides this same ticker under its own key
+// `directory_sync`, and edge registration (edges.go) under `edge_sync`. Three
+// different egresses with three different privacy stories — findings go OUT,
+// the directory only comes IN, registration sends the external DOMAINS and
+// nothing else — so no switch may silently turn another off. With ALL THREE
+// false the goroutine is never started at all: no ticker, no work, nothing.
 
 import (
 	"context"
@@ -66,15 +65,15 @@ func (e *uiExtension) startFindingSync() {
 				e.syncFindingsOnce(ctx)
 			}
 			// Leg 2 — the directory pull (directory_sync): rides the same
-			// cadence, after findings (v1 phase 1 — directory.go); conditional
+			// cadence, after findings (directory.go); conditional
 			// full-table fetch, same skip conditions, silent. Gated on its OWN
 			// key, so finding_sync: false never stops a name refresh.
 			if syncDirectory {
 				e.syncDirectoryOnce(ctx)
 			}
 			// Leg 3 — edge registration (edge_sync): the external edges this
-			// deployment has discovered, by registrable domain (v1 phase 2 —
-			// edges.go). Same cadence, same skip conditions, silent. Gated on
+			// deployment has discovered, by registrable domain
+			// (edges.go). Same cadence, same skip conditions, silent. Gated on
 			// its OWN key, so neither of the other two switches stops it and
 			// it stops neither of them.
 			if syncEdges {

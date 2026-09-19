@@ -68,9 +68,9 @@ const (
 	// AttrMCPErrorCode (additive, optional — 2026-09-17) is the JSON-RPC error
 	// code when the tools/call REQUEST itself was rejected (as opposed to a
 	// result with isError). -32602 (invalid params) on arguments that
-	// previously succeeded is R-B's observed_failure row.
+	// previously succeeded is the observed_failure row.
 	AttrMCPErrorCode = "flanj.mcp.error.code"
-	// AttrMCPViaDispatch (additive, optional — R-E, 2026-09-17) is stamped by
+	// AttrMCPViaDispatch (additive, optional — 2026-09-17) is stamped by
 	// the drift processor, never by an SDK: the dispatcher tool a call went
 	// through when it was re-attributed to the inner tool it named.
 	AttrMCPViaDispatch = "flanj.mcp.via_dispatch"
@@ -347,8 +347,8 @@ func StampValidated(lr plog.LogRecord, v model.Validation) {
 	}
 }
 
-// StampDispatchTarget re-keys a dispatcher call to the inner tool it named
-// (R-E, brief 2026-09-17 §3.2): the tool name and the route now name the inner
+// StampDispatchTarget re-keys a dispatcher call to the inner tool it named:
+// the tool name and the route now name the inner
 // tool, and the dispatcher is kept as via_dispatch. The request body is left
 // untouched — it is the literal dispatcher call, which is what a provider
 // needs to reproduce it.

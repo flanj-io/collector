@@ -1,6 +1,6 @@
 package promote
 
-// Directory client calls (v1 phase 1 — edge naming, CONTRACTS-CP):
+// Directory client calls (edge naming):
 //
 //   - GetDirectory: the periodic FULL-TABLE pull (GET /api/v1/directory,
 //     Bearer collector key) with a conditional fetch — If-None-Match with the

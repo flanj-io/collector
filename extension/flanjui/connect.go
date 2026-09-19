@@ -28,7 +28,7 @@ import (
 // is mandatory at Connect, unique within the contact's workspace on the CP,
 // and changeable: once a key exists, every later register — a resend, a change
 // of contact, or a RENAME (the same call with a new name) — is sent with
-// Bearer <collector key> (CONTRACTS-CP §5.1); the CP updates the record the key
+// Bearer <collector key>; the CP updates the record the key
 // names and nothing else. The relay keeps the CP's copy of the name (from the
 // register response and from `me`), so a rename made on the dashboard reaches
 // the panel too. A change of contact leaves the previously confirmed email
@@ -73,7 +73,7 @@ type connectState struct {
 	ConfirmedContactEmail string // the contact usable for threads ("" until the first confirmation)
 
 	// ConfirmationMail is TRANSIENT — the outcome of the confirmation mail on
-	// THIS request (CONTRACTS-CP §5.1: sent | failed | cooldown), never
+	// THIS request (sent | failed | cooldown), never
 	// persisted and never read back from the store. It describes an attempt,
 	// not deployment state: a page that reloads has no send to report, and
 	// saveConnect deliberately does not carry it.
@@ -84,7 +84,7 @@ type connectState struct {
 
 // hasConfirmedContact is the Create-thread gate: a confirmed contact exists —
 // either the current one, or a previous one that stays usable while a newer
-// contact is pending (CONTRACTS-CP §5.3).
+// contact is pending.
 func (cs connectState) hasConfirmedContact() bool {
 	return cs.ContactStatus == contactConfirmed || cs.ConfirmedContactEmail != ""
 }
@@ -267,7 +267,7 @@ func (e *uiExtension) refreshConnect(ctx context.Context, st store.Store, cs con
 		}
 	}
 	set(&cs.CollectorPublicID, me.CollectorPublicID)
-	// The name is the CP's to hold: a rename made on the dashboard (§5.21)
+	// The name is the CP's to hold: a rename made on the dashboard
 	// lands here on the next refresh, so the panel never shows a stale one.
 	set(&cs.CollectorName, me.CollectorName)
 	set(&cs.ConsumerDisplayName, me.ConsumerDisplayName)
@@ -328,7 +328,7 @@ func (e *uiExtension) handleConnectGet(w http.ResponseWriter, r *http.Request) {
 	cs, cpErr := e.refreshConnect(r.Context(), st, cs, false)
 	out := cs.view()
 	out["cp_configured"] = e.cp != nil
-	// v1 phase 2 — the edge-registration disclosure. The panel states what
+	// The edge-registration disclosure. The panel states what
 	// Connecting causes BEFORE you Connect ("this collector registers the
 	// external domains it observes — never calls, bodies, or payloads"), so the
 	// SPA needs the deployment's actual `edge_sync` setting: with the switch off
@@ -361,7 +361,7 @@ func (e *uiExtension) handleConnectGet(w http.ResponseWriter, r *http.Request) {
 // cp_public_url wins outright. It exists because the address the collector's
 // REQUESTS go to (cp_base_url — the promote client's base) and the address the
 // OPERATOR'S BROWSER can open are different things on any split network: on
-// the e2e stack cp_base_url is `http://cp-api:3001` (docker DNS), in a cluster
+// the integration stack cp_base_url is `http://cp-api:3001` (docker DNS), in a cluster
 // it is as likely a Service name or a VPC-private ingress, and a laptop
 // resolves none of them. Without the public key, cp_base_url is used only when
 // its host is not obviously non-public — a dead link is worse than no link,
@@ -616,7 +616,7 @@ func (e *uiExtension) handleConnectPost(w http.ResponseWriter, r *http.Request) 
 	// First Connect: register with the deploy token when one is configured,
 	// with no credential otherwise (the open door, 2026-09-14); the collector
 	// key is returned once. Afterwards EVERY register goes out with the
-	// collector key (CONTRACTS-CP §5.1): the same email only re-sends the
+	// collector key: the same email only re-sends the
 	// confirmation; a different email starts a new pending contact on the same
 	// collector; a different collector_name renames it. The deploy token is
 	// never used again once a key exists — a register without the key is a NEW

@@ -44,12 +44,12 @@ type stubCP struct {
 	lastRegisterBody map[string]any
 	wrongOrigin      bool
 	mintCount        int
-	// CONTRACTS-CP §5.1 (additive): the confirmation-mail outcome the CP
+	// The confirmation-mail outcome the CP
 	// reports on register. "" = the CP reports none (already confirmed, or a
 	// CP predating the field), which must reach the UI as an ABSENT key.
 	confirmationMail           string
 	confirmationMailRetryAfter int
-	// §5.5a list route: insertion order (the stub lists it reversed, so the
+	// Thread list route: insertion order (the stub lists it reversed, so the
 	// most recently touched thread is first), the last query string seen, the
 	// number of list calls, and an optional forced status for the error paths.
 	order      []string
@@ -57,14 +57,14 @@ type stubCP struct {
 	listCalls  int
 	listStatus int
 	// listTotal / listHasMore override the envelope's truncation fields, so a
-	// test can be a collector with more threads than §5.5a's hard cap.
+	// test can be a collector with more threads than the list route's hard cap.
 	listTotal   int
 	listHasMore bool
 	// Finding-shape sync (POST /api/v1/findings): every raw request body, in
 	// order, plus the call count — sync_test.go asserts on the BYTES.
 	findingsCalls  int
 	findingsBodies [][]byte
-	// Edge registration (POST /api/v1/edges/sync — v1 phase 2): the call count
+	// Edge registration (POST /api/v1/edges/sync): the call count
 	// plus every raw body in order, so a test can assert on the WIRE BYTES that
 	// an internal edge never left.
 	edgesCalls  int
@@ -72,7 +72,7 @@ type stubCP struct {
 	// Directory pull (GET /api/v1/directory): the served ENTRIES object + ETag,
 	// the If-None-Match header of every call, and the call count. Fixtures set
 	// the bare `{"<domain>": {"name","tier"}}` map; the stub ALWAYS wraps it in
-	// the §5.14 envelope `{"entries": …, "count": n}` itself, so a fixture can
+	// the directory envelope `{"entries": …, "count": n}` itself, so a fixture can
 	// never drift back to serving a bare map.
 	directoryEntries string
 	directoryETag    string
@@ -86,7 +86,7 @@ type stubCP struct {
 	submissionMessage string
 }
 
-// directoryEnvelopeBody wraps a bare entries object in the §5.14 response
+// directoryEnvelopeBody wraps a bare entries object in the directory response
 // envelope `{"entries": …, "count": n}` — the ONLY shape the stub (and the
 // real CP) ever serves. Tests reuse it to compute expected raw bodies.
 func directoryEnvelopeBody(entries string) string {
@@ -98,7 +98,7 @@ func directoryEnvelopeBody(entries string) string {
 	return fmt.Sprintf(`{"entries":%s,"count":%d}`, entries, len(m))
 }
 
-// summaryRow is the §5.5 summary object — the SAME row §5.5a lists.
+// summaryRow is the thread summary object — the SAME row the thread list returns.
 func (s *stubCP) summaryRow(id string) map[string]any {
 	return map[string]any{"id": id, "thread_public_id": "pub_" + id, "state": s.state[id], "closed_at": nil, "reopened_at": nil,
 		"turn": "waiting_on_provider", "consumer_display_name": "Acme Consumer Ltd", "provider_display_name": "Acme Payments",
@@ -192,7 +192,7 @@ func newStubCP(t *testing.T) *stubCP {
 				mailOut(w, 200, named(map[string]any{"collector_id": "c1", "collector_public_id": "pub_c1", "contact_status": s.contactStatus}))
 				return
 			}
-			// a different email with only the deploy token = a NEW collector (CONTRACTS-CP §5.1) —
+			// a different email with only the deploy token = a NEW collector —
 			// a Connected collector must never land here.
 			mailOut(w, 201, map[string]any{"collector_id": "c2", "collector_public_id": "pub_c2", "collector_key": "ckey_OTHER_COLLECTOR", "contact_status": "pending"})
 		case "Bearer " + s.collectorKey:
@@ -259,7 +259,7 @@ func newStubCP(t *testing.T) *stubCP {
 		jsonOut(w, status, map[string]any{"thread_id": "thr_1", "thread_public_id": "pub_thr_1", "thread_url": fmt.Sprintf("https://cp.test/t/pub_thr_1#k=tok_%d", s.flagCalls),
 			"peek_url": fmt.Sprintf("https://cp.test/t/pub_thr_1#k=tok_%d", s.flagCalls), "magic_token": "x", "state": "open", "status": st})
 	})
-	// CONTRACTS §5: the shape-only finding sync — collector key required; the
+	// The shape-only finding sync — collector key required; the
 	// stub records the raw body so tests can assert on the wire bytes.
 	mux.HandleFunc("POST /api/v1/findings", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
@@ -276,7 +276,7 @@ func newStubCP(t *testing.T) *stubCP {
 		_ = json.Unmarshal(raw, &b)
 		jsonOut(w, 200, map[string]any{"received": len(b.Findings), "stored": len(b.Findings)})
 	})
-	// CONTRACTS §5: edge registration — collector key required; the stub
+	// Edge registration — collector key required; the stub
 	// records the raw body so tests can assert on the wire bytes that no
 	// internal edge, and no peer host, ever left.
 	mux.HandleFunc("POST /api/v1/edges/sync", func(w http.ResponseWriter, r *http.Request) {
@@ -335,7 +335,7 @@ func newStubCP(t *testing.T) *stubCP {
 		}
 		jsonOut(w, 202, map[string]any{"status": "pending"})
 	})
-	// CONTRACTS-CP §5.5a: the collector-key-scoped thread list, an ENVELOPE.
+	// The collector-key-scoped thread list, an ENVELOPE.
 	mux.HandleFunc("GET /api/v1/threads", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -399,7 +399,7 @@ func newStubCP(t *testing.T) *stubCP {
 		}
 	})
 	// Every request, whatever the route, so a test can assert a code path makes
-	// NO control-plane call at all — which is the whole ruling for uploaded
+	// NO control-plane call at all — which is the whole point for uploaded
 	// contracts, and not something a per-route counter can prove.
 	s.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
@@ -590,7 +590,7 @@ func TestConnectThenFlagLoop(t *testing.T) {
 	if r.st.settings[settingCollectorKey] != r.cp.collectorKey {
 		t.Fatalf("resend must keep the key")
 	}
-	// CONTRACTS-CP §5.1: once a key exists, register goes out with the KEY, never the deploy token
+	// Once a key exists, register goes out with the KEY, never the deploy token
 	if got := r.cp.registerAuths; len(got) != 2 || got[0] != "Bearer "+r.cp.deployToken || got[1] != "Bearer "+r.cp.collectorKey {
 		t.Fatalf("register bearers = %v; want [deploy token, collector key]", got)
 	}
@@ -797,7 +797,7 @@ func TestThreadsListSourceIsTheControlPlane(t *testing.T) {
 	_ = saveThread(r.st, threadRecord{ThreadID: "thr_gone", ThreadPublicID: "p", FindingID: "fnd_gone", Endpoint: "POST /v1/charges",
 		Provider: "Acme Payments", ThreadURL: "https://cp.test/t/p#k=t", CreatedAt: "2026-08-23T10:00:00Z"})
 	// Two CP rows: one this collector has a local record for, one it does not
-	// (a wiped local store — §5.5a exists precisely so that no longer loses the list).
+	// (a wiped local store — the CP-side list exists precisely so that no longer loses the list).
 	_ = saveThread(r.st, threadRecord{ThreadID: "thr_1", ThreadPublicID: "pub_thr_1", FindingID: "fnd_1", Endpoint: "POST /v1/charges",
 		Provider: "Acme Payments", Integration: "acme-payments", ThreadURL: "https://cp.test/t/pub_thr_1#k=tok_1", CreatedAt: "2026-08-23T10:00:00Z"})
 	r.cp.mu.Lock()
@@ -823,7 +823,7 @@ func TestThreadsListSourceIsTheControlPlane(t *testing.T) {
 		t.Errorf("expected exactly one CP list call, got %d", calls)
 	}
 	if query != "limit=200" {
-		t.Errorf("limit must be the §5.5a hard cap, got %q", query)
+		t.Errorf("limit must be the list route's hard cap, got %q", query)
 	}
 	// CP order is the order (most-recently-active first): thr_2 then thr_1.
 	if list[0]["thread_id"] != "thr_2" || list[1]["thread_id"] != "thr_1" {
@@ -1032,7 +1032,7 @@ func TestStaleThreadPointerOperatesOnTheRequestedThread(t *testing.T) {
 	}
 }
 
-// TestThreadsListTruncationIsHonest: §5.5a has no cursor, so a collector with
+// TestThreadsListTruncationIsHonest: the CP thread list has no cursor, so a collector with
 // more threads than the hard cap gets a short list. That has to be visible —
 // total and has_more are relayed, never decoded and dropped.
 func TestThreadsListTruncationIsHonest(t *testing.T) {
@@ -1125,7 +1125,7 @@ func TestConnectReplayWithoutKey(t *testing.T) {
 	}
 }
 
-// TestChangeContactKeepsKeyAndThreads (CONTRACTS-CP §5.1 + §5.3): a Connected
+// TestChangeContactKeepsKeyAndThreads: a Connected
 // collector that changes its contact re-registers with the COLLECTOR KEY (never
 // the deploy token — that would register a new collector), keeps its key, and
 // while the NEW email is pending the previously confirmed contact keeps Create
@@ -1280,7 +1280,7 @@ func TestFlagGateBeforeFirstConfirmation(t *testing.T) {
 	}
 }
 
-// TestFlagRefusesLocalOnlyKinds (v0.5 §4.C.4, amended qfix2-2026-08-26): the
+// TestFlagRefusesLocalOnlyKinds (amended qfix2-2026-08-26): the
 // relay REFUSES to flag local-only finding kinds SERVER-SIDE — stale_client,
 // and ONLY stale_client — even for a fully Connected collector. Nothing reaches
 // the CP for those. Every flaggable kind still flags, including a DESCRIPTION
@@ -1327,7 +1327,7 @@ func TestFlagRefusesLocalOnlyKinds(t *testing.T) {
 		t.Fatalf("a local-only finding reached the CP (%d flag calls)", r.cp.flagCalls)
 	}
 
-	// R-C (Idan, 2026-09-17): INFO never crosses the org boundary, on any
+	// INFO never crosses the org boundary, on any
 	// kind — refused here server-side, not just by the UI's missing control.
 	_ = r.st.InsertFinding(model.Finding{SchemaVersion: 1, ID: "fnd_info", Kind: model.KindDefinitionChange,
 		ChangeKind: "input", Severity: model.SeverityInfo, Integration: "acme-payments", Endpoint: "create_refund",
@@ -1361,7 +1361,7 @@ func TestFlagRefusesLocalOnlyKinds(t *testing.T) {
 		t.Errorf("an output_mismatch flag must carry its failing call: %v", r.cp.lastFlagBody)
 	}
 
-	// CALL-LESS FLAGGING (ux-design-v2 §2.7.5): a DESCRIPTION definition change
+	// CALL-LESS FLAGGING: a DESCRIPTION definition change
 	// has no source call at all. It must NOT 400 finding_has_no_call, and the
 	// body must omit `call` rather than invent one.
 	resp, out, raw = r.do(t, http.MethodPost, "/api/flag", map[string]any{"finding_id": "fnd_desc", "allowed_domains": []string{"acme-payments.test"}})
@@ -1383,7 +1383,7 @@ func TestFlagRefusesLocalOnlyKinds(t *testing.T) {
 	// finding that has no source call at ALL — a version diff, or an
 	// output_mismatch whose call was never stored — now flags CALL-LESS instead
 	// of answering 400 finding_has_no_call, because the message carries the ask.
-	// This is the 400 gap closed by design (v1-build-spec §3 Step 4, ruling 3).
+	// This is the 400 gap closed by design.
 	_ = r.st.InsertFinding(model.Finding{SchemaVersion: 1, ID: "fnd_mismatch_nocall", Kind: model.KindOutputMismatch,
 		Severity: model.SeverityBreaking, Integration: "acme-payments", Endpoint: "list_transactions",
 		Expected: "type=integer", Actual: `type=string ("1200")`, Rule: "type-mismatch",
@@ -1777,7 +1777,7 @@ func TestFindingAckFlow(t *testing.T) {
 	}
 }
 
-// TestAckKeyedOnEvidenceVersion (qfix2-2026-08-26, ux-design-v2 §2.8; §7 risk 2)
+// TestAckKeyedOnEvidenceVersion (qfix2-2026-08-26)
 // is THE regression test for silent auto-acknowledgement.
 //
 // Finding.ComputeSignature() is integration|endpoint|kind|rule|field_path —
@@ -1893,7 +1893,7 @@ func TestAckKeyedOnEvidenceVersion(t *testing.T) {
 		t.Errorf("legacy ack must not cover a definition_change: %v", rows["fnd_desc"])
 	}
 
-	// 5. The optional §2.8 wire fields are accepted and PERSISTED (no UI for
+	// 5. The optional wire fields are accepted and PERSISTED (no UI for
 	//    them in this slice — the reason set and the person model are next).
 	resp, _, _ = r.do(t, http.MethodPost, "/api/findings/fnd_desc/ack", map[string]any{
 		"reason": "we_adapt", "note": "we pin tools/list at v1.2.0", "actor_person_id": "per_1",
@@ -1947,7 +1947,7 @@ func TestAckOccurrenceCountedKeepsSignatureOnlyKey(t *testing.T) {
 	}
 }
 
-// TestHeldPriorDataProbe (qfix2-2026-08-26, ux-design-v2 §3.4): GET /api/health
+// TestHeldPriorDataProbe (qfix2-2026-08-26): GET /api/health
 // reports whether this collector held data before the light-default upgrade —
 // the SECOND gate on the one-time theme-flip notice (the first, "no stored
 // theme choice", only the browser can answer). A fresh install must answer
@@ -2021,7 +2021,7 @@ func (b *brokenStore) GetSetting(string) (string, bool, error)           { retur
 // walk (2026-09-02): with the database stopped, every read route answered
 // `{"error": "failed to connect to user=flanj database=flanj … lookup postgres
 // …"}` — the connection string, in prose, to an unauthenticated localhost GET,
-// at 500, while every mutating route answered the deck's one sentence at the
+// at 500, while every mutating route answered the fixed one-sentence copy at the
 // same moment. Two envelopes and two statuses for one condition.
 //
 // Every read route now answers the SAME 503 {error, message} the rest of the
@@ -2063,7 +2063,7 @@ func TestReadRoutesNeverLeakTheStoreError(t *testing.T) {
 			t.Errorf("GET %s: error = %v, want the stable code store_error", path, body["error"])
 		}
 		if body["message"] != msgStoreUnavailable {
-			t.Errorf("GET %s: message = %v, want the deck's sentence %q", path, body["message"], msgStoreUnavailable)
+			t.Errorf("GET %s: message = %v, want the fixed sentence %q", path, body["message"], msgStoreUnavailable)
 		}
 		// The leak itself: never the DSN, in any fragment, on any route.
 		for _, secret := range []string{"user=", "database=", "postgres", "5432", storeDSNError} {
@@ -2191,7 +2191,7 @@ func TestFindingsCarryTheirSourceCallHost(t *testing.T) {
 }
 
 // TestConnectRelaysTheConfirmationMailOutcome pins the middle of the honesty
-// seam (CONTRACTS-CP §5.1). The CP answers 200/201 whether or not the mail left
+// seam. The CP answers 200/201 whether or not the mail left
 // the box, so a 2xx alone can never justify "Check your inbox" — the collector
 // must relay the CP's own verdict, unchanged, and say nothing when there is
 // none. A regression here is silent: the panel keeps rendering, just lying.

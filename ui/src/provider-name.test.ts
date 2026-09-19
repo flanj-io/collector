@@ -32,7 +32,7 @@ describe('providerNameForFinding', () => {
 
   it('call-evidenced findings keep the SDK integration slug, humanized — the relay’s own rule', () => {
     expect(providerNameForFinding(LIVE, { contracts: [CONTRACT], edges: [] })).toBe('Acme Payments');
-    // e2e pins `New thread with Acme Tools` for the MCP server (mcp.spec.ts).
+    // The integration tests pin `New thread with Acme Tools` for the MCP server.
     expect(providerNameForFinding(MCP, { contracts: [], edges: [] })).toBe('Acme Tools');
   });
 

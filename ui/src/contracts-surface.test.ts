@@ -251,7 +251,7 @@ describe('the uploader can be driven from the keyboard', () => {
   });
 
   it('releases the confirm button once a host re-parse lands, and even when it fails', async () => {
-    // QA walk, 2026-09-02 (VERIFIED blocker): the hold that stops a binding
+    // exploratory testing, 2026-09-02 (VERIFIED blocker): the hold that stops a binding
     // being committed against a stale preview was released in the wrong
     // function, so editing the host at the confirm step disabled "Add contract"
     // permanently — the preview came back 200 and the button never came back.
@@ -308,13 +308,13 @@ describe('the uploader can be driven from the keyboard', () => {
   });
 
   it('shows the server\'s own sentence when the document is too large', async () => {
-    // Launch-week item 6 (2026-09-07): a 9 MB document came back from the relay
+    // Reproduced through the UI, 2026-09-07: a 9 MB document came back from the relay
     // as 400 invalid_json, so the uploader showed "The request body is not
     // valid JSON." for a size problem. The relay now answers 413
     // document_too_large; the uploader has no copy of its own for that code —
     // it renders the relay's sentence — so this pins that the sentence reaches
     // the error line unchanged.
-    // The deck's own constant, mirrored from messages.go — not a second copy of
+    // The copy's own constant, mirrored from messages.go — not a second copy of
     // the sentence (TestContractTooLargeMirrorInSync guards the mirror itself).
     const TOO_LARGE = CONTRACT_TOO_LARGE;
     vi.stubGlobal('fetch', vi.fn(async () => json({ error: 'document_too_large', message: TOO_LARGE }, 413)));

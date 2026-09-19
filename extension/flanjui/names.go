@@ -8,7 +8,7 @@ import (
 	"github.com/flanj-io/collector/internal/store"
 )
 
-// Edge display names (v1 phase 1 — edge naming): human names for discovered
+// Edge display names (edge naming): human names for discovered
 // OUTBOUND edges, keyed by the registrable domain (internal/edge.RegistrableDomain)
 // and persisted in the store's settings KV so every pod of a deployment agrees
 // and a name survives a restart. Never a per-pod file.

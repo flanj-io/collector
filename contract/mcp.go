@@ -6,11 +6,11 @@ import (
 )
 
 // ToolDef mirrors one entry of an MCP `tools/list` result, with the MCP wire
-// field names (spec §1: name, description, inputSchema, optional outputSchema,
+// field names (name, description, inputSchema, optional outputSchema,
 // annotations). Schemas stay raw JSON here — the server's own words — and are
 // canonicalized only when normalized into an Operation.
 //
-// Two callers share this seam: mcp-drift-watch hands it already-decoded tool
+// Two callers share this seam: other Flanj tooling hands it already-decoded tool
 // lists (stored snapshots, fixtures), and the collector's Step C event loader
 // (internal/drift MCPDetector.LoadSnapshot) decodes `contract_snapshot`
 // records through ParseToolsList into the same []ToolDef — the normalization

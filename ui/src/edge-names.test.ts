@@ -30,7 +30,7 @@ const row = {
 describe('copy', () => {
   it('there is NO provenance badge on any tier', () => {
     // `named by you` was the last one standing and went the way of the other
-    // three (owner ruling 2026-09-01): redundant beside a name you typed, and a
+    // three: redundant beside a name you typed, and a
     // chip in the name slot competes with the name for the eye. `Edit name` /
     // `Remove name` already say the name is yours, where you can act on it.
     // Nothing to assert but the absence: the module no longer exports a badge,
@@ -87,7 +87,7 @@ describe('editor state machine', () => {
     expect(editorClosed()).toBeNull();
   });
 
-  it('a failed save keeps the draft and shows the copy-deck error (Retry path)', () => {
+  it('a failed save keeps the draft and shows the copy error (Retry path)', () => {
     let s = saveStart(typeDraft(beginEdit(row), 'Stripe Payments'));
     s = saveFailed(s);
     expect(s.busy).toBe(false);

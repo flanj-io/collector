@@ -1,4 +1,4 @@
-// Theme preference (qfix2-2026-08-26, ux-design-v2 §3): LIGHT by default, dark
+// Theme preference (qfix2-2026-08-26): LIGHT by default, dark
 // opt-in. There is no System option — it was deleted, along with the
 // `prefers-color-scheme` media query in the collector stylesheet that served it
 // (leaving that query in place while defaulting to light would give a dark-OS
@@ -9,7 +9,7 @@
 // always stamped on <html> — the dark palette lives under [data-flanj-theme="dark"]
 // only.
 //
-// Migration (§3.4), which spares anyone who chose:
+// Migration, which spares anyone who chose:
 //   'dark'   → stays dark (an explicit choice, and it means the same thing in
 //              both models)
 //   'light'  → stays light
@@ -80,8 +80,8 @@ export function hasStoredThemeChoice(storage: ThemeStorage = localStorage): bool
 }
 
 /**
- * The one-time light-default notice (§3.4), gated on BOTH conditions — getting
- * either one wrong either spams fresh installs or reaches nobody (§7 risk 8):
+ * The one-time light-default notice, gated on BOTH conditions — getting
+ * either one wrong either spams fresh installs or reaches nobody:
  *
  *   1. this browser has NO stored theme choice (i.e. it was on System), and
  *   2. the collector reports it held data before this upgrade

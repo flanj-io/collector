@@ -1,6 +1,6 @@
 // The header org pill shows a NAME someone typed (consumer_display_name) — the same
-// string the provider sees on every thread and the one e2e reads back verbatim
-// (mcp.spec.ts "baseline": `expect(overviewText).toContain(CONSUMER)`). The Blueprint
+// string the provider sees on every thread and the one the integration tests read back verbatim
+// (`expect(overviewText).toContain(CONSUMER)`). The Blueprint
 // port made every `.pill` uppercase mono, which turned "CustomerX" into "CUSTOMERX" in
 // the rendered text (innerText applies text-transform) and broke that read. Uppercase
 // is for labels; a name keeps its own case. Structural gate, like tokens.test.ts:

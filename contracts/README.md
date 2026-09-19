@@ -16,12 +16,12 @@ the control-plane endpoints it calls.
 
 Everything in this directory except `golden-otlp-server-call.json` and the three
 `contract-*` Step A fixtures (see the table) is a **byte-identical copy** of the
-canonical contract that lives in the private `e2e` repo at `e2e/contracts/` (`CONTRACTS.md` + `v1/*`).
+canonical contract (`CONTRACTS.md` + `v1/*`) maintained upstream by the Flanj maintainers.
 It is the agreed language between the SDK, this collector and the control plane — the OTLP wire
 convention the collector ingests, the `RedactedCall`/`Finding` shapes it stores and emits, the redaction
 floor it must enforce bit-for-bit with the TypeScript implementation, the control-plane endpoints it
 calls (Connect, flag, thread state), and its frozen runtime config keys. The collector's own tests assert against these files so the
-repo proves conformance standalone; the `e2e` integration gate is the cross-repo safety net.
+repo proves conformance standalone; Flanj's cross-repo integration suite is the safety net.
 
 ## What is vendored here
 
@@ -37,21 +37,20 @@ repo proves conformance standalone; the `e2e` integration gate is the cross-repo
 | `redaction-fixtures.json` | the structured cross-language PARITY battery (the TypeScript SDK and control-plane DLP run the same file) | `internal/redact/fixtures_test.go` |
 | `redacted-call.schema.json`, `finding.schema.json`, `cp-flag-request.schema.json` | JSON Schemas for `RedactedCall`, `Finding`, and the flag request body | `internal/promote/promote_test.go` (compiles all three); `internal/model` mirrors the first two |
 | `sample-redacted-call.json`, `sample-finding.json` | sample payloads used to build a conforming flag | `internal/promote/promote_test.go` |
-| `contract-normalization-openapi.yaml`, `contract-normalization-tools-list.json` | **collector-owned** (v0.5 Step A, like `golden-otlp-server-call.json`) — the SAME logical contract expressed as OpenAPI and as an MCP `tools/list`; normalizing both must yield deep-equal Operations | `contract/normalize_test.go` |
-| `contract-diff-cases.json` | **collector-owned** (v0.5 Step A) — the definition-diff classifier battery (≥2 cases per class BREAKING / NON_BREAKING / DESCRIPTION, incl. a rename; since 2026-09-13 one case per cell of the direction-aware rule table in `CONTRACTS.md` §4) | `contract/diff/diff_test.go` (+ `directions_test.go`, the per-cell fragments and details) |
+| `contract-normalization-openapi.yaml`, `contract-normalization-tools-list.json` | **collector-owned** (Step A, like `golden-otlp-server-call.json`) — the SAME logical contract expressed as OpenAPI and as an MCP `tools/list`; normalizing both must yield deep-equal Operations | `contract/normalize_test.go` |
+| `contract-diff-cases.json` | **collector-owned** (Step A) — the definition-diff classifier battery (≥2 cases per class BREAKING / NON_BREAKING / DESCRIPTION, incl. a rename; since 2026-09-13 one case per cell of the direction-aware rule table in `CONTRACTS.md` §4) | `contract/diff/diff_test.go` (+ `directions_test.go`, the per-cell fragments and details) |
 
 ## Layout note
 
 The canonical tree is `contracts/CONTRACTS.md` + `contracts/v1/<fixtures>`; vendored copies are kept
 **flat** (same as `sdk/contracts/`). So the `./v1/…` links inside `CONTRACTS.md` resolve to *this*
-directory, and its `./README.md` link refers to the canonical governance doc in `e2e/contracts/README.md`,
+directory, and its `./README.md` link refers to the canonical governance doc upstream,
 not this file.
 
 ## Changing anything
 
-Edit the canonical file in `e2e/contracts/`, bump `schema_version` if the change is breaking, re-vendor
-byte-identically to `sdk/`, `collector/`, `control-plane/`, and make every repo's suite green. See
-`e2e/contracts/README.md` (governance). `golden-otlp-server-call.json` and the three `contract-*`
+Edit the canonical file upstream, bump `schema_version` if the change is breaking, re-vendor
+byte-identically to every consuming repo, and make every repo's suite green.
+`golden-otlp-server-call.json` and the three `contract-*`
 Step A fixtures are the exceptions: they are owned here; promote them to the canonical set if another
-repo ever needs them (the `contract-*` files are candidates once `mcp-drift-watch` or `e2e` consumes
-them — flagged as an open item in the v0.5 Step A handoff).
+repo ever needs them (the `contract-*` files are candidates once another repo consumes them).
