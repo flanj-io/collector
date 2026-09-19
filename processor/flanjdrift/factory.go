@@ -64,6 +64,9 @@ func createLogsProcessor(
 		kick:   make(chan struct{}, 1),
 		done:   make(chan struct{}),
 	}
+	if len(c.MCPMetaAdapters) > 0 {
+		dp.mcp.SetMetaAdapters(c.MCPMetaAdapters)
+	}
 
 	// PROVIDER contracts are not loaded here — they arrive from the store at
 	// Start and on every refresh tick. With none uploaded the processor is a

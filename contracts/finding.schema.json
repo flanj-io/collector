@@ -11,7 +11,11 @@
   "properties": {
     "schema_version": { "type": "integer", "const": 1 },
     "id": { "type": "string", "format": "uuid" },
-    "kind": { "type": "string", "enum": ["live-vs-spec", "version-diff", "output_mismatch", "definition_change", "stale_client"] },
+    "kind": { "type": "string", "enum": ["live-vs-spec", "version-diff", "output_mismatch", "definition_change", "stale_client", "input_rejection", "value_change"] },
+    "change_kind": { "description": "R-A (Idan, 2026-09-17): WHAT moved — a FINER axis than `kind`, which names which detector spoke. Additive and OPTIONAL: set on MCP findings only (definition_change carries wording|input|output|catalog, output_mismatch carries value, stale_client carries observed_failure); absent on the HTTP/OpenAPI kinds and on findings from older collectors, so readers must tolerate its absence. A kind never implies a severity.", "type": "string", "enum": ["wording", "input", "output", "catalog", "value", "observed_failure"] },
+    "via_dispatch": { "description": "R-E (2026-09-17), additive and optional: the dispatcher tool a call went through when detection attributed it to the inner tool a recorded search result named.", "type": "string" },
+    "source": { "description": "Additive and optional: which contract the finding was judged against — tools_list (a complete observed catalog; absence means this), search_result (definitions a discovery meta-tool returned) or toolset_enable (a session's listing right after a toolset was enabled).", "type": "string", "enum": ["tools_list", "search_result", "toolset_enable"] },
+    "completeness": { "description": "Additive and optional: complete, or partial — a search result is partial by nature and never a source of removals.", "type": "string", "enum": ["complete", "partial"] },
     "severity": { "type": "string", "enum": ["breaking", "warning", "info"] },
     "integration": { "type": "string" },
     "endpoint": { "type": "string" },

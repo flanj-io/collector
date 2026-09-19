@@ -176,7 +176,7 @@ describe('a version-diff finding renders on the card its contract owns', () => {
     expect(row.find('button.flag').exists()).toBe(true);
     // The hint stays, and still explains the EVIDENCE, never the severity. The
     // badge on this very row says `breaking`.
-    expect(row.find('.badge').text()).toBe('breaking');
+    expect(row.find('.badge').text()).toBe('BREAKING');
     expect(row.text()).not.toContain('Informational');
     expect(row.text()).toContain('no failing call');
     expect(row.text()).not.toContain("can’t be flagged");

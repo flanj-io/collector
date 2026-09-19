@@ -73,6 +73,8 @@ import {
   defChangeDetail,
   defChangeNoCallSub,
   definitionClass,
+  severityLabel,
+  changeKindOf,
   descriptionChipLabel,
   descriptionChipTitle,
   descriptionCountTitle,
@@ -84,11 +86,15 @@ import {
   isBreakingFinding,
   isLocalNotice,
   identifiableServerRefs,
+  staysLocalAsInfo,
+  INFO_STAYS_LOCAL,
   isMcpCall,
   isMcpFinding,
   localNoticesSubFor,
   mcpBadgeLabel,
   mcpContractMeta,
+  metaCatalogLabel,
+  isSearchCatalog,
   serverCommandLine,
   mcpHeadline,
   mcpStatusLabel,
@@ -282,13 +288,9 @@ const pillTone = computed(() =>
 function toneClass(tone: 'drift' | 'ok' | 'neutral'): string {
   return tone === 'drift' ? 'tone-breaking' : tone === 'ok' ? 'tone-ok' : 'tone-info';
 }
-/** The bolt inside a severity chip follows the chip's tier; a DESCRIPTION
- *  (wording) change and the info tier are both steel. */
+/** The bolt inside a severity chip follows the chip's severity. */
 function badgeTone(f: Finding): string {
-  if (f.kind === 'definition_change') {
-    const c = definitionClass(f);
-    return c === 'BREAKING' ? 'tone-breaking' : c === 'NON-BREAKING' ? 'tone-warning' : 'tone-info';
-  }
+  // Severity alone decides the tone (R-A): a kind never implies a severity.
   return f.severity === 'breaking' ? 'tone-breaking' : f.severity === 'warning' ? 'tone-warning' : 'tone-info';
 }
 /** A thread chip lifts to the accent when the turn is ours to act on. */
@@ -1119,6 +1121,16 @@ function mcpServerName(integration: string): string {
 
 // Hosts that are MCP edges: known from mcp contracts and from observed MCP
 // calls — drives the transport badge on the Edges overview.
+// Brief 2026-09-17 §3.5: hosts whose catalog sits behind discovery meta-tools,
+// with how many tools the agent's searches have shown us. Both of a server's
+// cards say so — its tools/list lists only the meta-tools, and the search row
+// is only what was looked up — so neither implies full coverage.
+const searchCatalogByHost = computed(() => {
+  const m = new Map<string, number>();
+  for (const s of mcpContracts.value) if (isSearchCatalog(s) && s.peer_host) m.set(s.peer_host, s.endpoints || 0);
+  return m;
+});
+
 const mcpHosts = computed(() => {
   const hosts = new Set<string>();
   for (const s of mcpContracts.value) if (s.peer_host) hosts.add(s.peer_host);
@@ -1175,7 +1187,11 @@ const localNoticesProviders = computed(() =>
 // MCP contract findings shown on the Contracts tab: output_mismatch +
 // definition_change (stale_client stays a Health-band notice only).
 const mcpContractFindings = computed(() =>
-  mcpFindings.value.filter((f) => f.kind === 'output_mismatch' || f.kind === 'definition_change')
+  // value_change and input_rejection (2026-09-17, R-B's collector-only rows)
+  // are provider-side contract evidence like the other two, so they sit on the
+  // same cards; stale_client stays a local notice.
+  mcpFindings.value.filter((f) =>
+    f.kind === 'output_mismatch' || f.kind === 'definition_change' || f.kind === 'value_change' || f.kind === 'input_rejection')
 );
 
 // Contracts tab pills (two-tier): red = breaking-severity rows (all sources —
@@ -1914,13 +1930,17 @@ watch(tab, (t) => {
 
           <div v-if="p.spec" class="prov-links">
             <a class="doc-link" :href="specHref(p.spec)" target="_blank" rel="noopener">
-              {{ p.spec.format === 'mcp' ? 'View tools/list snapshot' : 'View OpenAPI spec' }}
+              {{ p.spec.format === 'mcp' ? (isSearchCatalog(p.spec) ? 'View tools found by search' : 'View tools/list snapshot') : 'View OpenAPI spec' }}
             </a>
             <a v-if="p.spec.docs_url" class="doc-link" :href="p.spec.docs_url" target="_blank" rel="noopener">
               API docs ↗
             </a>
             <template v-if="p.spec.format === 'mcp'">
-              <span class="prov-meta">{{ mcpContractMeta(p.spec.endpoints || 0, humanTime(p.spec.loaded_at)) }}</span>
+              <span v-if="isSearchCatalog(p.spec)" class="prov-meta meta-catalog">{{ metaCatalogLabel(p.spec.endpoints || 0) }} · updated {{ humanTime(p.spec.loaded_at) }}</span>
+              <template v-else>
+                <span class="prov-meta">{{ mcpContractMeta(p.spec.endpoints || 0, humanTime(p.spec.loaded_at)) }}</span>
+                <span v-if="searchCatalogByHost.has(p.peerHost)" class="prov-meta meta-catalog">{{ metaCatalogLabel(searchCatalogByHost.get(p.peerHost) || 0) }}</span>
+              </template>
             </template>
             <template v-else>
               <!-- Provenance + recency, relative, with the absolute time on
@@ -1986,15 +2006,17 @@ watch(tab, (t) => {
                control plane's findings index lands on this exact row. -->
           <article v-for="f in p.findings" :id="'finding-' + f.id" :key="f.id" class="finding nested" :class="{ acked: isAcked(f), highlight: f.id === highlightFindingId }">
             <div class="finding-head">
-              <!-- definition_change rows carry the classifier's class badge (deck §3):
-                   BREAKING red · NON-BREAKING copper · DESCRIPTION steel — each
-                   badge matches the tab pill and the card chip that count it. -->
+              <!-- R-A (2026-09-17): TWO labels — the severity (coloured:
+                   BREAKING red · WARNING copper · INFO steel) and, separately,
+                   the change kind (neutral). They replace the single class
+                   badge, which mixed the two ("DESCRIPTION" was a kind,
+                   "BREAKING" a severity). -->
               <span
-                v-if="f.kind === 'definition_change'"
                 class="badge"
-                :class="{ breaking: definitionClass(f) === 'BREAKING', warning: definitionClass(f) === 'NON-BREAKING', description: definitionClass(f) === 'DESCRIPTION' }"
-              ><svg class="hx sm" :class="badgeTone(f)" aria-hidden="true" focusable="false"><use href="#hxbolt" /></svg>{{ definitionClass(f) }}<svg class="hx sm" :class="badgeTone(f)" aria-hidden="true" focusable="false"><use href="#hxbolt" /></svg></span>
-              <span v-else class="badge" :class="f.severity"><svg class="hx sm" :class="badgeTone(f)" aria-hidden="true" focusable="false"><use href="#hxbolt" /></svg>{{ f.severity }}<svg class="hx sm" :class="badgeTone(f)" aria-hidden="true" focusable="false"><use href="#hxbolt" /></svg></span>
+                :class="{ breaking: f.severity === 'breaking', warning: f.severity === 'warning', description: f.severity === 'info' }"
+              ><svg class="hx sm" :class="badgeTone(f)" aria-hidden="true" focusable="false"><use href="#hxbolt" /></svg>{{ severityLabel(f) }}<svg class="hx sm" :class="badgeTone(f)" aria-hidden="true" focusable="false"><use href="#hxbolt" /></svg></span>
+              <span v-if="changeKindOf(f)" class="badge kind" :title="'Kind: what moved. A kind never implies a severity.'">{{ changeKindOf(f) }}</span>
+              <span v-if="f.via_dispatch" class="badge kind" :title="'Called through the dispatcher ' + f.via_dispatch + ' and attributed to the tool it named.'">via {{ f.via_dispatch }}</span>
               <span class="endpoint">{{ f.endpoint }}</span>
               <span class="rule">{{ f.rule }}</span>
               <!-- Call counts belong to call-evidenced kinds only. A
@@ -2044,12 +2066,12 @@ watch(tab, (t) => {
             </div>
             <div v-else class="drift-row">
               <div class="col">
-                <div class="k">{{ f.kind === 'output_mismatch' ? 'declared (their outputSchema)' : 'expected (per spec)' }}</div>
+                <div class="k">{{ f.kind === 'output_mismatch' ? 'declared (their outputSchema)' : f.kind === 'value_change' ? 'held before (value format)' : f.kind === 'input_rejection' ? 'accepted before' : 'expected (per spec)' }}</div>
                 <div class="v expected">{{ f.expected }}</div>
               </div>
               <div class="arrow">≠</div>
               <div class="col">
-                <div class="k">{{ f.kind === 'output_mismatch' ? 'got (structuredContent)' : 'actual (live)' }}</div>
+                <div class="k">{{ f.kind === 'output_mismatch' ? 'got (structuredContent)' : f.kind === 'value_change' ? 'holds now (value format)' : f.kind === 'input_rejection' ? 'rejected now' : 'actual (live)' }}</div>
                 <div class="v actual">{{ f.actual }}</div>
               </div>
               <div class="col loc">
@@ -2116,6 +2138,14 @@ watch(tab, (t) => {
                    Until the list has been answered once, this finding may well
                    already be in a thread — offering Create thread would be a
                    claim we cannot make. Say what we don't know instead. -->
+              <!-- R-C (2026-09-17): INFO stays local, on every kind. Shown, never
+                   flaggable — the relay and the control plane refuse it too.
+                   Acknowledge stays available: it is local-only. -->
+              <template v-else-if="staysLocalAsInfo(f)">
+                <span class="hint-inline info-local">{{ INFO_STAYS_LOCAL }}</span>
+                <button v-if="isAckable(f)" type="button" class="btn ghost small" :disabled="ackBusy[f.id]" :title="ACK_TITLE" @click="setAck(f, true)">{{ ACK_LABEL }}</button>
+                <span v-if="ackError[f.id]" class="error small-err">{{ ackError[f.id] }}</span>
+              </template>
               <template v-else-if="!threadsKnown"><span class="hint-inline">{{ THREAD_STATE_UNKNOWN }}</span></template>
               <!-- definition_change, EVERY class incl. DESCRIPTION (ux-design-v2
                    §2.7): flaggable and CALL-LESS. The control is never born
@@ -2874,6 +2904,9 @@ pre.body { background: var(--surface); border: var(--border-w) solid var(--rule)
    the tier's bare colour, text in its -ink role. Each tier uses its own family
    and the accent never carries one (src/tokens.test.ts pins all three). */
 .badge { display: inline-flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 104px; font: 600 10.5px/1 var(--f-mono); letter-spacing: 0.1em; text-transform: uppercase; padding: 4px 7px; border: var(--border-w-hair) solid currentColor; border-radius: var(--radius); }
+/* The change-kind label (R-A): neutral, never a severity colour — only the
+   severity chip beside it is coloured. */
+.badge.kind { min-width: 0; color: var(--ink-soft); border-color: var(--rule); }
 .badge.breaking { color: var(--sev-breaking-ink); border-color: var(--sev-breaking); }
 .badge.warning { color: var(--sev-warning-ink); border-color: var(--sev-warning); }
 /* INFO is the neutral tier of the product-fixed triad. It used to be filled with

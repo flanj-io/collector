@@ -1320,8 +1320,30 @@ func TestFlagRefusesLocalOnlyKinds(t *testing.T) {
 	if resp.StatusCode != 403 || out["error"] != "not_flaggable" {
 		t.Errorf("flag fnd_stale = %d %v, want 403 not_flaggable", resp.StatusCode, out)
 	}
+	if out["message"] != msgNotFlaggable {
+		t.Errorf("flag fnd_stale message = %q, want the stale-client sentence", out["message"])
+	}
 	if r.cp.flagCalls != 0 {
 		t.Fatalf("a local-only finding reached the CP (%d flag calls)", r.cp.flagCalls)
+	}
+
+	// R-C (Idan, 2026-09-17): INFO never crosses the org boundary, on any
+	// kind — refused here server-side, not just by the UI's missing control.
+	_ = r.st.InsertFinding(model.Finding{SchemaVersion: 1, ID: "fnd_info", Kind: model.KindDefinitionChange,
+		ChangeKind: "input", Severity: model.SeverityInfo, Integration: "acme-payments", Endpoint: "create_refund",
+		Expected: `{"name":"chargeId"}`, Actual: `{"name":"charge_id"}`,
+		Rule: "input-property-renamed", DetectedAt: "2026-08-24T10:00:01Z"})
+	resp, out, _ = r.do(t, http.MethodPost, "/api/flag", map[string]any{"finding_id": "fnd_info", "allowed_domains": []string{"acme-payments.test"}})
+	if resp.StatusCode != 403 || out["error"] != "not_flaggable" {
+		t.Errorf("flag fnd_info = %d %v, want 403 not_flaggable", resp.StatusCode, out)
+	}
+	// The refusal must be true of THIS finding: an info row is not a
+	// stale-client call, so it never gets the stale-client sentence.
+	if out["message"] != msgInfoNotFlaggable {
+		t.Errorf("flag fnd_info message = %q, want the info sentence", out["message"])
+	}
+	if r.cp.flagCalls != 0 {
+		t.Fatalf("an info finding reached the CP (%d flag calls)", r.cp.flagCalls)
 	}
 
 	// The flaggable MCP kind goes through unchanged.
@@ -1986,11 +2008,14 @@ func (b *brokenStore) ListEdges(bool) ([]model.Edge, error) {
 }
 func (b *brokenStore) EdgeCallCountsSince(string) (map[string]int, error) { return nil, b.err }
 func (b *brokenStore) ListCalls(int) ([]model.RedactedCall, error)        { return nil, b.err }
-func (b *brokenStore) ListFindings(int) ([]model.Finding, error)          { return nil, b.err }
-func (b *brokenStore) ListSpecInfos() ([]model.SpecInfo, error)           { return nil, b.err }
-func (b *brokenStore) GetSpecDoc(string) ([]byte, string, bool, error)    { return nil, "", false, b.err }
-func (b *brokenStore) CallPeerHosts([]string) (map[string]string, error)  { return nil, b.err }
-func (b *brokenStore) GetSetting(string) (string, bool, error)            { return "", false, b.err }
+func (b *brokenStore) GetCall(string) (model.RedactedCall, bool, error) {
+	return model.RedactedCall{}, false, b.err
+}
+func (b *brokenStore) ListFindings(int) ([]model.Finding, error)         { return nil, b.err }
+func (b *brokenStore) ListSpecInfos() ([]model.SpecInfo, error)          { return nil, b.err }
+func (b *brokenStore) GetSpecDoc(string) ([]byte, string, bool, error)   { return nil, "", false, b.err }
+func (b *brokenStore) CallPeerHosts([]string) (map[string]string, error) { return nil, b.err }
+func (b *brokenStore) GetSetting(string) (string, bool, error)           { return "", false, b.err }
 
 // TestReadRoutesNeverLeakTheStoreError is the regression for the postgres-lane
 // walk (2026-09-02): with the database stopped, every read route answered
@@ -2015,6 +2040,7 @@ func TestReadRoutesNeverLeakTheStoreError(t *testing.T) {
 		"/api/health",
 		"/api/edges",
 		"/api/calls",
+		"/api/calls/call_1",
 		"/api/findings",
 		"/api/contracts",
 		"/api/contracts/spec?integration=acme-payments",
@@ -2225,5 +2251,24 @@ func TestConnectRelaysTheConfirmationMailOutcome(t *testing.T) {
 				t.Errorf("GET /api/connect must report no mail outcome, got %v", after["confirmation_mail"])
 			}
 		})
+	}
+}
+
+// TestCallByID: GET /api/calls/{id} serves the one stored call a finding's
+// source_call_id names, whatever its age — the list route is the newest 200,
+// and a deduplicated finding keeps its FIRST call as evidence.
+func TestCallByID(t *testing.T) {
+	r := newRig(t)
+	r.start(t)
+	resp, out, raw := r.do(t, http.MethodGet, "/api/calls/call_1", nil)
+	if resp.StatusCode != http.StatusOK || out["id"] != "call_1" || out["route"] != "/v1/charges" {
+		t.Fatalf("GET /api/calls/call_1 = %d %s, want the stored call", resp.StatusCode, raw)
+	}
+	if c, _ := out["correlation"].(map[string]any); c["request_id"] != "req_abc" {
+		t.Errorf("correlation = %v, want the stored call's request id", out["correlation"])
+	}
+	resp, out, _ = r.do(t, http.MethodGet, "/api/calls/nope", nil)
+	if resp.StatusCode != http.StatusNotFound || out["error"] != "call_not_found" {
+		t.Fatalf("GET /api/calls/nope = %d %v, want 404 call_not_found", resp.StatusCode, out)
 	}
 }

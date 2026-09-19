@@ -180,6 +180,12 @@ describe('rollCall', () => {
     expect(ROLL_CALL_ZERO).toContain('upload one');
   });
 
+  it('a search-learned catalog is the same server, not a second one (brief §3.5)', () => {
+    const searched: ContractSpec = { ...mcpContract, integration: 'acme-tools:search', source: 'search_result' };
+    expect(rollCall([edge('mcp.acme.test')], [mcpContract, searched], mcp)).toBe('1 MCP server self-reports theirs');
+    expect(provenanceWord(searched)).toBe('searched');
+  });
+
   it('an MCP-only estate is not a zero state — those servers ARE covered', () => {
     expect(rollCall([edge('mcp.acme.test')], [mcpContract], mcp)).toBe('1 MCP server self-reports theirs');
   });

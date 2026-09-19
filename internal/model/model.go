@@ -88,6 +88,17 @@ type RedactedCall struct {
 	// MCPIsError mirrors the CallToolResult's isError (also true when the call
 	// itself rejected). Feeds the error-rate metric; never a finding on its own.
 	MCPIsError bool `json:"mcp_is_error,omitempty"`
+	// MCPErrorCode is the JSON-RPC error code when the call itself was
+	// rejected (CONTRACTS §2 flanj.mcp.error.code, additive, optional); 0 when
+	// the call returned a result or the SDK is older.
+	MCPErrorCode int `json:"mcp_error_code,omitempty"`
+	// ViaDispatch (additive, optional — ruling R-E, brief 2026-09-17 §3.2) is
+	// the discovery DISPATCHER this call went through, when the collector
+	// re-attributed it to the inner tool it named: MCPToolName and Route then
+	// name that inner tool, and RequestBody stays the literal dispatcher
+	// arguments, so a provider can reproduce the exact call. Empty on every
+	// call that was not re-attributed.
+	ViaDispatch string `json:"via_dispatch,omitempty"`
 	// MCPServerName / MCPServerVersion carry serverInfo when the client
 	// surfaced it (never guessed).
 	MCPServerName    string `json:"mcp_server_name,omitempty"`
@@ -323,6 +334,16 @@ const (
 	// CURRENT tools/list, or with args violating the current inputSchema.
 	// Consumer-side, LOCAL ONLY — never flaggable, no flag control anywhere.
 	KindStaleClient = "stale_client"
+	// KindValueChange: a value in the tool's OBSERVED responses changed
+	// meaning — timestamp format, ID format, enum casing, integer vs decimal —
+	// while the declared schema (if any) said nothing (R-B: value / WARNING,
+	// collector-only, 2026-09-17).
+	KindValueChange = "value_change"
+	// KindInputRejection: a tools/call was rejected with JSON-RPC -32602 on
+	// arguments of a shape that previously SUCCEEDED on the same tool (R-B:
+	// observed_failure / BREAKING, collector-only, 2026-09-17). Provider-side,
+	// so it is flaggable, unlike stale_client.
+	KindInputRejection = "input_rejection"
 
 	// MCPResultTypeComplete / MCPResultTypeInputRequired are the two `resultType`
 	// values MCP revision 2026-07-28 defines. They are compared, never assumed:
@@ -352,18 +373,55 @@ const RuleDescriptionChanged = "description-changed"
 // evidence — the flag sheet now carries the claim honestly. Nothing auto-flags:
 // a description change only ever leaves this collector when a human presses the
 // control.
+//
+// INFO never crosses the org boundary (ruling R-C, Idan 2026-09-17): the local
+// UI shows an info finding, the Flag control is absent on it, this relay
+// refuses it, and the control plane rejects a flag whose finding severity is
+// info. Only WARNING and BREAKING become a flag. This applies to every kind,
+// HTTP as well as MCP.
 func (f Finding) Flaggable() bool {
-	// stale_client only. Never widen this without re-reading the evidence rule.
-	return f.Kind != KindStaleClient
+	// Two refusals, and never widen either without re-reading the rulings:
+	// stale_client is consumer-side (evidence rule), and info stays local (R-C).
+	return f.Kind != KindStaleClient && f.Severity != SeverityInfo
 }
 
 // Finding is a technical-adherence drift record. Mirrors
 // contracts/finding.schema.json.
 type Finding struct {
-	SchemaVersion   int     `json:"schema_version"`
-	ID              string  `json:"id"`
-	Kind            string  `json:"kind"`
-	Severity        string  `json:"severity"`
+	SchemaVersion int    `json:"schema_version"`
+	ID            string `json:"id"`
+	Kind          string `json:"kind"`
+	// ChangeKind (additive, optional — ruling R-A, Idan 2026-09-17) is WHAT
+	// moved: wording | input | output | catalog | value | observed_failure.
+	// It is a FINER axis than Kind, which names which detector spoke
+	// (definition_change, output_mismatch, stale_client, live-vs-spec,
+	// version-diff) — four of R-A's six kinds are sub-kinds of
+	// definition_change, so the two could not be merged without either losing
+	// the detector or re-lettering a field the control plane, the dashboard
+	// and e2e all read.
+	//
+	// Set on MCP findings: definition_change carries wording/input/output/
+	// catalog, output_mismatch carries value, stale_client carries
+	// observed_failure. Empty on the HTTP/OpenAPI kinds, which R-A's
+	// vocabulary does not describe, and on findings from older collectors —
+	// readers must tolerate its absence.
+	ChangeKind string `json:"change_kind,omitempty"`
+	Severity   string `json:"severity"`
+	// ViaDispatch (additive, optional — ruling R-E, 2026-09-17) names the
+	// generic dispatcher a call went through when detection re-attributed it
+	// to the INNER tool. It is set only when the inner name exactly matched a
+	// tool the same server returned in a search result this collector had
+	// already recorded; the stored call itself stays the literal dispatcher
+	// call, whose request body names the inner tool — the evidence a provider
+	// needs to reproduce it.
+	ViaDispatch string `json:"via_dispatch,omitempty"`
+	// Source / Completeness (additive, optional) describe the contract a
+	// definition_change was classified against: "tools_list" (a complete
+	// observed catalog, the default when absent) or "search_result" (tool
+	// definitions a discovery meta-tool returned — "partial" by nature, since
+	// a search page is never the whole catalog).
+	Source          string  `json:"source,omitempty"`
+	Completeness    string  `json:"completeness,omitempty"`
 	Integration     string  `json:"integration"`
 	Endpoint        string  `json:"endpoint"`
 	FieldPath       *string `json:"field_path"`
@@ -455,6 +513,13 @@ const (
 	// it. Periodic re-fetch is the control-plane registry (v2) and deliberately
 	// does not exist here.
 	SpecSourceFetched = "fetched"
+	// SpecSourceSearchResult (ruling R-E, brief 2026-09-17 §3.1) is an MCP
+	// server's catalog as learned from the SEARCH RESULTS of its discovery
+	// meta-tools — the tools the agent actually looked up, never the whole
+	// catalog. Partial by construction: a tool absent from it is not removed.
+	// Stored as its own row, `<integration>:search` (SearchSpecIntegration),
+	// beside the server's tools/list row, which lists the meta-tools.
+	SpecSourceSearchResult = "search_result"
 
 	// Edge classes, shared by RedactedCall and SpecInfo. `local-process` is the
 	// SDK's own word for a server spawned as a child process (MCP over stdio);
@@ -602,3 +667,11 @@ func (f Finding) ComputeSignature() string {
 
 // Ptr is a small helper for the nullable string fields.
 func Ptr(s string) *string { return &s }
+
+// SearchSpecIntegration is the spec_infos key of an integration's
+// search-learned catalog (SpecSourceSearchResult): its own row, so the
+// server's tools/list row — which on a meta-gated server lists only the
+// meta-tools — keeps its key.
+func SearchSpecIntegration(integration string) string {
+	return integration + ":search"
+}
