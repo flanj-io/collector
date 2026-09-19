@@ -233,6 +233,11 @@ ALTER TABLE findings ADD COLUMN IF NOT EXISTS inbound INTEGER NOT NULL DEFAULT 0
 	if err := moveMCPRowsOutOfSpecInfos(tx); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
+	// Then every catalogue moves to the key the collector derives from its
+	// peer host (rekeyMCPCatalogues), in the same transaction.
+	if err := rekeyMCPCatalogues(tx, p.rebind); err != nil {
+		return fmt.Errorf("migrate: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("migrate: commit: %w", err)
 	}

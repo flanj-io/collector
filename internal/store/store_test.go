@@ -729,7 +729,7 @@ func TestSpecInfo_SourceRoundTrip(t *testing.T) {
 		s := b.open(t, 0, 0)
 		at := "2026-09-07T10:00:00Z"
 		observed := model.SpecInfo{
-			Integration: "acme-tools", Role: model.SpecRoleProvider, PeerHost: "mcp.acme.test",
+			Integration: "mcp-acme-test", Role: model.SpecRoleProvider, PeerHost: "mcp.acme.test",
 			EdgeClass: model.EdgeClassExternal, Format: model.SpecFormatMCP, Title: "acme-tools",
 			Version: "3.2.0", Endpoints: 3, LoadedAt: at, Source: model.SpecSourceObserved,
 		}
@@ -740,7 +740,7 @@ func TestSpecInfo_SourceRoundTrip(t *testing.T) {
 				Title: "Org API", LoadedAt: at, Source: model.SpecSourceConfig},
 			// No Source at all: a stdio server's snapshot as a pre-fix front
 			// emits it. Its format says what it is.
-			{Integration: "acme-tools-stdio", Role: model.SpecRoleProvider, EdgeClass: model.EdgeClassLocalProcess,
+			{Integration: "acme-tools", Role: model.SpecRoleProvider, PeerHost: "acme-tools", EdgeClass: model.EdgeClassLocalProcess,
 				Format: model.SpecFormatMCP, Title: "acme-tools", Endpoints: 3, LoadedAt: at},
 		} {
 			if err := PutSpecRecord(s, si, snapshot); err != nil {
@@ -753,9 +753,9 @@ func TestSpecInfo_SourceRoundTrip(t *testing.T) {
 			t.Fatalf("re-put: %v", err)
 		}
 		want := map[string]string{
-			"acme-tools":       model.SpecSourceObserved,
-			"self":             model.SpecSourceConfig,
-			"acme-tools-stdio": model.SpecSourceObserved,
+			"mcp-acme-test": model.SpecSourceObserved,
+			"self":          model.SpecSourceConfig,
+			"acme-tools":    model.SpecSourceObserved,
 		}
 		if got := specSources(t, s); !reflect.DeepEqual(got, want) {
 			t.Errorf("sources after put = %v, want %v", got, want)

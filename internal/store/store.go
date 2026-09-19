@@ -1110,6 +1110,83 @@ func moveMCPRowsOutOfSpecInfos(tx execer) error {
 	return nil
 }
 
+// rekeyMCPCatalogues is the one-time move of every MCP catalogue stored under
+// an SDK-sent id to the key the collector derives from its peer host
+// (integration.Derive: the call rule, which every new snapshot and call now
+// lands on). A search-learned row (source search_result) moves to the derived
+// key's <key>:search sibling. Run at open by both backends inside the
+// migration transaction (postgres: under the schema lock, so N pods starting
+// at once move each row once).
+//
+// The mis-keyed rows are read out whole, deleted, then upserted at their
+// derived keys with the newer loaded_at winning — so two rows that collapse
+// onto one key keep the NEWEST, a row already on its key competes on the same
+// terms, and a row whose old id happens to be another row's derived key
+// cannot shadow it on the way. Idempotent: once every row is on its derived
+// key the scan selects nothing to move.
+func rekeyMCPCatalogues(tx queryExecer, rebind func(string) string) error {
+	type row struct {
+		key, role, host, edgeClass, title, version, docsURL, loadedAt, doc, source, serverCommand string
+		endpoints                                                                                 int
+	}
+	rows, err := tx.Query(`SELECT integration, role, COALESCE(peer_host,''), COALESCE(edge_class,''), COALESCE(title,''),
+	        COALESCE(version,''), COALESCE(docs_url,''), endpoints, loaded_at, doc, source, COALESCE(server_command,'')
+	   FROM mcp_catalogues`)
+	if err != nil {
+		return fmt.Errorf("rekey mcp catalogues: read: %w", err)
+	}
+	type move struct {
+		from string
+		to   row
+	}
+	var moves []move
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.key, &r.role, &r.host, &r.edgeClass, &r.title, &r.version, &r.docsURL,
+			&r.endpoints, &r.loadedAt, &r.doc, &r.source, &r.serverCommand); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("rekey mcp catalogues: scan: %w", err)
+		}
+		derived := integration.Derive(true, "", r.host, "")
+		if r.source == model.SpecSourceSearchResult {
+			derived = model.SearchSpecIntegration(derived)
+		}
+		if derived == r.key {
+			continue
+		}
+		from := r.key
+		r.key = derived
+		moves = append(moves, move{from: from, to: r})
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("rekey mcp catalogues: read: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("rekey mcp catalogues: read: %w", err)
+	}
+	for _, m := range moves {
+		if _, err := tx.Exec(rebind(`DELETE FROM mcp_catalogues WHERE integration=?`), m.from); err != nil {
+			return fmt.Errorf("rekey mcp catalogues: delete %q: %w", m.from, err)
+		}
+	}
+	for _, m := range moves {
+		r := m.to
+		if _, err := tx.Exec(rebind(
+			`INSERT INTO mcp_catalogues (`+mcpCatalogueColumns+`)
+			 VALUES (?,?,NULLIF(?,''),NULLIF(?,''),NULLIF(?,''),NULLIF(?,''),NULLIF(?,''),?,?,?,?,NULLIF(?,''))
+			 ON CONFLICT (integration) DO UPDATE SET
+			   role=excluded.role, peer_host=excluded.peer_host, edge_class=excluded.edge_class, title=excluded.title,
+			   version=excluded.version, docs_url=excluded.docs_url, endpoints=excluded.endpoints,
+			   loaded_at=excluded.loaded_at, doc=excluded.doc, source=excluded.source, server_command=excluded.server_command
+			 WHERE excluded.loaded_at > mcp_catalogues.loaded_at`),
+			r.key, r.role, r.host, r.edgeClass, r.title, r.version, r.docsURL, r.endpoints, r.loadedAt, r.doc, r.source, r.serverCommand,
+		); err != nil {
+			return fmt.Errorf("rekey mcp catalogues: move to %q: %w", r.key, err)
+		}
+	}
+	return nil
+}
+
 // ListMCPCatalogues returns the observed MCP catalogues (metadata only, the
 // document's size measured), each marked Format "mcp" so a caller merging it
 // with ListSpecInfos keeps the two apart by format.
