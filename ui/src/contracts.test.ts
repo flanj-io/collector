@@ -455,6 +455,43 @@ describe('rollCall counts MCP from contracts, not edges', () => {
 /** No call resolves — the state of the calls page after the window turns over. */
 const evictedAll = (): string | undefined => undefined;
 
+describe('findingBelongsToContract — a finding raised on an INBOUND call', () => {
+  // A self-spec finding is keyed by the service the inbound call reached
+  // (orders-svc), not by the self contract's own key (self), and its source
+  // call's host is the CONSUMER that called us. Without the inbound mark it
+  // fell off the self card into a leftover card of its own — or, when that
+  // consumer is also a provider we hold a contract for, onto that provider's
+  // card by host.
+  const selfSpec: ContractSpec = { integration: 'self', role: 'self', format: 'openapi' };
+  const partner: ContractSpec = {
+    integration: 'partner-acme-test', role: 'provider', format: 'openapi', peer_host: 'partner.acme.test'
+  };
+  const inbound = {
+    integration: 'orders-svc', kind: 'live-vs-spec', source_call_id: 'call_in',
+    peer_host: 'partner.acme.test', inbound: true
+  };
+  const none = () => undefined;
+
+  it('belongs to the self contract', () => {
+    expect(findingBelongsToContract(inbound, selfSpec, none)).toBe(true);
+  });
+
+  it('never to a provider contract on the same host', () => {
+    expect(findingBelongsToContract(inbound, partner, none)).toBe(false);
+  });
+
+  it('an outbound finding on that host still belongs to the provider, not to self', () => {
+    const outbound = { ...inbound, integration: 'partner-acme-test', inbound: undefined };
+    expect(findingBelongsToContract(outbound, partner, none)).toBe(true);
+    expect(findingBelongsToContract(outbound, selfSpec, none)).toBe(false);
+  });
+
+  it('a row keyed "self" by an older collector still joins the self card', () => {
+    const legacy = { integration: 'self', kind: 'live-vs-spec', source_call_id: 'gone' };
+    expect(findingBelongsToContract(legacy, selfSpec, none)).toBe(true);
+  });
+});
+
 describe('findingBelongsToContract', () => {
   // REGRESSION, found by blind exploratory testing: one provider
   // rendered as TWO cards — the uploaded contract showing CONFORMING, and

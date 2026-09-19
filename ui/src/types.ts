@@ -124,6 +124,10 @@ export interface Finding {
    *  on a definition_change, absent on every other kind. The SPA re-checks it
    *  against spec_version_to so a NEW change can never inherit an old ack. */
   acked_evidence_version?: string;
+  /** The finding's source call was INBOUND (the store's record, local read API
+   *  only): raised against the self contract, keyed by the service the call
+   *  reached. Absent from an older collector, whose self findings keyed `self`. */
+  inbound?: boolean;
 }
 
 export interface Health {

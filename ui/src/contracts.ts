@@ -725,6 +725,10 @@ export interface AttributableFinding {
    *  GET /api/findings. Present whenever the store still holds that call —
    *  which is whenever a finding exists, since a finding pins its evidence. */
   peer_host?: string;
+  /** The finding's source call was INBOUND, as the store recorded it: it was
+   *  raised against the self contract and is keyed by the service the call
+   *  reached, not by the self contract's own key. */
+  inbound?: boolean;
 }
 
 /**
@@ -767,6 +771,11 @@ export function findingBelongsToContract(
   // other finding to a REST contract. A finding with no kind (an older
   // collector's row) is judged on host and integration alone, as before.
   if (finding.kind !== undefined && isMcpFindingKind(finding.kind) !== (spec.format === 'mcp')) return false;
+  // A finding on an INBOUND call was judged against the self contract and
+  // nothing else. Its key is the service the call reached (never the self
+  // row's `self`), and its call's host is the consumer that called us — which
+  // may well be a provider we hold a contract for. Neither join applies.
+  if (finding.inbound) return spec.role === 'self';
   const callHost =
     finding.peer_host || (finding.source_call_id ? hostOfCall(finding.source_call_id) : undefined);
   if (callHost && spec.peer_host) return callHost === spec.peer_host;
