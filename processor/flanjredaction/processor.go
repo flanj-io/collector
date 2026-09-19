@@ -1,9 +1,11 @@
 package flanjredaction
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"sort"
+	"strings"
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
@@ -52,27 +54,83 @@ func (p *redactionProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.
 
 // redactSnapshot re-runs the floor over the observed tools/list document (the
 // SDK already floor-redacted it at source; this pass is idempotent and
-// add-only, like redactRecord). No field records: the snapshot is a contract
-// document, not a call body.
+// add-only, like redactRecord) and over the stdio server's launch line riding
+// the same record. No field records: the snapshot is a contract document, not
+// a call body.
 func (p *redactionProcessor) redactSnapshot(lr plog.LogRecord) {
 	attrs := lr.Attributes()
-	v, ok := attrs.Get(otlpattr.AttrMCPContractSnapshot)
-	if !ok {
-		return
-	}
-	res := p.r.Redact(v.Str())
-	if res.Text != v.Str() {
-		attrs.PutStr(otlpattr.AttrMCPContractSnapshot, res.Text)
-	}
-	if len(res.Patterns) == 0 {
-		return
-	}
 	fired := map[string]bool{}
-	for _, id := range res.Patterns {
-		fired[id] = true
+	if v, ok := attrs.Get(otlpattr.AttrMCPContractSnapshot); ok {
+		res := p.r.Redact(v.Str())
+		if res.Text != v.Str() {
+			attrs.PutStr(otlpattr.AttrMCPContractSnapshot, res.Text)
+		}
+		for _, id := range res.Patterns {
+			fired[id] = true
+		}
+	}
+	p.redactServerCommand(attrs, fired)
+	if len(fired) == 0 {
+		return
 	}
 	attrs.PutBool(otlpattr.AttrRedactApplied, true)
 	mergePatterns(attrs, fired)
+}
+
+// redactServerCommand re-runs the floor over flanj.mcp.server.command — the
+// argv the SDK saw, which is STORED with the observed contract and rendered on
+// its card, so the same defense-in-depth applies as to the snapshot beside it.
+//
+// Same entry point (Redact, the text path), applied the way CONTRACTS §2 has
+// the SDK apply it: element by element. A pattern can then never span two argv
+// entries, and the value stays the JSON array the store and the card expect.
+// A command the floor leaves alone passes through byte-identical; one it
+// touches is re-encoded compactly with raw non-ASCII and no HTML escaping —
+// the SDK's own serialisation. A value that is not a JSON array of strings is
+// dropped by the snapshot decoder (otlpattr.ContractSnapshotFromRecord); it is
+// still floored here as plain text, so nothing un-floored rides this record
+// whatever reads it next.
+func (p *redactionProcessor) redactServerCommand(attrs pcommon.Map, fired map[string]bool) {
+	v, ok := attrs.Get(otlpattr.AttrMCPServerCommand)
+	if !ok {
+		return
+	}
+	raw := v.Str()
+	parts, ok := otlpattr.DecodeServerCommand(raw)
+	if !ok {
+		res := p.r.Redact(raw)
+		if res.Text != raw {
+			attrs.PutStr(otlpattr.AttrMCPServerCommand, res.Text)
+		}
+		for _, id := range res.Patterns {
+			fired[id] = true
+		}
+		return
+	}
+	changed := false
+	for i, el := range parts {
+		res := p.r.Redact(el)
+		if res.Text != el {
+			parts[i] = res.Text
+			changed = true
+		}
+		for _, id := range res.Patterns {
+			fired[id] = true
+		}
+	}
+	if !changed {
+		return
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(parts); err != nil {
+		// []string always encodes; if it ever did not, keep nothing rather
+		// than the un-floored original.
+		attrs.Remove(otlpattr.AttrMCPServerCommand)
+		return
+	}
+	attrs.PutStr(otlpattr.AttrMCPServerCommand, strings.TrimSuffix(buf.String(), "\n"))
 }
 
 // redactRecord redacts each body attribute in place and, if anything new fired,

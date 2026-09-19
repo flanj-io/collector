@@ -31,7 +31,11 @@ re-applies the Flanj floor to every `call` record's free-text attributes
   pass re-scans `flanj.mcp.contract_snapshot` (the observed tools/list is
   STORED as the edge's local spec, so the same defense-in-depth applies) —
   add-only, idempotent, no field records (a contract document, not a call
-  body).
+  body). Since 2026-09-18 the same pass re-floors `flanj.mcp.server.command`
+  (a stdio server's launch line, stored with the contract for its card) —
+  ELEMENT BY ELEMENT, as the SDK does, so it stays a JSON array; untouched
+  commands pass byte-identical, and a value that is not a JSON array of strings
+  is floored as plain text (the snapshot decoder then drops it).
 
 ## Tests
 

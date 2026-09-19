@@ -79,6 +79,15 @@ const (
 	AttrMCPServerName      = "flanj.mcp.server.name"
 	AttrMCPServerVersion   = "flanj.mcp.server.version"
 	AttrMCPProtocolVersion = "flanj.mcp.protocol.version"
+	// AttrMCPServerCommand (optional, additive 2026-09-18) is how the client
+	// LAUNCHED a stdio server (`flanj.edge.class` = local-process): a compact
+	// JSON array `[command, ...args]`, each element floor-redacted by the SDK,
+	// capped at 1024 bytes (last element exactly "…" when args were dropped).
+	// It exists so a reader can see which PACKAGE is behind a self-reported
+	// serverInfo.name. Opaque display text for the contract card: validated as
+	// a JSON array of strings and nothing else, never parsed for meaning, and
+	// never part of a flag payload. Rides contract_snapshot records only.
+	AttrMCPServerCommand = "flanj.mcp.server.command"
 	// AttrMCPSessionID is the Mcp-Session-Id when the transport exposes one.
 	// Protocol-level sessions were removed in revision 2026-07-28, so this is
 	// permanently absent against a current server; the slot stays for clients
@@ -356,9 +365,48 @@ type ContractSnapshot struct {
 	// INSIDE SnapshotJSON, so the stored document stays self-describing.
 	CatalogTTLMs      int
 	CatalogCacheScope string
+	// ServerCommand is flanj.mcp.server.command verbatim when it is a
+	// non-empty JSON array of strings, and "" otherwise — absent, or a value
+	// that is not that shape (dropped, never a reason to fail the record).
+	ServerCommand string
 	// ObservedAt is the record's own timestamp (the spec's "<ts>" in
 	// provenance "observed tools/list at <ts>").
 	ObservedAt string
+}
+
+// DecodeServerCommand reports whether raw is a flanj.mcp.server.command the
+// collector keeps: a JSON array of strings with at least one element (the
+// command itself is always present on the wire). Anything else — not JSON, an
+// object, a number in the array, null, [] — is not a command and is dropped.
+// The SHAPE is the only thing checked: the value is display text, and nothing
+// in the collector acts on what it says.
+func DecodeServerCommand(raw string) ([]string, bool) {
+	if raw == "" {
+		return nil, false
+	}
+	// Into []any, not []string: encoding/json decodes a null ELEMENT into a
+	// string as a silent no-op, so `["npx",null]` would pass as a command.
+	var elems []any
+	if err := json.Unmarshal([]byte(raw), &elems); err != nil || len(elems) == 0 {
+		return nil, false
+	}
+	parts := make([]string, len(elems))
+	for i, e := range elems {
+		s, ok := e.(string)
+		if !ok {
+			return nil, false
+		}
+		parts[i] = s
+	}
+	return parts, true
+}
+
+// serverCommandOf keeps a valid command verbatim and drops everything else.
+func serverCommandOf(raw string) string {
+	if _, ok := DecodeServerCommand(raw); !ok {
+		return ""
+	}
+	return raw
 }
 
 // ContractSnapshotFromRecord reconstructs a ContractSnapshot from a
@@ -382,6 +430,7 @@ func ContractSnapshotFromRecord(lr plog.LogRecord) (ContractSnapshot, error) {
 		SnapshotJSON:      raw,
 		CatalogTTLMs:      getInt(m, AttrMCPCatalogTTLMs),
 		CatalogCacheScope: getStr(m, AttrMCPCatalogCacheScope),
+		ServerCommand:     serverCommandOf(getStr(m, AttrMCPServerCommand)),
 		ObservedAt:        recordTime(lr),
 	}, nil
 }

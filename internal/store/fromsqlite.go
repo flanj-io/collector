@@ -307,9 +307,18 @@ func copySpecInfos(src *sql.DB, tx *sql.Tx) (int, error) {
 	if hasSourceURL {
 		sourceURLCol = `COALESCE(source_url,'')`
 	}
+	// server_command (2026-09-18) — the same probe, for the same reason: a file
+	// last written by a build before this column must still import, with the
+	// launch line simply empty (the next observed tools/list writes it again).
+	hasServerCommand, _ := sqliteHasColumn(src, "spec_infos", "server_command")
+	serverCommandCol := `'' AS server_command`
+	if hasServerCommand {
+		serverCommandCol = `COALESCE(server_command,'')`
+	}
 	rows, err := src.Query(
 		`SELECT integration, role, peer_host, edge_class, format, title, version, docs_url,
-		        endpoints, loaded_at, doc, source, ` + sourceURLCol + `, prev_doc, prev_version, prev_loaded_at
+		        endpoints, loaded_at, doc, source, ` + sourceURLCol + `, ` + serverCommandCol + `,
+		        prev_doc, prev_version, prev_loaded_at
 		   FROM spec_infos`)
 	if err != nil {
 		return 0, fmt.Errorf("migrate-from-sqlite: read contracts: %w", err)
@@ -320,23 +329,23 @@ func copySpecInfos(src *sql.DB, tx *sql.Tx) (int, error) {
 		var (
 			integration, format, loadedAt, doc, source   string
 			role                                         string
-			sourceURL                                    string
+			sourceURL, serverCommand                     string
 			peerHost, edgeClass, title, version, docsURL sql.NullString
 			prevDoc, prevVersion, prevLoadedAt           sql.NullString
 			endpoints                                    int
 		)
 		if err := rows.Scan(&integration, &role, &peerHost, &edgeClass, &format, &title, &version,
-			&docsURL, &endpoints, &loadedAt, &doc, &source, &sourceURL, &prevDoc, &prevVersion, &prevLoadedAt); err != nil {
+			&docsURL, &endpoints, &loadedAt, &doc, &source, &sourceURL, &serverCommand, &prevDoc, &prevVersion, &prevLoadedAt); err != nil {
 			return n, fmt.Errorf("migrate-from-sqlite: scan contract: %w", err)
 		}
 		res, err := tx.Exec(
 			`INSERT INTO spec_infos
 			  (integration, role, peer_host, edge_class, format, title, version, docs_url,
-			   endpoints, loaded_at, doc, source, source_url, prev_doc, prev_version, prev_loaded_at)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+			   endpoints, loaded_at, doc, source, source_url, server_command, prev_doc, prev_version, prev_loaded_at)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
 			 ON CONFLICT (integration) DO NOTHING`,
 			integration, role, peerHost, edgeClass, format, title, version, docsURL,
-			endpoints, loadedAt, doc, source, nullStr(sourceURL), prevDoc, prevVersion, prevLoadedAt,
+			endpoints, loadedAt, doc, source, nullStr(sourceURL), nullStr(serverCommand), prevDoc, prevVersion, prevLoadedAt,
 		)
 		if err != nil {
 			return n, fmt.Errorf("migrate-from-sqlite: insert contract %s: %w", integration, err)

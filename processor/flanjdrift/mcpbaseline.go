@@ -121,8 +121,10 @@ func (s *mcpSeeds) reconcile(infos []model.SpecInfo, src specSource, det *drift.
 		}
 		// A stdio row names a serverInfo.name, not a host: it is one row for
 		// every pod's own subprocess, so it seeds none of them (see the
-		// local-process note at the top of this file).
-		if si.EdgeClass == model.EdgeClassLocalProcess {
+		// local-process note at the top of this file). An `unknown` row (the
+		// Python SDK never saw the transport) is keyed the same way — by a
+		// self-reported name — so the same reasoning holds and it seeds nobody.
+		if si.EdgeClass == model.EdgeClassLocalProcess || si.EdgeClass == model.EdgeClassUnknown {
 			continue
 		}
 		listed[si.Integration] = struct{}{}

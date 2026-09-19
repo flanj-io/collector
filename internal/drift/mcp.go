@@ -125,6 +125,10 @@ func (d *MCPDetector) LoadSnapshot(snap otlpattr.ContractSnapshot) ([]model.Find
 		Title:     snap.ServerName,
 		Version:   snap.ServerVersion,
 		Endpoints: len(tools),
+		// Display-only launch line of a stdio server (flanj.mcp.server.command);
+		// "" for every other server. Not part of the contract: it never moves
+		// the content hash, and a change to it alone is not a definition change.
+		ServerCommand: snap.ServerCommand,
 	}
 
 	d.mu.Lock()

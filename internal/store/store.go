@@ -930,7 +930,7 @@ func (b *base) ListSpecInfos() ([]model.SpecInfo, error) {
 	rows, err := b.db.Query(
 		`SELECT integration, role, COALESCE(peer_host,''), COALESCE(edge_class,''), format, COALESCE(title,''),
 		        COALESCE(version,''), COALESCE(docs_url,''), endpoints, loaded_at,
-		        COALESCE(source,'config'), COALESCE(source_url,''),
+		        COALESCE(source,'config'), COALESCE(source_url,''), COALESCE(server_command,''),
 		        COALESCE(prev_version,''), COALESCE(prev_loaded_at,''),
 		        ` + b.octetLength("doc") + `
 		   FROM spec_infos ORDER BY role DESC, integration ASC`, // self first
@@ -944,7 +944,7 @@ func (b *base) ListSpecInfos() ([]model.SpecInfo, error) {
 		var si model.SpecInfo
 		if err := rows.Scan(&si.Integration, &si.Role, &si.PeerHost, &si.EdgeClass, &si.Format, &si.Title,
 			&si.Version, &si.DocsURL, &si.Endpoints, &si.LoadedAt,
-			&si.Source, &si.SourceURL, &si.PrevVersion, &si.PrevLoadedAt, &si.DocBytes); err != nil {
+			&si.Source, &si.SourceURL, &si.ServerCommand, &si.PrevVersion, &si.PrevLoadedAt, &si.DocBytes); err != nil {
 			return nil, err
 		}
 		out = append(out, si)
