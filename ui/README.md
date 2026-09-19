@@ -50,7 +50,7 @@ Built to static assets; no runtime server of its own.
 - **Threads** — state of every thread this collector created (provider · endpoint · evidence ·
   status · opened · last reply · link) with Open / Close thread / Reopen / Copy thread link /
   Replace link; `#threads/<thread_id>` deep-links and highlights a row.
-- **Settings** — **Connect to Flanj network**: org name + contact email (+ your name, this
+- **Settings** — **Connect to Flanj network**: collector name + contact email (+ your name, this
   collector's address); one-click email confirmation; Resend / Change contact.
 
 ## Data source

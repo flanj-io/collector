@@ -10,7 +10,8 @@
 #
 # So this file carries NO identity and NO control plane. What that buys:
 #
-#   - `/api/health` reports no consumer_display_name, because none has been given
+#   - no organization name is shown anywhere: the workspace's name is chosen by
+#     its contact on the control plane's confirmation page, after Connect
 #   - `cp_configured` is false, which is true of this config AND of reality
 #   - Connect answers `cp_not_configured`, naming the two keys to set, instead of
 #     failing as if the operator's network were at fault
@@ -20,8 +21,8 @@
 # is deliberate — looking around without connecting is a property of this thing,
 # so an unconfigured collector must boot rather than refuse.
 #
-# TO CONNECT: copy config/config.example.yaml, set consumer_display_name and
-# cp_base_url (a deploy token is optional since 2026-09-14), and mount it over
+# TO CONNECT: copy config/config.example.yaml, set cp_base_url (a deploy token
+# is optional since 2026-09-14), and mount it over
 # /etc/flanj/config.yaml (README "Run it on a laptop"). Every key is frozen in
 # contracts/CONTRACTS.md §8; the example documents all of them, this file
 # documents none, and that split is the point.
@@ -38,10 +39,12 @@ extensions:
 
   flanjui:
     ui_endpoint: 127.0.0.1:5335 # loopback only — the collector is outbound-only
-    # consumer_display_name, provider_display_name: ABSENT on purpose. An
-    # identity belongs to whoever installed this collector, and the image has
-    # never met them. Connect asks for the org name and the collector's NAME in
-    # the UI (the name is the deployment's identity — CONTRACTS §5, 2026-09-14).
+    # consumer_display_name, provider_display_name: ABSENT on purpose — both are
+    # deprecated and ignored (2026-09-19). An identity belongs to whoever
+    # installed this collector, and the image has never met them. Connect asks
+    # for the collector's NAME in the UI (the deployment's identity — CONTRACTS
+    # §5, 2026-09-14); the workspace's name is chosen by the contact on the
+    # control plane's confirmation page.
     #
     # cp_base_url: ABSENT on purpose. With no base URL the CP client is never
     # built, so nothing outbound exists to fail. (cp_deploy_token is optional

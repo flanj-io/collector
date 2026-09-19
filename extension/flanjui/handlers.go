@@ -150,9 +150,10 @@ func (e *uiExtension) handleHealth(w http.ResponseWriter, r *http.Request) {
 		// — the first is "this browser has no stored theme
 		// choice", which only the browser can answer.
 		"held_prior_data": heldPriorData(st),
-		// consumer_display_name names the INSTALLER, not a discovery — it may
-		// render pre-traffic (the pre-traffic honesty rule exempts it).
-		"consumer_display_name": e.cfg.ConsumerDisplayName,
+		// No organization name here (2026-09-19): the configured
+		// consumer_display_name is deprecated and ignored, and the workspace's
+		// display name — the only org name this collector shows — rides
+		// GET /api/connect, once the control plane has told us.
 		// Does this pod serve its contracts to FRONT collectors? The Contracts
 		// card needs it to say anything about the 8 MiB document cap, which
 		// applies to that hop and to no other: on a single pod the same
@@ -592,7 +593,13 @@ func (e *uiExtension) handleFindings(w http.ResponseWriter, r *http.Request) {
 // email — the consumer copies the Thread link; an `invitee_email` from an old
 // UI build is accepted and ignored.
 type flagRequestBody struct {
-	FindingID           string `json:"finding_id"`
+	FindingID string `json:"finding_id"`
+	// ProviderDisplayName is DEPRECATED (2026-09-19): accepted and IGNORED. It
+	// was an older UI's per-flag override of the provider name; the control
+	// plane now names the provider itself (verified domain ownership, else a
+	// verified directory name, else the domain), so this collector no longer
+	// forwards any provider name on a flag. The field stays decodable so an
+	// older UI build keeps working.
 	ProviderDisplayName string `json:"provider_display_name"`
 	Message             string `json:"message"`
 	// AllowedDomains is the sheet's "Open to" choice, REQUIRED: a list of email
@@ -724,25 +731,26 @@ func (e *uiExtension) handleFlag(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// The consumer org is the Connected one (config is the fallback for display
-	// only). Provider name: UI override, then provider_display_name, then the
-	// humanized integration id (CONTRACTS §5/§8).
-	consumerName := cs.ConsumerDisplayName
-	if consumerName == "" {
-		consumerName = e.cfg.ConsumerDisplayName
+	// The org name on the wire is the workspace's display name as this
+	// collector last read it from the control plane, or nothing (the field is
+	// omitted) — never the deprecated config key. The control plane names the
+	// sender from the workspace either way.
+	consumerName := cs.WorkspaceDisplayName
+	// providerName is LOCAL ONLY (2026-09-19) — it never rides the flag
+	// (promote.FlagRequest carries no provider_display_name field at all; the
+	// control plane names the provider itself, from verified domain ownership,
+	// else a verified directory name, else the domain). It only seeds this
+	// collector's OWN thread record (rec.Provider below) as a placeholder for
+	// the Threads tab until the control plane's resolved name arrives on the
+	// next list poll. `body.ProviderDisplayName` (an older UI's per-flag
+	// override) and `e.cfg.ProviderDisplayName` (the deprecated config key) are
+	// both accepted for compatibility and otherwise IGNORED — neither
+	// influences this placeholder or anything sent onward.
+	integration := finding.Integration
+	if call != nil {
+		integration = call.Integration
 	}
-	providerName := body.ProviderDisplayName
-	if providerName == "" {
-		providerName = e.cfg.ProviderDisplayName
-	}
-	if providerName == "" {
-		// A call-less finding names its own integration.
-		integration := finding.Integration
-		if call != nil {
-			integration = call.Integration
-		}
-		providerName = humanizeIntegration(integration)
-	}
+	providerName := humanizeIntegration(integration)
 	// Who may open the thread — the last local check before anything leaves.
 	// Refused HERE so the operator reads it in the sheet; the CP refuses the
 	// same shapes independently.
@@ -753,7 +761,6 @@ func (e *uiExtension) handleFlag(w http.ResponseWriter, r *http.Request) {
 	}
 	req := promote.Build(promote.Input{
 		ConsumerDisplayName: consumerName,
-		ProviderDisplayName: providerName,
 		Message:             body.Message,
 		Call:                call,
 		Finding:             finding,
@@ -890,18 +897,15 @@ func (e *uiExtension) handleEdgeThread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	consumerName := cs.ConsumerDisplayName
-	if consumerName == "" {
-		consumerName = e.cfg.ConsumerDisplayName
-	}
-	// The provider name is the edge's RESOLVED name (user > contract > directory
-	// > auto) — the same string the row the operator clicked is rendering. An
-	// unnamed edge sends no name at all rather than a humanized host: the CP
-	// falls back to its own resolution, and the thread page anchors on the
-	// domain we are sending anyway.
-	names := e.newNameResolver(st)
-	providerName, _ := names.resolve(target.PeerHost, domain)
-
+	consumerName := cs.WorkspaceDisplayName // the same rule as the flag path
+	// No provider name is sent (2026-09-19, see promote.FlagRequest): the
+	// control plane resolves the provider side itself off `ProviderHost` below
+	// (verified domain ownership, else a verified directory name, else the
+	// domain), the same way it does for a call-evidenced flag. This route used
+	// to send the edge's locally-resolved name (user > contract > directory >
+	// auto) alongside the host; the host alone is now sufficient and is never a
+	// guess.
+	//
 	// Who may open the thread — the same rule, in the same place, as the flag path.
 	allowedDomains, allowedEmails, refuseCode, refuseMsg := openToOf(body.AllowedDomains, body.AllowedEmails)
 	if refuseCode != "" {
@@ -911,7 +915,6 @@ func (e *uiExtension) handleEdgeThread(w http.ResponseWriter, r *http.Request) {
 	req := promote.BuildQuestion(promote.QuestionInput{
 		IdempotencyKey:      edgeThreadIdempotencyKey(body.RequestID, target.PeerHost),
 		ConsumerDisplayName: consumerName,
-		ProviderDisplayName: providerName,
 		ProviderHost:        target.PeerHost,
 		Message:             body.Message,
 		AllowedDomains:      allowedDomains,

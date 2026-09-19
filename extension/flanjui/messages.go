@@ -7,7 +7,7 @@ package flanjui
 // previewer" in anything user-facing — the naming denylist test scans this file
 // together with the UI sources.
 const (
-	msgNotConnected = "Connect first. Creating a thread link needs your org name and a confirmed contact email — viewing local data never does."
+	msgNotConnected = "Connect first. Creating a thread link needs a confirmed contact email — viewing local data never does."
 	// msgThreadsNotConnected is the LIST answer, and it deliberately does not say
 	// "no threads": the threads live on the control plane, so a collector without
 	// a key cannot tell an empty list from a list it can't read.
@@ -37,7 +37,7 @@ const (
 	msgForeignOrigin       = "This action is only available from the collector's own page."
 	msgInvalidJSON         = "The request body is not valid JSON."
 	msgRequestTooLarge     = "The request body is too large for this action."
-	msgConnectFields       = "Your organization and a contact email are required."
+	msgConnectFields       = "A contact email is required."
 	msgConnectNameRequired = "Give this collector a name — it identifies this deployment in your Flanj workspace."
 	msgInvalidEmail        = "Enter a valid email."
 	msgFindingRequired     = "finding_id is required."

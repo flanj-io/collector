@@ -143,7 +143,6 @@ export interface Health {
    *  gate on the one-time theme-flip notice. Absent on an
    *  older collector, which reads as "no notice" — the safe direction. */
   held_prior_data?: boolean;
-  consumer_display_name?: string;
   provider_display_name?: string;
   /** Does this pod hand its stored contracts to FRONT collectors — i.e. is it
    *  the store pod of a tiered deployment (`flanjstore.spec_endpoint`)?

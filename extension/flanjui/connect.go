@@ -37,16 +37,25 @@ import (
 // exists", not on "the latest contact is confirmed".
 
 const (
-	settingCollectorKey        = "connect.collector_key"
-	settingCollectorPublicID   = "connect.collector_public_id"
-	settingCollectorName       = "connect.collector_name"
-	settingConsumerDisplayName = "connect.consumer_display_name"
-	settingContactEmail        = "connect.contact_email"
-	settingContactDisplayName  = "connect.contact_display_name"
-	settingRegisteredAt        = "connect.registered_at"
-	settingContactStatus       = "connect.contact_status" // pending | confirmed (refreshed from `me`)
-	settingConfirmedAt         = "connect.confirmed_at"
-	settingLocalUIURL          = "connect.local_ui_url"
+	settingCollectorKey      = "connect.collector_key"
+	settingCollectorPublicID = "connect.collector_public_id"
+	settingCollectorName     = "connect.collector_name"
+	// settingLegacyConsumerDisplayName is the org name an older collector
+	// typed at Connect. READ-ONLY now (2026-09-19): it names nothing, is
+	// never shown or sent, and is read only as a trace that this deployment
+	// was used before (priordata.go).
+	settingLegacyConsumerDisplayName = "connect.consumer_display_name"
+	// settingWorkspaceDisplayName is this collector's copy of the workspace's
+	// display name, read from `me` (2026-09-19). In the store settings KV —
+	// shared by every pod of the deployment, never a per-pod file — so it
+	// survives a restart and an unreachable control plane.
+	settingWorkspaceDisplayName = "connect.workspace_display_name"
+	settingContactEmail         = "connect.contact_email"
+	settingContactDisplayName   = "connect.contact_display_name"
+	settingRegisteredAt         = "connect.registered_at"
+	settingContactStatus        = "connect.contact_status" // pending | confirmed (refreshed from `me`)
+	settingConfirmedAt          = "connect.confirmed_at"
+	settingLocalUIURL           = "connect.local_ui_url"
 	// settingConfirmedContactEmail is the contact currently usable for threads
 	// (may differ from contact_email while a newer contact is pending).
 	settingConfirmedContactEmail = "connect.confirmed_contact_email"
@@ -60,17 +69,23 @@ const (
 
 // connectState is the persisted Connect record.
 type connectState struct {
-	CollectorKey          string // the secret — never serialized, never logged
-	CollectorPublicID     string
-	CollectorName         string // the CP's copy of the name (2026-09-14)
-	ConsumerDisplayName   string
-	ContactEmail          string // the most recent (possibly pending) contact
-	ContactDisplayName    string
-	RegisteredAt          string
-	ContactStatus         string // status of ContactEmail
-	ConfirmedAt           string
-	LocalUIURL            string
-	ConfirmedContactEmail string // the contact usable for threads ("" until the first confirmation)
+	CollectorKey      string // the secret — never serialized, never logged
+	CollectorPublicID string
+	CollectorName     string // the CP's copy of the name (2026-09-14)
+	// WorkspaceDisplayName is the CP's workspace name, cached from `me`
+	// ("" until a contact has named the workspace). The one organization
+	// name this collector shows or sends.
+	WorkspaceDisplayName string
+	// LegacyConsumerDisplayName is what an older collector stored at Connect.
+	// Loaded, never saved, never shown, never sent.
+	LegacyConsumerDisplayName string
+	ContactEmail              string // the most recent (possibly pending) contact
+	ContactDisplayName        string
+	RegisteredAt              string
+	ContactStatus             string // status of ContactEmail
+	ConfirmedAt               string
+	LocalUIURL                string
+	ConfirmedContactEmail     string // the contact usable for threads ("" until the first confirmation)
 
 	// ConfirmationMail is TRANSIENT — the outcome of the confirmation mail on
 	// THIS request (sent | failed | cooldown), never
@@ -110,15 +125,18 @@ func (cs connectState) status() string {
 // reading a 2xx as delivery.
 func (cs connectState) view() map[string]any {
 	out := map[string]any{
-		"status":                cs.status(),
-		"collector_name":        nullable(cs.CollectorName),
-		"consumer_display_name": nullable(cs.ConsumerDisplayName),
-		"contact_email":         nullable(cs.ContactEmail),
-		"contact_display_name":  nullable(cs.ContactDisplayName),
-		"collector_public_id":   nullable(cs.CollectorPublicID),
-		"registered_at":         nullable(cs.RegisteredAt),
-		"confirmed_at":          nullable(cs.ConfirmedAt),
-		"local_ui_url":          nullable(cs.LocalUIURL),
+		"status":         cs.status(),
+		"collector_name": nullable(cs.CollectorName),
+		// The workspace's display name — null until the contact has named it
+		// on the confirmation page. There is no consumer_display_name here any
+		// more: the collector no longer names its organization.
+		"workspace_display_name": nullable(cs.WorkspaceDisplayName),
+		"contact_email":          nullable(cs.ContactEmail),
+		"contact_display_name":   nullable(cs.ContactDisplayName),
+		"collector_public_id":    nullable(cs.CollectorPublicID),
+		"registered_at":          nullable(cs.RegisteredAt),
+		"confirmed_at":           nullable(cs.ConfirmedAt),
+		"local_ui_url":           nullable(cs.LocalUIURL),
 		// The contact threads are created with right now; while a new contact
 		// is pending this is the previous confirmed one (Create thread stays
 		// available), null until the first confirmation.
@@ -165,7 +183,8 @@ func loadConnect(st store.Store) (connectState, error) {
 		{settingCollectorKey, &cs.CollectorKey},
 		{settingCollectorPublicID, &cs.CollectorPublicID},
 		{settingCollectorName, &cs.CollectorName},
-		{settingConsumerDisplayName, &cs.ConsumerDisplayName},
+		{settingWorkspaceDisplayName, &cs.WorkspaceDisplayName},
+		{settingLegacyConsumerDisplayName, &cs.LegacyConsumerDisplayName},
 		{settingContactEmail, &cs.ContactEmail},
 		{settingContactDisplayName, &cs.ContactDisplayName},
 		{settingRegisteredAt, &cs.RegisteredAt},
@@ -186,13 +205,13 @@ func loadConnect(st store.Store) (connectState, error) {
 	return cs, nil
 }
 
-// saveConnect persists the record. The key is written only when non-empty (a
-// replay never blanks the key we already hold).
+// saveConnect persists the record. The key and the workspace name are written
+// only when non-empty (a replay never blanks the key we already hold, and a
+// Connect never blanks a workspace name another pod's poll just cached).
 func saveConnect(st store.Store, cs connectState) error {
 	puts := map[string]string{
 		settingCollectorPublicID:     cs.CollectorPublicID,
 		settingCollectorName:         cs.CollectorName,
-		settingConsumerDisplayName:   cs.ConsumerDisplayName,
 		settingContactEmail:          cs.ContactEmail,
 		settingContactDisplayName:    cs.ContactDisplayName,
 		settingRegisteredAt:          cs.RegisteredAt,
@@ -203,6 +222,9 @@ func saveConnect(st store.Store, cs connectState) error {
 	}
 	if cs.CollectorKey != "" {
 		puts[settingCollectorKey] = cs.CollectorKey
+	}
+	if cs.WorkspaceDisplayName != "" {
+		puts[settingWorkspaceDisplayName] = cs.WorkspaceDisplayName
 	}
 	for k, v := range puts {
 		if err := st.PutSetting(k, v); err != nil {
@@ -270,7 +292,13 @@ func (e *uiExtension) refreshConnect(ctx context.Context, st store.Store, cs con
 	// The name is the CP's to hold: a rename made on the dashboard
 	// lands here on the next refresh, so the panel never shows a stale one.
 	set(&cs.CollectorName, me.CollectorName)
-	set(&cs.ConsumerDisplayName, me.ConsumerDisplayName)
+	// The workspace's display name is the CP's too, and it can change (the
+	// workspace renames itself), so every successful poll re-reads it. Only a
+	// non-null value is kept: null means "not named yet" (or an older CP), and
+	// never un-names a workspace this collector already knows.
+	if me.WorkspaceDisplayName != nil {
+		set(&cs.WorkspaceDisplayName, strings.TrimSpace(*me.WorkspaceDisplayName))
+	}
 	set(&cs.ContactEmail, me.ContactEmail)
 	set(&cs.ContactDisplayName, me.ContactDisplayName)
 	set(&cs.RegisteredAt, me.RegisteredAt)
@@ -546,13 +574,15 @@ var publicTLDs = map[string]bool{
 	"hk": true, "kr": true, "za": true, "tr": true, "ae": true, "us": true,
 }
 
-// connectRequestBody is POST /api/connect.
+// connectRequestBody is POST /api/connect. There is no organization name: the
+// workspace is named by its contact on the control plane's confirmation page
+// (2026-09-19). An older UI's `consumer_display_name` is simply not decoded —
+// accepted, and ignored.
 type connectRequestBody struct {
-	ConsumerDisplayName string `json:"consumer_display_name"`
-	ContactEmail        string `json:"contact_email"`
-	CollectorName       string `json:"collector_name"`
-	ContactDisplayName  string `json:"contact_display_name"`
-	LocalUIURL          string `json:"local_ui_url"`
+	ContactEmail       string `json:"contact_email"`
+	CollectorName      string `json:"collector_name"`
+	ContactDisplayName string `json:"contact_display_name"`
+	LocalUIURL         string `json:"local_ui_url"`
 }
 
 // handleConnectPost is Connect. Idempotent: read-before-register; the same
@@ -569,14 +599,13 @@ func (e *uiExtension) handleConnectPost(w http.ResponseWriter, r *http.Request) 
 	if !readJSONBody(w, r, maxSmallBodyBytes, &body, "request_too_large", msgRequestTooLarge) {
 		return
 	}
-	body.ConsumerDisplayName = strings.TrimSpace(body.ConsumerDisplayName)
 	body.ContactEmail = strings.TrimSpace(body.ContactEmail)
 	// Whitespace collapsed like the CP will collapse it, so what the panel shows before the
 	// answer lands is what the answer will say.
 	body.CollectorName = strings.Join(strings.Fields(body.CollectorName), " ")
 	body.ContactDisplayName = strings.TrimSpace(body.ContactDisplayName)
 	body.LocalUIURL = strings.TrimSpace(body.LocalUIURL)
-	if body.ConsumerDisplayName == "" || body.ContactEmail == "" {
+	if body.ContactEmail == "" {
 		writeErr(w, http.StatusBadRequest, "missing_fields", msgConnectFields)
 		return
 	}
@@ -592,7 +621,6 @@ func (e *uiExtension) handleConnectPost(w http.ResponseWriter, r *http.Request) 
 	// message, before anything is sent or persisted. The collector name too —
 	// it is shown on the dashboard and in the confirmation mail.
 	rd := redact.New()
-	body.ConsumerDisplayName = strings.TrimSpace(rd.Redact(body.ConsumerDisplayName).Text)
 	body.ContactDisplayName = strings.TrimSpace(rd.Redact(body.ContactDisplayName).Text)
 	body.CollectorName = strings.TrimSpace(rd.Redact(body.CollectorName).Text)
 	if body.CollectorName == "" {
@@ -622,11 +650,10 @@ func (e *uiExtension) handleConnectPost(w http.ResponseWriter, r *http.Request) 
 	// never used again once a key exists — a register without the key is a NEW
 	// collector on the CP.
 	req := promote.RegisterRequest{
-		ConsumerDisplayName: body.ConsumerDisplayName,
-		ContactEmail:        body.ContactEmail,
-		CollectorName:       body.CollectorName,
-		ContactDisplayName:  body.ContactDisplayName,
-		LocalUIURL:          body.LocalUIURL,
+		ContactEmail:       body.ContactEmail,
+		CollectorName:      body.CollectorName,
+		ContactDisplayName: body.ContactDisplayName,
+		LocalUIURL:         body.LocalUIURL,
 	}
 	var resp promote.RegisterResponse
 	if cs.CollectorKey != "" {
@@ -665,12 +692,8 @@ func (e *uiExtension) handleConnectPost(w http.ResponseWriter, r *http.Request) 
 	} else {
 		cs.CollectorName = body.CollectorName
 	}
-	cs.ConsumerDisplayName = body.ConsumerDisplayName
 	cs.ContactEmail = body.ContactEmail
 	cs.ContactDisplayName = body.ContactDisplayName
-	if cs.ContactDisplayName == "" {
-		cs.ContactDisplayName = body.ConsumerDisplayName
-	}
 	if body.LocalUIURL != "" {
 		cs.LocalUIURL = body.LocalUIURL
 	}

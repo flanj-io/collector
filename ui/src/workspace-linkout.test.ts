@@ -26,7 +26,7 @@ const HEALTH = {
 
 const CONNECTED = {
   status: 'connected',
-  consumer_display_name: 'Acme Consumer Ltd',
+  workspace_display_name: 'Acme Consumer Ltd',
   contact_email: 'ops@acme.test',
   contact_display_name: 'Dana',
   collector_public_id: 'col_pub_1',

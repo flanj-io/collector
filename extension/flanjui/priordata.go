@@ -52,7 +52,7 @@ func heldPriorData(st store.Store) bool {
 // the `threads.index` array, which the CP-backed thread list retired.)
 func probePriorData(st store.Store) bool {
 	if cs, err := loadConnect(st); err == nil &&
-		(cs.CollectorKey != "" || cs.ContactEmail != "" || cs.ConsumerDisplayName != "" || cs.RegisteredAt != "") {
+		(cs.CollectorKey != "" || cs.ContactEmail != "" || cs.LegacyConsumerDisplayName != "" || cs.WorkspaceDisplayName != "" || cs.RegisteredAt != "") {
 		return true
 	}
 	if sigs, err := loadAckIndex(st); err == nil && len(sigs) > 0 {

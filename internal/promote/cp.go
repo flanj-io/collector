@@ -54,9 +54,12 @@ func AsCPError(err error) *CPError {
 
 // RegisterRequest is POST /api/v1/collectors/register (no credential, Bearer
 // cp_deploy_token, or Bearer collector key — CONTRACTS §5).
+//
+// It carries no organization name (CONTRACTS §5, 2026-09-19): a workspace is
+// named by its contact on the control plane's confirmation page, never by a
+// collector, so `consumer_display_name` — deprecated, optional — is not sent.
 type RegisterRequest struct {
-	ConsumerDisplayName string `json:"consumer_display_name"`
-	ContactEmail        string `json:"contact_email"`
+	ContactEmail string `json:"contact_email"`
 	// CollectorName is the deployment's NAME (2026-09-14): unique within the
 	// contact's workspace, changeable. Required by the CP from a collector
 	// that knows the field, which this one does — the relay refuses a Connect
@@ -105,13 +108,18 @@ type RegisterResponse struct {
 type MeResponse struct {
 	// CollectorName is the stored name after any rename — the dashboard's
 	// rename reaches the panel through this field.
-	CollectorName       string `json:"collector_name"`
-	CollectorID         string `json:"collector_id"`
-	CollectorPublicID   string `json:"collector_public_id"`
-	ConsumerDisplayName string `json:"consumer_display_name"`
-	ContactEmail        string `json:"contact_email"`
-	ContactDisplayName  string `json:"contact_display_name"`
-	ContactStatus       string `json:"contact_status"`
+	CollectorName     string `json:"collector_name"`
+	CollectorID       string `json:"collector_id"`
+	CollectorPublicID string `json:"collector_public_id"`
+	// WorkspaceDisplayName is the workspace's one display name (2026-09-19) —
+	// the name other organizations see. nil until a contact has confirmed and
+	// named it (and from an older CP that predates the field). It can change:
+	// the workspace may rename itself, so the relay re-reads it on every poll.
+	// (The deprecated `consumer_display_name` is not read: it names nothing.)
+	WorkspaceDisplayName *string `json:"workspace_display_name"`
+	ContactEmail         string  `json:"contact_email"`
+	ContactDisplayName   string  `json:"contact_display_name"`
+	ContactStatus        string  `json:"contact_status"`
 	// ConfirmedContactEmail is the contact currently usable for threads — null
 	// until the first confirmation; it STAYS set while a newer contact is pending
 	// (the relay must not 412 a flag while it is non-null).

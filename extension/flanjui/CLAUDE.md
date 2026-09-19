@@ -49,8 +49,8 @@ API + the flag action.
   `forbidden_origin`), never a CORS header. Errors are `{error, message}` with
   the relay's fixed copy (`messages.go`). Tokens, handoffs and the collector key never
   reach a log line.
-  - `GET|POST /api/connect` (`connect.go`) — **Connect**: `POST {consumer_display_name,
-    collector_name, contact_email, contact_display_name?, local_ui_url?}` registers the
+  - `GET|POST /api/connect` (`connect.go`) — **Connect**: `POST {collector_name,
+    contact_email, contact_display_name?, local_ui_url?}` registers the
     deployment with the CP (`register` — since 2026-09-14 with NO credential when
     `cp_deploy_token` is unset, the open door; with the token when set, on the first
     Connect only). `collector_name` is MANDATORY (`400 collector_name_required`): the
@@ -67,8 +67,19 @@ API + the flag action.
     same email = resend, key unchanged; a new email = a new pending contact on
     the same collector, key unchanged — the previously confirmed contact stays
     usable for threads (`confirmed_contact_email` from `me`) until the new one
-    confirms. `GET` → `{status: disconnected|pending|connected,
-    consumer_display_name, contact_email, contact_display_name,
+    confirms. **No organization name (2026-09-19):** a workspace — every
+    collector whose contact is one person — has ONE display name, chosen by the
+    contact on the control plane's confirmation page, never on the collector.
+    An older UI's `consumer_display_name` is accepted and ignored, and the
+    register call never carries the field. The relay reads the name back from
+    `me` (`workspace_display_name`) on every refresh and caches it in the
+    settings KV (`connect.workspace_display_name`, deployment-shared) whenever
+    the CP returns a non-null value — so it survives an unreachable CP and a
+    restart, and a rename on the dashboard shows up on the next poll. It is the
+    only org name the UI shows (header pill, Connected panel's `Workspace` row),
+    and a flag carries it as `consumer_display_name` when known, else omits the
+    field — never the config value. `GET` → `{status: disconnected|pending|connected,
+    collector_name, workspace_display_name, contact_email, contact_display_name,
     confirmed_contact_email, collector_public_id, registered_at, confirmed_at,
     local_ui_url, dashboard_url?}` refreshed from `me` (≤1 CP call / 10s per pod; the UI polls it
     every 5s while pending). `dashboard_url` is the SPA's one door out (the
@@ -85,7 +96,12 @@ API + the flag action.
     can (2026-09-07). Absent → the SPA keeps the pill a
     Settings button.
   - `POST /api/flag {finding_id, allowed_emails, allowed_domains, message?, provider_display_name?}` — **Create
-    thread**: `403 {error: not_flaggable}` for LOCAL-ONLY finding kinds
+    thread**. `provider_display_name` is DEPRECATED (2026-09-19): accepted and
+    IGNORED. The control plane now names the provider side of every thread
+    itself (verified domain ownership, else a verified directory name, else
+    the domain — CONTRACTS §5), and `promote.FlagRequest` carries no provider
+    name field at all — the key is only decoded here for an older UI build.
+    `403 {error: not_flaggable}` for LOCAL-ONLY finding kinds
     (`model.Finding.Flaggable()` — `stale_client`, and only `stale_client`): the
     evidence rule is enforced server-side in the relay, never just by UI
     absence, so a hand-crafted request cannot promote a local notice.
@@ -181,7 +197,8 @@ API + the flag action.
     otherwise onto `thread.link.<thread_id>` — a key only that thread's Replace
     link writes, blind.
   - `GET /api/health` also carries `connect_status` (from the store only) and
-    the configured display names. `GET /api/connect` also carries `edge_sync` —
+    the (deprecated) `provider_display_name` once traffic exists — never an
+    organization name: the configured `consumer_display_name` is ignored. `GET /api/connect` also carries `edge_sync` —
     this deployment's actual registration setting, so the panel's disclosure
     line states what really leaves rather than what usually does.
 
@@ -265,7 +282,8 @@ collector is outbound-only; nothing serves off-host.
 - `web/dist/index.html` — committed **placeholder**; the real SPA overwrites it
   at Docker build time (only the placeholder is tracked; `web/dist/assets/` is
   gitignored).
-- `config.go` — frozen keys `ui_endpoint`, `consumer_display_name`,
+- `config.go` — frozen keys `ui_endpoint`, `consumer_display_name` (DEPRECATED
+  and ignored, 2026-09-19 — the workspace is named on the control plane),
   `provider_display_name`, `cp_base_url`, `cp_public_url` (optional,
   browser-facing — validated at boot: absolute http(s), no credentials),
   `cp_deploy_token` (OPTIONAL since 2026-09-14 — Connect needs no token), and
@@ -274,6 +292,9 @@ collector is outbound-only; nothing serves off-host.
   DEPRECATED and ignored (removed from §8 2026-09-14; decoded so an old config
   boots, with a warning): the deployment's identity is its collector NAME, and
   `/api/health` carries `collector_name` where the `integration` slug was.
+  `provider_display_name` is likewise DEPRECATED and ignored for the flag
+  (2026-09-19, see below) — decoded so an existing config keeps loading, with
+  no effect on what is sent.
 - `sync.go` — ONE 15s ticker, THREE independently gated legs. `edges.go` is the
   third: **edge registration**, `POST /api/v1/edges/sync` with the
   collector key. It lists the store's EXTERNAL edges and hands them to
@@ -285,9 +306,11 @@ collector is outbound-only; nothing serves off-host.
   panel before the operator Connects, and switchable with `edge_sync: false`
   without touching the other two legs. The log line carries counts and a status —
   never a domain, which would put the dependency graph in the pod logs.
-  `provider_display_name` is the FLAG's fallback provider name only — it stopped
+  `provider_display_name` was the FLAG's fallback provider name — it stopped
   naming edges when contracts moved into the UI (its edge linkage came from the
-  config spec's `peer_host`).
+  config spec's `peer_host`), and since 2026-09-19 it no longer names the flag
+  either: the control plane resolves the provider side itself, so the key is
+  accepted and ignored.
 - `contracts_upload.go` — `POST /api/contracts/{preview,upload,remove}`: the only
   way a provider contract enters this collector. Parse-before-persist, mandatory
   host binding, integration id DERIVED from the host, replace with one previous

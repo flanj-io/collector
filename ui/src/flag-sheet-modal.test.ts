@@ -34,7 +34,7 @@ const FINDING: Finding = {
 // message, Create thread, Cancel), which is the sheet keyboard users meet.
 const CONNECTED: ConnectState = {
   status: 'connected',
-  consumer_display_name: 'Acme',
+  workspace_display_name: 'Acme',
   contact_email: 'ops@acme.test',
   confirmed_contact_email: 'ops@acme.test'
 };

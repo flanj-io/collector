@@ -64,7 +64,7 @@ describe('ConnectPanel renders the disclosure', () => {
           state: base({
             status,
             edge_sync: true,
-            consumer_display_name: 'Acme Consumer Ltd',
+            workspace_display_name: 'Acme Consumer Ltd',
             contact_email: 'ops@acme.example',
             confirmed_contact_email: status === 'connected' ? 'ops@acme.example' : null,
             local_ui_url: 'http://localhost:5335'
