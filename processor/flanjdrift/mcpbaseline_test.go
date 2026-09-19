@@ -434,7 +434,8 @@ func (p *mcpStorePod) fetched(integration string) int {
 }
 
 // TestMCPBaselineNeverSeedsLocalProcessRows: a stdio (local-process) row seeds
-// nobody, over either source.
+// nobody, over either source. Nor does an `unknown` row (the Python SDK never
+// saw the server's transport): its peer_host is the same self-reported name.
 //
 // A stdio MCP server has no host on the wire, so the SDK records its
 // serverInfo.name as the peer_host — a name, not an identity. Every pod
@@ -444,11 +445,17 @@ func (p *mcpStorePod) fetched(integration string) int {
 // only its own rows; a shared postgres is one database behind every pod, so it
 // does not (see TestTwoPodsSharingAStoreNeverPingPongStdioBaselines).
 func TestMCPBaselineNeverSeedsLocalProcessRows(t *testing.T) {
+	for _, class := range []string{model.EdgeClassLocalProcess, model.EdgeClassUnknown} {
+		t.Run(class, func(t *testing.T) { assertNameKeyedRowSeedsNobody(t, class) })
+	}
+}
+
+func assertNameKeyedRowSeedsNobody(t *testing.T, class string) {
 	rows := []model.SpecInfo{
 		{Integration: "acme-payments", Role: model.SpecRoleProvider, Format: model.SpecFormatMCP, PeerHost: "mcp.acme.test",
 			EdgeClass: model.EdgeClassExternal, Source: model.SpecSourceObserved, LoadedAt: "2026-09-08T10:00:00.000Z"},
 		{Integration: "filesystem", Role: model.SpecRoleProvider, Format: model.SpecFormatMCP, PeerHost: "filesystem",
-			EdgeClass: model.EdgeClassLocalProcess, Source: model.SpecSourceObserved, LoadedAt: "2026-09-08T10:00:00.000Z"},
+			EdgeClass: class, Source: model.SpecSourceObserved, LoadedAt: "2026-09-08T10:00:00.000Z"},
 	}
 	docs := map[string][]byte{"acme-payments": []byte(mcpSnapshotJSON), "filesystem": []byte(stdioListRead)}
 
@@ -469,7 +476,7 @@ func TestMCPBaselineNeverSeedsLocalProcessRows(t *testing.T) {
 		t.Fatal("the external row did not seed the front")
 	}
 	if front.mcp.HasBaseline("filesystem", "client") {
-		t.Fatal("a local-process row seeded a front over the channel")
+		t.Fatalf("a %s row seeded a front over the channel", class)
 	}
 	if n := pod.fetched("filesystem"); n != 0 {
 		t.Errorf("the skipped row was downloaded %d times, want never", n)
@@ -497,7 +504,7 @@ func TestMCPBaselineNeverSeedsLocalProcessRows(t *testing.T) {
 		t.Fatalf("co-located store adopted %+v, want the external row alone", adopted)
 	}
 	if own.mcp.HasBaseline("filesystem", "client") {
-		t.Fatal("a local-process row seeded a pod from its own store — on a shared postgres that row is every pod's")
+		t.Fatalf("a %s row seeded a pod from its own store — on a shared postgres that row is every pod's", class)
 	}
 }
 

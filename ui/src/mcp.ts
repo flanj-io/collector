@@ -327,6 +327,33 @@ export function mcpContractMeta(toolCount: number, updated: string): string {
   return `${toolCount} tool${toolCount === 1 ? '' : 's'} · contract observed from tools/list · updated ${updated}`;
 }
 
+export const MCP_LAUNCHED_AS = 'Launched as:';
+
+/**
+ * `Launched as: npx -y @stripe/mcp@0.2.1` — how the client started a stdio
+ * server, so the card says which PACKAGE is behind a self-reported
+ * serverInfo.name. `server_command` is the SDK's JSON array `[command,
+ * ...args]` (already floor-redacted twice); the line is its elements joined by
+ * single spaces, an element that contains whitespace (or is empty) written as
+ * a JSON string so the argv boundaries stay legible.
+ *
+ * '' — render nothing — for every edge class but `local-process`, when the
+ * field is absent, and when it is not a non-empty JSON array of strings: an
+ * unreadable value is not worth a broken line on a contract card.
+ */
+export function serverCommandLine(edgeClass?: string, serverCommand?: string): string {
+  if (edgeClass !== 'local-process' || !serverCommand) return '';
+  let parts: unknown;
+  try {
+    parts = JSON.parse(serverCommand);
+  } catch {
+    return '';
+  }
+  if (!Array.isArray(parts) || parts.length === 0 || !parts.every((p) => typeof p === 'string')) return '';
+  const argv = (parts as string[]).map((p) => (p === '' || /\s/.test(p) ? JSON.stringify(p) : p));
+  return `${MCP_LAUNCHED_AS} ${argv.join(' ')}`;
+}
+
 /** Per-tool row label from the tool's declared schemas. */
 export function toolContractLabel(hasOutputSchema: boolean): string {
   return hasOutputSchema ? 'input + output contract' : 'input contract only';

@@ -25,14 +25,18 @@ export interface ContractSpec {
   version?: string;
   endpoints?: number;
   loaded_at?: string;
-  /** 'external' | 'internal' | 'local-process' — mirrors the call field. The
-   *  only fact that separates two servers publishing the same name. */
+  /** 'external' | 'internal' | 'local-process' | 'unknown' — mirrors the call
+   *  field. The only fact that separates two servers publishing the same name.
+   *  `unknown` (Python SDK): an MCP server whose transport the SDK never saw. */
   edge_class?: string;
   /** How the contract got here: 'upload' | 'fetched' | 'config' | 'observed'. */
   source?: string;
   /** Where a 'fetched' contract came from. Empty for every other source.
    *  Evidence, not a handle — nothing re-reads it, and nothing re-fetches. */
   source_url?: string;
+  /** How the client launched a stdio MCP server: a JSON array STRING,
+   *  `[command, ...args]`. Absent on every other row. Local display only. */
+  server_command?: string;
   /** The version this one replaced, when it replaced one. */
   prev_version?: string;
   /** The stored document's size in bytes, measured by the store at list time.
@@ -618,9 +622,15 @@ export function hasBindingWarning(checks: readonly BindingCheck[]): boolean {
 
 /* ── Identity ──────────────────────────────────────────────────────────── */
 
+/** The origin of a server whose transport the SDK never saw (edge class `unknown`). */
+export const ORIGIN_UNKNOWN = 'location unknown';
+
 /**
  * WHERE this contract's counterparty is: the host for a network transport, the
- * literal word `stdio` for a local process.
+ * literal word `stdio` for a local process, and `location unknown` when the SDK
+ * never saw the transport (edge class `unknown`, Python SDK) — its peer_host is
+ * then the server's own serverInfo.name, and printing that as a place would
+ * repeat the name and claim a location nobody observed.
  *
  * Exists because two MCP servers can publish the same `serverInfo.name` — the
  * live stack has exactly that — and the name is the only thing the card
@@ -634,6 +644,7 @@ export function contractOrigin(spec: ContractSpec): string {
   // an origin would be inventing one — it keeps a bare title.
   if (spec.role === 'self') return '';
   if (spec.edge_class === 'local-process') return 'stdio';
+  if (spec.edge_class === 'unknown') return ORIGIN_UNKNOWN;
   return spec.peer_host || spec.integration || '';
 }
 

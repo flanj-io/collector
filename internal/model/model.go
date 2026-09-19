@@ -462,6 +462,11 @@ const (
 	EdgeClassExternal     = "external"
 	EdgeClassInternal     = "internal"
 	EdgeClassLocalProcess = "local-process"
+	// EdgeClassUnknown is the Python SDK's word for an MCP server whose
+	// transport it never saw (CONTRACTS §2): remote or local, it cannot say.
+	// Its peer_host is the server's self-reported serverInfo.name, exactly as
+	// for local-process — a name, not a host identity.
+	EdgeClassUnknown = "unknown"
 )
 
 // MaxContractDocBytes caps ONE contract document, at every boundary a document
@@ -542,6 +547,21 @@ type SpecInfo struct {
 	// "loaded" and "fetched" are the same instant by construction, and two
 	// columns for one fact is how they come to disagree.
 	SourceURL string `json:"source_url,omitempty"`
+
+	// ServerCommand is how the client launched an observed stdio MCP server
+	// (edge_class local-process): the SDK's flanj.mcp.server.command verbatim,
+	// a compact JSON array `[command, ...args]` STRING, empty when the SDK did
+	// not send one (a URL-addressed server, an older SDK) or sent something
+	// that is not a JSON array of strings. Additive 2026-09-18.
+	//
+	// It exists because serverInfo.name is SELF-REPORTED: a vendor's
+	// `npx @stripe/mcp` and a third party's `npx someone/stripe-mcp` can
+	// publish the same name, and the launch line is what tells them apart on
+	// the contract card. LOCAL DISPLAY ONLY — it is floor-redacted twice (the
+	// SDK per element, the collector's redaction processor once more), never
+	// interpreted, and never part of a flag payload: the promote path builds
+	// from the call and the finding and never reads this row.
+	ServerCommand string `json:"server_command,omitempty"`
 
 	// DocBytes is the stored document's size in bytes, measured by the store at
 	// LIST time — it is derived from the row, never a stored column, and no

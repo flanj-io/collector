@@ -88,6 +88,7 @@ import {
   localNoticesSubFor,
   mcpBadgeLabel,
   mcpContractMeta,
+  serverCommandLine,
   mcpHeadline,
   mcpStatusLabel,
   methodFacetOf,
@@ -177,6 +178,10 @@ interface SpecInfo {
    *  other source. The card renders it as a link, and the flagged thread
    *  repeats it — the provider can check what they publish against it. */
   source_url?: string;
+  /** How the client launched a stdio MCP server — a JSON array string
+   *  `[command, ...args]`, absent on every other row. Display only: the card
+   *  renders it as one quiet line, and nothing sends it anywhere. */
+  server_command?: string;
   /** The version this contract replaced, when it replaced one. */
   prev_version?: string;
 }
@@ -1929,6 +1934,14 @@ watch(tab, (t) => {
                  no error, no finding, a card that looks finished. -->
             <span class="prov-meta evidence">{{ cardEvidenceMeta(p) }}</span>
           </div>
+          <!-- How the client launched a stdio server: serverInfo.name is
+               self-reported, and the package on this line is what tells a
+               vendor's server from a lookalike. local-process only (the helper
+               answers '' for every other class and for an unreadable value);
+               text interpolation, so the argv is escaped, never markup; mono,
+               and it WRAPS — a clipped command is a different command. Local
+               display only: the Flag sheet never reads it. -->
+          <p v-if="p.spec && serverCommandLine(p.spec.edge_class, p.spec.server_command)" class="prov-command mono">{{ serverCommandLine(p.spec.edge_class, p.spec.server_command) }}</p>
           <!-- WHERE a fetched contract came from, as the address itself — the
                operator must be able to check it, and a link they can open is
                the only version of that claim that is actually checkable. Absent
@@ -2816,6 +2829,11 @@ pre.body { background: var(--surface); border: var(--border-w) solid var(--rule)
    checkable one. */
 .prov-source { margin: 4px 0 0; font-size: 12px; color: var(--ink-soft); display: flex; flex-wrap: wrap; gap: 5px; align-items: baseline; }
 .prov-source a { word-break: break-all; }
+/* A stdio server's launch line. The provenance channel's muted ink and size —
+   a fact about how this machine started the server, not a verdict — and it
+   wraps anywhere rather than clipping: a long argv cut short reads as a
+   different command. */
+.prov-command { margin: 6px 0 0; font-size: 12px; color: var(--ink-soft); overflow-wrap: anywhere; white-space: normal; }
 /* The same fact on the finding, in the finding's own detail channel: this is
    the row a flag is raised from, and the sentence that reaches the provider. */
 .finding-source { margin: 4px 0 0; font-size: 12px; color: var(--ink-soft); }
