@@ -330,8 +330,18 @@ describe('deck §2 — health', () => {
 describe('deck §3 — contracts', () => {
   it('server meta + no-spec copy', () => {
     expect(MCP_NO_SPEC_NEEDED).toBe('No spec file needed — the server publishes its own contract on tools/list.');
-    expect(mcpContractMeta(3, 'Aug 24, 14:02')).toBe('3 tools · contract observed from tools/list · updated Aug 24, 14:02');
-    expect(mcpContractMeta(1, 'now')).toBe('1 tool · contract observed from tools/list · updated now');
+    // With a version the line is unchanged — the version is the card heading's chip, and e2e
+    // (mcp.spec.ts) pins `3 tools · contract observed from tools/list`.
+    expect(mcpContractMeta(3, 'Aug 24, 14:02', '1.2.0')).toBe('3 tools · contract observed from tools/list · updated Aug 24, 14:02');
+    expect(mcpContractMeta(1, 'now', '1.2.0')).toBe('1 tool · contract observed from tools/list · updated now');
+  });
+
+  // Idan, 2026-09-19: serverInfo.version is optional; a server that sends none SAYS so,
+  // instead of the card carrying no version anywhere.
+  it('server meta says "version not specified" when serverInfo carries no version', () => {
+    expect(mcpContractMeta(3, 'now', undefined)).toBe('3 tools · version not specified · contract observed from tools/list · updated now');
+    expect(mcpContractMeta(3, 'now', '')).toBe('3 tools · version not specified · contract observed from tools/list · updated now');
+    expect(mcpContractMeta(3, 'now', '   ')).toBe('3 tools · version not specified · contract observed from tools/list · updated now');
   });
 
   it('per-tool rows from the snapshot document', () => {

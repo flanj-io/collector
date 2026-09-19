@@ -13,6 +13,7 @@
 // Nothing auto-flags: a finding only leaves this collector when a human presses
 // the control.
 
+import { VERSION_NOT_SPECIFIED, versionLabel } from './contracts';
 import { NOTHING_VALIDATED_YET_CLAUSE, type HeadlineTone } from './headline';
 import { requestIdsLine } from './threads';
 import type { Correlation, Finding, RedactedCall } from './types';
@@ -323,8 +324,12 @@ export function noticeLine(f: Finding, server: string): string {
 
 export const MCP_NO_SPEC_NEEDED = 'No spec file needed — the server publishes its own contract on tools/list.';
 
-export function mcpContractMeta(toolCount: number, updated: string): string {
-  return `${toolCount} tool${toolCount === 1 ? '' : 's'} · contract observed from tools/list · updated ${updated}`;
+/** A server's version already sits in the card heading's chip, so the line
+ *  carries it only when there is none to show: serverInfo.version is optional,
+ *  and a card with no version anywhere read as "not applicable". */
+export function mcpContractMeta(toolCount: number, updated: string, version: string | undefined): string {
+  const missing = versionLabel(version) === VERSION_NOT_SPECIFIED ? ` · ${VERSION_NOT_SPECIFIED}` : '';
+  return `${toolCount} tool${toolCount === 1 ? '' : 's'}${missing} · contract observed from tools/list · updated ${updated}`;
 }
 
 export const MCP_LAUNCHED_AS = 'Launched as:';

@@ -39,6 +39,10 @@ export interface ContractSpec {
   server_command?: string;
   /** The version this one replaced, when it replaced one. */
   prev_version?: string;
+  /** When the document this one replaced was loaded. Set on EVERY replace, so
+   *  it — not prev_version, which is empty when the replaced document declared
+   *  no version — is what says a replace happened. */
+  prev_loaded_at?: string;
   /** The stored document's size in bytes, measured by the store at list time.
    *  Absent (or 0) on a collector that predates the field. */
   doc_bytes?: number;
@@ -141,6 +145,19 @@ export const FETCH_UNREACHABLE_FALLBACK = 'Couldn’t reach that URL from this c
 export const FETCH_BIND_FAILED_FALLBACK = 'Couldn’t bind that document. Nothing was changed.';
 export const PROBE_FAILED_FALLBACK = 'Couldn’t look for a spec on that host just now.';
 
+/**
+ * Idan, 2026-09-19: a contract that declares no version SAYS so. Every version
+ * segment used to be conditional and simply vanished, which reads the same as
+ * "this line has no version slot". Empty and whitespace-only count as missing.
+ */
+export const VERSION_NOT_SPECIFIED = 'version not specified';
+
+/** `v1.0.0`, or `version not specified`. */
+export function versionLabel(version?: string): string {
+  const v = (version || '').trim();
+  return v ? `v${v}` : VERSION_NOT_SPECIFIED;
+}
+
 /** One offered candidate, described the way the confirm step describes a
  *  document: what it is, how big, and whether its own `servers:` corroborate
  *  the host — the single most useful "is this the right document?" signal, and
@@ -151,8 +168,7 @@ export function probeCandidateLine(c: {
   endpoints: number;
   servers_match: boolean;
 }): string {
-  const parts = [c.title || 'OpenAPI document'];
-  if (c.version) parts.push(`v${c.version}`);
+  const parts = [c.title || 'OpenAPI document', versionLabel(c.version)];
   parts.push(endpointCount(c.endpoints));
   parts.push(c.servers_match ? 'its servers list this host' : 'its servers don’t list this host');
   return parts.join(' · ');
@@ -359,11 +375,20 @@ export function endpointCount(n?: number): string {
  * control-plane freshness line is a copy swap here, not a re-layout.
  */
 export function contractMeta(spec: ContractSpec, now: number = Date.now()): string {
-  const parts = [endpointCount(spec.endpoints)];
-  if (spec.version) parts.push(`v${spec.version}`);
+  const parts = [endpointCount(spec.endpoints), versionLabel(spec.version)];
   parts.push(`${provenanceWord(spec)} ${timeAgo(spec.loaded_at, now)}`);
-  if (spec.prev_version) parts.push(`replaced v${spec.prev_version}`);
+  const replaced = replacedSegment(spec);
+  if (replaced) parts.push(replaced);
   return parts.join(' · ');
+}
+
+/** `replaced v1.0.0`; `replaced (version not specified)` when the replaced
+ *  document declared none; empty when nothing was replaced. */
+function replacedSegment(spec: ContractSpec): string {
+  const prev = (spec.prev_version || '').trim();
+  if (prev) return `replaced v${prev}`;
+  if (spec.prev_loaded_at || spec.prev_version) return `replaced (${VERSION_NOT_SPECIFIED})`;
+  return '';
 }
 
 /* ── The fetched source line — the point of the whole fetch phase ───────── */
@@ -423,10 +448,12 @@ export function fetchedSourceForThread(spec: ContractSpec | null | undefined, fm
 }
 
 /** The Edges row's third line, in the muted text channel under the host:
- *  `contract v1.0.0 · uploaded 12d ago`. */
+ *  `contract v1.0.0 · uploaded 12d ago`, or
+ *  `contract · version not specified · uploaded 12d ago`. */
 export function edgeContractLine(spec: ContractSpec, now: number = Date.now()): string {
-  const version = spec.version ? ` v${spec.version}` : '';
-  return `contract${version} · ${provenanceWord(spec)} ${timeAgo(spec.loaded_at, now)}`;
+  const label = versionLabel(spec.version);
+  const head = label === VERSION_NOT_SPECIFIED ? `contract · ${label}` : `contract ${label}`;
+  return `${head} · ${provenanceWord(spec)} ${timeAgo(spec.loaded_at, now)}`;
 }
 
 /* ── The roll call ─────────────────────────────────────────────────────── */

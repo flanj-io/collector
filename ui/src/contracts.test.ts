@@ -100,6 +100,40 @@ describe('contractMeta', () => {
     ).toBe('4 endpoints · v2.1.0 · uploaded 2h ago · replaced v1.0.0');
   });
 
+  // Idan, 2026-09-19: a contract with no version SAYS so. The segment used to
+  // vanish, which read the same as "this line has no version slot".
+  it('says "version not specified" when the document declares no version', () => {
+    expect(contractMeta(uploaded('api.acme.test', { version: undefined }), NOW))
+      .toBe('4 endpoints · version not specified · uploaded 12d ago');
+    expect(contractMeta(uploaded('api.acme.test', { version: '' }), NOW))
+      .toBe('4 endpoints · version not specified · uploaded 12d ago');
+  });
+
+  it('treats a whitespace-only version as no version', () => {
+    expect(contractMeta(uploaded('api.acme.test', { version: '  ' }), NOW))
+      .toBe('4 endpoints · version not specified · uploaded 12d ago');
+  });
+
+  it('says so on a replace whose NEW document declares no version', () => {
+    expect(
+      contractMeta(uploaded('api.acme.test', { version: '', prev_version: '1.0.0', loaded_at: '2026-08-31T10:00:00Z' }), NOW)
+    ).toBe('4 endpoints · version not specified · uploaded 2h ago · replaced v1.0.0');
+  });
+
+  it('still names the replace when the REPLACED document declared no version', () => {
+    // prev_loaded_at is what marks a replace; prev_version is empty both when
+    // nothing was replaced and when the replaced document had no version.
+    const replaced = { version: '2.1.0', prev_loaded_at: '2026-08-20T10:00:00Z', loaded_at: '2026-08-31T10:00:00Z' };
+    expect(contractMeta(uploaded('api.acme.test', replaced), NOW))
+      .toBe('4 endpoints · v2.1.0 · uploaded 2h ago · replaced (version not specified)');
+    expect(contractMeta(uploaded('api.acme.test', { ...replaced, prev_version: ' ' }), NOW))
+      .toBe('4 endpoints · v2.1.0 · uploaded 2h ago · replaced (version not specified)');
+  });
+
+  it('adds no replace segment when nothing was replaced', () => {
+    expect(contractMeta(uploaded('api.acme.test'), NOW)).not.toContain('replaced');
+  });
+
   it('never says anything about age beyond how long ago it was', () => {
     // v1 ships relative time and NOTHING else: no threshold, no amber, no nag.
     // Contract age must never read as a defect — that severity class belongs to
@@ -116,8 +150,17 @@ describe('edgeContractLine', () => {
     expect(edgeContractLine(uploaded('api.acme.test'), NOW)).toBe('contract v1.0.0 · uploaded 12d ago');
   });
 
-  it('drops the version when the document declares none', () => {
-    expect(edgeContractLine(uploaded('api.acme.test', { version: '' }), NOW)).toBe('contract · uploaded 12d ago');
+  // Idan, 2026-09-19: the version used to drop out (`contract · uploaded 12d ago`).
+  it('says "version not specified" when the document declares none', () => {
+    expect(edgeContractLine(uploaded('api.acme.test', { version: '' }), NOW))
+      .toBe('contract · version not specified · uploaded 12d ago');
+    expect(edgeContractLine(uploaded('api.acme.test', { version: undefined }), NOW))
+      .toBe('contract · version not specified · uploaded 12d ago');
+  });
+
+  it('treats a whitespace-only version as none', () => {
+    expect(edgeContractLine(uploaded('api.acme.test', { version: ' \t' }), NOW))
+      .toBe('contract · version not specified · uploaded 12d ago');
   });
 });
 
@@ -599,8 +642,11 @@ describe('the probe OFFERS and never binds', () => {
   it('shows the corroboration on the offer, not after it is taken', () => {
     expect(probeCandidateLine({ title: 'Acme', version: '1.2.0', endpoints: 4, servers_match: true }))
       .toBe('Acme · v1.2.0 · 4 endpoints · its servers list this host');
+    // Idan, 2026-09-19: no version reads "version not specified", never a gap.
     expect(probeCandidateLine({ endpoints: 1, servers_match: false }))
-      .toBe('OpenAPI document · 1 endpoint · its servers don’t list this host');
+      .toBe('OpenAPI document · version not specified · 1 endpoint · its servers don’t list this host');
+    expect(probeCandidateLine({ title: 'Acme', version: ' ', endpoints: 4, servers_match: true }))
+      .toBe('Acme · version not specified · 4 endpoints · its servers list this host');
   });
 });
 

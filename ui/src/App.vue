@@ -184,6 +184,9 @@ interface SpecInfo {
   server_command?: string;
   /** The version this contract replaced, when it replaced one. */
   prev_version?: string;
+  /** Set on every replace — what says a replace happened when the replaced
+   *  document declared no version. */
+  prev_loaded_at?: string;
 }
 
 const health = ref<Health | null>(null);
@@ -1915,7 +1918,7 @@ watch(tab, (t) => {
               API docs ↗
             </a>
             <template v-if="p.spec.format === 'mcp'">
-              <span class="prov-meta">{{ mcpContractMeta(p.spec.endpoints || 0, humanTime(p.spec.loaded_at)) }}</span>
+              <span class="prov-meta">{{ mcpContractMeta(p.spec.endpoints || 0, humanTime(p.spec.loaded_at), p.spec.version) }}</span>
             </template>
             <template v-else>
               <!-- Provenance + recency, relative, with the absolute time on
