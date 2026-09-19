@@ -345,8 +345,14 @@ func TestStaleClient_ToolNotListed(t *testing.T) {
 		t.Fatalf("findings = %+v, want exactly 1", fs)
 	}
 	f := fs[0]
-	if f.Kind != model.KindStaleClient || f.Rule != RuleToolNotListed || f.Severity != model.SeverityWarning {
-		t.Errorf("kind/rule/severity = %s/%s/%s", f.Kind, f.Rule, f.Severity)
+	// R-B (2026-09-17): stale_client on a real call is observed_failure /
+	// BREAKING (it was warning). It stays local-only: the kind rule decides
+	// that, not the severity.
+	if f.Kind != model.KindStaleClient || f.Rule != RuleToolNotListed || f.Severity != model.SeverityBreaking || f.ChangeKind != "observed_failure" {
+		t.Errorf("kind/rule/severity/change_kind = %s/%s/%s/%s", f.Kind, f.Rule, f.Severity, f.ChangeKind)
+	}
+	if f.Flaggable() {
+		t.Error("stale_client must stay local-only at any severity")
 	}
 	if !strings.Contains(f.Detail, "calling `old_refund` against a stale definition") {
 		t.Errorf("detail = %q, want the Health copy", f.Detail)
@@ -448,8 +454,15 @@ func TestDefinitionChange_Classes(t *testing.T) {
 		}
 		bySig[f.Signature] = f
 	}
-	if len(findings) != 7 {
-		t.Fatalf("findings = %d (%v), want exactly 7", len(findings), sigs(findings))
+	// Six, not seven: R-B's additive cells are not findings, and the
+	// fixture's newly declared output schema (list_transactions) is one.
+	if len(findings) != 6 {
+		t.Fatalf("findings = %d (%v), want exactly 6", len(findings), sigs(findings))
+	}
+	for _, f := range findings {
+		if f.Rule == diff.RuleOutputSchemaDeclared {
+			t.Errorf("an additive change reached the findings: %s", f.Signature)
+		}
 	}
 
 	check := func(op, rule, fieldPath, severity string, flaggable bool) model.Finding {
@@ -461,6 +474,12 @@ func TestDefinitionChange_Classes(t *testing.T) {
 		}
 		if f.Severity != severity {
 			t.Errorf("%s severity = %q, want %q", rule, f.Severity, severity)
+		}
+		// R-A: every finding carries a change_kind alongside its severity, and
+		// the two are independent. A definition_change must never ship without
+		// one — an empty change_kind is what the single Class label looked like.
+		if f.ChangeKind == "" {
+			t.Errorf("%s carries no change_kind", rule)
 		}
 		if f.Flaggable() != flaggable {
 			t.Errorf("%s flaggable = %v, want %v", rule, f.Flaggable(), flaggable)
@@ -493,13 +512,20 @@ func TestDefinitionChange_Classes(t *testing.T) {
 		t.Errorf("marshalled definition_change must carry snapshot_observed_from (err=%v): %s", err, doc)
 	}
 
-	check("create_refund", diff.RuleInputRequiredPropertyAdded, "input.reason", model.SeverityBreaking, true)
-	check("list_transactions", diff.RuleOutputSchemaDeclared, "output", model.SeverityInfo, true)
+	// R-B, 2026-09-17: a new REQUIRED param is the one input cell above INFO,
+	// and it is WARNING, not breaking. It was breaking here until the ruling.
+	reqAdd := check("create_refund", diff.RuleInputRequiredPropertyAdded, "input.reason", model.SeverityWarning, true)
+	if reqAdd.ChangeKind != string(diff.KindInput) {
+		t.Errorf("change_kind = %q, want input", reqAdd.ChangeKind)
+	}
 	// DESCRIPTION is FLAGGABLE since qfix2-2026-08-26 (ux-design-v2 §2.7): the
 	// evidence rule is amended, not broken — a description change is the
 	// provider's own published text, before and after. It still never
 	// auto-flags; only a human pressing the control sends it.
 	desc := check("create_refund", diff.RuleDescriptionChanged, "description", model.SeverityWarning, true)
+	if desc.ChangeKind != string(diff.KindWording) {
+		t.Errorf("a description change is change_kind wording; got %q", desc.ChangeKind)
+	}
 	if desc.Rule != model.RuleDescriptionChanged {
 		t.Errorf("model.RuleDescriptionChanged mirror out of sync: %q vs %q", desc.Rule, model.RuleDescriptionChanged)
 	}
@@ -512,7 +538,7 @@ func TestDefinitionChange_Classes(t *testing.T) {
 	// An OPTIONAL input removal the new schema tolerates is info, flaggable
 	// like every non-breaking definition change, and its Detail states the
 	// consequence for a caller BEFORE the timestamp tail the UIs parse.
-	opt := check("create_refund", diff.RuleInputOptionalPropertyRemoved, "input.card_number", model.SeverityInfo, true)
+	opt := check("create_refund", diff.RuleInputOptionalPropertyRemoved, "input.card_number", model.SeverityInfo, false) // R-C: info stays local
 	if !strings.Contains(opt.Detail, "callers still sending `card_number`") || !strings.Contains(opt.Detail, "not rejected") {
 		t.Errorf("optional-removal Detail %q must state the consequence", opt.Detail)
 	}
@@ -522,9 +548,12 @@ func TestDefinitionChange_Classes(t *testing.T) {
 	if opt.Actual != "(none)" {
 		t.Errorf("a removal has no after fragment; actual = %q", opt.Actual)
 	}
-	// A renamed input property is ONE breaking finding under the OLD path,
-	// carrying both names; the twin never surfaces as a required addition.
-	ren := check("list_transactions", diff.RuleInputPropertyRenamed, "input.account_id", model.SeverityBreaking, true)
+	// A renamed input property is ONE finding under the OLD path, carrying
+	// both names; the twin never surfaces as a required addition. INFO since
+	// 2026-09-17 (was breaking): it is the same parameter under a new
+	// spelling, so it is information for the caller, not a promise broken to
+	// them — and that holds even when the new name is REQUIRED.
+	ren := check("list_transactions", diff.RuleInputPropertyRenamed, "input.account_id", model.SeverityInfo, false) // R-C: info stays local
 	if !strings.Contains(ren.Expected, `"account_id"`) || !strings.Contains(ren.Actual, `"accountId"`) {
 		t.Errorf("rename fragments = %q / %q, want old and new names", ren.Expected, ren.Actual)
 	}
