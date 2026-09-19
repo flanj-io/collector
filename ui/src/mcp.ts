@@ -231,10 +231,16 @@ export interface McpServerRef {
   /** Where this server is: its host, or `stdio` for a local process. Two
    *  servers sharing a name rendered two IDENTICAL health lines without it. */
   origin?: string;
+  /** The caller's service.name — which of this deployment's services this
+   *  line speaks for (serviceSlices). Local only: never leaves the collector. */
+  service?: string;
+  /** The contract row's integration id — rendered only when another line's
+   *  lead would otherwise match this one (identifiableServerRefs). */
+  integration?: string;
 }
 
 /**
- * `Server: <name> v<version> · <origin> — `
+ * `Server: <name> v<version> · <origin> · called by <service> — `
  *
  * One sentence, one subject: the server, then what your calls showed after the
  * dash. The old pivot was `. You: ` — a second subject that read as a stray
@@ -249,7 +255,68 @@ export interface McpServerRef {
 function serverLead(s: McpServerRef): string {
   const version = s.version ? ' v' + s.version : '';
   const origin = s.origin ? ' · ' + s.origin : '';
-  return `Server: ${s.name}${version}${origin} — `;
+  const service = s.service ? ' · called by ' + s.service : '';
+  const integration = s.integration ? ' · integration: ' + s.integration : '';
+  return `Server: ${s.name}${version}${origin}${service}${integration} — `;
+}
+
+/**
+ * The Overview's server refs, each keeping its integration id only when its
+ * lead (name, version, origin, service) matches another's — the one case the
+ * service cannot tell apart: one service configured with two integration ids
+ * against one server. A line with a unique lead is left exactly as it was.
+ */
+export function identifiableServerRefs(refs: (McpServerRef & { integration: string })[]): McpServerRef[] {
+  const bare = (s: McpServerRef): McpServerRef => ({ name: s.name, version: s.version, origin: s.origin, service: s.service });
+  const count = new Map<string, number>();
+  for (const s of refs) count.set(serverLead(bare(s)), (count.get(serverLead(bare(s))) || 0) + 1);
+  return refs.map((s) => ((count.get(serverLead(bare(s))) || 0) > 1 ? s : bare(s)));
+}
+
+/** One MCP call to a contract row, as the Overview split reads it. */
+export interface McpRowCall {
+  /** The caller's service.name; '' when its resource carried none. */
+  service: string;
+  tool: string;
+  drifted: boolean;
+  validated: boolean;
+}
+
+/** One Overview line's worth of a contract row: a service, the row's findings
+ *  its line reports, and the calls from it that were validated. */
+export interface McpServiceSlice {
+  service: string;
+  findings: Finding[];
+  validatedCalls: number;
+}
+
+/**
+ * Split one MCP contract row into one Overview line per calling service
+ * (Datadog's `service`: the caller's OTel service.name). A row nobody has
+ * called yet stays one line, with no service.
+ *
+ * A drift is ONE finding however many services hit it (findings dedup by
+ * signature, CONTRACTS §4), but every call is labelled — so an output mismatch
+ * lands on the line of each service whose own calls to that tool were stamped
+ * drifted. When no call in view can place it (they aged out of the window), it
+ * lands on EVERY line of the row: a line may never read green because its
+ * evidence was evicted. A definition change is the server's, never a
+ * caller's, so it is on every line. The clause's count stays the finding's.
+ */
+export function serviceSlices(findings: Finding[], calls: McpRowCall[]): McpServiceSlice[] {
+  const services = Array.from(new Set(calls.map((c) => c.service))).sort();
+  if (services.length === 0) return [{ service: '', findings, validatedCalls: 0 }];
+  const placed = new Map<Finding, Set<string>>();
+  for (const f of findings) {
+    if (f.kind !== 'output_mismatch') continue;
+    const hit = new Set(calls.filter((c) => c.drifted && c.tool === f.endpoint).map((c) => c.service));
+    if (hit.size > 0) placed.set(f, hit);
+  }
+  return services.map((service) => ({
+    service,
+    findings: findings.filter((f) => !placed.has(f) || placed.get(f)!.has(service)),
+    validatedCalls: calls.filter((c) => c.service === service && c.validated).length
+  }));
 }
 
 /** One MCP server's Overview health line, and its tone — three of them, like

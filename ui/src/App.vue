@@ -87,6 +87,8 @@ import {
   isLocalNotice,
   staysLocalAsInfo,
   INFO_STAYS_LOCAL,
+  identifiableServerRefs,
+  serviceSlices,
   isMcpCall,
   isMcpFinding,
   localNoticesSubFor,
@@ -581,6 +583,7 @@ const fStatus = ref('');
 const fContract = ref('');
 const fDirection = ref('');
 const fPeer = ref('');
+const fService = ref('');
 const hideHealth = ref(false);
 
 const callsById = computed(() => {
@@ -759,6 +762,12 @@ const methodOptions = computed(() =>
   Array.from(new Set(calls.value.map((c) => methodFacetOf(c)))).sort()
 );
 
+// The caller's service.name, Datadog-style: which of this deployment's own
+// services made the call. Local only (CONTRACTS §3).
+const serviceOptions = computed(() =>
+  Array.from(new Set(calls.value.map((c) => c.service_name).filter(Boolean) as string[])).sort()
+);
+
 const peerOptions = computed(() =>
   Array.from(new Set(calls.value.map((c) => c.peer_host).filter(Boolean) as string[])).sort()
 );
@@ -781,6 +790,7 @@ const filtersActive = computed(
       fContract.value ||
       fDirection.value ||
       fPeer.value ||
+      fService.value ||
       hideHealth.value
     )
 );
@@ -801,6 +811,7 @@ const filteredCalls = computed(() => {
     if (fContract.value === 'not-checked' && coverageOf(c) !== 'not-checked') return false;
     if (fDirection.value && c.direction !== fDirection.value) return false;
     if (fPeer.value && c.peer_host !== fPeer.value) return false;
+    if (fService.value && c.service_name !== fService.value) return false;
     if (hideHealth.value && HEALTH_RE.test(c.route || c.url || '')) return false;
     if (include.length || exclude.length) {
       const hay = [
@@ -809,6 +820,7 @@ const filteredCalls = computed(() => {
         c.url,
         String(c.status_code),
         c.integration,
+        c.service_name,
         c.peer_host,
         c.direction === 'server' ? 'inbound' : c.direction === 'client' ? 'outbound' : '',
         c.correlation?.request_id,
@@ -835,6 +847,7 @@ function clearFilters() {
   fContract.value = '';
   fDirection.value = '';
   fPeer.value = '';
+  fService.value = '';
   hideHealth.value = false;
 }
 
@@ -1144,23 +1157,36 @@ const mcpHosts = computed(() => {
 // Per-server MCP health headline (deck §2): output mismatch → definition
 // change (breaking, no calls affected yet) → nothing validated yet (neutral)
 // → clean. Three tones, like the REST line above it.
-const mcpOverview = computed(() =>
-  mcpContracts.value.map((s) => ({
-    key: s.integration,
-    headline: mcpHeadline(
-      // Same origin rule as the Contracts card, from the same function — so the
-      // two surfaces cannot drift apart and render two identical health lines
-      // for two different servers again.
-      { name: s.title || s.integration, version: s.version, origin: contractOrigin(s) },
-      mcpFindings.value.filter((f) => f.integration === s.integration),
-      humanTime,
-      // Evidence for THIS server only: its own validated tool calls. Zero is
-      // the neutral state — a snapshot that has judged nothing is not an
-      // all-clear, however complete the Contracts card beside it looks.
-      calls.value.filter((c) => isMcpCall(c) && c.integration === s.integration && isValidated(c)).length
-    )
-  }))
-);
+const mcpOverview = computed(() => {
+  // One line per (contract row, calling service) — serviceSlices in
+  // ui/src/mcp.ts decides which of the row's findings each line reports.
+  const lines = mcpContracts.value.flatMap((s) => {
+    const rowCalls = calls.value
+      .filter((c) => isMcpCall(c) && c.integration === s.integration)
+      .map((c) => ({ service: c.service_name || '', tool: toolNameOf(c), drifted: isDrifted(c), validated: isValidated(c) }));
+    const rowFindings = mcpFindings.value.filter((f) => f.integration === s.integration);
+    return serviceSlices(rowFindings, rowCalls).map((slice) => ({ s, slice }));
+  });
+  // Same origin rule as the Contracts card, from the same function — so the
+  // two surfaces cannot drift apart and render two identical health lines
+  // for two different servers again.
+  const refs = identifiableServerRefs(
+    lines.map(({ s, slice }) => ({
+      name: s.title || s.integration,
+      version: s.version,
+      origin: contractOrigin(s),
+      service: slice.service,
+      integration: s.integration
+    }))
+  );
+  return lines.map(({ s, slice }, i) => ({
+    key: s.integration + '|' + slice.service,
+    // Evidence for THIS line only: the validated calls of this service to this
+    // server. Zero is the neutral state — a snapshot that has judged nothing is
+    // not an all-clear, however complete the Contracts card beside it looks.
+    headline: mcpHeadline(refs[i], slice.findings, humanTime, slice.validatedCalls)
+  }));
+});
 
 // Local notices (deck §2): stale_client ONLY since qfix2-2026-08-26. A
 // DESCRIPTION definition change is now flaggable, so it cannot sit under a band
@@ -2313,6 +2339,10 @@ watch(tab, (t) => {
               <option value="server">inbound</option>
               <option value="client">outbound</option>
             </select>
+            <select v-if="serviceOptions.length" v-model="fService" class="tr-select" aria-label="Filter by service">
+              <option value="">service: all</option>
+              <option v-for="sv in serviceOptions" :key="sv" :value="sv">{{ sv }}</option>
+            </select>
             <select v-model="fPeer" class="tr-select" aria-label="Filter by counterparty">
               <option value="">counterparty: all</option>
               <option v-for="p in peerOptions" :key="p" :value="p">{{ internalPeers.has(p) ? p + ' · internal' : p }}</option>
@@ -2361,6 +2391,7 @@ watch(tab, (t) => {
           <div class="tr-head">
             <span class="c-when">captured</span>
             <span class="c-call">call</span>
+            <span class="c-svc">service</span>
             <span class="c-peer">counterparty</span>
             <span class="c-status">status</span>
             <span class="c-corr">correlation</span>
@@ -2400,6 +2431,13 @@ watch(tab, (t) => {
                   <span class="method" :class="c.method.toLowerCase()">{{ c.method }}</span>
                   <span class="route mono">{{ c.route || c.url }}</span>
                 </template>
+              </span>
+              <!-- The caller's service.name, Datadog-style: which of this
+                   deployment's services the call belongs to, beside the
+                   counterparty it went to or came from. Local only. -->
+              <span class="c-svc" :title="c.service_name || 'no service.name on this call'">
+                <span v-if="c.service_name" class="svc-name mono">{{ c.service_name }}</span>
+                <span v-else class="svc-name none">—</span>
               </span>
               <span class="c-peer" :title="c.peer_addr ? 'peer address ' + c.peer_addr : undefined">
                 <span class="dir-chip" :class="c.direction === 'server' ? 'in' : 'out'">{{ dirLabel(c.direction) }}</span>
@@ -2457,6 +2495,10 @@ watch(tab, (t) => {
                   </span>
                 </span>
                 <span class="dim">·</span>
+                <template v-if="c.service_name">
+                  <span>service <code>{{ c.service_name }}</code></span>
+                  <span class="dim">·</span>
+                </template>
                 <span>integration <code>{{ c.integration }}</code></span>
                 <span class="dim">·</span>
                 <span v-if="c.redaction?.applied" class="redacted-tag">
@@ -2771,7 +2813,7 @@ h2 small { font: 400 12.5px/1.5 var(--f-sans); letter-spacing: 0.04em; text-tran
 .traffic { border: var(--border-w) solid var(--rule); border-radius: var(--radius); background: var(--surface); }
 .tr-head, .tr-row {
   display: grid;
-  grid-template-columns: 1.15fr 1.9fr 1.35fr 0.55fr 1.4fr 0.9fr;
+  grid-template-columns: 1.15fr 1.9fr 1fr 1.35fr 0.55fr 1.4fr 0.9fr;
   gap: 10px;
   align-items: center;
   padding: 10px 14px;
@@ -2816,6 +2858,11 @@ h2 small { font: 400 12.5px/1.5 var(--f-sans); letter-spacing: 0.04em; text-tran
 .dir-chip.out { color: var(--accent-ink); }
 .dir-chip.in { color: var(--ink-soft); }
 .peer-host { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-size: 12.5px; }
+/* Traffic service cell: the caller's own service, in the same ink as the host
+   it talks to; a call that carried none is muted, never blank. */
+.tr-row .c-svc { min-width: 0; }
+.svc-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-size: 12.5px; }
+.svc-name.none { color: var(--ink-soft); }
 
 /* Expanded call: headers and bodies on the sunk surface, framed. */
 .tr-detail { border-top: var(--border-w-hair) solid var(--rule-soft); background: var(--surface-sunk); padding: 14px 14px 18px; }
@@ -3085,11 +3132,14 @@ pre.body { background: var(--surface); border: var(--border-w) solid var(--rule)
      beside a stranger. */
   .tr-row {
     grid-template-columns: minmax(0, 1fr) max-content;
-    grid-template-areas: "call call" "peer status" "when mark" "corr corr";
+    grid-template-areas: "call call" "svc svc" "peer status" "when mark" "corr corr";
     gap: 6px 10px;
   }
   .tr-row .c-call { grid-area: call; flex-wrap: wrap; }
   .tr-row .route { white-space: normal; overflow: visible; text-overflow: clip; word-break: break-word; }
+  .tr-row .c-svc { grid-area: svc; display: flex; gap: 6px; font-size: 12.5px; }
+  /* The header is hidden here, so the service line names itself. */
+  .tr-row .c-svc::before { content: 'service'; color: var(--ink-soft); }
   .tr-row .c-peer { grid-area: peer; }
   /* The host is an identity: it wraps at natural breaks rather than ellipsizing. */
   .tr-row .peer-host { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
