@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 //
-// The edge-registration disclosure (v1 phase 2): the pure copy rule, and — on
+// The edge-registration disclosure: the pure copy rule, and — on
 // the REAL component — that the panel actually renders it, in every state,
 // including BEFORE the operator Connects. The disclosure is the consent half of
 // this slice; a helper that returns the right sentence to a call site that
@@ -36,7 +36,7 @@ describe('edgeDisclosure', () => {
   });
 
   it('renders nothing when the collector has not said which way the switch is set', () => {
-    // A collector predating v1 phase 2, or a /api/connect response not yet in.
+    // A collector predating edge registration, or a /api/connect response not yet in.
     // Guessing "on" would claim a flow that may not exist; guessing "off" would
     // hide one that does.
     expect(edgeDisclosure(undefined)).toBeNull();

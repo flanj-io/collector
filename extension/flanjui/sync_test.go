@@ -42,7 +42,7 @@ func syncSentinelFinding(id, field string) model.Finding {
 
 // connectKeyOnly puts ONLY the collector key into the store — the sync needs a
 // key, and deliberately NOT a confirmed contact (this is the collector's own
-// telemetry, same posture as §5.5a reads).
+// telemetry, same posture as thread-list reads).
 func connectKeyOnly(t *testing.T, r *testRig) {
 	t.Helper()
 	if err := r.st.PutSetting(settingCollectorKey, r.cp.collectorKey); err != nil {
@@ -273,7 +273,7 @@ func TestFindingSyncDefaultOn(t *testing.T) {
 	}
 }
 
-// --- the two switches (owner ruling 2026-08-31) -----------------------------
+// --- the two switches (2026-08-31) -----------------------------
 //
 // `finding_sync` and `directory_sync` gate the two legs of the ONE ticker
 // independently: an egress (findings POST) and a pure fetch (directory GET)

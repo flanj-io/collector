@@ -56,7 +56,7 @@ export interface CoverageEdge {
   direction?: string;
 }
 
-/* ── Copy deck ─────────────────────────────────────────────────────────── */
+/* ── Copy ──────────────────────────────────────────────────────────────── */
 
 /** The collector files REST contracts only — an OpenAPI document, uploaded or
  *  fetched. An MCP server's tools/list arrives with the traffic and is not
@@ -73,27 +73,25 @@ export const NO_CONTRACT_ROW =
 export const NO_CONTRACT_SECTION =
   'These providers have traffic but no contract — their calls are captured, and nothing validates them.';
 /**
- * The MCP contrast, stated as a COMPARISON — the canonical paragraph in the
- * vault's `positioning-2026-09.md` §5, which names this empty state as its
- * highest-leverage single placement: it is where a new operator stands when
- * they wonder what to do next.
+ * The MCP contrast, stated as a COMPARISON. This empty state is where a new
+ * operator stands when they wonder what to do next.
  *
  * The power is in the contrast, not the convenience. "Nobody publishes an
  * accurate OpenAPI spec" is the strongest practical objection to the REST half,
  * and it does not apply to MCP at all.
  *
  * THE URL CLAUSE IS RESTORED HERE, and this is the commit that earns it.
- * §5 ends "REST providers need a spec: paste a URL, or upload one", and the doc
- * says in the same breath: restore the clause in the same commit that ships the
- * fetch, and not before. PR #91 shipped it WITHOUT the clause because the
- * collector could not then fetch anything, so the verbatim string would have
- * been a false claim on the one surface whose whole argument is that it does
- * not make them. Ruling R5's fetch ships in this commit
- * (`extension/flanjui/contracts_fetch.go`), so the claim is now true, and
- * `contracts.test.ts` asserts the clause is present rather than absent.
+ * The copy ends "REST providers need a spec: paste a URL, or upload one", and
+ * the clause may only ship in the same commit as the fetch, and not before. PR
+ * #91 shipped it WITHOUT the clause because the collector could not then fetch
+ * anything, so the verbatim string would have been a false claim on the one
+ * surface whose whole argument is that it does not make them. The URL fetch
+ * ships in this commit (`extension/flanjui/contracts_fetch.go`), so the claim
+ * is now true, and `contracts.test.ts` asserts the clause is present rather
+ * than absent.
  *
  * If the fetch route is ever removed, this string goes back to the #91 wording
- * in the same commit. The rule is the doc's and it cuts both ways.
+ * in the same commit. The rule cuts both ways.
  */
 export const MCP_NEEDS_NO_SETUP =
   'MCP servers need nothing here — their baseline arrived with the traffic, because tools/list is the contract. A REST provider needs a spec somebody published: paste its URL, or upload the document.';
@@ -152,7 +150,7 @@ export const FETCH_BIND_FAILED_FALLBACK = 'Couldn’t bind that document. Nothin
 export const PROBE_FAILED_FALLBACK = 'Couldn’t look for a spec on that host just now.';
 
 /**
- * Idan, 2026-09-19: a contract that declares no version SAYS so. Every version
+ * A contract that declares no version SAYS so. Every version
  * segment used to be conditional and simply vanished, which reads the same as
  * "this line has no version slot". Empty and whitespace-only count as missing.
  */
@@ -413,7 +411,7 @@ function replacedSegment(spec: ContractSpec): string {
  * cannot date it, and cannot tell their own document from an edited copy. A URL
  * they serve, with the moment it was read, is a claim they can check against
  * what they are publishing right now — which is an EVIDENCE-RULE upgrade, not a
- * convenience (architecture.md §3.4, ruling R5).
+ * convenience.
  *
  * Returns '' for every other source, and the callers render nothing rather than
  * a hedge — an uploaded contract simply has no such line, and inventing one
@@ -779,7 +777,7 @@ export function findingBelongsToContract(
  * The "Provider contracts" empty state, which has TWO branches because the
  * instruction differs.
  *
- * BUG (postgres-lane QA walk, 2026-09-01): the single string ended "— or send
+ * BUG (found in exploratory testing, 2026-09-01): the single string ended "— or send
  * traffic through the SDK to discover providers first", and stayed on screen
  * after discovery had happened, directly above a section headed "Providers with
  * no contract (2)". The page was instructing a step the operator had already
@@ -849,11 +847,14 @@ export function providerNameForFinding(
     edges: readonly ProviderEdge[];
   }
 ): string {
-  // The configured `provider_display_name` is a REST provider's name — the v0 one-provider shape —
-  // and it names ONLY a call-evidenced REST finding. Never an MCP server, which names itself through
-  // its tools/list (`New thread with Acme Tools`, pinned by e2e), and never a version diff, which
-  // resolves through its contract below. Until 2026-09-14 the scope was the config `integration_id`
-  // (the name applied to findings under that slug alone); with the key gone, the KIND is the scope.
+  // The configured `provider_display_name` is a REST provider's name — the v0
+  // one-provider shape — and it names ONLY a call-evidenced REST finding. Never
+  // an MCP server, which
+  // names itself through its tools/list (`New thread with Acme Tools`, pinned
+  // by the integration tests), and never a version diff, which resolves through
+  // its contract below. Until 2026-09-14 the scope was the config
+  // `integration_id` (the name applied to findings under that slug alone); with
+  // the key gone, the KIND is the scope.
   if (ctx.providerDisplayName && f.kind === 'live-vs-spec') {
     return ctx.providerDisplayName;
   }

@@ -7,7 +7,7 @@
 // Create thread) and the success state (the link, Copy thread link, Copy link +
 // message, View thread). Nothing is emailed by Flanj on flag.
 //
-// v1 phase 4 — QUESTION MODE. With an `edge` and no `finding` this is the same
+// QUESTION MODE. With an `edge` and no `finding` this is the same
 // sheet minus the evidence block: "Start a thread" on an edge row. It is the
 // SAME component on purpose — the Connect prompt, the 412 handling, the
 // disclosure, the focus trap, the copy/share path and the success state are the
@@ -80,7 +80,7 @@ const props = defineProps<{
   providerHost?: string | null;
   /** The contract bound to this provider, when one is. Passed so the default
    *  message can name the provider's OWN published spec URL and the moment it
-   *  was read — the evidence upgrade a fetched contract buys (ruling R5). A
+   *  was read — the evidence upgrade a fetched contract buys. A
    *  contract from any other source contributes nothing and the sentence is
    *  simply absent. */
   spec?: ContractSpec | null;
@@ -174,7 +174,7 @@ async function loadOpenToHint() {
  *  the SAME thread instead of opening a second one. Minted once, here. */
 const requestId = typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(36).slice(2);
 
-// v0.5: MCP findings carry the deck's MCP evidence / IDs / disclosure / prefill
+// v0.5: MCP findings carry the MCP evidence / IDs / disclosure / prefill
 // copy; HTTP findings keep the v0.1a strings unchanged.
 const isMcp = computed(() => !!props.finding && isMcpFinding(props.finding));
 const mcpServer = computed(() => props.call?.mcp_server_name || props.provider);
@@ -215,14 +215,14 @@ const contactEmail = computed(() => props.connect?.confirmed_contact_email || pr
 const evidence = computed(() =>
   !props.finding ? '' : isMcp.value ? mcpEvidenceLine(props.finding, mcpServer.value, shortDate) : evidenceLine(props.finding)
 );
-// The mute-risk guard renders on the DESCRIPTION class only (ux-design-v2
-// §2.7.4): this class is the one where the finding is a question, not a defect,
-// and saying so is what keeps a subjective flag from reading as an accusation.
+// The mute-risk guard renders on the DESCRIPTION class only: this class is the
+// one where the finding is a question, not a defect, and saying so is what
+// keeps a subjective flag from reading as an accusation.
 const descriptionGuard = computed(() => (isMcp.value && props.finding && isDescriptionChange(props.finding) ? FLAG_DESCRIPTION_GUARD : ''));
-// The IDs line: an MCP flag uses the deck's JSON-RPC line ONLY while the
+// The IDs line: an MCP flag uses the JSON-RPC line ONLY while the
 // client-generated id is the sole correlation key — mixed keys fall back to
-// the standard count line with an honest note for the client-generated one
-// (deck §5). HTTP keeps the existing line.
+// the standard count line with an honest note for the client-generated one.
+// HTTP keeps the existing line.
 // A definition_change is CALL-LESS: there is no call, so "No request IDs were
 // captured on this call." would be answering a question nobody asked about a
 // thing that does not exist. The disclosure carries what leaves instead.
@@ -379,9 +379,9 @@ async function openThread() {
 
 // ─── Modal behaviour ──────────────────────────────────────────────────────
 // `aria-modal="true"` is a promise: while the sheet is open, the rest of the
-// page is unreachable. Three things make it true (launch-week item 9 found all
-// three missing — a screen reader believed the page was gone while a keyboard
-// user was tabbing through the Overview behind the backdrop):
+// page is unreachable. Three things make it true (each was once missing — a screen reader
+// believed the page was gone while a keyboard user was tabbing through the
+// Overview behind the backdrop):
 //   1. `inert` on everything outside the sheet — pointer, focus and the
 //      accessibility tree at once. Every targeted browser honours it (the build
 //      targets Vite 8's baseline-widely-available set: Chrome 111 / Edge 111 /

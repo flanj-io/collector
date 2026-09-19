@@ -19,7 +19,7 @@ import (
 // Both are on by default. Without them a store write that fails (postgres away
 // mid-write, a locked sqlite file, a transient DSN error) was returned as a
 // permanent error and the batch — calls AND the findings that pinned them —
-// was gone (launch-week item 5, 2026-09-07).
+// was gone (fixed 2026-09-07).
 type Config struct {
 	// QueueConfig is the upstream `sending_queue`: a bounded IN-MEMORY buffer
 	// of received batches ahead of the store write. The receiver ACKs a batch

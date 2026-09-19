@@ -16,7 +16,7 @@ import (
 // process that observes is the process that persists, and Start re-seeds from
 // the co-located store. A tiered FRONT breaks it: the front owns no store, so
 // its baseline was whatever that one process had personally witnessed.
-// Observed live on the tiered e2e lane, 2026-09-07: front-a sees the
+// Observed live on the tiered integration lane, 2026-09-07: front-a sees the
 // tools/list, the server renames a tool, a stale client calls the old name
 // through front-b — and nothing fires. front-b never saw the list before the
 // rename, so it has nothing to diff and nothing to judge the call against;
@@ -71,7 +71,7 @@ import (
 // still listed, so the Contracts tab shows the stdio server either way.
 
 // mcpSeedLogMessage is the line a front logs when it adopts a baseline from
-// the store. The tiered e2e lane waits on it (a front has no other observable
+// the store. The tiered integration lane waits on it (a front has no other observable
 // surface), so it is a named constant rather than a string in a call.
 const mcpSeedLogMessage = "mcp baseline seeded from the store"
 

@@ -180,7 +180,7 @@ func TestFlagBody_MCPOutputMismatchConforms(t *testing.T) {
 	validate(t, flagSchema(t), body)
 }
 
-// TestFlagBody_CallLessDefinitionChange (qfix2-2026-08-26, ux-design-v2 §2.7.5):
+// TestFlagBody_CallLessDefinitionChange (qfix2-2026-08-26):
 // a definition_change is CALL-LESS by nature — its evidence is the provider's
 // own two published tools/list snapshots, carried by the Finding. The body must
 // OMIT `call` entirely rather than carry an empty or invented call record, and
@@ -223,13 +223,13 @@ func TestFlagBody_CallLessDefinitionChange(t *testing.T) {
 	validate(t, flagSchema(t), body)
 }
 
-// TestDefaultMessage_DescriptionAsksRatherThanAccuses (qfix2-2026-08-26,
-// ux-design-v2 §2.7.4): the flag sheet labels its textarea "Message
-// (optional)", so a user who clears the prefilled question sends an EMPTY
-// message — and the default written here is what the provider actually reads.
-// For a DESCRIPTION change that default must stay the question. "Contract
-// drift on <tool>" would file a wording change as a defect claim, which is the
-// mute risk the sheet's guard line exists to prevent.
+// TestDefaultMessage_DescriptionAsksRatherThanAccuses (qfix2-2026-08-26): the
+// flag sheet labels its textarea "Message (optional)", so a user who clears the
+// prefilled question sends an EMPTY message — and the default written here is
+// what the provider actually reads. For a DESCRIPTION change that default must
+// stay the question. "Contract drift on <tool>" would file a wording change as
+// a defect claim, which is the mute risk the sheet's guard line exists to
+// prevent.
 func TestDefaultMessage_DescriptionAsksRatherThanAccuses(t *testing.T) {
 	finding := loadJSON[model.Finding](t, "sample-finding.json")
 	finding.Kind = model.KindDefinitionChange

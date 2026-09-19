@@ -63,8 +63,8 @@ volume is root-owned: that combination fails at start with `unable to open datab
 
 **The UI binds container loopback, by design, and that is not a setting to relax.** The collector is
 outbound-only; nothing it serves is reachable off-host. `-p 5335:5335` therefore publishes nothing. Bridge
-it from *inside* the network namespace instead, which is what the e2e harness does
-(`e2e/compose/docker-compose.yml`). The port is published on the collector above because a container
+it from *inside* the network namespace instead, which is what Flanj's own integration harness does.
+The port is published on the collector above because a container
 sharing another's network namespace cannot publish its own:
 
 ```bash
@@ -220,7 +220,7 @@ live in the public [`contract`](contract/) package.)
 **Languages.** Node / TypeScript — **supported** (the [SDK](https://github.com/flanj-io/sdk):
 HTTP egress and ingress, plus the MCP client). Python — **early**, MCP client only, with no HTTP body
 capture. The rule is the same one the transports above follow: a language is called *supported* only
-once the whole loop runs on it end to end in our own e2e harness, with that lane's assertions green.
+once the whole loop runs on it end to end in our own integration harness, with that suite's assertions green.
 Until then it says early — here, and on every other surface.
 
 **Where this stops, said out loud.** A REST provider needs a spec and this collector never fetches

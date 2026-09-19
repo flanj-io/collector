@@ -198,7 +198,7 @@ ALTER TABLE spec_infos ADD COLUMN IF NOT EXISTS prev_version TEXT;
 ALTER TABLE spec_infos ADD COLUMN IF NOT EXISTS prev_loaded_at TEXT;
 ALTER TABLE spec_infos ADD COLUMN IF NOT EXISTS edge_class TEXT;
 -- spec_infos.source_url: where a contract with source='fetched' came from
--- (ruling R5, 2026-09-16). NULL for every other source, and nothing re-reads
+-- (2026-09-16). NULL for every other source, and nothing re-reads
 -- it — it is the evidence line's URL, not a refresh handle.
 ALTER TABLE spec_infos ADD COLUMN IF NOT EXISTS source_url TEXT;
 -- spec_infos.server_command: how the client launched an observed stdio MCP

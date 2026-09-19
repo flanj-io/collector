@@ -9,7 +9,7 @@ import (
 	"github.com/flanj-io/collector/internal/otlpattr"
 )
 
-// The Step 0 audit battery: MCP protocol revision 2026-07-28 against the v0.5
+// The audit battery: MCP protocol revision 2026-07-28 against the v0.5
 // detector, which was built in August against the older stateful model. Every
 // case here fails on the pre-audit code.
 

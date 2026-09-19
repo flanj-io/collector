@@ -235,8 +235,8 @@ describe('a failing store must not render as a fresh install', () => {
     expect(w.text()).toContain(HOST);
   });
 
-  it('an unreachable relay gets the deck line, not a raw TypeError', async () => {
-    // Found by the QA walk: aborting the polls at the transport layer put
+  it('an unreachable relay gets the fixed line, not a raw TypeError', async () => {
+    // Found in exploratory testing: aborting the polls at the transport layer put
     // "Failed to load: TypeError: Failed to fetch" in front of the operator —
     // the exact string the per-finding ack path already refuses to show.
     const w = await mountApp();
@@ -273,7 +273,7 @@ describe('a failing store must not render as a fresh install', () => {
   });
 });
 
-/* ── 4. Evidence is per edge (the second QA walk, 2026-09-07) ─────────────── */
+/* ── 4. Evidence is per edge (the second exploratory pass, 2026-09-07) ─────────────── */
 
 const MCP_HOST = 'mcp.acme.test';
 const MCP_INTEGRATION = 'acme-tools';

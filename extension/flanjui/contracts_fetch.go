@@ -25,7 +25,7 @@ import (
 // Contract FETCH — the second way a provider contract enters this collector,
 // and the first one that leaves a claim a STRANGER can check.
 //
-// Ruling R5 (2026-09-16, `architecture.md` §3.4) reversed the standing "no URL
+// This reverses the standing "no URL
 // fetch, ever" position this file's predecessor recorded. The reversal is not a
 // convenience argument. An uploaded file's provenance is "somebody at the
 // consumer had a file": a provider reading a flagged thread cannot verify it,

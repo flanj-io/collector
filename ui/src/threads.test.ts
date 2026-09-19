@@ -24,7 +24,7 @@ import {
   type ThreadSummary
 } from './threads';
 
-// A §5.5a row exactly as the control plane sends it — the SAME object the
+// A thread-list row exactly as the control plane sends it — the SAME object the
 // per-thread summary returns, and the source of the Threads tab list since
 // slice-inbox. It carries no finding id, no thread_url and never a token.
 const base: ThreadSummary = {
@@ -69,7 +69,7 @@ const merged: ThreadRow = {
  *  are empty. */
 const orphan: ThreadRow = { ...merged, finding_id: '', integration: undefined, thread_url: '' };
 
-describe('turnLabel (copy deck status column)', () => {
+describe('turnLabel (status column)', () => {
   it('walks the derived turn', () => {
     expect(turnLabel(base, 'Acme Payments')).toBe('Waiting on Acme Payments');
     expect(turnLabel({ ...base, turn: 'provider_replied' }, 'Acme Payments')).toBe('Acme Payments replied');
@@ -118,7 +118,7 @@ describe('chipLabel', () => {
   });
 });
 
-// The row model is a CP §5.5a summary merged with the collector's local
+// The row model is a control-plane thread summary merged with the collector's local
 // pointer. Everything the READ-ONLY tab renders must survive a row whose local
 // record is missing — the thread exists on the control plane, and every column
 // comes from the CP row alone. (The canCopyLink family retired with slice 2:
@@ -136,7 +136,7 @@ describe('merged row (CP summary + local pointer)', () => {
     expect(turnLabel(base, '')).toBe('Waiting on Acme Payments');
     expect(turnLabel({ ...base, turn: 'provider_replied' }, '')).toBe('Acme Payments replied');
   });
-  // Archived rows are INCLUDED by §5.5a and flagged, never dropped — an
+  // Archived rows are INCLUDED by the list and flagged, never dropped — an
   // archived thread still renders its real state, not a special one.
   it('renders an archived row like any other', () => {
     expect(turnLabel({ ...base, archived: true, state: 'closed' }, 'Acme Payments')).toBe('Closed');
@@ -145,14 +145,14 @@ describe('merged row (CP summary + local pointer)', () => {
 });
 
 // The tab is read-only since slice 2: thread operations live on the thread
-// page, and the always-visible line under the header is the exact deck copy.
+// page, and the always-visible line under the header is the exact copy.
 describe('the read-only header line', () => {
-  it('is the deck sentence, verbatim', () => {
+  it('is the exact sentence', () => {
     expect(THREADS_READ_ONLY_NOTE).toBe('Close, reopen and link changes happen on the thread page — View thread opens it.');
   });
 });
 
-// §5.5a has no cursor: the list stops at the control plane's hard cap, and the
+// The list has no cursor: it stops at the control plane's hard cap, and the
 // tab has to say so rather than quietly losing rows (and, with them, the "In
 // thread" chip on the findings those rows carry).
 describe('truncationNote', () => {
@@ -191,7 +191,7 @@ describe('defaultFlagMessage + evidence', () => {
     first_seen: '2026-08-20T00:00:00Z',
     kind: 'live-vs-spec'
   };
-  it('prefills the deck message', () => {
+  it('prefills the message', () => {
     const d = (iso: string) => (iso ? 'Aug 20' : '');
     expect(defaultFlagMessage(f, 'req_1', d)).toBe(
       'Seeing quantity come back as string on POST /v1/charges since Aug 20 — spec says integer. Request ID req_1 is in the thread. Can you confirm on your side?'
@@ -201,8 +201,8 @@ describe('defaultFlagMessage + evidence', () => {
     );
   });
   // The thread is the surface the PROVIDER reads, and a fetched contract is the
-  // only kind whose source they can check for themselves. Phase 3 (ruling R5)
-  // exists to put that sentence here.
+  // only kind whose source they can check for themselves. The
+  // contract URL fetch exists to put that sentence here.
   it('names the provider\u2019s own published spec when the contract was fetched', () => {
     const d = (iso: string) => (iso ? 'Aug 20' : '');
     const source = 'Checked against your published spec at https://api.acme.test/openapi.json, fetched 17 Sep.';
@@ -218,7 +218,7 @@ describe('defaultFlagMessage + evidence', () => {
   // An uploaded contract's provenance is not checkable by a stranger, so the
   // message says nothing about it — "from a file we have" is words with no fact
   // in them, on a message a provider reads.
-  it('is byte-identical to the pre-R5 message when there is no source to name', () => {
+  it('is byte-identical to the message before a fetched source existed when there is no source to name', () => {
     const d = (iso: string) => (iso ? 'Aug 20' : '');
     expect(defaultFlagMessage(f, 'req_1', d, '')).toBe(defaultFlagMessage(f, 'req_1', d));
     expect(defaultFlagMessage(f, 'req_1', d, undefined)).toBe(
@@ -319,7 +319,7 @@ describe('cannotListThreads (gate on the 412 the relay would answer)', () => {
   });
 });
 
-// thread-domain-gate: the "Who can open it" parser and copy (open-to-v2 §6, three modes 2026-09-15).
+// thread-domain-gate: the "Who can open it" parser and copy.
 import {
   domainsSentence,
   gatedShareWarning,

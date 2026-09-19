@@ -1,4 +1,4 @@
-// Package contract is the transport-neutral contract model (v0.5 spec §4 Step A).
+// Package contract is the transport-neutral contract model (Step A).
 //
 // A Contract is a set of Operations whose request/response constraints are
 // JSON Schema. Transports plug in as LOADERS that normalize their native
@@ -14,14 +14,13 @@
 //     normalize into inputSchema, the 2xx JSON response into outputSchema.
 //     The OpenAPI machinery lives in that subpackage ON PURPOSE: this
 //     package's public surface carries no kin-openapi types, so an MCP-only
-//     importer (mcp-drift-watch) links none of it.
+//     importer (other Flanj tooling) links none of it.
 //
 // Everything downstream of a loader (the definition-diff classifier in
 // contract/diff, and later the findings pipeline) is transport-agnostic.
 //
-// This package is PUBLIC (not under internal/) by design: mcp-drift-watch
-// imports it so the definition-diff classifier has exactly one implementation
-// (v0.5 spec §5 "Classifier placement").
+// This package is PUBLIC (not under internal/) by design: other Flanj tooling
+// imports it so the definition-diff classifier has exactly one implementation.
 package contract
 
 import (

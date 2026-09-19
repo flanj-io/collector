@@ -1,11 +1,10 @@
-/* vendored from docs/design/tokens.css — do not edit here.
-   Canonical source lives in the docs vault (flanj-io/docs, docs/design/tokens.css),
-   generated from docs/design/tokens.json. Same discipline as CONTRACTS.md: change
-   the vault copy, then re-vendor. Bundled by Vite into the single stylesheet the
-   collector serves through go:embed, so the local UI stays self-contained.
-   Everything below the canonical banner is the vault file byte for byte;
-   src/tokens.test.ts pins its digest and, where the vault is checked out beside
-   this repo, compares the two files directly.
+/* Vendored — do not edit here; re-vendor from the canonical source.
+   Same discipline as CONTRACTS.md: change the canonical copy, then re-vendor.
+   Bundled by Vite into the single stylesheet the collector serves through
+   go:embed, so the local UI stays self-contained.
+   Everything below the canonical banner is the canonical file byte for byte;
+   src/tokens.test.ts pins its digest and, only when FLANJ_TOKENS_SOURCE points at a
+   copy of the canonical file, compares the two files directly.
 
    Webfonts are deliberately not imported here, and the collector loads NONE: it is
    a local-first tool served from a laptop, and a Google Fonts link would be an
@@ -15,8 +14,8 @@
    a hard constraint, not a fallback.
 
    The `prefers-color-scheme` block below never fires here: index.html stamps
-   data-flanj-theme="light" on <html>, and the collector's theme ruling (ux-design-v2
-   §3, light default, dark opt-in, no System state) governs. See src/theme.ts. */
+   data-flanj-theme="light" on <html>, and the collector's theme rule
+   (light default, dark opt-in, no System state) governs. See src/theme.ts. */
 
 /* Flanj design tokens — CANONICAL SOURCE. **Blueprint direction, locked 2026-09-09.**
    Generated from tokens.json; pulled from the Flanj Design System project in

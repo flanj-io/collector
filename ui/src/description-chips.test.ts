@@ -14,7 +14,7 @@ import App from './App.vue';
 const DESCRIPTION = {
   id: 'fnd_desc_1',
   kind: 'definition_change',
-  // R-B (2026-09-17): a reworded description is wording / WARNING.
+  // A reworded description is wording / WARNING.
   severity: 'warning',
   change_kind: 'wording',
   integration: 'acme-tools',
@@ -92,7 +92,7 @@ async function mountApp(findings: unknown[]): Promise<VueWrapper> {
 describe('a DESCRIPTION change wears one vocabulary from the tab to the row', () => {
   it('description-only: the tab pill keeps its class and count but takes the steel outline; the card chip says DESCRIPTION', async () => {
     const w = await mountApp([DESCRIPTION]);
-    // e2e (mcp.spec / triage.spec) reads `.tab-count.warn` and its title's tail.
+    // The integration tests read `.tab-count.warn` and its title's tail.
     const pill = w.find('.tab-count.warn');
     expect(pill.exists()).toBe(true);
     expect(pill.text()).toBe('1');
@@ -103,7 +103,7 @@ describe('a DESCRIPTION change wears one vocabulary from the tab to the row', ()
     expect(w.find('.provider .tag.desc').exists()).toBe(true);
     expect(w.find('.provider .tag.desc').text()).toBe('1 DESCRIPTION');
     expect(w.find('.provider .tag.warn').exists()).toBe(false);
-    // The row carries TWO labels (R-A): the severity, coloured, and the
+    // The row carries TWO labels: the severity, coloured, and the
     // change kind, neutral — where one mixed DESCRIPTION badge used to be.
     const badges = w.findAll(`#finding-${DESCRIPTION.id} .badge`);
     expect(badges[0].text()).toContain('WARNING');
@@ -137,7 +137,7 @@ describe('a DESCRIPTION change wears one vocabulary from the tab to the row', ()
   });
 });
 
-// R-C (Idan, 2026-09-17): INFO stays local. An info finding is SHOWN on its
+// INFO stays local. An info finding is SHOWN on its
 // card, with its two labels, and carries NO Flag control — the relay and the
 // control plane refuse it server-side as well.
 describe('an INFO finding stays local', () => {
@@ -166,7 +166,7 @@ describe('an INFO finding stays local', () => {
   });
 });
 
-// R-B's collector-only rows (2026-09-17) are provider-side evidence and sit on
+// The collector-only rows (2026-09-17) are provider-side evidence and sit on
 // the same cards as output_mismatch and definition_change.
 describe('value_change and input_rejection render on the contract card', () => {
   it('a value_change shows WARNING + value and can be flagged', async () => {

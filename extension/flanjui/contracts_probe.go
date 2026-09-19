@@ -21,8 +21,8 @@ import (
 // CONTRACT IS WORSE THAN NO CONTRACT. A host with no contract renders
 // `not checked`, which is honest and costs the operator nothing. A host bound
 // to the wrong document renders DRIFTED — loudly, on a stranger's real
-// provider, to a thread that stranger reads. `competitors.md` records the
-// consequence: providers who get flagged wrongly mute the tool, and a muted
+// provider, to a thread that stranger reads. The consequence:
+// providers who get flagged wrongly mute the tool, and a muted
 // provider is a dead edge in a network product. A probe hit is a GUESS
 // (`/openapi.json` on a gateway is routinely somebody else's document, or a
 // stale copy, or the gateway's own spec rather than the service's) and a guess

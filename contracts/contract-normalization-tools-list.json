@@ -1,5 +1,5 @@
 {
-  "_comment": "Step A normalization fixture — MCP side (v0.5 spec §4.A acceptance (1)). The SAME logical contract as contract-normalization-openapi.yaml, expressed as an MCP tools/list result. COLLECTOR-OWNED for now; promote to the canonical e2e/contracts set when another repo consumes it.",
+  "_comment": "Step A normalization fixture — MCP side. The SAME logical contract as contract-normalization-openapi.yaml, expressed as an MCP tools/list result. COLLECTOR-OWNED for now; promote to the canonical contract set when another repo consumes it.",
   "tools": [
     {
       "name": "get_balance",

@@ -223,7 +223,7 @@ func TestRemoteSourceAcceptsADocumentAtTheCap(t *testing.T) {
 	}
 }
 
-// TestRemoteSourceOversizedKeepsThePreviousDocument pins the RULING, which is
+// TestRemoteSourceOversizedKeepsThePreviousDocument pins the RULE, which is
 // the one reconcile already applies to every per-document failure: report it,
 // skip it, and keep validating against whatever is already cached for that
 // edge. A contract that outgrows the cap must cost the front the UPDATE, never
@@ -263,7 +263,7 @@ func TestRemoteSourceOversizedKeepsThePreviousDocument(t *testing.T) {
 // TestRemoteSourceRefusesAnOversizedList: the same reader serves the metadata
 // route, and a truncated JSON list fails as "unexpected end of JSON input" —
 // a parse verdict for a size problem, on the request a front makes every ten
-// seconds. One reader, one ruling.
+// seconds. One reader, one size rule.
 func TestRemoteSourceRefusesAnOversizedList(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

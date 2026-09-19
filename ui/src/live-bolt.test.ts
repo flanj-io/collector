@@ -1,5 +1,5 @@
 // The Traffic tab's LIVE light was the last flat CSS hexagon in this UI — a `clip-path`
-// polygon on a span, the pre-Blueprint mark (Idan spotted it, 2026-09-14). The design system
+// polygon on a span, the pre-Blueprint mark (spotted 2026-09-14). The design system
 // has one status light: the hex bolt, green when live. Structural gate, like tokens.test.ts:
 // the light is a <use> of the one #hxbolt symbol with the ok tone, and no clip-path hexagon
 // is drawn anywhere in a component's style block.

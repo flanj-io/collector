@@ -91,7 +91,7 @@ describe('headlineFor — the all-clear has to be earned', () => {
   });
 });
 
-describe('headlineFor — evidence is per edge (the second QA walk)', () => {
+describe('headlineFor — evidence is per edge (the second exploratory pass)', () => {
   it('the repro: an unvalidated REST provider beside a validated MCP server is NEUTRAL, not green', () => {
     // Fresh stack, no contract. POST /__drive {target:"acme"} then {target:"mcp"},
     // reload: the MCP tool calls were validated against the server's tools/list,

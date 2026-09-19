@@ -41,11 +41,11 @@ func createDefaultConfig() component.Config {
 		// Shape-only findings sync is on unless finding_sync: false (CONTRACTS §8).
 		FindingSync: true,
 		// The directory display-name refresh is on unless directory_sync:
-		// false (CONTRACTS §8) — its own switch since the 2026-08-31 ruling, so
+		// false (CONTRACTS §8) — its own switch since 2026-08-31, so
 		// an omitted key still means on and behaviour is unchanged.
 		DirectorySync: true,
-		// Edge registration is on unless edge_sync: false (CONTRACTS §8,
-		// v1 phase 2). On-by-default stands because registration becomes
+		// Edge registration is on unless edge_sync: false (CONTRACTS §8).
+		// On-by-default stands because registration becomes
 		// load-bearing when schema-push rides it; the switch and the Connect
 		// disclosure are what make that defensible in the meantime.
 		EdgeSync: true,

@@ -23,8 +23,8 @@ import (
 // survives a store reset and a re-detected finding keeps its id-independent
 // identity.
 //
-// THE SIGNATURE ALONE IS NOT A SUFFICIENT KEY (qfix2-2026-08-26, ux-design-v2
-// §2.8). Finding.ComputeSignature() is integration|endpoint|kind|rule|field_path
+// THE SIGNATURE ALONE IS NOT A SUFFICIENT KEY (qfix2-2026-08-26).
+// Finding.ComputeSignature() is integration|endpoint|kind|rule|field_path
 // — STABLE across successive definition changes. A SECOND description change on
 // the same tool and field produces the IDENTICAL signature, so under a
 // signature-only key it would arrive silently pre-acknowledged, and a breaking
@@ -83,7 +83,7 @@ type ackRecord struct {
 	// definition_change). See the package comment above.
 	EvidenceVersion string `json:"evidence_version,omitempty"`
 	// Reason / Note / ActorPersonID are accepted and persisted when the caller
-	// supplies them (ux-design-v2 §2.8 wire shape). The reason-set UI, the note
+	// supplies them. The reason-set UI, the note
 	// field and the person model land in the NEXT slice — nothing renders them
 	// yet, and nothing here invents an actor.
 	Reason        string `json:"reason,omitempty"`
@@ -229,7 +229,7 @@ func loadAckSet(st store.Store) (map[string]ackRecord, error) {
 // field is optional and LOCAL-ONLY; the evidence version is never taken from
 // the client — it is derived server-side from the finding being acknowledged.
 type ackRequestBody struct {
-	// Reason is the wire code for why (ux-design-v2 §2.2: "no_change" |
+	// Reason is the wire code for why ("no_change" |
 	// "we_adapt"). Stored opaquely — the contract file is authoritative for the
 	// value set and the reason-set UI is the NEXT slice's work.
 	Reason string `json:"reason"`

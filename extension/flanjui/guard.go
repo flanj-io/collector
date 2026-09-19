@@ -15,7 +15,7 @@ func writeErr(w http.ResponseWriter, status int, code, message string) {
 }
 
 // guardLocalMutating enforces the browser-facing rules for every state-changing
-// route (CONTRACTS / spec Step 4b): POST only (405), the `X-Flanj-UI: 1`
+// route: POST only (405), the `X-Flanj-UI: 1`
 // header (a custom header forces a CORS preflight this server never answers —
 // no CORS headers are ever set — so a foreign page cannot drive it), a JSON
 // content type, and no foreign `Origin` (when a browser sends one it must name
@@ -69,7 +69,7 @@ func sameHost(originHost, reqHost string) bool {
 // CP error (412 not_connected | contact_unconfirmed, 403 wrong_origin, 401,
 // 404, 429 …) passes through with its status + code, the CP's message when it
 // sent one, else our own copy; a transport failure is 502 cp_unreachable with
-// the deck's "nothing happened" line for that action.
+// the fixed "nothing happened" line for that action.
 func writeCPError(w http.ResponseWriter, err error, unreachableMsg string) {
 	if ce := promote.AsCPError(err); ce != nil {
 		code := ce.Code

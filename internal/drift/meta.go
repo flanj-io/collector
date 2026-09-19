@@ -12,7 +12,7 @@ import (
 	"github.com/flanj-io/collector/internal/model"
 )
 
-// Discovery meta-tools (brief 2026-09-17 §3, ruling R-E).
+// Discovery meta-tools.
 //
 // Some MCP servers list only discovery meta-tools — a search tool and a
 // generic dispatcher — instead of their catalog. An agent then learns a tool
@@ -27,7 +27,7 @@ import (
 //     a search page is never the whole catalog.
 //   - a dispatcher call is re-attributed to its inner tool ONLY when the inner
 //     name exactly matches a tool the SAME server returned in a search result
-//     already recorded here (R-E, option C). Nothing is inferred from shape:
+//     already recorded here. Nothing is inferred from shape:
 //     an unknown name stays attributed to the dispatcher.
 //
 // Which tools are search tools and dispatchers comes from the baked adapters
@@ -41,7 +41,7 @@ type MetaAdapter struct {
 	SearchTools []string `mapstructure:"search_tools"`
 	// DispatchTools call another tool by name.
 	DispatchTools []DispatchTool `mapstructure:"dispatch_tools"`
-	// EnableTools switch a toolset on for the session (brief §3.3). A tools/list
+	// EnableTools switch a toolset on for the session. A tools/list
 	// observed right after one of them succeeds is the SESSION's expanded
 	// catalog, not a change to the server's: see LoadSnapshot.
 	EnableTools []string `mapstructure:"enable_tools"`
@@ -57,7 +57,7 @@ type DispatchTool struct {
 	ArgsArg string `mapstructure:"args_arg"`
 }
 
-// bakedAdapter is the known-server patterns (brief §3.5), by tool name. Each
+// bakedAdapter is the known-server patterns, by tool name. Each
 // entry is a pattern seen in the wild, not a guess at a shape: Sentry's
 // search_sentry_tools / execute_sentry_tool (census 2026-09-17), the CPZAI-
 // style search_tools / call_tool pair, Shopware's shopware-tool-search, and
@@ -142,7 +142,7 @@ type SpecDoc struct {
 // ingestSearchResult records the tool definitions a search result carried and
 // returns a definition_change for every tool RE-observed with a different
 // definition, plus the edge's search-learned catalog as a contract row when
-// this result changed it (brief §3.1). First sight of a tool is a baseline,
+// this result changed it. First sight of a tool is a baseline,
 // never a finding; absence from a later result is never a removal.
 func (d *MCPDetector) ingestSearchResult(call model.RedactedCall) ([]model.Finding, *SpecDoc) {
 	defs := searchResultTools(call.ResponseBody)
@@ -296,7 +296,7 @@ func (d *MCPDetector) SeedSearched(info model.SpecInfo, raw []byte) (bool, error
 
 // partialOpAt is a tool's definition from the edge's partial catalog, when it
 // FALLS BACK there: the observation time and where it came from. searchOnly
-// restricts it to search results — the only source R-E lets re-key a
+// restricts it to search results — the only source that may re-key a
 // dispatcher call.
 func (d *MCPDetector) partialOpAt(peerHost, direction, tool string, searchOnly bool) (*contract.Operation, string, string) {
 	d.mu.Lock()

@@ -21,8 +21,8 @@ import (
 // more than 200 findings in one POST is a 400.
 const FindingsSyncMaxItems = 200
 
-// Per-field length caps of the CP's sync DTO (the public CONTRACTS.md §5 caps;
-// they mirror the MaxLength decorators in the CP's sync-finding.dto.ts). The
+// Per-field length caps of the CP's sync DTO (the public CONTRACTS.md §5 caps; the
+// CP enforces the same maxima). The
 // CP validates the batch as a unit, so ONE oversized value would 400 the whole
 // POST on every tick forever — BuildFindingShapes truncates every string field
 // to its cap instead.

@@ -8,8 +8,8 @@ import (
 	"github.com/flanj-io/collector/internal/model"
 )
 
-// TestInsertFinding_IdempotentRedelivery is the regression for launch-week
-// item 5: the store exporter now queues and RETRIES a batch whose write failed,
+// TestInsertFinding_IdempotentRedelivery is the regression for an early
+// defect: the store exporter now queues and RETRIES a batch whose write failed,
 // and a front re-sends a batch whose ACK it never got — so the store receives
 // the SAME finding record twice. Calls were already idempotent on their id; a
 // finding's second arrival was indistinguishable from a repeat occurrence and

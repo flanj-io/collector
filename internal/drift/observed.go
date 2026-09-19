@@ -14,8 +14,8 @@ import (
 	"github.com/flanj-io/collector/internal/otlpattr"
 )
 
-// Observed-traffic detectors: R-B's two collector-only rows (Idan,
-// 2026-09-17). Both learn from calls the agent already made; neither probes.
+// Observed-traffic detectors: the two collector-only rows. Both learn from
+// calls the agent already made; neither probes.
 //
 //   - input_rejection (observed_failure / BREAKING): a call rejected with
 //     JSON-RPC -32602 whose ARGUMENT SHAPE previously succeeded on the same

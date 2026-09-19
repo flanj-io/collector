@@ -1,9 +1,8 @@
-// Pure helpers for the v0.5 MCP surfaces (spec §4.D). Every user-facing string
-// here is VERBATIM deck copy ("v0.5 MCP surfaces — UX copy deck") with the
-// placeholders filled in. No DOM, no fetch — unit-tested with vitest.
+// Pure helpers for the v0.5 MCP surfaces. Every user-facing string
+// here is fixed copy with the placeholders filled in. No DOM, no fetch — unit-tested with vitest.
 //
-// Flaggability (spec §1/§6 evidence rule, AMENDED qfix2-2026-08-26 —
-// ux-design-v2 §2.7; enforced server-side by the relay):
+// Flaggability (evidence rule, AMENDED qfix2-2026-08-26;
+// enforced server-side by the relay):
 //   output_mismatch                    → flaggable (has a source call)
 //   definition_change, EVERY class     → flaggable, and CALL-LESS: no call is
 //     shared, because the evidence is the provider's own published definitions,
@@ -38,12 +37,12 @@ export function toolNameOf(c: Pick<RedactedCall, 'mcp_tool_name' | 'route'>): st
 
 export type DefinitionClass = 'BREAKING' | 'NON-BREAKING' | 'DESCRIPTION';
 
-/** R-A: the severity label, on its own axis — BREAKING | WARNING | INFO. */
+/** The severity label, on its own axis — BREAKING | WARNING | INFO. */
 export function severityLabel(f: Pick<Finding, 'severity'>): string {
   return (f.severity || '').toUpperCase();
 }
 
-/** R-A: the change kind, on its own axis. Older collectors sent none; for a
+/** The change kind, on its own axis. Older collectors sent none; for a
  *  definition change it is then read off the rule id the way the classifier
  *  would have stamped it, and for anything else it stays empty. */
 export function changeKindOf(f: Pick<Finding, 'kind' | 'rule' | 'change_kind'>): string {
@@ -58,7 +57,7 @@ export function changeKindOf(f: Pick<Finding, 'kind' | 'rule' | 'change_kind'>):
 
 /** Class badge of a definition_change finding, from severity + rule. Used for
  *  the local TIERS (red / amber / acknowledge), not as a label: the badge
- *  shows severityLabel and changeKindOf, two separate fields (R-A). */
+ *  shows severityLabel and changeKindOf, two separate fields. */
 export function definitionClass(f: Pick<Finding, 'kind' | 'severity' | 'rule'>): DefinitionClass | '' {
   if (f.kind !== 'definition_change') return '';
   if (f.rule === 'description-changed') return 'DESCRIPTION';
@@ -66,7 +65,7 @@ export function definitionClass(f: Pick<Finding, 'kind' | 'severity' | 'rule'>):
 }
 
 /**
- * Local-only items: never a flag control, anywhere (spec §6 evidence rule).
+ * Local-only items: never a flag control, anywhere (evidence rule).
  * Since qfix2-2026-08-26 this is stale_client and ONLY stale_client — a
  * DESCRIPTION definition change is now flaggable, so it is no longer a local
  * notice and no longer appears in the Overview "Local notices" band (whose own
@@ -77,7 +76,7 @@ export function isLocalNotice(f: Pick<Finding, 'kind' | 'severity' | 'rule'>): b
 }
 
 /** A DESCRIPTION-class definition change — the one finding class that carries
- *  the mute-risk guard line on the flag sheet (§2.7.4). */
+ *  the mute-risk guard line on the flag sheet. */
 export function isDescriptionChange(f: Pick<Finding, 'kind' | 'severity' | 'rule'>): boolean {
   return definitionClass(f) === 'DESCRIPTION';
 }
@@ -88,7 +87,7 @@ export function isFlaggableMcp(f: Pick<Finding, 'kind' | 'severity' | 'rule'>): 
 }
 
 /**
- * INFO never crosses the org boundary (ruling R-C, Idan 2026-09-17), on any
+ * INFO never crosses the org boundary, on any
  * kind. The row is still SHOWN where it always was — it is not a local notice
  * and it does not leave the Contracts tab — it just carries no Flag control,
  * and the relay and the control plane both refuse it server-side.
@@ -136,8 +135,8 @@ export function ackEvidenceVersion(f: Pick<Finding, 'kind' | 'spec_version_to'>)
  * Acknowledged on this collector (from the read-API join).
  *
  * The collector applies the evidence-version rule server-side; this repeats it
- * client-side on purpose (ux-design-v2 §2.8, §7 risk 2 — the highest-severity
- * item in the slice). A SECOND definition change on the same tool and field has
+ * client-side on purpose (the highest-severity
+ * risk in this feature). A SECOND definition change on the same tool and field has
  * the IDENTICAL signature, so a signature-only ack would render it silently
  * pre-acknowledged and a breaking change could sit unseen. Two independent
  * checks means one of them failing cannot hide a new change.
@@ -209,7 +208,7 @@ export function informationalChipTitle(nonBreaking: number, description: number)
   return parts.join(' · ');
 }
 
-// ─── Deck §1 — Edges ─────────────────────────────────────────────────────────
+// ─── Edges ───────────────────────────────────────────────────────────────────
 
 export const MCP_BADGE_TOOLTIP = 'An MCP server — its tools/list is the contract.';
 
@@ -217,7 +216,7 @@ export function mcpBadgeLabel(edgeClass?: string): string {
   return edgeClass === 'local-process' ? 'MCP · stdio' : 'MCP';
 }
 
-// ─── Deck §2 — Health (Overview) ─────────────────────────────────────────────
+// ─── Health (Overview) ───────────────────────────────────────────────────────
 
 export interface McpServerRef {
   /** serverInfo.name — NOT unique: two servers can publish the same one. */
@@ -239,7 +238,7 @@ export interface McpServerRef {
  *
  * One sentence, one subject: the server, then what your calls showed after the
  * dash. The old pivot was `. You: ` — a second subject that read as a stray
- * label on the Overview (Idan, 2026-09-14); the e2e reads pin only the
+ * label on the Overview; the integration tests pin only the
  * lowercase clause and the `Server: <name> v<version>` opening, so the pivot
  * is the one part free to change. The origin goes after the version and before
  * the pivot, so all four
@@ -342,10 +341,10 @@ export interface McpHeadline {
  * that band promises nothing in it can be flagged). Without a clause here a
  * server whose only drift is a wording change would report "no drift detected"
  * while the Contracts tab listed a row with a primary `Flag this` — the tab and
- * the headline contradicting each other (ux-design-v2 §7 risk 3). So the line
+ * the headline contradicting each other. So the line
  * names the wording change. Its TONE, though, is not `drift` (UX review
  * 2026-09-14): a description change is chipped `DESCRIPTION` on the row and
- * the tab, and the kit's own detail copy says wording is not a severity claim —
+ * the tab, and the design's own detail copy says wording is not a severity claim —
  * a red bolt and a red rule over it were a false alarm the row then retracted.
  * The clause rides the verdict the validated calls earned: `ok` when this
  * server has validated at least one call, `neutral` when it has validated
@@ -391,7 +390,7 @@ export function mcpHeadline(
   return { text: serverLead(s) + 'no drift detected.', tone: 'ok' };
 }
 
-/** Local notices band (deck §2): title + sub. Items carry no Flag control, ever. */
+/** Local notices band: title + sub. Items carry no Flag control, ever. */
 export const LOCAL_NOTICES_TITLE = 'Local notices';
 
 export function localNoticesSub(provider: string): string {
@@ -422,7 +421,7 @@ export function noticeLine(f: Finding, server: string): string {
   return `Your agent's arguments to ${f.endpoint} no longer match the current inputSchema at ${path}. Update your client.`;
 }
 
-// ─── Deck §3 — Contracts ─────────────────────────────────────────────────────
+// ─── Contracts ───────────────────────────────────────────────────────────────
 
 export const MCP_NO_SPEC_NEEDED = 'No spec file needed — the server publishes its own contract on tools/list.';
 
@@ -438,7 +437,7 @@ function missingVersion(version: string | undefined): string {
   return versionLabel(version) === VERSION_NOT_SPECIFIED ? ` · ${VERSION_NOT_SPECIFIED}` : '';
 }
 
-/** R-E / brief 2026-09-17 §3.5: the honest label for a server whose catalog
+/** The honest label for a server whose catalog
  *  sits behind discovery meta-tools. The collector sees only the tools the
  *  agent looked up, so the count is what was OBSERVED, never the catalog. */
 export function metaCatalogLabel(observed: number): string {
@@ -530,12 +529,12 @@ export function afterColLabel(hash: string, time: string): string {
   return `after (snapshot ${hash || '—'} · ${time || '—'})`;
 }
 
-/** definition_change row detail (deck §3). */
+/** definition_change row detail. */
 export function defChangeDetail(t1: string, t2: string, provider: string): string {
   return `Their tools/list at ${t1} vs at ${t2} — both ${provider}'s own words.`;
 }
 
-// ─── Deck §4 — Traffic ───────────────────────────────────────────────────────
+// ─── Traffic ─────────────────────────────────────────────────────────────────
 
 export const MCP_TOOL_CHIP = 'TOOL';
 export const MCP_ERROR_TOOLTIP = 'The server returned isError — an execution failure, not contract drift.';
@@ -557,8 +556,8 @@ export function methodFacetOf(c: Pick<RedactedCall, 'transport' | 'method'>): st
 
 /**
  * Status-facet match for one call. HTTP rows match by status class ('err' =
- * ≥400). MCP rows carry NO HTTP status — they are ok/error from isError
- * (deck §4): 'err' matches an isError row, the ok bucket '2xx' matches an ok
+ * ≥400). MCP rows carry NO HTTP status — they are ok/error from isError:
+ * 'err' matches an isError row, the ok bucket '2xx' matches an ok
  * row, and 3xx/4xx/5xx match nothing (an MCP error has no HTTP class to claim).
  */
 export function statusFilterMatches(
@@ -575,7 +574,7 @@ export function statusFilterMatches(
   return `${Math.floor(c.status_code / 100)}xx` === filter;
 }
 
-// ─── Deck §5 — Flag sheet (MCP) ──────────────────────────────────────────────
+// ─── Flag sheet (MCP) ────────────────────────────────────────────────────────
 
 /** `type=integer` → `integer`; `type=string ("1200")` → `string`. */
 export function typeOf(rendered: string): string {
@@ -604,7 +603,7 @@ export function afterObservedAt(f: Pick<Finding, 'snapshot_observed_at' | 'detai
 /**
  * Evidence line body (rendered after the "Evidence (1):" label).
  *
- * DESCRIPTION gets its own variant (ux-design-v2 §2.7.4): the claim it makes is
+ * DESCRIPTION gets its own variant: the claim it makes is
  * "your own two published versions", not "a definition change of class X" —
  * which is what lets a subjective finding cross the org boundary honestly.
  */
@@ -621,7 +620,7 @@ export function mcpEvidenceLine(f: Finding, server: string, fmtDate: (iso: strin
 }
 
 /**
- * The mute-risk guard (ux-design-v2 §2.7.4), rendered directly above the
+ * The mute-risk guard, rendered directly above the
  * primary button on the DESCRIPTION class ONLY. It stops a subjective finding
  * from landing at the provider as an accusation.
  */
@@ -633,7 +632,7 @@ export function mcpIdsLine(provider: string): string {
 }
 
 /**
- * The IDs line for an MCP flag. The deck's JSON-RPC line is honest only while
+ * The IDs line for an MCP flag. The JSON-RPC line is honest only while
  * the client-generated id is the SOLE correlation key; with mixed keys the
  * standard count line runs, plus a short honest note for the client-generated
  * one (never pitched as an id the provider issued).
@@ -647,13 +646,13 @@ export function mcpIdsLineFor(c: Correlation | null | undefined, provider: strin
   return `${line} One of them is your client's own JSON-RPC id — in ${provider}'s logs only if they log it.`;
 }
 
-/** The sub-line under a call-less definition_change evidence (deck §5). */
+/** The sub-line under a call-less definition_change evidence. */
 export function defChangeNoCallSub(provider: string): string {
   return `No call is shared — the evidence is ${provider}'s own published definitions, before and after.`;
 }
 
 /**
- * "What leaves this collector" (deck §5) — the lead before the
+ * "What leaves this collector" — the lead before the
  * `<C> · <E>` names; the tail after them.
  */
 export function mcpDisclosureLead(f: Pick<Finding, 'kind' | 'severity' | 'rule'>, tool: string): string {
@@ -671,7 +670,7 @@ export function mcpDisclosureTail(f: Pick<Finding, 'kind' | 'severity' | 'rule'>
   return isDescriptionChange(f) ? 'Raw calls never leave.' : 'No call data is involved, so none leaves.';
 }
 
-/** Prefilled, editable, optional message for the Flag sheet (deck §5). */
+/** Prefilled, editable, optional message for the Flag sheet. */
 export function mcpDefaultMessage(f: Finding, fmtDate: (iso: string) => string): string {
   if (f.kind === 'definition_change') {
     if (isDescriptionChange(f)) {

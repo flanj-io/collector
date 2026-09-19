@@ -22,7 +22,7 @@ func connectedRig(t *testing.T) *testRig {
 	return r
 }
 
-// TestEdgeThreadCreatesMessageOnlyThread — v1 phase 4, case 1. "Start a thread"
+// TestEdgeThreadCreatesMessageOnlyThread — case 1. "Start a thread"
 // on an edge row sends a MESSAGE-ONLY flag: no `call`, no `finding`, and a
 // `provider_host` naming the edge so the thread page can anchor its provider
 // slot on the domain instead of an unattributed asserted name.

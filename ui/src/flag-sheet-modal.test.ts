@@ -1,14 +1,14 @@
 // @vitest-environment happy-dom
 //
 // The Flag sheet says `aria-modal="true"` — a promise that, while it is open,
-// the rest of the page is unreachable. Launch-week item 9 found it was not:
-// nothing behind the sheet was inert, Tab walked straight out into the
-// Overview, and closing it dropped focus on <body>. A screen reader believed
-// the page was gone while a keyboard user was standing in it — the attribute
-// lying is worse than its absence. These tests hold the promise on the real
-// component: the page behind is inert exactly while the sheet is open, Tab and
-// Shift+Tab wrap inside it, Escape still closes, and focus goes back to the
-// control that opened it.
+// the rest of the page is unreachable. It was not: nothing behind the sheet
+// was inert, Tab walked straight out into the Overview, and closing it
+// dropped focus on <body>. A screen reader believed the page was gone while a
+// keyboard user was standing in it — the attribute lying is worse than its
+// absence. These tests hold the promise on the real component: the page
+// behind is inert exactly while the sheet is open, Tab and Shift+Tab wrap
+// inside it, Escape still closes, and focus goes back to the control that
+// opened it.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mount, type VueWrapper } from '@vue/test-utils';
 import FlagSheet from './FlagSheet.vue';

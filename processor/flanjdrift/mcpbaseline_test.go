@@ -856,7 +856,7 @@ func TestMCPBaselineRefusesAnOversizedSnapshot(t *testing.T) {
 }
 
 // paddedMCPSnapshot builds a well-formed tools/list document of exactly n
-// bytes. Well-formed on purpose: these tests are about the SIZE ruling, so the
+// bytes. Well-formed on purpose: these tests are about the SIZE rule, so the
 // content must never be what decides them.
 func paddedMCPSnapshot(n int) []byte {
 	const head = `{"tools":[{"name":"pad","description":"`

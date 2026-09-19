@@ -15,7 +15,7 @@ import (
 )
 
 // A meta-gated server: tools/list carries only the search tool and the
-// dispatcher (brief 2026-09-17 §3).
+// dispatcher.
 const metaSnapshotJSON = `{"tools":[
   {"name":"search_tools","description":"Search the catalog.","inputSchema":{"type":"object","properties":{"query":{"type":"string"}}}},
   {"name":"call_tool","description":"Call a catalog tool.","inputSchema":{"type":"object","properties":{"name":{"type":"string"},"arguments":{"type":"object"}}}}]}`
@@ -41,7 +41,7 @@ func str(lr plog.LogRecord, k string) string {
 	return v.Str()
 }
 
-// TestDispatchedCallIsStoredAsTheInnerTool is brief §3.1 + §3.2 through the
+// TestDispatchedCallIsStoredAsTheInnerTool goes through the
 // processor: a search result becomes a contract row of its own, and a
 // dispatcher call to a tool that search returned leaves the processor re-keyed
 // to that tool — tool name and route — with the dispatcher kept as

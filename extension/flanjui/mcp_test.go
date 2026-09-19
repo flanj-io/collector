@@ -310,7 +310,7 @@ func TestMCPFindingRowsAreTheUIRows(t *testing.T) {
 	}
 }
 
-// TestMCPListFindingsByEdge covers the query the brief names — open findings on
+// TestMCPListFindingsByEdge covers the query for open findings on
 // ONE edge — including the case that is easy to lose: a call-less MCP
 // definition_change has no source call and therefore no peer host of its own,
 // and reaches its edge only through the contract bound to that host.
@@ -364,7 +364,7 @@ func TestMCPUnknownEdgeIsNotAnAllClear(t *testing.T) {
 
 // ─── honesty ─────────────────────────────────────────────────────────────────
 
-// TestMCPEmptyCollectorAnswersHonestly is the brief's third acceptance: a
+// TestMCPEmptyCollectorAnswersHonestly is the third acceptance: a
 // collector with no findings answers honestly rather than fabricating or
 // erroring. A fresh install has no calls at all, so "no drift" would be a claim
 // about evidence that does not exist.
@@ -471,7 +471,7 @@ func TestMCPGetFindingNotFoundIsHonest(t *testing.T) {
 
 // ─── the redaction floor on this surface ─────────────────────────────────────
 
-// TestMCPNeverEmitsARawBody is the assertion the brief asks for by name. The
+// TestMCPNeverEmitsARawBody is the key redaction assertion. The
 // seeded calls carry a canary in every body, both header maps and the URL
 // query; every tool is driven with every argument that could widen an answer,
 // and no byte of any response may contain it.
@@ -675,7 +675,7 @@ func TestMCPStoreFailureNeverReachesTheAgent(t *testing.T) {
 		}
 		txt := resultText(res)
 		if !strings.Contains(txt, msgStoreUnavailable) {
-			t.Errorf("%s should answer with the deck's one sentence, got %q", name, txt)
+			t.Errorf("%s should answer with the fixed one-sentence copy, got %q", name, txt)
 		}
 		if strings.Contains(txt, storeDSNError) {
 			t.Errorf("%s handed the raw store error to the agent: %q", name, txt)

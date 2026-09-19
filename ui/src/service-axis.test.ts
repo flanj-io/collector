@@ -138,7 +138,7 @@ describe('the Overview MCP lines, per calling service', () => {
   });
 
   it('tells apart two rows on one server by service, with no integration id', async () => {
-    // The e2e stack: two configured integrations, one service each.
+    // The integration stack: two configured integrations, one service each.
     stub([contract('acme-tools'), contract('acme-tools-py')], [call('acme-tools', 'org-app', 'clean'), call('acme-tools-py', 'org-app-py', 'clean')]);
     const lines = overviewLines(await mountApp());
     expect(lines).toHaveLength(2);

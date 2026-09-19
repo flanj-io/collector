@@ -84,7 +84,7 @@
     },
     "provider_host": {
       "type": "string",
-      "description": "OPTIONAL, additive (v1p4-2026-09-08): the observed host of the edge this thread is about, for a thread that carries NO call. The domain is the anchor and the name is decoration (v1 spec §5), so a message-only thread started from an edge row sends the host it was started from and the thread page resolves a VERIFIED directory name or the bare domain for its provider slot instead of an unattributed consumer-asserted name. IGNORED whenever `call` is present — the evidence's own URL always wins over a client assertion. Unparseable values are dropped, never guessed at."
+      "description": "OPTIONAL, additive (v1p4-2026-09-08): the observed host of the edge this thread is about, for a thread that carries NO call. The domain is the anchor and the name is decoration, so a message-only thread started from an edge row sends the host it was started from and the thread page resolves a VERIFIED directory name or the bare domain for its provider slot instead of an unattributed consumer-asserted name. IGNORED whenever `call` is present — the evidence's own URL always wins over a client assertion. Unparseable values are dropped, never guessed at."
     },
     "allowed_domains": {
       "type": [

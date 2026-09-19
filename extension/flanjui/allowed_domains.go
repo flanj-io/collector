@@ -16,7 +16,7 @@ import (
 // carries neither key is refused rather than defaulted. The CP reads both keys
 // absent as "anyone", but only for collectors that predate the fields and could
 // never have asked their operator; this one always can, so a silent default here
-// would be the very thing the ruling forbids. The CP normalizes and refuses the
+// would be the very thing this rule forbids. The CP normalizes and refuses the
 // same shapes; checking here means the operator reads the refusal in the sheet,
 // not as a CP round trip.
 

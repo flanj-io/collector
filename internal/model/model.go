@@ -99,7 +99,7 @@ type RedactedCall struct {
 	// rejected (CONTRACTS §2 flanj.mcp.error.code, additive, optional); 0 when
 	// the call returned a result or the SDK is older.
 	MCPErrorCode int `json:"mcp_error_code,omitempty"`
-	// ViaDispatch (additive, optional — ruling R-E, brief 2026-09-17 §3.2) is
+	// ViaDispatch (additive, optional — 2026-09-17) is
 	// the discovery DISPATCHER this call went through, when the collector
 	// re-attributed it to the inner tool it named: MCPToolName and Route then
 	// name that inner tool, and RequestBody stays the literal dispatcher
@@ -324,7 +324,7 @@ const (
 	KindLiveVsSpec  = "live-vs-spec"
 	KindVersionDiff = "version-diff"
 
-	// v0.5 MCP finding kinds (spec §1/§4.C).
+	// v0.5 MCP finding kinds.
 	// KindOutputMismatch: a tool call's structuredContent violates the tool's
 	// declared outputSchema. FLAGGABLE — the purest evidence-rule case: their
 	// schema vs their own response.
@@ -343,12 +343,12 @@ const (
 	KindStaleClient = "stale_client"
 	// KindValueChange: a value in the tool's OBSERVED responses changed
 	// meaning — timestamp format, ID format, enum casing, integer vs decimal —
-	// while the declared schema (if any) said nothing (R-B: value / WARNING,
+	// while the declared schema (if any) said nothing (value / WARNING,
 	// collector-only, 2026-09-17).
 	KindValueChange = "value_change"
 	// KindInputRejection: a tools/call was rejected with JSON-RPC -32602 on
-	// arguments of a shape that previously SUCCEEDED on the same tool (R-B:
-	// observed_failure / BREAKING, collector-only, 2026-09-17). Provider-side,
+	// arguments of a shape that previously SUCCEEDED on the same tool
+	// (observed_failure / BREAKING, collector-only, 2026-09-17). Provider-side,
 	// so it is flaggable, unlike stale_client.
 	KindInputRejection = "input_rejection"
 
@@ -368,8 +368,8 @@ const (
 // plain record types — does not import the classifier.
 const RuleDescriptionChanged = "description-changed"
 
-// Flaggable reports whether this finding may be flagged cross-org (v0.5 spec
-// §6 evidence rule, AMENDED qfix2-2026-08-26): stale_client is consumer-side —
+// Flaggable reports whether this finding may be flagged cross-org (evidence rule,
+// AMENDED qfix2-2026-08-26): stale_client is consumer-side —
 // it is local-only, the relay REFUSES it server-side, the UI shows no flag
 // control anywhere, and it never reaches the control plane.
 //
@@ -381,14 +381,14 @@ const RuleDescriptionChanged = "description-changed"
 // a description change only ever leaves this collector when a human presses the
 // control.
 //
-// INFO never crosses the org boundary (ruling R-C, Idan 2026-09-17): the local
+// INFO never crosses the org boundary (2026-09-17): the local
 // UI shows an info finding, the Flag control is absent on it, this relay
 // refuses it, and the control plane rejects a flag whose finding severity is
 // info. Only WARNING and BREAKING become a flag. This applies to every kind,
 // HTTP as well as MCP.
 func (f Finding) Flaggable() bool {
-	// Two refusals, and never widen either without re-reading the rulings:
-	// stale_client is consumer-side (evidence rule), and info stays local (R-C).
+	// Two refusals, and never widen either without re-reading the reasons above:
+	// stale_client is consumer-side (evidence rule), and info stays local.
 	return f.Kind != KindStaleClient && f.Severity != SeverityInfo
 }
 
@@ -398,23 +398,23 @@ type Finding struct {
 	SchemaVersion int    `json:"schema_version"`
 	ID            string `json:"id"`
 	Kind          string `json:"kind"`
-	// ChangeKind (additive, optional — ruling R-A, Idan 2026-09-17) is WHAT
+	// ChangeKind (additive, optional — 2026-09-17) is WHAT
 	// moved: wording | input | output | catalog | value | observed_failure.
 	// It is a FINER axis than Kind, which names which detector spoke
 	// (definition_change, output_mismatch, stale_client, live-vs-spec,
-	// version-diff) — four of R-A's six kinds are sub-kinds of
+	// version-diff) — four of the six kinds are sub-kinds of
 	// definition_change, so the two could not be merged without either losing
 	// the detector or re-lettering a field the control plane, the dashboard
-	// and e2e all read.
+	// and the integration suite all read.
 	//
 	// Set on MCP findings: definition_change carries wording/input/output/
 	// catalog, output_mismatch carries value, stale_client carries
-	// observed_failure. Empty on the HTTP/OpenAPI kinds, which R-A's
+	// observed_failure. Empty on the HTTP/OpenAPI kinds, which this
 	// vocabulary does not describe, and on findings from older collectors —
 	// readers must tolerate its absence.
 	ChangeKind string `json:"change_kind,omitempty"`
 	Severity   string `json:"severity"`
-	// ViaDispatch (additive, optional — ruling R-E, 2026-09-17) names the
+	// ViaDispatch (additive, optional — 2026-09-17) names the
 	// generic dispatcher a call went through when detection re-attributed it
 	// to the INNER tool. It is set only when the inner name exactly matched a
 	// tool the same server returned in a search result this collector had
@@ -509,8 +509,8 @@ const (
 	// tools/list snapshot, which needs no configuring and no uploading.
 	SpecSourceObserved = "observed"
 	// SpecSourceFetched marks a contract THIS collector fetched over HTTP from
-	// a URL an operator gave it (or approved from a probe), ruling R5,
-	// 2026-09-16. It is a PROVENANCE word, not a mechanism: the row carries
+	// a URL an operator gave it (or approved from a probe),
+	// since 2026-09-16. It is a PROVENANCE word, not a mechanism: the row carries
 	// SpecInfo.SourceURL, and that is the whole point of the source — "your own
 	// published spec at <url>, fetched <when>" is a claim the provider can
 	// check for themselves, which an uploaded file never is.
@@ -520,7 +520,7 @@ const (
 	// it. Periodic re-fetch is the control-plane registry (v2) and deliberately
 	// does not exist here.
 	SpecSourceFetched = "fetched"
-	// SpecSourceSearchResult (ruling R-E, brief 2026-09-17 §3.1) is an MCP
+	// SpecSourceSearchResult is an MCP
 	// server's catalog as learned from the SEARCH RESULTS of its discovery
 	// meta-tools — the tools the agent actually looked up, never the whole
 	// catalog. Partial by construction: a tool absent from it is not removed.
@@ -610,9 +610,8 @@ type SpecInfo struct {
 	// It exists so the finding and the thread can say "checked against your
 	// published spec at <url>, fetched <when>" — a sentence the provider
 	// reading the thread can verify against their own publishing, which is an
-	// upgrade to the EVIDENCE RULE and not a convenience (architecture.md §3.4,
-	// ruling R5). An uploaded file's name proves nothing to a stranger; a URL
-	// they serve does.
+	// upgrade to the EVIDENCE RULE and not a convenience. An uploaded file's
+	// name proves nothing to a stranger; a URL they serve does.
 	//
 	// The fetch TIME is LoadedAt, deliberately reusing the one timestamp the
 	// row already carries rather than adding a second: for a fetched row

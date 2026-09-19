@@ -39,7 +39,7 @@ this exporter routes those to `PutSpecInfo` like any spec_info; a raw
   `sending_queue` + `retry_on_failure` (the same keys as a front's `otlphttp`),
   both on by default with defaults tuned for the last hop before persistence.
   Nothing says where to write: the extension owns the store.
-- `exporter_test.go` — the launch-week-5 regressions over the REAL sqlite store
+- `exporter_test.go` — the durability regressions over the REAL sqlite store
   behind a fail-on-command double: an outage and a mid-batch failure both land
   exactly once; a full queue refuses retryably; the default config keeps the
   queue + retry on. Review of #46 (2026-09-08): an UNSTAMPED call (the golden
@@ -68,7 +68,7 @@ this exporter routes those to `PutSpecInfo` like any spec_info; a raw
   references (+ repairs the edge drift attribution) — see `internal/store`
   `latePin`. The exporter never reorders or buffers to compensate.
 
-## Durability (launch-week item 5, 2026-09-07)
+## Durability (2026-09-07)
 
 Until 2026-09-07 this exporter built `exporterhelper.NewLogs` with no queue, no
 retry: `consumeLogs`' error went straight back to the pipeline as a permanent
@@ -175,7 +175,7 @@ something the write path cannot honour.
 Store behaviour (ring buffer, pin, promote, the occurrence ledger and its TTL
 prune, and the `ErrRejected` classification on both backends —
 `rejected_test.go`) is tested in `internal/store`; this exporter's queue/retry/idempotency contract in
-`exporter_test.go` (above). The e2e postgres lane drives the real thing
-(`e2e/tests/store-durability.spec.ts`: DB stopped for longer than the SDK's own
+`exporter_test.go` (above). Flanj's integration postgres lane drives the real thing
+(DB stopped for longer than the SDK's own
 retry budget, a call and its finding driven meanwhile, both present exactly once
 after recovery).

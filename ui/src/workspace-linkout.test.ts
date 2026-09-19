@@ -1,13 +1,13 @@
 // @vitest-environment happy-dom
 //
-// v1 phase 3: the Threads tab's link-out to the person's CP workspace.
+// The Threads tab's link-out to the person's CP workspace.
 //
 // The two facts worth pinning are both about restraint. It rides the EXISTING
 // `dashboard_url` field, so it inherits that field's rule — absent means the
 // collector has no address a browser off-host could open, and absence must
 // render nothing rather than a dead link (the defect the pill's own test
 // records). And it is one muted line under a list that already exists: the
-// brief's rule for this slice is NO NEW NAG SURFACES, so there is no banner, no
+// rule for this slice is NO NEW NAG SURFACES, so there is no banner, no
 // card and nothing dismissable to assert.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mount, type VueWrapper } from '@vue/test-utils';
@@ -92,7 +92,7 @@ async function mountApp(): Promise<VueWrapper> {
   return w;
 }
 
-describe('the Threads tab workspace link-out (v1 phase 3)', () => {
+describe('the Threads tab workspace link-out', () => {
   it('offers the workspace when the collector has an address a browser can open', async () => {
     serve({ ...CONNECTED, dashboard_url: DASHBOARD });
     const w = await mountApp();

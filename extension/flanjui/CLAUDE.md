@@ -42,12 +42,12 @@ API + the flag action.
   {error: "store_error", message: …}`, with the raw error going to the log and
   nowhere else — a pgx connection error is the DSN in prose, and the read routes
   used to hand it to the browser verbatim at 500.
-- **Control-plane relay (v0.1a — CONTRACTS §5, spec Step 4b).** The UI never
+- **Control-plane relay (v0.1a — CONTRACTS §5).** The UI never
   holds a bearer; the relay does, and every mutating route is guarded
   (`guard.go`): POST only (405), `X-Flanj-UI: 1` (403 `ui_header_required`),
   `Content-Type: application/json` (415), no foreign `Origin` (403
   `forbidden_origin`), never a CORS header. Errors are `{error, message}` with
-  the deck's copy (`messages.go`). Tokens, handoffs and the collector key never
+  the relay's fixed copy (`messages.go`). Tokens, handoffs and the collector key never
   reach a log line.
   - `GET|POST /api/connect` (`connect.go`) — **Connect**: `POST {consumer_display_name,
     collector_name, contact_email, contact_display_name?, local_ui_url?}` registers the
@@ -63,7 +63,7 @@ API + the flag action.
     when already connected). Display names pass the redaction floor
     (`internal/redact`, like the flag message) before they are sent or stored.
     Once a key exists EVERY later register (resend / change of contact) goes out
-    with Bearer **collector key** (`RegisterWithKey`, CONTRACTS-CP §5.1): the
+    with Bearer **collector key** (`RegisterWithKey`): the
     same email = resend, key unchanged; a new email = a new pending contact on
     the same collector, key unchanged — the previously confirmed contact stays
     usable for threads (`confirmed_contact_email` from `me`) until the new one
@@ -82,7 +82,7 @@ API + the flag action.
     `http://cp-api.flanj:3001`).
     It is never minted from the promote client's base alone: that is where the
     collector's requests go (docker DNS, a k8s Service), not where a laptop
-    can (launch-week item 8, 2026-09-07). Absent → the SPA keeps the pill a
+    can (2026-09-07). Absent → the SPA keeps the pill a
     Settings button.
   - `POST /api/flag {finding_id, allowed_emails, allowed_domains, message?, provider_display_name?}` — **Create
     thread**: `403 {error: not_flaggable}` for LOCAL-ONLY finding kinds
@@ -143,7 +143,7 @@ API + the flag action.
     thing that makes a domain honestly someone's email domain; a curated name
     prefills nothing. GET only, `no-store`, nothing leaves the deployment.
   - `POST /api/edges/thread {host, message, request_id, allowed_emails, allowed_domains}` — **Start a thread**
-    from an EDGE row (v1 phase 4): a MESSAGE-ONLY thread. Same Connect gate as
+    from an EDGE row: a MESSAGE-ONLY thread. Same Connect gate as
     the flag, from the same helper (`requireConnectedForThread`) so the two
     doors answer with the same 412s. Outbound rows only (`404 edge_not_found`
     for an unknown or INBOUND host — an inbound `peer_host` is a forgeable XFF
@@ -158,10 +158,10 @@ API + the flag action.
     is parked under `thread.link.<thread_id>` (the existing key for a thread
     with no finding record) → `{thread_id, thread_public_id, thread_url, state,
     status}`.
-  - `GET /api/threads` — ONE call to the CP's §5.5a list (Bearer collector key,
+  - `GET /api/threads` — ONE call to the CP's thread list (Bearer collector key,
     most-recently-active first), each row joined to the local record by thread
     id. The envelope is the collector's own internal shape:
-    `{threads, count, total, limit, has_more}` — §5.5a has no cursor, so
+    `{threads, count, total, limit, has_more}` — the CP list has no cursor, so
     `has_more` is what stops 200 rows from silently becoming the whole truth.
     The list path WRITES NOTHING except recovering a missing pointer from the
     legacy `threads.index` (lazy, per listed thread, a single blind write of the
@@ -189,9 +189,8 @@ API + the flag action.
   `/mcp` on THIS listener.** Streamable HTTP (`github.com/modelcontextprotocol/go-sdk`),
   stateless, JSON responses; four tools, every one annotated read-only:
   `drift_summary` · `list_edges` · `list_findings` (filters: `edge`, `kind`,
-  `severity`, `include_acknowledged`, `limit`) · `get_finding`. Named in
-  `launch-plan.md`'s one-line description of what launches; the prerequisite for
-  the AI-reliability directory submissions.
+  `severity`, `include_acknowledged`, `limit`) · `get_finding`. A prerequisite for the
+  AI-reliability directory submissions.
   - **It is a route, not a listener.** The whole security story is that
     `ui_endpoint` is already validated loopback (`Config.Validate`), so the agent
     surface inherits the outbound-only posture with nothing new bound. On top of
@@ -202,8 +201,7 @@ API + the flag action.
   - **Read-only, and that is structural.** There is no tool for any route behind
     `guardMutating` / `guardLocalMutating` — no flag, no acknowledge, no
     connect, no contract upload. An agent does not satisfy the browser guard and
-    is not meant to; suggest-and-approve is a later slice (v4 in
-    `mvp-roadmap.md`), and this is NOT that.
+    is not meant to; suggest-and-approve is a later slice, and this is NOT that.
   - **One builder for the rows.** `handlers.go` exposes `findingRows` and
     `edgeRows`; both `/api/findings` / `/api/edges` and the MCP tools read
     through them, so "the agent and the human see the same truth" is structural
@@ -237,8 +235,8 @@ API + the flag action.
     collector has never observed is answered as an unknown edge with the known
     ones listed, never as "no findings". None of these is an error.
   - **Protocol.** The Go SDK speaks 2026-07-28 and negotiates down through
-    2025-11-25 — what `@modelcontextprotocol/sdk` 1.30.0 speaks, the version the
-    e2e `org-app` and `mock-mcp` harnesses pin — to 2024-11-05, so no pin of our
+    2025-11-25 — what `@modelcontextprotocol/sdk` 1.30.0 speaks, the version
+    test servers pin — to 2024-11-05, so no pin of our
     own is needed and there is no mismatch to work around.
   - **No new config key.** The surface is on by default and has no switch: the
     read API beside it has no auth either, so gating one and not the other would
@@ -260,7 +258,7 @@ collector is outbound-only; nothing serves off-host.
 - `connect.go` — Connect state (store settings KV), `me` refresh cache, the
   `/api/connect` handlers. `threads.go` — the per-finding thread records + the
   `/api/threads…` handlers. `guard.go` — the mutating-route guard + CP error
-  mapping. `messages.go` — every user-facing relay string (deck copy).
+  mapping. `messages.go` — every user-facing relay string.
 - `mcp.go` — the agent-facing MCP server: tool definitions, the evidence
   tally, the outbound redaction pass and the `/mcp` handler.
 - `embed.go` — `//go:embed all:web/dist`.
@@ -277,7 +275,7 @@ collector is outbound-only; nothing serves off-host.
   boots, with a warning): the deployment's identity is its collector NAME, and
   `/api/health` carries `collector_name` where the `integration` slug was.
 - `sync.go` — ONE 15s ticker, THREE independently gated legs. `edges.go` is the
-  third (v1 phase 2): **edge registration**, `POST /api/v1/edges/sync` with the
+  third: **edge registration**, `POST /api/v1/edges/sync` with the
   collector key. It lists the store's EXTERNAL edges and hands them to
   `promote.BuildEdgeRegistrations`, which emits `{registrable_domain, direction,
   first_seen, last_seen}` per (domain, direction) — folding the hosts under a

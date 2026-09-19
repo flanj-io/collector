@@ -35,13 +35,13 @@ const (
 	// store pod's contract endpoint and the front that reads it, so the three
 	// ends of the channel agree by construction rather than by comment.
 	maxDocBytes = model.MaxContractDocBytes
-	// maxEnvelopeBytes bounds the READ of an upload envelope; the ruling on
-	// size is the document check in readContractUpload, against maxDocBytes.
+	// maxEnvelopeBytes bounds the READ of an upload envelope; the size
+	// rule is the document check in readContractUpload, against maxDocBytes.
 	// The envelope is JSON, and JSON escaping grows a text document on the
 	// wire (every newline is two bytes, every quote too), so a bound of
 	// "document cap plus a little" refused documents that were under the cap:
 	// real YAML at 7.8 MiB arrives as an envelope past 8 MiB. Twice the cap
-	// holds any document the ruling would accept, plus the host and filename.
+	// holds any document the rule would accept, plus the host and filename.
 	maxEnvelopeBytes = 2*maxDocBytes + (1 << 16)
 	// maxSmallBodyBytes bounds every OTHER JSON envelope the localhost API
 	// accepts — contract remove, edge name, Connect, flag, finding ack. All of
@@ -71,8 +71,8 @@ const (
 // decoder then saw a string cut off mid-way, reported an unexpected EOF, and
 // every oversized upload came back as "not valid JSON". The 413 branch was
 // reachable only for envelopes inside the 64 KiB between the document cap and
-// the reader's: a 9 MB document reproduced it through the UI on 2026-09-07
-// (launch-week item 6). MaxBytesReader also tells the server to close the
+// the reader's: a 9 MB document reproduced it through the UI on 2026-09-07.
+// MaxBytesReader also tells the server to close the
 // connection after the reply instead of draining the rest of the upload.
 func readJSONBody(w http.ResponseWriter, r *http.Request, limit int64, dst any, tooLargeCode, tooLargeMsg string) bool {
 	return decodeJSONBody(w, r, limit, dst, tooLargeCode, tooLargeMsg, false)
@@ -305,10 +305,10 @@ func (e *uiExtension) readContractUpload(w http.ResponseWriter, r *http.Request)
 	summary, err := drift.DescribeSpec([]byte(req.Document))
 	if err != nil {
 		// The parser's reason — which line, which key — goes to the log; the
-		// response carries the deck's sentence and nothing after it. It used to
+		// response carries the one fixed sentence and nothing after it. It used to
 		// append the parser's own text ("failed to unmarshal data: json error:
-		// … yaml error: …"), which put Go's voice in the operator's UI (QA walk
-		// finding NB-2, 2026-09-07). Every error on this surface is one sentence.
+		// … yaml error: …"), which put Go's voice in the operator's UI
+		// (2026-09-07). Every error on this surface is one sentence.
 		e.telemetry.Logger.Info("contracts: refused an unparseable document for " + host +
 			uploadFilenameNote(req.Filename) + ": " + err.Error())
 		writeErr(w, http.StatusBadRequest, "unparseable_document", msgContractUnparseable)

@@ -7,9 +7,9 @@ import (
 )
 
 // allRules is every rule id this package can put on a Change, listed by hand.
-// Listing them here rather than ranging over rbTable is the point: the table
+// Listing them here rather than ranging over severityTable is the point: the table
 // cannot vouch for its own completeness, so the two lists are independent and
-// TestRBTableIsTotal fails when a new rule is added to one and not the other.
+// TestSeverityTableIsTotal fails when a new rule is added to one and not the other.
 var allRules = []string{
 	RuleOperationRemoved, RuleOperationRenamed, RuleOperationAdded,
 	RuleCatalogMovedBehindMetaTools,
@@ -29,15 +29,15 @@ var allRules = []string{
 	RuleDescriptionChanged,
 }
 
-// TestRBTableIsTotal: every rule has exactly one ruled (kind, severity), and
-// the table holds no row for a rule that does not exist. A rule with no ruled
+// TestSeverityTableIsTotal: every rule has exactly one (kind, severity), and
+// the table holds no row for a rule that does not exist. A rule with no
 // severity must never be published as though it had one, so the gap is a test
 // failure rather than a runtime default.
-func TestRBTableIsTotal(t *testing.T) {
+func TestSeverityTableIsTotal(t *testing.T) {
 	for _, r := range allRules {
 		v, ok := lookup(r)
 		if !ok {
-			t.Errorf("rule %q has no row in R-B's table", r)
+			t.Errorf("rule %q has no row in the severity table", r)
 			continue
 		}
 		if v.kind == "" {
@@ -54,20 +54,19 @@ func TestRBTableIsTotal(t *testing.T) {
 	for _, r := range allRules {
 		known[r] = true
 	}
-	for r := range rbTable {
+	for r := range severityTable {
 		if !known[r] {
-			t.Errorf("R-B's table has a row for %q, which is not a rule this package emits", r)
+			t.Errorf("the severity table has a row for %q, which is not a rule this package emits", r)
 		}
 	}
-	if len(rbTable) != len(allRules) {
-		t.Errorf("table has %d rows, %d rules exist", len(rbTable), len(allRules))
+	if len(severityTable) != len(allRules) {
+		t.Errorf("table has %d rows, %d rules exist", len(severityTable), len(allRules))
 	}
 }
 
-// TestKindNeverImpliesSeverity is R-A stated as a test: knowing the kind must
+// TestKindNeverImpliesSeverity states as a test that knowing the kind must
 // not let you infer the severity. If every kind collapsed onto a single
-// severity the two fields would be one field again, which is the state R-A
-// was issued to end.
+// severity the two fields would be one field again, which is the state the split exists to end.
 func TestKindNeverImpliesSeverity(t *testing.T) {
 	sevsByKind := map[Kind]map[Severity]bool{}
 	for _, r := range allRules {
@@ -112,8 +111,8 @@ func TestSeverityIsStampedNotHandWritten(t *testing.T) {
 	}
 }
 
-// TestOutputOptionalPropertyRemoved_IsWarning is the cell R-B added. Before
-// the ruling this emitted NOTHING: the posture was that an optional output
+// TestOutputOptionalPropertyRemoved_IsWarning is a cell the severity table added. Before
+// it, this emitted NOTHING: the posture was that an optional output
 // field is a value consumers were never promised, so a provider could stop
 // declaring a field consumers were reading and the diff stayed silent.
 func TestOutputOptionalPropertyRemoved_IsWarning(t *testing.T) {
@@ -124,16 +123,16 @@ func TestOutputOptionalPropertyRemoved_IsWarning(t *testing.T) {
 		t.Errorf("kind = %q, want %q", c.Kind, KindOutput)
 	}
 	if !c.Reported {
-		t.Error("an optional output removal is reported under R-B")
+		t.Error("an optional output removal is reported")
 	}
 	if !reflect.DeepEqual(c.Before, map[string]any{"type": "string"}) {
 		t.Errorf("before fragment = %v, want the removed property's schema", c.Before)
 	}
 }
 
-// TestOutputEnumValueAdded_IsWarning: Idan 2026-09-17. It used to be
+// TestOutputEnumValueAdded_IsWarning: it used to be
 // NON_BREAKING here while the package comment asserted the opposite ("EVERY
-// output cell is breaking"); the ruling settles it at WARNING and the prose
+// output cell is breaking"); it is now WARNING and the prose
 // was corrected to match.
 func TestOutputEnumValueAdded_IsWarning(t *testing.T) {
 	before := mkTools(t, oneTool("", `{"type":"object","properties":{"s":{"type":"string","enum":["a","b"]}}}`))
@@ -144,7 +143,7 @@ func TestOutputEnumValueAdded_IsWarning(t *testing.T) {
 	}
 }
 
-// TestInputFamilyIsInfoExceptNewRequired is Idan's ruling of 2026-09-17 in one
+// TestInputFamilyIsInfoExceptNewRequired states the input family's rule in one
 // place: every input change is INFO except a new REQUIRED param (WARNING) and
 // the additive cells (unreported). In particular an input removal is INFO even
 // when the new schema declares additionalProperties:false — the caller
@@ -176,7 +175,7 @@ func TestInputFamilyIsInfoExceptNewRequired(t *testing.T) {
 	}
 }
 
-// TestTrivialWordingChange is R-B's "ignore diffs that are whitespace-, case-
+// TestTrivialWordingChange is the table's "ignore diffs that are whitespace-, case-
 // or punctuation-only". The first case is the real one it was written for:
 // a2awire-weather / data_session_open on 2026-09-08, whose entire published
 // wording finding was an em dash becoming a hyphen — and which was that
@@ -210,7 +209,7 @@ func TestTrivialWordingChange(t *testing.T) {
 }
 
 // TestReportableAndHighest: published counts are computed over Reportable, and
-// an R-D change event carries the HIGHEST severity of its findings.
+// a change event carries the HIGHEST severity of its findings.
 func TestReportableAndHighest(t *testing.T) {
 	cs := []Change{
 		{Rule: RuleOperationAdded}, {Rule: RuleInputPropertyRenamed},

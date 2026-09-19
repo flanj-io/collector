@@ -1,6 +1,6 @@
 name: ci
 
-# Per-PR CI for the collector. Fixtures-only — never needs the private control-plane (flag POST is
+# Per-PR CI for the collector. Fixtures-only — never needs a live control plane (flag POST is
 # tested against a stub). Builds the multi-stage image, runs Go unit + contract tests (ingest
 # contracts/golden-otlp-call.json -> expected Finding; redaction vs vectors), and checks the
 # operator doc still matches the config surface, lints the Helm chart and smokes the tiered shape it
@@ -16,8 +16,7 @@ permissions:
 
 # Actions-minutes budget: without this, pushing three times to a branch runs three full
 # pipelines to completion — nothing supersedes anything. Cancel only on pull_request, so every
-# commit on main keeps its own verdict instead of "cancelled". (This used to be about the e2e
-# dispatch a main push fired; there is none since 2026-09-13.)
+# commit on main keeps its own verdict instead of "cancelled".
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -37,7 +36,7 @@ jobs:
           # --no-merges: a merge commit contributes no authored content — the
           # commits it brings in carry their own sign-offs — and nothing that
           # creates one signs it: not GitHub's "Update branch" button, not the
-          # `git merge origin/main` this workspace prescribes for resolving a
+          # `git merge origin/main` commonly used to resolve a
           # conflict. Without this, syncing a PR with main reds its own DCO
           # check, and the only way out is force-pushing an amended merge onto
           # a shared branch. The upstream DCO app skips merges for the same

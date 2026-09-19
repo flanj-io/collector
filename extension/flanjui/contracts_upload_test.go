@@ -71,7 +71,7 @@ func TestUploadStoresAContractBoundToItsHost(t *testing.T) {
 	}
 }
 
-// TestUploadNeverReachesTheControlPlane is the ruling under test. Uploaded
+// TestUploadNeverReachesTheControlPlane is the rule under test. Uploaded
 // contracts stay on the collector; a document that left would be the whole
 // feature betrayed, so this asserts it at the wire.
 func TestUploadNeverReachesTheControlPlane(t *testing.T) {
@@ -98,10 +98,10 @@ func TestUploadNeverReachesTheControlPlane(t *testing.T) {
 // document reaching a row costs that host detection at a point the operator can
 // no longer see the error.
 //
-// The response is the deck's sentence and nothing after it. It used to carry
+// The response is the fixed sentence and nothing after it. It used to carry
 // the parser's own text appended ("failed to unmarshal data: json error: …
-// yaml error: …"), which is Go's voice in the operator's UI (QA walk finding
-// NB-2, 2026-09-07); the reason still matters, so it goes to the log.
+// yaml error: …"), which is Go's voice in the operator's UI
+// (2026-09-07); the reason still matters, so it goes to the log.
 func TestUploadRefusesAnUnparseableDocumentAndPersistsNothing(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
@@ -119,7 +119,7 @@ func TestUploadRefusesAnUnparseableDocumentAndPersistsNothing(t *testing.T) {
 		t.Errorf("error = %v, want unparseable_document", out["error"])
 	}
 	if msg, _ := out["message"].(string); msg != msgContractUnparseable {
-		t.Errorf("message = %q, want exactly the deck's sentence %q", msg, msgContractUnparseable)
+		t.Errorf("message = %q, want exactly the fixed sentence %q", msg, msgContractUnparseable)
 	}
 
 	// The parser's reason is logged, with the binding it was refused for.
@@ -490,7 +490,7 @@ func paddedDoc(t *testing.T, n int) string {
 // fronts. The ceiling is on the DOCUMENT, and it is exact: at the cap uploads,
 // one byte over is refused — as 413 document_too_large, whatever the size.
 //
-// Launch-week item 6 (reproduced through the UI, 2026-09-07): the envelope
+// Reproduced through the UI, 2026-09-07: the envelope
 // used to be read through io.LimitReader, which truncates silently, so a 9 MB
 // document decoded as JSON cut off mid-string and came back 400 invalid_json
 // ("The request body is not valid JSON."). The 413 was reachable only for
@@ -537,7 +537,7 @@ func TestUploadCapsDocumentSize(t *testing.T) {
 				t.Errorf("error = %v, want document_too_large", out["error"])
 			}
 			if out["message"] != msgContractTooLarge {
-				t.Errorf("message = %v, want the deck's sentence", out["message"])
+				t.Errorf("message = %v, want the fixed sentence", out["message"])
 			}
 			if infos, _ := r.st.ListSpecInfos(); len(infos) != 0 {
 				t.Errorf("an oversized document was persisted: %+v", infos)
@@ -561,7 +561,7 @@ func TestRemoveCapsItsBody(t *testing.T) {
 		t.Fatalf("status = %d, want 413: %.200s", resp.StatusCode, raw)
 	}
 	if out["error"] != "request_too_large" || out["message"] != msgRequestTooLarge {
-		t.Errorf("body = %v, want request_too_large with the deck's sentence", out)
+		t.Errorf("body = %v, want request_too_large with the fixed sentence", out)
 	}
 }
 

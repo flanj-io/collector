@@ -23,8 +23,8 @@ import (
 // intra-cluster listener (flanjstore `spec_endpoint`) — never the UI's, which
 // stays loopback.
 //
-// Deliberately shaped like the deferred CP-side per-domain fetch
-// (architecture.md §6, Addendum 4 ruling 3): "here are the hosts I see, send me
+// Deliberately shaped like the deferred CP-side per-domain fetch:
+// "here are the hosts I see, send me
 // their contracts". When that lands it is a second implementation of this
 // interface, not a second channel.
 type remoteSpecSource struct {

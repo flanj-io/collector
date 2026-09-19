@@ -1,9 +1,9 @@
 /**
- * The Connect panel's edge-registration disclosure (v1 phase 2 — CONTRACTS §5,
+ * The Connect panel's edge-registration disclosure (CONTRACTS §5,
  * `POST /api/v1/edges/sync`).
  *
  * Connecting starts a second thing leaving this collector besides findings: the
- * EXTERNAL domains it has discovered, registered so the owner's control-plane
+ * EXTERNAL domains it has discovered, registered so the operator's control-plane
  * dashboard can show the integration graph before anything has broken. That is
  * a data flow the operator must read BEFORE they Connect, not discover
  * afterwards — so the line renders in the panel in every state, disconnected
@@ -25,7 +25,7 @@ export interface EdgeDisclosure {
   state: 'on' | 'off';
 }
 
-/** The on-copy, verbatim — the spec's sentence (`v1-build-spec.md` §3 Step 2). */
+/** The on-copy, verbatim — the exact sentence. */
 export const EDGE_REGISTRATION_DISCLOSURE =
   'This collector registers the external domains it observes — never calls, bodies, or payloads. Internal edges never leave.';
 
