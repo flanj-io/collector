@@ -60,7 +60,7 @@ export interface CoverageEdge {
 
 /** The collector files REST contracts only — an OpenAPI document, uploaded or
  *  fetched. An MCP server's tools/list arrives with the traffic and is not
- *  filed (ruling, 2026-09-19), so every string that asks for a document says
+ *  filed, so every string that asks for a document says
  *  REST, and names the format it means. */
 export const ADD_CONTRACT = 'Add REST contract';
 export const REPLACE_CONTRACT = 'Replace';

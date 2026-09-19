@@ -1114,7 +1114,7 @@ const versionDiffFindings = computed(() => findings.value.filter((f) => f.kind =
 // tools/list arrives with the traffic and is stored as an MCP catalogue, apart
 // from the REST contracts (listed by /api/contracts with format "mcp"), so the
 // Contracts tab lists the server (title = serverInfo.name) and this UI needs
-// no spec file. It is not a filed contract (ruling 2026-09-19).
+// no spec file. It is not a filed contract.
 const mcpContracts = computed(() => contracts.value.filter((s) => s.format === 'mcp'));
 
 const mcpFindings = computed(() => findings.value.filter((f) => isMcpFinding(f)));
