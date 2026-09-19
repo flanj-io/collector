@@ -38,6 +38,7 @@ import {
   mcpBadgeLabel,
   mcpContractMeta,
   metaCatalogLabel,
+  metaCatalogMeta,
   isSearchCatalog,
   mcpCorrelationCount,
   mcpDefaultMessage,
@@ -356,6 +357,20 @@ describe('deck §3 — contracts', () => {
     expect(metaCatalogLabel(1)).toBe('MCP · catalog behind meta-tools — observed 1 tool');
     expect(isSearchCatalog({ source: 'search_result' })).toBe(true);
     expect(isSearchCatalog({ source: 'observed' })).toBe(false);
+  });
+
+  // A catalog row carries serverInfo.version too (internal/drift/meta.go), which is optional:
+  // with one, the line is unchanged — the version is the heading chip, as on a tools/list card.
+  it('a catalog card with a version reads as before', () => {
+    expect(metaCatalogMeta(2, 'now', '1.2.0')).toBe('MCP · catalog behind meta-tools — observed 2 tools · updated now');
+  });
+
+  // Idan, 2026-09-19: a catalog whose server sends no version says so.
+  it('a catalog card says "version not specified" when serverInfo carries no version', () => {
+    for (const none of [undefined, '', '  ']) {
+      expect(metaCatalogMeta(2, 'now', none))
+        .toBe('MCP · catalog behind meta-tools — observed 2 tools · version not specified · updated now');
+    }
   });
 
   it('per-tool rows from the snapshot document', () => {

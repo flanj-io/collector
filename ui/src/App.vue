@@ -93,6 +93,7 @@ import {
   mcpBadgeLabel,
   mcpContractMeta,
   metaCatalogLabel,
+  metaCatalogMeta,
   isSearchCatalog,
   serverCommandLine,
   mcpHeadline,
@@ -1934,7 +1935,7 @@ watch(tab, (t) => {
               API docs ↗
             </a>
             <template v-if="p.spec.format === 'mcp'">
-              <span v-if="isSearchCatalog(p.spec)" class="prov-meta meta-catalog">{{ metaCatalogLabel(p.spec.endpoints || 0) }} · updated {{ humanTime(p.spec.loaded_at) }}</span>
+              <span v-if="isSearchCatalog(p.spec)" class="prov-meta meta-catalog">{{ metaCatalogMeta(p.spec.endpoints || 0, humanTime(p.spec.loaded_at), p.spec.version) }}</span>
               <template v-else>
                 <span class="prov-meta">{{ mcpContractMeta(p.spec.endpoints || 0, humanTime(p.spec.loaded_at), p.spec.version) }}</span>
                 <span v-if="searchCatalogByHost.has(p.peerHost)" class="prov-meta meta-catalog">{{ metaCatalogLabel(searchCatalogByHost.get(p.peerHost) || 0) }}</span>
