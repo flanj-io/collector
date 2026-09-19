@@ -122,6 +122,11 @@ func (e *storeExporter) writeOne(res pcommon.Resource, lr plog.LogRecord) (strin
 				zap.String("kind", f.Kind), zap.String("signature", f.Signature))
 			return "finding", "", nil
 		}
+		// A front marks a finding born from an inbound call; the store keeps
+		// that on the row whether or not the call ever arrives.
+		if otlpattr.FindingInbound(lr) {
+			return "finding", f.ID, e.st.InsertInboundFinding(f)
+		}
 		return "finding", f.ID, e.st.InsertFinding(f)
 	case otlpattr.RecordTypeSpecInfo:
 		// Contract metadata from a front collector (tiered topology). Both

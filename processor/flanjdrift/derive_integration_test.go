@@ -159,3 +159,61 @@ func TestDerive_InboundKeysByServiceName(t *testing.T) {
 		}
 	}
 }
+
+// A finding born from an INBOUND call leaves the processor marked as such on
+// its internal finding record — the fact that keeps its service-name key off
+// the control-plane wire even when the store never holds the call. The marker
+// is an attribute of the record, never a field of the finding's JSON, and it
+// survives the front→store hop (the OTLP encoding round-trip below).
+func TestDerive_InboundFindingRecordCarriesTheMarker(t *testing.T) {
+	const marker = "flanj.finding.inbound" // otlpattr.AttrFindingInbound
+	self, err := drift.LoadSpecData(specV1(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := processorWith(t, map[string][]byte{"api.acme.test": specV1(t)})
+	p.selfDoc = self
+	in := goldenBatchWith(t, otlpattr.AttrDirection, "server")
+	in.ResourceLogs().At(0).Resource().Attributes().PutStr(otlpattr.ResourceServiceName, "orders-svc")
+	out := goldenCallBatch(t) // outbound, same drift, against the provider contract
+	for _, c := range []struct {
+		name string
+		ld   plog.Logs
+		want bool
+	}{{"inbound", in, true}, {"outbound", out, false}} {
+		processed, err := p.processLogs(context.Background(), c.ld)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wire, err := (&plog.ProtoMarshaler{}).MarshalLogs(processed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hopped, err := (&plog.ProtoUnmarshaler{}).UnmarshalLogs(wire)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := 0
+		rls := hopped.ResourceLogs()
+		for i := 0; i < rls.Len(); i++ {
+			recs := rls.At(i).ScopeLogs().At(0).LogRecords()
+			for k := 0; k < recs.Len(); k++ {
+				lr := recs.At(k)
+				if otlpattr.RecordType(lr) != otlpattr.RecordTypeFinding {
+					continue
+				}
+				found++
+				v, ok := lr.Attributes().Get(marker)
+				if got := ok && v.Bool(); got != c.want {
+					t.Errorf("%s finding record: %s = %v (present %v), want %v", c.name, marker, got, ok, c.want)
+				}
+				if raw, _ := lr.Attributes().Get(otlpattr.AttrFindingJSON); strings.Contains(raw.Str(), "inbound") {
+					t.Errorf("%s finding JSON carries the marker: %s", c.name, raw.Str())
+				}
+			}
+		}
+		if found != 1 {
+			t.Fatalf("%s: finding records = %d, want 1", c.name, found)
+		}
+	}
+}

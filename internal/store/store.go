@@ -85,6 +85,11 @@ type Store interface {
 	// ONE exception to the frozen doc: a definition_change whose EVIDENCE has
 	// moved on — see refreshedFindingDoc.
 	InsertFinding(f model.Finding) error
+	// InsertInboundFinding is InsertFinding for a finding born from an INBOUND
+	// call (the finding record's otlpattr.AttrFindingInbound): the same insert,
+	// and findings.inbound set on its row in the same transaction — whether or
+	// not the call is ever stored. Never cleared by a later InsertFinding.
+	InsertInboundFinding(f model.Finding) error
 	// MarkPromoted implements evict-after-promote: unpin + stamp promoted_at.
 	MarkPromoted(id string) error
 	GetCall(id string) (model.RedactedCall, bool, error)

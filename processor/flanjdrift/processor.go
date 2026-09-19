@@ -12,6 +12,7 @@ import (
 
 	"github.com/flanj-io/collector/internal/condition"
 	"github.com/flanj-io/collector/internal/drift"
+	"github.com/flanj-io/collector/internal/integration"
 	"github.com/flanj-io/collector/internal/model"
 	"github.com/flanj-io/collector/internal/otlpattr"
 	"github.com/flanj-io/collector/internal/store"
@@ -409,6 +410,19 @@ func specInfoFor(doc *openapi3.T, role, integration, peerHost string) model.Spec
 func (p *driftProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.Logs, error) {
 	var findings []model.Finding
 	var mcpSpecs []specInfoRecord
+	// The findings born from an INBOUND call (any direction "server" call —
+	// MCP included — fails closed): their records carry the inbound marker, so
+	// the store keeps their service-name key off the wire even if it never
+	// holds the call.
+	inbound := map[string]bool{}
+	markInbound := func(call model.RedactedCall, fs []model.Finding) {
+		if call.Direction != integration.DirectionServer {
+			return
+		}
+		for _, f := range fs {
+			inbound[f.ID] = true
+		}
+	}
 
 	rls := ld.ResourceLogs()
 	for i := 0; i < rls.Len(); i++ {
@@ -495,6 +509,7 @@ func (p *driftProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.Logs
 					}
 					j := p.mcp.Judge(call)
 					findings = append(findings, j.Findings...)
+					markInbound(call, j.Findings)
 					otlpattr.StampValidated(lr, j.Validation)
 					// A dispatcher call judged as the inner
 					// tool it named is STORED as that tool too, the dispatcher
@@ -548,6 +563,7 @@ func (p *driftProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.Logs
 					// by host, so the two never share a signature, and the flag
 					// relay sends "self" in place of the service name.
 					findings = append(findings, fs...)
+					markInbound(call, fs)
 					otlpattr.StampValidated(lr, verdict)
 					continue
 				}
@@ -591,7 +607,7 @@ func (p *driftProcessor) processLogs(_ context.Context, ld plog.Logs) (plog.Logs
 	// Findings the refresh loop produced since the last batch ride this one.
 	findings = append(findings, p.takeHeldFindings()...)
 	if len(findings) > 0 || len(specs) > 0 {
-		appendRecords(ld, findings, specs)
+		appendRecords(ld, findings, specs, inbound)
 	}
 	return ld, nil
 }
@@ -615,12 +631,15 @@ func (p *driftProcessor) dueSpecInfos(now time.Time) []specInfoRecord {
 // appendRecords writes each Finding and spec_info as its own log record under a
 // fresh trailing ResourceLogs/ScopeLogs so they never collide with the in-flight
 // call records (and calls stay ahead of findings within the batch).
-func appendRecords(ld plog.Logs, findings []model.Finding, specs []specInfoRecord) {
+func appendRecords(ld plog.Logs, findings []model.Finding, specs []specInfoRecord, inbound map[string]bool) {
 	sl := ld.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty()
 	sl.Scope().SetName("flanjdrift")
 	for _, f := range findings {
 		lr := sl.LogRecords().AppendEmpty()
 		_ = otlpattr.FindingToRecord(lr, f)
+		if inbound[f.ID] {
+			otlpattr.MarkFindingInbound(lr)
+		}
 	}
 	for _, si := range specs {
 		lr := sl.LogRecords().AppendEmpty()

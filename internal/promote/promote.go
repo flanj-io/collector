@@ -145,7 +145,9 @@ func Build(in Input) FlagRequest {
 	// it from a copy — never from the caller's call. An inbound call and a
 	// finding raised against the self spec are KEYED by that name locally, so
 	// both copies carry "self" instead, and the finding's signature (which
-	// starts with the key) is recomputed with it.
+	// starts with the key) is recomputed with it. Deliberately fail-closed: ANY
+	// inbound call relays as "self", an MCP one included although MCP keys by
+	// host — a lost label is recoverable, a leaked service name is not.
 	selfKeyed := in.Inbound || (in.Call != nil && in.Call.Direction == integration.DirectionServer)
 	var call *model.RedactedCall
 	if in.Call != nil {

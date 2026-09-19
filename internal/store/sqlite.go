@@ -326,7 +326,16 @@ func (s *sqliteStore) upsertEdgeLocked(peerHost, direction, class, at string) er
 // failed write, a front re-sending after a lost ACK — changes nothing the
 // second time. Every statement runs in one transaction, so a write that fails
 // half-way leaves no ledger row behind and the retry applies the finding in full.
-func (s *sqliteStore) InsertFinding(f model.Finding) (err error) {
+func (s *sqliteStore) InsertFinding(f model.Finding) error {
+	return s.insertFinding(f, false)
+}
+
+// InsertInboundFinding: see Store.InsertInboundFinding.
+func (s *sqliteStore) InsertInboundFinding(f model.Finding) error {
+	return s.insertFinding(f, true)
+}
+
+func (s *sqliteStore) insertFinding(f model.Finding, inbound bool) (err error) {
 	defer func() { err = classify(err) }() // ErrRejected on a constraint the ON CONFLICT does not absorb
 	if f.Signature == "" {
 		f.Signature = f.ComputeSignature()
@@ -389,6 +398,13 @@ func (s *sqliteStore) InsertFinding(f model.Finding) (err error) {
 	)
 	if err != nil {
 		return fmt.Errorf("insert finding: %w", err)
+	}
+	// The row exists now, new or deduped: an inbound record sets the mark on
+	// it. Only ever set — an unmarked occurrence leaves it alone.
+	if inbound {
+		if _, err := tx.Exec(s.rebind(`UPDATE findings SET inbound=1 WHERE signature=? AND inbound=0`), f.Signature); err != nil {
+			return fmt.Errorf("mark inbound finding: %w", err)
+		}
 	}
 	// mark-on-finding: THIS call drifted, whether or not its signature is new.
 	// Distinct from the pin, which marks the ONE representative call kept

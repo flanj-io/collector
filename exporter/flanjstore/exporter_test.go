@@ -139,6 +139,14 @@ func (f *flakyStore) InsertFinding(fd model.Finding) error {
 	return f.Store.InsertFinding(fd)
 }
 
+func (f *flakyStore) InsertInboundFinding(fd model.Finding) error {
+	f.note(fd.ID)
+	if err := f.gate(); err != nil {
+		return err
+	}
+	return f.Store.InsertInboundFinding(fd)
+}
+
 // storeProvider is the flanjstore EXTENSION as the exporter sees it.
 type storeProvider struct{ st store.Store }
 

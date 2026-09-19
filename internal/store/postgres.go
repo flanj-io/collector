@@ -337,7 +337,16 @@ func (p *postgresStore) upsertEdgeTx(tx *sql.Tx, peerHost, direction, class, at 
 // ACK, the same batch landing on two pods — applies nothing the second time.
 // The ledger row commits with the finding or not at all, so a write that fails
 // half-way leaves nothing behind for the retry to trip over.
-func (p *postgresStore) InsertFinding(f model.Finding) (err error) {
+func (p *postgresStore) InsertFinding(f model.Finding) error {
+	return p.insertFinding(f, false)
+}
+
+// InsertInboundFinding: see Store.InsertInboundFinding.
+func (p *postgresStore) InsertInboundFinding(f model.Finding) error {
+	return p.insertFinding(f, true)
+}
+
+func (p *postgresStore) insertFinding(f model.Finding, inbound bool) (err error) {
 	defer func() { err = classify(err) }() // ErrRejected on SQLSTATE class 23/22
 	if f.Signature == "" {
 		f.Signature = f.ComputeSignature()
@@ -398,6 +407,13 @@ func (p *postgresStore) InsertFinding(f model.Finding) (err error) {
 	)
 	if err != nil {
 		return fmt.Errorf("insert finding: %w", err)
+	}
+	// The row exists now, new or deduped: an inbound record sets the mark on
+	// it. Only ever set — an unmarked occurrence leaves it alone.
+	if inbound {
+		if _, err := tx.Exec(p.rebind(`UPDATE findings SET inbound=1 WHERE signature=? AND inbound=0`), f.Signature); err != nil {
+			return fmt.Errorf("mark inbound finding: %w", err)
+		}
 	}
 	// mark-on-finding: THIS call drifted, whether or not its signature is new.
 	// Distinct from the pin, which marks the ONE representative call kept

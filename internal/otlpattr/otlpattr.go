@@ -491,6 +491,28 @@ func FindingToRecord(lr plog.LogRecord, f model.Finding) error {
 	return nil
 }
 
+// AttrFindingInbound marks a finding record whose finding was born from an
+// INBOUND call: raised against the self spec and keyed by the service the call
+// reached, a name that never leaves the collector (CONTRACTS §3). It is an
+// attribute of the collector's own finding record — the processor→exporter
+// path and the tiered front→store hop — and never part of the finding's JSON,
+// so it cannot reach the control plane. The store persists it
+// (store.Store.InsertInboundFinding) whether or not the call is ever stored.
+const AttrFindingInbound = "flanj.finding.inbound"
+
+// MarkFindingInbound stamps AttrFindingInbound on a finding record.
+func MarkFindingInbound(lr plog.LogRecord) {
+	lr.Attributes().PutBool(AttrFindingInbound, true)
+}
+
+// FindingInbound reports whether a finding record carries AttrFindingInbound.
+// Absent (every record from an older front) is false; the store's own join on
+// the source call's direction still applies then.
+func FindingInbound(lr plog.LogRecord) bool {
+	v, ok := lr.Attributes().Get(AttrFindingInbound)
+	return ok && v.Type() == pcommon.ValueTypeBool && v.Bool()
+}
+
 // FindingFromRecord reconstructs a Finding from a "finding" log record.
 func FindingFromRecord(lr plog.LogRecord) (model.Finding, error) {
 	var f model.Finding
