@@ -87,6 +87,8 @@ import {
   isLocalNotice,
   staysLocalAsInfo,
   INFO_STAYS_LOCAL,
+  identifiableServerRefs,
+  serviceSlices,
   isMcpCall,
   isMcpFinding,
   localNoticesSubFor,
@@ -577,6 +579,7 @@ const fStatus = ref('');
 const fContract = ref('');
 const fDirection = ref('');
 const fPeer = ref('');
+const fService = ref('');
 const hideHealth = ref(false);
 
 const callsById = computed(() => {
@@ -755,6 +758,12 @@ const methodOptions = computed(() =>
   Array.from(new Set(calls.value.map((c) => methodFacetOf(c)))).sort()
 );
 
+// The caller's service.name, Datadog-style: which of this deployment's own
+// services made the call. Local only (CONTRACTS §3).
+const serviceOptions = computed(() =>
+  Array.from(new Set(calls.value.map((c) => c.service_name).filter(Boolean) as string[])).sort()
+);
+
 const peerOptions = computed(() =>
   Array.from(new Set(calls.value.map((c) => c.peer_host).filter(Boolean) as string[])).sort()
 );
@@ -777,6 +786,7 @@ const filtersActive = computed(
       fContract.value ||
       fDirection.value ||
       fPeer.value ||
+      fService.value ||
       hideHealth.value
     )
 );
@@ -797,6 +807,7 @@ const filteredCalls = computed(() => {
     if (fContract.value === 'not-checked' && coverageOf(c) !== 'not-checked') return false;
     if (fDirection.value && c.direction !== fDirection.value) return false;
     if (fPeer.value && c.peer_host !== fPeer.value) return false;
+    if (fService.value && c.service_name !== fService.value) return false;
     if (hideHealth.value && HEALTH_RE.test(c.route || c.url || '')) return false;
     if (include.length || exclude.length) {
       const hay = [
@@ -805,6 +816,7 @@ const filteredCalls = computed(() => {
         c.url,
         String(c.status_code),
         c.integration,
+        c.service_name,
         c.peer_host,
         c.direction === 'server' ? 'inbound' : c.direction === 'client' ? 'outbound' : '',
         c.correlation?.request_id,
@@ -831,6 +843,7 @@ function clearFilters() {
   fContract.value = '';
   fDirection.value = '';
   fPeer.value = '';
+  fService.value = '';
   hideHealth.value = false;
 }
 
@@ -1140,23 +1153,36 @@ const mcpHosts = computed(() => {
 // Per-server MCP health headline (deck §2): output mismatch → definition
 // change (breaking, no calls affected yet) → nothing validated yet (neutral)
 // → clean. Three tones, like the REST line above it.
-const mcpOverview = computed(() =>
-  mcpContracts.value.map((s) => ({
-    key: s.integration,
-    headline: mcpHeadline(
-      // Same origin rule as the Contracts card, from the same function — so the
-      // two surfaces cannot drift apart and render two identical health lines
-      // for two different servers again.
-      { name: s.title || s.integration, version: s.version, origin: contractOrigin(s) },
-      mcpFindings.value.filter((f) => f.integration === s.integration),
-      humanTime,
-      // Evidence for THIS server only: its own validated tool calls. Zero is
-      // the neutral state — a snapshot that has judged nothing is not an
-      // all-clear, however complete the Contracts card beside it looks.
-      calls.value.filter((c) => isMcpCall(c) && c.integration === s.integration && isValidated(c)).length
-    )
-  }))
-);
+const mcpOverview = computed(() => {
+  // One line per (contract row, calling service) — serviceSlices in
+  // ui/src/mcp.ts decides which of the row's findings each line reports.
+  const lines = mcpContracts.value.flatMap((s) => {
+    const rowCalls = calls.value
+      .filter((c) => isMcpCall(c) && c.integration === s.integration)
+      .map((c) => ({ service: c.service_name || '', tool: toolNameOf(c), drifted: isDrifted(c), validated: isValidated(c) }));
+    const rowFindings = mcpFindings.value.filter((f) => f.integration === s.integration);
+    return serviceSlices(rowFindings, rowCalls).map((slice) => ({ s, slice }));
+  });
+  // Same origin rule as the Contracts card, from the same function — so the
+  // two surfaces cannot drift apart and render two identical health lines
+  // for two different servers again.
+  const refs = identifiableServerRefs(
+    lines.map(({ s, slice }) => ({
+      name: s.title || s.integration,
+      version: s.version,
+      origin: contractOrigin(s),
+      service: slice.service,
+      integration: s.integration
+    }))
+  );
+  return lines.map(({ s, slice }, i) => ({
+    key: s.integration + '|' + slice.service,
+    // Evidence for THIS line only: the validated calls of this service to this
+    // server. Zero is the neutral state — a snapshot that has judged nothing is
+    // not an all-clear, however complete the Contracts card beside it looks.
+    headline: mcpHeadline(refs[i], slice.findings, humanTime, slice.validatedCalls)
+  }));
+});
 
 // Local notices (deck §2): stale_client ONLY since qfix2-2026-08-26. A
 // DESCRIPTION definition change is now flaggable, so it cannot sit under a band
@@ -2309,6 +2335,10 @@ watch(tab, (t) => {
               <option value="server">inbound</option>
               <option value="client">outbound</option>
             </select>
+            <select v-if="serviceOptions.length" v-model="fService" class="tr-select" aria-label="Filter by service">
+              <option value="">service: all</option>
+              <option v-for="sv in serviceOptions" :key="sv" :value="sv">{{ sv }}</option>
+            </select>
             <select v-model="fPeer" class="tr-select" aria-label="Filter by counterparty">
               <option value="">counterparty: all</option>
               <option v-for="p in peerOptions" :key="p" :value="p">{{ internalPeers.has(p) ? p + ' · internal' : p }}</option>
@@ -2453,6 +2483,10 @@ watch(tab, (t) => {
                   </span>
                 </span>
                 <span class="dim">·</span>
+                <template v-if="c.service_name">
+                  <span>service <code>{{ c.service_name }}</code></span>
+                  <span class="dim">·</span>
+                </template>
                 <span>integration <code>{{ c.integration }}</code></span>
                 <span class="dim">·</span>
                 <span v-if="c.redaction?.applied" class="redacted-tag">

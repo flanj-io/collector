@@ -7,6 +7,7 @@ import (
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/consumer/consumererror"
+	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.uber.org/zap"
 
@@ -69,11 +70,12 @@ func (e *storeExporter) consumeLogs(_ context.Context, ld plog.Logs) error {
 	idx := 0 // flat record index across all resource/scope groups
 	rls := ld.ResourceLogs()
 	for i := 0; i < rls.Len(); i++ {
+		res := rls.At(i).Resource()
 		sls := rls.At(i).ScopeLogs()
 		for j := 0; j < sls.Len(); j++ {
 			recs := sls.At(j).LogRecords()
 			for k := 0; k < recs.Len(); k, idx = k+1, idx+1 {
-				kind, id, err := e.writeOne(recs.At(k))
+				kind, id, err := e.writeOne(res, recs.At(k))
 				if err == nil {
 					continue
 				}
@@ -105,7 +107,9 @@ func (e *storeExporter) consumeLogs(_ context.Context, ld plog.Logs) error {
 // id — for the caller's log line and nothing else — and the store's error, or
 // nil for a record dropped here (undecodable, id-less, or not a flanj call at
 // all): those are unfixable by a retry and cost the rest of the batch nothing.
-func (e *storeExporter) writeOne(lr plog.LogRecord) (string, string, error) {
+// res is the resource the record came under: a call takes its caller's
+// service.name from it (a resource attribute, never on the record itself).
+func (e *storeExporter) writeOne(res pcommon.Resource, lr plog.LogRecord) (string, string, error) {
 	switch otlpattr.RecordType(lr) {
 	case otlpattr.RecordTypeFinding:
 		f, err := otlpattr.FindingFromRecord(lr)
@@ -141,6 +145,7 @@ func (e *storeExporter) writeOne(lr plog.LogRecord) (string, string, error) {
 		// from THIS pdata, after the stamp (consumerCaps: MutatesData).
 		otlpattr.EnsureCallID(lr)
 		call := otlpattr.CallFromRecord(lr)
+		call.ServiceName = otlpattr.ServiceNameOf(res)
 		if !validCall(call) {
 			return "call", call.ID, nil
 		}
@@ -150,10 +155,10 @@ func (e *storeExporter) writeOne(lr plog.LogRecord) (string, string, error) {
 
 // remainingFrom copies the records at flat index >= from into a fresh
 // plog.Logs, keeping the resource/scope grouping each record came from (a
-// front's batch carries its resource attributes, and the store reads none of
-// them — but a retried request that flattened them would no longer be the
-// request that was received). Resource and scope groups that end up empty are
-// not created at all.
+// front's batch carries its resource attributes, and the store reads the
+// caller's service.name from them — a retried request that flattened them
+// would store its calls with no service). Resource and scope groups that end
+// up empty are not created at all.
 //
 // This is what makes the retry PARTIAL: exporterhelper's logsRequest.OnError
 // swaps the in-flight request for the logs carried by a consumererror.Logs, so

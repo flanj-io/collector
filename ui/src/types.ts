@@ -35,6 +35,9 @@ export interface RedactedCall {
   transport?: 'mcp' | string;
   mcp_tool_name?: string;
   mcp_is_error?: boolean;
+  /** The caller's OTel service.name (CONTRACTS §3, 2026-09-19): which of this
+   *  deployment's services made the call. Local only — never flagged out. */
+  service_name?: string;
   mcp_server_name?: string;
   mcp_server_version?: string;
   mcp_protocol_version?: string;

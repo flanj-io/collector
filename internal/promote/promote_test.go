@@ -412,3 +412,36 @@ func TestQuestionBody_RedactsTheMessage(t *testing.T) {
 		t.Errorf("the PAN survived the redaction floor: %q", req.Message)
 	}
 }
+
+// TestFlagBody_NeverCarriesServiceName: the caller's service.name names the
+// org's internal topology and stays on this collector (CONTRACTS §3). The call
+// rides the flag body whole, and the schema is additionalProperties:true, so
+// schema conformance cannot catch it — this pins the key's absence.
+func TestFlagBody_NeverCarriesServiceName(t *testing.T) {
+	callID := "01920000-0000-7000-8000-000000000011"
+	call := model.RedactedCall{
+		SchemaVersion: 1, ID: callID, CapturedAt: "2026-09-19T10:00:00.000Z",
+		Integration: "acme-tools", Direction: "client", PeerHost: "mcp.acme.test", EdgeClass: "external",
+		Method: "tools/call", URL: "mcp://mcp.acme.test/search", Route: "/search",
+		Transport: "mcp", MCPToolName: "search", ServiceName: "billing-worker-internal",
+	}
+	finding := model.Finding{
+		SchemaVersion: 1, ID: "01920000-0000-7000-8000-000000000012",
+		Kind: model.KindOutputMismatch, Severity: model.SeverityBreaking,
+		Integration: "acme-tools", Endpoint: "search", Rule: "type-mismatch",
+		SourceCallID: &callID, DetectedAt: "2026-09-19T10:00:01.000Z",
+	}
+	req := Build(Input{ConsumerDisplayName: "Acme Consumer Ltd", Call: &call, Finding: finding})
+	body, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leak := range []string{"service_name", "billing-worker-internal"} {
+		if bytes.Contains(body, []byte(leak)) {
+			t.Fatalf("flag body carries %q: %s", leak, body)
+		}
+	}
+	if call.ServiceName != "billing-worker-internal" {
+		t.Fatalf("Build mutated the caller's call: service_name = %q", call.ServiceName)
+	}
+}

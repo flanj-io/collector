@@ -225,6 +225,21 @@ func parseHeaders(s string) map[string]string {
 	return out
 }
 
+// ResourceServiceName is the OTel semantic-convention RESOURCE attribute naming
+// the service that emitted a batch — the caller, for a call record. Not a
+// flanj.* key: both SDKs set it on the OTLP resource from their service-name
+// option / OTEL_SERVICE_NAME (default "flanj-consumer"). CONTRACTS §2.
+const ResourceServiceName = "service.name"
+
+// ServiceNameOf reads the caller's service.name off a record's RESOURCE (one
+// per resource group, shared by every record under it), or "" when unset.
+func ServiceNameOf(res pcommon.Resource) string {
+	if v, ok := res.Attributes().Get(ResourceServiceName); ok {
+		return v.AsString()
+	}
+	return ""
+}
+
 // CallFromRecord reconstructs a RedactedCall from a "call" log record. The id is
 // a fresh uuidv7 and captured_at derives from the record timestamp.
 func CallFromRecord(lr plog.LogRecord) model.RedactedCall {

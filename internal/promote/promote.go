@@ -131,6 +131,15 @@ func Build(in Input) FlagRequest {
 		provider = HumanizeIntegration(integration)
 	}
 	finding := in.Finding
+	// The caller's service.name names this org's internal topology and stays
+	// on this collector (CONTRACTS §3). The call rides the body whole, so strip
+	// it from a copy — never from the caller's call.
+	var call *model.RedactedCall
+	if in.Call != nil {
+		c := *in.Call
+		c.ServiceName = ""
+		call = &c
+	}
 	return FlagRequest{
 		IdempotencyKey:      "flag_" + in.Finding.ID,
 		ConsumerDisplayName: in.ConsumerDisplayName,
@@ -138,7 +147,7 @@ func Build(in Input) FlagRequest {
 		Message:             msg,
 		AllowedDomains:      in.AllowedDomains,
 		AllowedEmails:       in.AllowedEmails,
-		Call:                in.Call,
+		Call:                call,
 		Finding:             &finding,
 	}
 }

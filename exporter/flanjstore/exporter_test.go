@@ -752,3 +752,53 @@ func TestPoisonBatch_DroppedAfterOneAttempt(t *testing.T) {
 		t.Errorf("failures = %d, want 2 (the rejection + the one transient failure)", failures)
 	}
 }
+
+// TestServiceName_FromResourceOntoTheStoredCall: service.name is a RESOURCE
+// attribute — one per resource group, shared by every record under it — so it
+// is read off the group each record came from, never off the record. A group
+// without one stores an empty service_name; nothing is invented.
+func TestServiceName_FromResourceOntoTheStoredCall(t *testing.T) {
+	exp, flaky := newExporter(t, fastRetry(t))
+	defer func() { _ = exp.Shutdown(context.Background()) }()
+
+	want := map[string]string{
+		"01920000-0000-7000-8000-0000000000a1": "org-app",
+		"01920000-0000-7000-8000-0000000000a2": "org-app",
+		"01920000-0000-7000-8000-0000000000b1": "org-app-py",
+		"01920000-0000-7000-8000-0000000000c1": "",
+	}
+	ld := plog.NewLogs()
+	for _, g := range []struct {
+		service string
+		ids     []string
+	}{
+		{"org-app", []string{"01920000-0000-7000-8000-0000000000a1", "01920000-0000-7000-8000-0000000000a2"}},
+		{"org-app-py", []string{"01920000-0000-7000-8000-0000000000b1"}},
+		{"", []string{"01920000-0000-7000-8000-0000000000c1"}},
+	} {
+		rl := ld.ResourceLogs().AppendEmpty()
+		if g.service != "" {
+			rl.Resource().Attributes().PutStr("service.name", g.service)
+		}
+		recs := rl.ScopeLogs().AppendEmpty().LogRecords()
+		for _, id := range g.ids {
+			goldenCall(t, id).CopyTo(recs.AppendEmpty())
+		}
+	}
+	if err := exp.ConsumeLogs(context.Background(), ld); err != nil {
+		t.Fatalf("ConsumeLogs: %v", err)
+	}
+	waitFor(t, "four calls", func() bool {
+		calls, _, _ := flaky.Store.Counts()
+		return calls == 4
+	})
+	for id, service := range want {
+		c, ok, err := flaky.Store.GetCall(id)
+		if err != nil || !ok {
+			t.Fatalf("GetCall(%s) = ok %v, err %v", id, ok, err)
+		}
+		if c.ServiceName != service {
+			t.Errorf("call %s: service_name = %q, want %q", id, c.ServiceName, service)
+		}
+	}
+}

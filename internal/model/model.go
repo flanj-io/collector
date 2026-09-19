@@ -56,6 +56,13 @@ type RedactedCall struct {
 	// flanj.peer.host). Local discovery metadata; not part of the frozen
 	// RedactedCall surface but carried for edge attribution.
 	PeerHost string `json:"peer_host,omitempty"`
+	// ServiceName is the CALLER's OTel resource `service.name` — which of this
+	// deployment's own services made the call (CONTRACTS §2 "Resource
+	// attributes"). Read by the store exporter off the record's resource, not
+	// a flanj.* attribute. LOCAL ONLY: it names the org's internal topology, so
+	// the flag relay strips it (promote.Build) and it never reaches the
+	// control plane, unlike its neighbours in this struct.
+	ServiceName string `json:"service_name,omitempty"`
 	// PeerAddr is the peer's socket address (IP) when the SDK captured one
 	// (CONTRACTS §2 flanj.peer.addr, optional). Transport detail for display;
 	// never an identity or edge key.
