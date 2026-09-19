@@ -146,8 +146,10 @@ func (p *driftProcessor) start(_ context.Context, host component.Host) error {
 	if p.st == nil {
 		return nil
 	}
+	// Only the self contract today (factory.go); dispatched by format all the
+	// same, so no MCP row can ever be written as a contract from here.
 	for _, si := range p.specInfos {
-		if err := p.st.PutSpecInfo(si.info, si.raw); err != nil && p.logger != nil {
+		if err := store.PutSpecRecord(p.st, si.info, si.raw); err != nil && p.logger != nil {
 			p.logger.Warn("record spec info failed", zap.String("role", si.info.Role), zap.Error(err))
 		}
 	}

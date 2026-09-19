@@ -168,7 +168,10 @@ contracts/                         # vendored contract: CONTRACTS.md + fixtures,
    every front forwards up, so a front's MCP baseline is the org-wide one and not what that one process
    witnessed — except a **stdio** (`local-process`) server's, which seeds nobody from any source, because
    its `peer_host` is a `serverInfo.name` and one row covers every pod's own subprocess
-   (`processor/flanjdrift/mcpbaseline.go`). That listener serves contracts and nothing else — no calls, no findings, no settings —
+   (`processor/flanjdrift/mcpbaseline.go`). Since 2026-09-19 the two kinds are stored apart (`spec_infos` /
+   `mcp_catalogues`) and one host can have both, so the channel lists both with their `format` and a front asks
+   for each document BY format (`/internal/contracts/doc?integration=…&format=openapi|mcp`; no format = the REST
+   contract, else the catalogue — an older front's request). That listener serves contracts and nothing else — no calls, no findings, no settings —
    and it is NOT the UI: the UI stays loopback (#5). Leave `store_pod_endpoint` unset on a tiered front
    and it detects no REST drift at all, whatever has been uploaded, and judges MCP calls only against
    the lists it observed itself. **One document is capped at 8 MiB on that channel**

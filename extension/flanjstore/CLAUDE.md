@@ -33,7 +33,11 @@ Two backends (`docs/STORE.md` is the user-facing guide):
   `spec_token`, CONTRACTS §8): a read-only, token-gated listener on the
   cluster interface serving provider contracts bound to an edge — uploaded
   OpenAPI documents and, since 2026-09-07, observed MCP `tools/list` snapshots
-  (the org-wide MCP baseline a front seeds from). `servableContract` is the ONE
+  (the org-wide MCP baseline a front seeds from) — since 2026-09-19 read from
+  their own `mcp_catalogues` table, listed beside the contracts with `format:
+  "mcp"`, and served by `doc?integration=…&format=openapi|mcp` (no format: the
+  REST contract, else the catalogue — what an older front's request meant).
+  Over-cap conditions key by format+integration. `servableContract` is the ONE
   admission rule, applied to the list and the doc route alike; the self
   contract and unbound rows never cross. One document is capped at
   `model.MaxContractDocBytes` (8 MiB — the SAME constant the upload path and
