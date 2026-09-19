@@ -8,7 +8,7 @@ import (
 	"github.com/flanj-io/collector/internal/model"
 )
 
-// The 2026-09-19 split (ruling: the collector files REST contracts only; an MCP
+// The 2026-09-19 split (the collector files REST contracts only; an MCP
 // server's tools/list arrives with the traffic and is not a filed contract).
 //
 // THE BUG: spec_infos held both, keyed by integration alone, and both kinds'

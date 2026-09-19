@@ -102,7 +102,7 @@ type Store interface {
 	// tools/list is not a filed contract and has its own table
 	// (PutMCPCatalogue). The two used to share spec_infos, keyed by integration
 	// alone, so an MCP server and a REST contract on one host were one row and
-	// every snapshot overwrote the contract (ruling 2026-09-19).
+	// every snapshot overwrote the contract.
 	PutSpecInfo(info model.SpecInfo, rawSpec []byte) error
 	// PutMCPCatalogue upserts an observed MCP catalogue: a tools/list snapshot,
 	// or an edge's search-learned `<integration>:search` catalogue. Keyed by

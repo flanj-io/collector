@@ -889,8 +889,8 @@ func TestAnnouncingWithNoStoreExtensionIsANoOp(t *testing.T) {
 
 // TestRemoveNeverTouchesAnMCPCatalogue replaces the #45 test that pinned the
 // observed-snapshot refusal sentence. Its premise — an MCP snapshot stored as a
-// spec_infos row the remove route could reach — is gone (ruling 2026-09-19:
-// the collector files REST contracts only; an MCP catalogue has its own
+// spec_infos row the remove route could reach — is gone (the
+// collector files REST contracts only; an MCP catalogue has its own
 // table). Its claim stands, rebuilt on the new fixture: a hand-crafted Remove
 // never deletes an observed MCP catalogue — not on an MCP-only host, and not
 // on a host that also has a REST contract, where only the contract goes.

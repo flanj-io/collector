@@ -757,7 +757,7 @@ describe('mcpOnlyHosts — a host that also serves REST is not MCP-only', () => 
   });
 });
 
-// The ruling (Idan, 2026-09-19): the collector files REST contracts only, and
+// The collector files REST contracts only, and
 // says so wherever a document is asked for.
 describe('the uploader asks for a REST contract by name', () => {
   it('names REST and the format on the button and both prompts', () => {

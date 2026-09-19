@@ -79,7 +79,7 @@ with the wrong `store_pod_token`). A call with no verdict is `not checked`, neve
 (previous snapshot kept for diffing; persisted as an MCP catalogue — the `mcp_catalogues` table, APART from the REST contracts
 in `spec_infos` since 2026-09-19, because one host can serve both and they share the host-derived integration — listed by
 `/api/contracts` with format `"mcp"` / source `"observed"`, so the Contracts tab lists the server and restarts re-seed). An MCP
-catalogue is NOT a filed contract (ruling 2026-09-19): upload and fetch bind REST (OpenAPI) contracts only and say so, and a
+catalogue is NOT a filed contract, because it arrives with the traffic: upload and fetch bind REST (OpenAPI) contracts only and say so, and a
 reader that means a catalogue asks for one by format (`/api/contracts/spec?…&format=mcp`, the store pod's
 `/internal/contracts/doc?…&format=mcp`). MCP findings: `output_mismatch` + `definition_change` (flaggable at every class — DESCRIPTION included
 since qfix2-2026-08-26; a human always presses the control) and the local-only `stale_client`; the flag relay REFUSES local-only kinds server-side
