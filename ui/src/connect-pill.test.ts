@@ -23,7 +23,7 @@ const HEALTH = {
 
 const CONNECTED = {
   status: 'connected',
-  consumer_display_name: 'Acme Consumer Ltd',
+  workspace_display_name: 'Acme Consumer Ltd',
   contact_email: 'ops@acme.test',
   contact_display_name: 'Dana',
   collector_public_id: 'col_pub_1',
@@ -123,7 +123,7 @@ describe('the Connected pill', () => {
   });
 
   it('is never a door before the collector is Connected, even if a dashboard_url were present', async () => {
-    serve({ status: 'pending', consumer_display_name: 'Acme Consumer Ltd', contact_email: 'ops@acme.test', dashboard_url: DASHBOARD });
+    serve({ status: 'pending', workspace_display_name: 'Acme Consumer Ltd', contact_email: 'ops@acme.test', dashboard_url: DASHBOARD });
     const w = await mountApp();
 
     expect(w.find('header a.pill-link').exists()).toBe(false);

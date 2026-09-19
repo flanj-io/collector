@@ -6,7 +6,6 @@
   "additionalProperties": false,
   "required": [
     "idempotency_key",
-    "consumer_display_name",
     "message"
   ],
   "allOf": [
@@ -77,8 +76,8 @@
     },
     "consumer_display_name": {
       "type": "string",
-      "minLength": 1,
-      "description": "REQUIRED on the wire, IGNORED for naming since 2026-09-19: the control plane names the sender from the flagging workspace's display name. Still required so a control plane that predates the change keeps accepting the flag."
+      "deprecated": true,
+      "description": "DEPRECATED 2026-09-19 — OPTIONAL, and IGNORED for naming: the control plane names the sender from the flagging workspace's display name. A collector may send its copy of that name, or omit the field."
     },
     "provider_display_name": {
       "type": "string",

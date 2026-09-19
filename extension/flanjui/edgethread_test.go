@@ -14,7 +14,7 @@ func connectedRig(t *testing.T) *testRig {
 	t.Helper()
 	r := newRig(t)
 	r.start(t)
-	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, ConsumerDisplayName: "Acme Consumer Ltd",
+	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, WorkspaceDisplayName: "Acme Consumer Ltd",
 		ContactEmail: "ops@acme.test", ContactStatus: "confirmed", ConfirmedContactEmail: "ops@acme.test"})
 	r.cp.mu.Lock()
 	r.cp.contactEmail, r.cp.contactStatus, r.cp.confirmedEmail = "ops@acme.test", "confirmed", "ops@acme.test"
@@ -60,7 +60,7 @@ func TestEdgeThreadCreatesMessageOnlyThread(t *testing.T) {
 		t.Errorf("message = %q, want the operator's question", msg)
 	}
 	if body["consumer_display_name"] != "Acme Consumer Ltd" {
-		t.Errorf("consumer_display_name = %v, want the CONNECTED org name", body["consumer_display_name"])
+		t.Errorf("consumer_display_name = %v, want the cached WORKSPACE name", body["consumer_display_name"])
 	}
 }
 
@@ -148,7 +148,7 @@ func TestEdgeThreadIsConnectGatedIdentically(t *testing.T) {
 	}
 
 	// Connected, contact still pending: the other 412.
-	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, ConsumerDisplayName: "Acme",
+	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, WorkspaceDisplayName: "Acme",
 		ContactEmail: "ops@acme.test", ContactStatus: "pending"})
 	r.cp.mu.Lock()
 	r.cp.contactEmail, r.cp.contactStatus, r.cp.confirmedEmail = "ops@acme.test", "pending", ""

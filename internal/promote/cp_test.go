@@ -40,7 +40,7 @@ func TestRegister(t *testing.T) {
 	cp := newStubCP(t, http.StatusCreated, `{"collector_id":"c1","collector_public_id":"pub_c1","collector_key":"ckey_secret","contact_status":"pending"}`)
 	c := NewClient(cp.srv.URL, "deploy_tok", "v").WithCollectorKey("old_key_must_not_be_used")
 	resp, status, err := c.Register(context.Background(), RegisterRequest{
-		ConsumerDisplayName: "Acme Consumer Ltd", ContactEmail: "ops@acme.test", ContactDisplayName: "Dana", LocalUIURL: "http://localhost:5335",
+		ContactEmail: "ops@acme.test", ContactDisplayName: "Dana", LocalUIURL: "http://localhost:5335",
 	})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
@@ -54,14 +54,18 @@ func TestRegister(t *testing.T) {
 	if cp.auth != "Bearer deploy_tok" {
 		t.Errorf("register must use the deploy token, got %q", cp.auth)
 	}
-	if cp.body["consumer_display_name"] != "Acme Consumer Ltd" || cp.body["contact_email"] != "ops@acme.test" ||
+	// No organization name on the wire (2026-09-19): the contact names the workspace on the CP.
+	if _, has := cp.body["consumer_display_name"]; has {
+		t.Errorf("register must not carry consumer_display_name: %v", cp.body)
+	}
+	if cp.body["contact_email"] != "ops@acme.test" ||
 		cp.body["contact_display_name"] != "Dana" || cp.body["local_ui_url"] != "http://localhost:5335" {
 		t.Errorf("body=%v", cp.body)
 	}
 
 	// Idempotent replay: 200 is accepted too.
 	cp2 := newStubCP(t, http.StatusOK, `{"collector_id":"c1","collector_public_id":"pub_c1","contact_status":"confirmed"}`)
-	resp2, status2, err := NewClient(cp2.srv.URL, "deploy_tok", "v").Register(context.Background(), RegisterRequest{ConsumerDisplayName: "A", ContactEmail: "a@b.c"})
+	resp2, status2, err := NewClient(cp2.srv.URL, "deploy_tok", "v").Register(context.Background(), RegisterRequest{ContactEmail: "a@b.c"})
 	if err != nil || status2 != 200 || resp2.ContactStatus != "confirmed" || resp2.CollectorKey != "" {
 		t.Errorf("replay: resp=%+v status=%d err=%v", resp2, status2, err)
 	}
@@ -73,7 +77,7 @@ func TestRegister(t *testing.T) {
 func TestRegisterWithKey(t *testing.T) {
 	cp := newStubCP(t, http.StatusOK, `{"collector_id":"c1","collector_public_id":"pub_c1","contact_status":"pending"}`)
 	c := NewClient(cp.srv.URL, "deploy_tok", "v").WithCollectorKey("ckey_secret")
-	resp, status, err := c.RegisterWithKey(context.Background(), RegisterRequest{ConsumerDisplayName: "Acme Consumer Ltd", ContactEmail: "new@acme.test", ContactDisplayName: "Dana"})
+	resp, status, err := c.RegisterWithKey(context.Background(), RegisterRequest{ContactEmail: "new@acme.test", ContactDisplayName: "Dana"})
 	if err != nil || status != 200 {
 		t.Fatalf("RegisterWithKey: %v (%d)", err, status)
 	}
@@ -83,7 +87,7 @@ func TestRegisterWithKey(t *testing.T) {
 	if cp.auth != "Bearer ckey_secret" {
 		t.Errorf("re-register must use the collector key, got %q", cp.auth)
 	}
-	if cp.body["contact_email"] != "new@acme.test" || cp.body["consumer_display_name"] != "Acme Consumer Ltd" || cp.body["contact_display_name"] != "Dana" {
+	if cp.body["contact_email"] != "new@acme.test" || cp.body["contact_display_name"] != "Dana" {
 		t.Errorf("body=%v", cp.body)
 	}
 	if resp.CollectorKey != "" || resp.ContactStatus != "pending" || resp.CollectorPublicID != "pub_c1" {
@@ -99,7 +103,7 @@ func TestRegisterWithKey(t *testing.T) {
 // TestMe proves GET me with the collector key, including the
 // confirmed_contact_email tri-state (value / null / absent on an older CP).
 func TestMe(t *testing.T) {
-	cp := newStubCP(t, http.StatusOK, `{"collector_id":"c1","collector_public_id":"pub","consumer_display_name":"Acme","contact_email":"new@acme.test","contact_display_name":"Dana","contact_status":"pending","confirmed_contact_email":"ops@acme.test","registered_at":"2026-08-23T10:00:00Z","confirmed_at":"2026-08-23T10:05:00Z"}`)
+	cp := newStubCP(t, http.StatusOK, `{"collector_id":"c1","collector_public_id":"pub","consumer_display_name":"Acme","workspace_display_name":"Acme Ltd","contact_email":"new@acme.test","contact_display_name":"Dana","contact_status":"pending","confirmed_contact_email":"ops@acme.test","registered_at":"2026-08-23T10:00:00Z","confirmed_at":"2026-08-23T10:05:00Z"}`)
 	c := NewClient(cp.srv.URL, "deploy_tok", "v").WithCollectorKey("ckey")
 	me, status, err := c.Me(context.Background())
 	if err != nil || status != 200 {
@@ -114,11 +118,17 @@ func TestMe(t *testing.T) {
 	if me.ConfirmedContactEmail == nil || *me.ConfirmedContactEmail != "ops@acme.test" {
 		t.Errorf("confirmed_contact_email not decoded: %+v", me.ConfirmedContactEmail)
 	}
+	if me.WorkspaceDisplayName == nil || *me.WorkspaceDisplayName != "Acme Ltd" {
+		t.Errorf("workspace_display_name not decoded: %+v", me.WorkspaceDisplayName)
+	}
 	// null before the first confirmation
 	cpNull := newStubCP(t, http.StatusOK, `{"contact_status":"pending","confirmed_contact_email":null}`)
 	me2, _, err := NewClient(cpNull.srv.URL, "d", "v").WithCollectorKey("ckey").Me(context.Background())
 	if err != nil || me2.ConfirmedContactEmail != nil {
 		t.Errorf("null confirmed_contact_email: %+v err=%v", me2.ConfirmedContactEmail, err)
+	}
+	if me2.WorkspaceDisplayName != nil {
+		t.Errorf("absent workspace_display_name must decode as nil: %q", *me2.WorkspaceDisplayName)
 	}
 }
 

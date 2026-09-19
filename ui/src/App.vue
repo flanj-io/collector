@@ -277,11 +277,17 @@ const threadsByFinding = computed(() => {
   for (const t of threads.value) m[t.finding_id] = t;
   return m;
 });
-const consumerName = computed(() => connect.value?.consumer_display_name || health.value?.consumer_display_name || 'Your organization');
-// Header org pill: the org identity ONLY — when no display name is configured
-// or Connected, no pill renders. Never the integration slug (a spec-scoping
-// label, not an identity; it stays on the Overview headline + its Contracts card).
-const orgPillName = computed(() => connect.value?.consumer_display_name || health.value?.consumer_display_name || '');
+// The organization's name is the WORKSPACE's display name (CONTRACTS §5, 2026-09-19): chosen by
+// the contact on the control plane's confirmation page, cached by the relay from `me`. Nothing
+// names the organization before that — not config, not a pre-Connect guess.
+const workspaceName = computed(() => connect.value?.workspace_display_name || '');
+// The Flag sheet's disclosure line names who the thread comes from; until the workspace is named
+// it says so in words rather than inventing a name.
+const consumerName = computed(() => workspaceName.value || 'your workspace');
+// Header org pill: the workspace name ONLY, and only once known — otherwise no
+// pill renders. Never the integration slug (a spec-scoping label, not an
+// identity; it stays on the Overview headline + its Contracts card).
+const orgPillName = computed(() => workspaceName.value);
 // The sheet header's address line: where THIS page is served from. Read once —
 // the origin cannot change under a mounted app.
 const uiHost = window.location.host;
@@ -1602,7 +1608,7 @@ watch(tab, (t) => {
       <div class="meta" v-if="health">
         <!-- Org identity only — never the integration slug (it scopes a spec,
              not this org; it lives on the Overview headline + its Contracts card). -->
-        <span v-if="orgPillName" class="pill pill-name" title="Your organization — shown to the provider on every thread.">{{ orgPillName }}</span>
+        <span v-if="orgPillName" class="pill pill-name" title="Your workspace — the name other organizations see on your threads.">{{ orgPillName }}</span>
         <span v-if="!health.cp_configured" class="pill warn">control plane not configured</span>
         <!-- Connected: the pill is the one door out to the control plane. The
              LABEL stays the status ("Connected") — a status indicator that hides
@@ -2308,7 +2314,6 @@ watch(tab, (t) => {
         <ConnectPanel
           v-else
           :state="connect"
-          :default-org="health?.consumer_display_name"
           :address-nudge-dismissed="addressNudgeDismissed"
           :focus-address-tick="focusAddressTick"
           @update:state="onConnectUpdated"
@@ -2566,7 +2571,6 @@ watch(tab, (t) => {
       :provider="providerNameFor(sheetFinding)"
       :consumer="consumerName"
       :connect="connect"
-      :default-org="health?.consumer_display_name"
       @close="closeSheet"
       @created="onThreadCreated"
       @update:connect="onConnectUpdated"
@@ -2580,7 +2584,6 @@ watch(tab, (t) => {
       :provider="sheetEdge.name"
       :consumer="consumerName"
       :connect="connect"
-      :default-org="health?.consumer_display_name"
       @close="closeSheet"
       @created="onThreadCreated"
       @update:connect="onConnectUpdated"

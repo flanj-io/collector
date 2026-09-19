@@ -24,7 +24,7 @@ import { QUESTION_LEAD, QUESTION_MESSAGE_LABEL, QUESTION_MESSAGE_REQUIRED } from
 
 const CONNECTED: ConnectState = {
   status: 'connected',
-  consumer_display_name: 'Acme',
+  workspace_display_name: 'Acme',
   contact_email: 'ops@acme.test',
   confirmed_contact_email: 'ops@acme.test'
 };

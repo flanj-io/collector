@@ -216,8 +216,8 @@ func TestContractNamePassesTheRedactionFloor(t *testing.T) {
 // TestHealthZeroTrafficHonesty: a fresh zero-traffic collector fabricates
 // nothing — /api/health omits `integration` and `provider_display_name`
 // entirely (no replacement values). They appear once an external outbound edge
-// (or a finding) exists. `consumer_display_name` — the installer's own name —
-// renders regardless.
+// (or a finding) exists. No organization name renders from config at all:
+// `consumer_display_name` is deprecated and ignored (2026-09-19).
 func TestHealthZeroTrafficHonesty(t *testing.T) {
 	r := newRig(t)
 	r.ext.cfg.ProviderDisplayName = "Acme Payments"
@@ -237,8 +237,8 @@ func TestHealthZeroTrafficHonesty(t *testing.T) {
 	if name, present := out["collector_name"]; !present || name != "" {
 		t.Errorf("health must carry an empty collector_name before Connect: %v", out["collector_name"])
 	}
-	if out["consumer_display_name"] != "Cfg Consumer" {
-		t.Errorf("consumer_display_name (the installer's own name) must still render: %v", out["consumer_display_name"])
+	if _, present := out["consumer_display_name"]; present {
+		t.Errorf("health must not name the organization from config: %s", raw)
 	}
 
 	// One external OUTBOUND edge → the provider name emits. The `integration` slug never does

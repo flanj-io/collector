@@ -58,7 +58,11 @@ integration:
   # identity is its collector NAME, given in the Connect panel. Accepted so an
   # existing values file still installs; nothing is rendered from it.
   id: ""
-  # "shared by <name>" on the peek screen — who is running this collector.
+  # consumerDisplayName: DEPRECATED and IGNORED (2026-09-19) — the collector no
+  # longer names its organization. A workspace has one display name, chosen by
+  # its contact on the control plane's confirmation page after Connect.
+  # Accepted so an existing values file still installs; nothing is rendered
+  # from it.
   consumerDisplayName: ""
   # providerDisplayName: DEPRECATED and IGNORED for the flag (2026-09-19) — the
   # control plane now names the provider side of every thread itself (verified

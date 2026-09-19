@@ -49,8 +49,8 @@ API + the flag action.
   `forbidden_origin`), never a CORS header. Errors are `{error, message}` with
   the relay's fixed copy (`messages.go`). Tokens, handoffs and the collector key never
   reach a log line.
-  - `GET|POST /api/connect` (`connect.go`) — **Connect**: `POST {consumer_display_name,
-    collector_name, contact_email, contact_display_name?, local_ui_url?}` registers the
+  - `GET|POST /api/connect` (`connect.go`) — **Connect**: `POST {collector_name,
+    contact_email, contact_display_name?, local_ui_url?}` registers the
     deployment with the CP (`register` — since 2026-09-14 with NO credential when
     `cp_deploy_token` is unset, the open door; with the token when set, on the first
     Connect only). `collector_name` is MANDATORY (`400 collector_name_required`): the
@@ -67,8 +67,19 @@ API + the flag action.
     same email = resend, key unchanged; a new email = a new pending contact on
     the same collector, key unchanged — the previously confirmed contact stays
     usable for threads (`confirmed_contact_email` from `me`) until the new one
-    confirms. `GET` → `{status: disconnected|pending|connected,
-    consumer_display_name, contact_email, contact_display_name,
+    confirms. **No organization name (2026-09-19):** a workspace — every
+    collector whose contact is one person — has ONE display name, chosen by the
+    contact on the control plane's confirmation page, never on the collector.
+    An older UI's `consumer_display_name` is accepted and ignored, and the
+    register call never carries the field. The relay reads the name back from
+    `me` (`workspace_display_name`) on every refresh and caches it in the
+    settings KV (`connect.workspace_display_name`, deployment-shared) whenever
+    the CP returns a non-null value — so it survives an unreachable CP and a
+    restart, and a rename on the dashboard shows up on the next poll. It is the
+    only org name the UI shows (header pill, Connected panel's `Workspace` row),
+    and a flag carries it as `consumer_display_name` when known, else omits the
+    field — never the config value. `GET` → `{status: disconnected|pending|connected,
+    collector_name, workspace_display_name, contact_email, contact_display_name,
     confirmed_contact_email, collector_public_id, registered_at, confirmed_at,
     local_ui_url, dashboard_url?}` refreshed from `me` (≤1 CP call / 10s per pod; the UI polls it
     every 5s while pending). `dashboard_url` is the SPA's one door out (the
@@ -186,7 +197,8 @@ API + the flag action.
     otherwise onto `thread.link.<thread_id>` — a key only that thread's Replace
     link writes, blind.
   - `GET /api/health` also carries `connect_status` (from the store only) and
-    the configured display names. `GET /api/connect` also carries `edge_sync` —
+    the (deprecated) `provider_display_name` once traffic exists — never an
+    organization name: the configured `consumer_display_name` is ignored. `GET /api/connect` also carries `edge_sync` —
     this deployment's actual registration setting, so the panel's disclosure
     line states what really leaves rather than what usually does.
 
@@ -270,7 +282,8 @@ collector is outbound-only; nothing serves off-host.
 - `web/dist/index.html` — committed **placeholder**; the real SPA overwrites it
   at Docker build time (only the placeholder is tracked; `web/dist/assets/` is
   gitignored).
-- `config.go` — frozen keys `ui_endpoint`, `consumer_display_name`,
+- `config.go` — frozen keys `ui_endpoint`, `consumer_display_name` (DEPRECATED
+  and ignored, 2026-09-19 — the workspace is named on the control plane),
   `provider_display_name`, `cp_base_url`, `cp_public_url` (optional,
   browser-facing — validated at boot: absolute http(s), no credentials),
   `cp_deploy_token` (OPTIONAL since 2026-09-14 — Connect needs no token), and

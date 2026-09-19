@@ -115,7 +115,8 @@
           "type": "string"
         },
         "consumerDisplayName": {
-          "type": "string"
+          "type": "string",
+          "description": "deprecated and ignored: the workspace is named by its contact on the control plane's confirmation page"
         },
         "providerDisplayName": {
           "type": "string"

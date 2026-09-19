@@ -85,7 +85,7 @@ func TestContractsServeServerCommand(t *testing.T) {
 func TestFlagNeverCarriesServerCommand(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
-	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, ConsumerDisplayName: "Acme",
+	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, WorkspaceDisplayName: "Acme",
 		ContactEmail: "ops@acme.test", ContactStatus: "confirmed", ConfirmedContactEmail: "ops@acme.test"})
 	r.cp.mu.Lock()
 	r.cp.contactEmail, r.cp.contactStatus, r.cp.confirmedEmail = "ops@acme.test", "confirmed", "ops@acme.test"

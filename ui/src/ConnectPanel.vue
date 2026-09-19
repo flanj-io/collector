@@ -1,8 +1,11 @@
 <script setup lang="ts">
 // Connect panel (v0.1a; open since 2026-09-14): registers this collector with
 // the control plane — a collector NAME (mandatory, unique in the workspace,
-// changeable), the org name and a contact email the control plane confirms
-// with one click. No pre-issued token: the confirmation click is the consent.
+// changeable) and a contact email the control plane confirms with one click.
+// No pre-issued token: the confirmation click is the consent. There is no
+// organization name here (2026-09-19): a workspace has one display name, which
+// its contact chooses on the control plane's confirmation page; once known,
+// the panel shows the relay's cached copy (`workspace_display_name`).
 // Shown on the Settings tab and inline in the Flag sheet. Local data viewing is
 // never gated on it; only creating a thread link is. A RENAME is the same
 // form, re-sent with the stored key — the relay carries it; the CP updates the
@@ -16,7 +19,6 @@ import { edgeDisclosure } from './connect-disclosure';
 
 const props = defineProps<{
   state: ConnectState | null;
-  defaultOrg?: string;
   inline?: boolean;
   /** Post-Connect address nudge: shared "remembered dismissal" flag (App owns storage). */
   addressNudgeDismissed?: boolean;
@@ -25,7 +27,6 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ (e: 'update:state', s: ConnectState): void; (e: 'cancel'): void; (e: 'dismiss-address-nudge'): void }>();
 
-const org = ref('');
 const collectorName = ref('');
 const name = ref('');
 const email = ref('');
@@ -72,7 +73,7 @@ onBeforeUnmount(() => {
 
 const touched = ref<ConnectFormTouched>(untouched());
 const focusedField = ref<keyof ConnectFormTouched | null>(null);
-const fieldRefs = { org, collectorName, name, email, localUrl } as const;
+const fieldRefs = { collectorName, name, email, localUrl } as const;
 function markTouched(k: keyof ConnectFormTouched) {
   // Typing marks the field as the user's; clearing it back to empty releases it for
   // prefill again (applySeed still never touches the focused field).
@@ -84,15 +85,14 @@ function setFocus(k: keyof ConnectFormTouched | null) {
 
 /** force = an explicit user action (open edit / cancel / after submit) — background polls never force. */
 function seedForm(force = false) {
-  const seeded = seededValues(props.state, props.defaultOrg, typeof window !== 'undefined' ? window.location.origin : '');
+  const seeded = seededValues(props.state, typeof window !== 'undefined' ? window.location.origin : '');
   const next = applySeed(
-    { org: org.value, collectorName: collectorName.value, name: name.value, email: email.value, localUrl: localUrl.value },
+    { collectorName: collectorName.value, name: name.value, email: email.value, localUrl: localUrl.value },
     seeded,
     touched.value,
     force,
     focusedField.value
   );
-  org.value = next.org;
   collectorName.value = next.collectorName;
   name.value = next.name;
   email.value = next.email;
@@ -101,7 +101,7 @@ function seedForm(force = false) {
 }
 seedForm(true);
 watch(
-  () => [props.state?.status, props.state?.contact_email, props.state?.collector_name, props.defaultOrg],
+  () => [props.state?.status, props.state?.contact_email, props.state?.collector_name],
   () => {
     // Background refresh: fill only pristine fields — never clobber typed text.
     if (!editing.value) seedForm(false);
@@ -155,10 +155,6 @@ function validEmail(v: string): boolean {
 async function submit(resend = false) {
   validation.value = '';
   errorMsg.value = '';
-  if (!org.value.trim()) {
-    validation.value = 'Add your organization first.';
-    return;
-  }
   if (!collectorName.value.trim()) {
     validation.value = 'Give this collector a name.';
     return;
@@ -171,7 +167,6 @@ async function submit(resend = false) {
   attempt.value = null;
   try {
     const s = await apiPost<ConnectState>('/api/connect', {
-      consumer_display_name: org.value.trim(),
       collector_name: collectorName.value.trim(),
       contact_email: email.value.trim(),
       contact_display_name: name.value.trim(),
@@ -248,16 +243,18 @@ function cancelEdit() {
             <button type="button" class="btn ghost small" @click="rename">Rename</button>
           </dd>
         </div>
-        <div class="connect-field">
-          <dt class="k">Organization</dt>
-          <dd class="v">{{ state?.consumer_display_name }}</dd>
+        <!-- The workspace's display name, as the relay last read it from the control plane —
+             rendered only once known: a blank row would read as "unnamed", which is not a fact. -->
+        <div v-if="state?.workspace_display_name" class="connect-field">
+          <dt class="k">Workspace</dt>
+          <dd class="v">{{ state.workspace_display_name }}</dd>
         </div>
         <div class="connect-field">
           <dt class="k">Contact</dt>
           <dd class="v">
             <span class="v-main">{{ state?.contact_email }}</span>
             <span class="v-mark ok"><svg class="hx sm tone-ok" aria-hidden="true" focusable="false"><use href="#hxbolt" /></svg>confirmed</span>
-            <span v-if="state?.contact_display_name && state?.contact_display_name !== state?.consumer_display_name" class="dim">
+            <span v-if="state?.contact_display_name && state?.contact_display_name !== state?.workspace_display_name" class="dim">
               · replies as {{ state?.contact_display_name }}
             </span>
           </dd>
@@ -308,19 +305,14 @@ function cancelEdit() {
     <!-- form -->
     <form v-else class="connect-form" @submit.prevent="submit(false)">
       <label class="field">
-        <span class="field-label">Your organization</span>
-        <input v-model="org" type="text" autocomplete="organization" :disabled="busy" @input="markTouched('org')" @focus="setFocus('org')" @blur="setFocus(null)" />
-        <span class="field-help">Shown to the provider on every thread.</span>
-      </label>
-      <label class="field">
         <span class="field-label">Collector name</span>
         <input ref="collectorNameEl" v-model="collectorName" type="text" autocomplete="off" maxlength="80" placeholder="e.g. prod-eu" :disabled="busy" @input="markTouched('collectorName')" @focus="setFocus('collectorName')" @blur="setFocus(null)" />
         <span class="field-help">How this deployment appears in your Flanj workspace. Unique there, and you can change it later.</span>
       </label>
       <label class="field">
         <span class="field-label">Your name <span class="dim">(optional)</span></span>
-        <input v-model="name" type="text" autocomplete="name" :placeholder="org ? 'e.g. Dana (' + org + ')' : 'e.g. Dana'" :disabled="busy" @input="markTouched('name')" @focus="setFocus('name')" @blur="setFocus(null)" />
-        <span class="field-help">Shown next to your messages on the thread. Defaults to your organization.</span>
+        <input v-model="name" type="text" autocomplete="name" placeholder="e.g. Dana" :disabled="busy" @input="markTouched('name')" @focus="setFocus('name')" @blur="setFocus(null)" />
+        <span class="field-help">Shown next to your messages on the thread.</span>
       </label>
       <label class="field">
         <span class="field-label">Contact email</span>
@@ -340,7 +332,7 @@ function cancelEdit() {
         </button>
         <button v-if="editing || inline" type="button" class="btn ghost" :disabled="busy" @click="cancelEdit">Cancel</button>
       </div>
-      <p class="connect-foot">Nothing leaves this collector until you click Connect. Connect sends only the fields above; no token is needed — the contact's confirmation click is what adds this collector to their workspace.</p>
+      <p class="connect-foot">Nothing leaves this collector until you click Connect. Connect sends only the fields above; no token is needed — the contact's confirmation click is what adds this collector to their workspace. The workspace's name is chosen by the contact on the confirmation page, not here, and it is shown to other organizations on your threads.</p>
     </form>
   </div>
 </template>

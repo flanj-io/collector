@@ -186,7 +186,7 @@ describe('the Overview headline', () => {
   });
 
   it('once Connected, the subline names this deployment by its collector name — the CP’s copy', async () => {
-    OK_BODIES['/api/connect'] = { status: 'connected', collector_name: 'prod-eu', consumer_display_name: 'CustomerX', contact_email: 'maya@customerx.example', confirmed_contact_email: 'maya@customerx.example', cp_configured: true };
+    OK_BODIES['/api/connect'] = { status: 'connected', collector_name: 'prod-eu', workspace_display_name: 'CustomerX', contact_email: 'maya@customerx.example', confirmed_contact_email: 'maya@customerx.example', cp_configured: true };
     try {
       const w = await mountApp();
       const hl = w.find('.headline');
@@ -204,6 +204,46 @@ describe('the Overview headline', () => {
     expect(hl.text()).toContain('No drift detected');
     expect(hl.classes()).toContain('ok');
     OK_BODIES['/api/calls'] = { calls: CAPTURED_BEFORE.map((t, i) => call(`c${i}`, t)) };
+  });
+});
+
+/* ── The organization name: the workspace's, once known ─────────────────── */
+
+// The collector no longer names its organization (CONTRACTS §5, 2026-09-19). The one org name the
+// UI shows is the workspace's display name, which the contact chooses on the control plane's
+// confirmation page and the relay caches from `me` — never a configured name, never pre-Connect.
+describe('the header names the workspace only once it is known', () => {
+  it('shows no organization from config, before Connect', async () => {
+    const saved = OK_BODIES['/api/health'];
+    OK_BODIES['/api/health'] = { ...(saved as object), consumer_display_name: 'Cfg Org' };
+    try {
+      const w = await mountApp();
+      expect(w.find('.pill-name').exists()).toBe(false);
+      expect(w.text()).not.toContain('Cfg Org');
+    } finally {
+      OK_BODIES['/api/health'] = saved;
+    }
+  });
+
+  it('shows nothing while Connected but not yet named — not the deprecated org name', async () => {
+    OK_BODIES['/api/connect'] = { status: 'connected', collector_name: 'prod-eu', consumer_display_name: 'CustomerX', workspace_display_name: null, contact_email: 'maya@customerx.example', confirmed_contact_email: 'maya@customerx.example', cp_configured: true };
+    try {
+      const w = await mountApp();
+      expect(w.find('.pill-name').exists()).toBe(false);
+      expect(w.text()).not.toContain('CustomerX');
+    } finally {
+      OK_BODIES['/api/connect'] = { status: 'disconnected' };
+    }
+  });
+
+  it('shows the workspace display name once the control plane reports it', async () => {
+    OK_BODIES['/api/connect'] = { status: 'connected', collector_name: 'prod-eu', workspace_display_name: 'Acme Ltd', contact_email: 'maya@customerx.example', confirmed_contact_email: 'maya@customerx.example', cp_configured: true };
+    try {
+      const w = await mountApp();
+      expect(w.find('.pill-name').text()).toBe('Acme Ltd');
+    } finally {
+      OK_BODIES['/api/connect'] = { status: 'disconnected' };
+    }
   });
 });
 

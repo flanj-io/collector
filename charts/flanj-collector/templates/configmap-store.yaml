@@ -49,9 +49,6 @@ data:
       # operator look at.
       flanjui:
         ui_endpoint: 127.0.0.1:5335
-        {{- with .Values.integration.consumerDisplayName }}
-        consumer_display_name: {{ . | quote }}
-        {{- end }}
         {{- with .Values.integration.providerDisplayName }}
         provider_display_name: {{ . | quote }}
         {{- end }}

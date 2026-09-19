@@ -17,7 +17,14 @@ type Config struct {
 	// boots — with a one-line warning naming it — instead of failing on an
 	// unknown key.
 	IntegrationID string `mapstructure:"integration_id"`
-	// ConsumerDisplayName is the "shared by <name>" identity on the peek screen.
+	// ConsumerDisplayName is DEPRECATED and IGNORED (2026-09-19). A workspace
+	// — every collector whose contact is one person — has ONE display name,
+	// owned by the control plane: its contact names it on the confirmation
+	// page the first collector's Connect mail opens, and the relay reads it
+	// back from `me` (`workspace_display_name`) and keeps a copy in the store.
+	// Nothing on this collector names the organization from config any more:
+	// not the Connect register, not a flag, not `/api/health`, not the UI. The
+	// key stays decodable so an existing config keeps loading.
 	ConsumerDisplayName string `mapstructure:"consumer_display_name"`
 	// ProviderDisplayName is DEPRECATED and IGNORED for the flag itself
 	// (2026-09-19): the control plane now names the provider side of every

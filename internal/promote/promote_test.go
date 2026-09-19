@@ -323,6 +323,44 @@ func TestBuild_NeverCarriesProviderDisplayName(t *testing.T) {
 	}
 }
 
+// The organization name on a flag is the workspace's display name, which the
+// control plane owns (CONTRACTS §5, 2026-09-19). The collector sends its cached
+// copy when it has one and otherwise omits the field — never an empty string,
+// never a configured value. Both shapes validate; both kinds of body (a flag and
+// an edge question) behave the same.
+func TestBuild_ConsumerDisplayNameOmittedUntilKnown(t *testing.T) {
+	call := loadJSON[model.RedactedCall](t, "sample-redacted-call.json")
+	finding := loadJSON[model.Finding](t, "sample-finding.json")
+	sch := flagSchema(t)
+	for _, tc := range []struct {
+		name string
+		req  FlagRequest
+		want any // nil = absent
+	}{
+		{"flag, unknown", Build(Input{Call: &call, Finding: finding}), nil},
+		{"flag, known", Build(Input{ConsumerDisplayName: "Acme Ltd", Call: &call, Finding: finding}), "Acme Ltd"},
+		{"question, unknown", BuildQuestion(QuestionInput{IdempotencyKey: "edge_x_1", ProviderHost: "api.acme.test", Message: "why?"}), nil},
+		{"question, known", BuildQuestion(QuestionInput{IdempotencyKey: "edge_x_1", ConsumerDisplayName: "Acme Ltd", ProviderHost: "api.acme.test", Message: "why?"}), "Acme Ltd"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body, err := json.Marshal(tc.req)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			validate(t, sch, body)
+			var wire map[string]any
+			_ = json.Unmarshal(body, &wire)
+			got, has := wire["consumer_display_name"]
+			if tc.want == nil && has {
+				t.Fatalf("consumer_display_name must be omitted until the workspace name is known, got %q: %s", got, body)
+			}
+			if tc.want != nil && got != tc.want {
+				t.Fatalf("consumer_display_name = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestBuild_IdempotencyKeyFromFinding proves re-flagging the same finding yields
 // the same idempotency key (CP returns the existing thread).
 func TestBuild_IdempotencyKeyFromFinding(t *testing.T) {

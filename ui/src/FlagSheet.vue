@@ -87,7 +87,6 @@ const props = defineProps<{
   provider: string;
   consumer: string;
   connect: ConnectState | null;
-  defaultOrg?: string;
 }>();
 const emit = defineEmits<{
   (e: 'close'): void;
@@ -493,9 +492,9 @@ watch(result, (r) => {
           Confirm <strong>{{ contactEmail }}</strong> first — we sent "Confirm your Flanj contact".
         </p>
         <p v-else class="prompt">
-          Connect first. Creating a thread link needs your org name and a confirmed contact email — viewing local data never does.
+          Connect first. Creating a thread link needs a confirmed contact email — viewing local data never does.
         </p>
-        <ConnectPanel :state="connect" :default-org="defaultOrg" inline @update:state="(s) => emit('update:connect', s)" @cancel="emit('close')" />
+        <ConnectPanel :state="connect" inline @update:state="(s) => emit('update:connect', s)" @cancel="emit('close')" />
         <p class="prompt-foot">
           Create thread unlocks the moment your contact is confirmed.
         </p>

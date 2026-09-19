@@ -150,9 +150,10 @@ func (e *uiExtension) handleHealth(w http.ResponseWriter, r *http.Request) {
 		// — the first is "this browser has no stored theme
 		// choice", which only the browser can answer.
 		"held_prior_data": heldPriorData(st),
-		// consumer_display_name names the INSTALLER, not a discovery — it may
-		// render pre-traffic (the pre-traffic honesty rule exempts it).
-		"consumer_display_name": e.cfg.ConsumerDisplayName,
+		// No organization name here (2026-09-19): the configured
+		// consumer_display_name is deprecated and ignored, and the workspace's
+		// display name — the only org name this collector shows — rides
+		// GET /api/connect, once the control plane has told us.
 		// Does this pod serve its contracts to FRONT collectors? The Contracts
 		// card needs it to say anything about the 8 MiB document cap, which
 		// applies to that hop and to no other: on a single pod the same
@@ -730,12 +731,11 @@ func (e *uiExtension) handleFlag(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// The consumer org is the Connected one (config is the fallback for display
-	// only).
-	consumerName := cs.ConsumerDisplayName
-	if consumerName == "" {
-		consumerName = e.cfg.ConsumerDisplayName
-	}
+	// The org name on the wire is the workspace's display name as this
+	// collector last read it from the control plane, or nothing (the field is
+	// omitted) — never the deprecated config key. The control plane names the
+	// sender from the workspace either way.
+	consumerName := cs.WorkspaceDisplayName
 	// providerName is LOCAL ONLY (2026-09-19) — it never rides the flag
 	// (promote.FlagRequest carries no provider_display_name field at all; the
 	// control plane names the provider itself, from verified domain ownership,
@@ -897,10 +897,7 @@ func (e *uiExtension) handleEdgeThread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	consumerName := cs.ConsumerDisplayName
-	if consumerName == "" {
-		consumerName = e.cfg.ConsumerDisplayName
-	}
+	consumerName := cs.WorkspaceDisplayName // the same rule as the flag path
 	// No provider name is sent (2026-09-19, see promote.FlagRequest): the
 	// control plane resolves the provider side itself off `ProviderHost` below
 	// (verified domain ownership, else a verified directory name, else the

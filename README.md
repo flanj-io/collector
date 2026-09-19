@@ -31,7 +31,7 @@ UI in one binary.
   actionable), **Traffic** (live tail of redacted calls), **Contracts** (the loaded specs; each finding has
   **Flag this** → one sheet → **Create thread** → a **thread link** you paste into the channel the two teams
   already share), **Threads** (the state of every thread you created: turn label, opens, Open / Close /
-  Reopen / Replace link) and **Settings** (**Connect** — org name and a one-click-confirmed contact email;
+  Reopen / Replace link) and **Settings** (**Connect** — a collector name and a one-click-confirmed contact email;
   required to create thread links, never to view your own data).
 
 A detection becomes something you can act on with the provider. The SDK is Apache-2.0; this collector is
@@ -94,8 +94,7 @@ practical objection to the REST half of this, and it does not apply to MCP at al
 ```bash
 helm install flanj oci://registry-1.docker.io/flanj/flanj-collector \
   --namespace flanj --create-namespace \
-  --set specToken.value="$(openssl rand -hex 32)" \
-  --set integration.consumerDisplayName='Acme Consumer Ltd'
+  --set specToken.value="$(openssl rand -hex 32)"
 ```
 
 That is the tiered shape: N stateless front collectors and one store pod, which is where the UI and the
@@ -127,10 +126,12 @@ the UI all work on the first run with no configuration at all — looking around
 point. **Connect** is the one thing that needs you first, and until it has a control plane it says so:
 `The control plane is not configured on this collector (set cp_base_url).`
 
-Copy `config/config.example.yaml`, which documents every key, set `consumer_display_name` and
-`cp_base_url`, and mount it over the baked path. No token is needed to Connect: the panel asks for a
-collector name and a contact email, and the contact's confirmation click is what adds the collector
-to their Flanj workspace (`cp_deploy_token` is optional — for an operator's or per-account token):
+Copy `config/config.example.yaml`, which documents every key, set `cp_base_url`, and mount it over the
+baked path. No token is needed to Connect: the panel asks for a collector name and a contact email, and
+the contact's confirmation click is what adds the collector to their Flanj workspace
+(`cp_deploy_token` is optional — for an operator's or per-account token). The panel asks for no
+organization name: the contact names the workspace on the confirmation page, and that name — the one
+other organizations see on your threads — shows in the UI once it is set:
 
 ```bash
 docker run -d --name flanj \

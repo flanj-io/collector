@@ -24,7 +24,7 @@ import type { ConnectState } from './threads';
 
 const CONNECTED: ConnectState = {
   status: 'connected',
-  consumer_display_name: 'Acme',
+  workspace_display_name: 'Acme',
   contact_email: 'ops@acme.test',
   confirmed_contact_email: 'ops@acme.test'
 };

@@ -137,7 +137,7 @@ describe('the launch line on the Contracts card', () => {
 describe('the launch line never reaches the Flag sheet', () => {
   const CONNECTED: ConnectState = {
     status: 'connected',
-    consumer_display_name: 'Acme',
+    workspace_display_name: 'Acme',
     contact_email: 'ops@acme.test',
     confirmed_contact_email: 'ops@acme.test'
   };

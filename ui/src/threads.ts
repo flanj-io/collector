@@ -140,7 +140,11 @@ export interface ConnectState {
   /** The deployment's NAME (2026-09-14): unique in the workspace, changeable.
    *  The CP's copy — a rename made on the dashboard lands here through `me`. */
   collector_name?: string | null;
-  consumer_display_name?: string;
+  /** The workspace's display name (CONTRACTS §5, 2026-09-19): the ONE organization name this
+   *  collector shows — chosen by the contact on the control plane's confirmation page, cached by
+   *  the relay from `me` so it survives an unreachable control plane. null until it is known.
+   *  The collector no longer names its organization itself, so there is no org field here. */
+  workspace_display_name?: string | null;
   contact_email?: string;
   contact_display_name?: string;
   collector_public_id?: string;

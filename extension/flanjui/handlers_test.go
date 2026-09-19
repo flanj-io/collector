@@ -32,10 +32,15 @@ type stubCP struct {
 	contactEmail   string // the most recent (possibly pending) contact
 	confirmedEmail string // the contact usable for threads ("" until the first confirmation)
 	// totalCalls counts EVERY request that reached this stub, on any route.
-	totalCalls       int
-	registerCalls    int
-	registerAuths    []string // Authorization header of every register call, in order ("" = none sent)
-	collectorName    string   // the CP's copy of the name (2026-09-14): what register stored, what `me` reports
+	totalCalls    int
+	registerCalls int
+	registerAuths []string // Authorization header of every register call, in order ("" = none sent)
+	collectorName string   // the CP's copy of the name (2026-09-14): what register stored, what `me` reports
+	// workspaceName is what `me` reports as workspace_display_name: nil is the
+	// JSON null a CP answers until a contact has named the workspace.
+	workspaceName *string
+	// meStatus, when non-zero, makes `me` answer that status with an error body.
+	meStatus         int
 	flagCalls        int
 	state            map[string]string // thread id -> open|closed
 	replaceCalls     int
@@ -219,8 +224,16 @@ func newStubCP(t *testing.T) *stubCP {
 		if !keyed(w, r) {
 			return
 		}
+		if s.meStatus != 0 {
+			jsonOut(w, s.meStatus, map[string]string{"error": "cp_down", "message": "The control plane is down."})
+			return
+		}
 		if s.contactStatus == "confirmed" {
 			s.confirmedEmail = s.contactEmail
+		}
+		var workspace any
+		if s.workspaceName != nil {
+			workspace = *s.workspaceName
 		}
 		confirmedAt := ""
 		var confirmedEmail any
@@ -228,7 +241,7 @@ func newStubCP(t *testing.T) *stubCP {
 			confirmedAt = "2026-08-23T10:05:00Z"
 			confirmedEmail = s.confirmedEmail
 		}
-		jsonOut(w, 200, map[string]any{"collector_id": "c1", "collector_public_id": "pub_c1", "collector_name": s.collectorName, "consumer_display_name": "Acme Consumer Ltd",
+		jsonOut(w, 200, map[string]any{"collector_id": "c1", "collector_public_id": "pub_c1", "collector_name": s.collectorName, "consumer_display_name": "Acme Consumer Ltd", "workspace_display_name": workspace,
 			"contact_email": s.contactEmail, "contact_display_name": "Dana", "contact_status": s.contactStatus, "confirmed_contact_email": confirmedEmail,
 			"registered_at": "2026-08-23T10:00:00Z", "confirmed_at": confirmedAt})
 	})
@@ -629,8 +642,10 @@ func TestConnectThenFlagLoop(t *testing.T) {
 	if _, has := r.cp.lastFlagBody["invitee_email"]; has {
 		t.Errorf("invitee_email must not be sent: %v", r.cp.lastFlagBody)
 	}
-	if r.cp.lastFlagBody["consumer_display_name"] != "Acme Consumer Ltd" {
-		t.Errorf("flag body names: %v", r.cp.lastFlagBody)
+	// No workspace name is known yet (the stub's `me` reports null), so the
+	// deprecated field is omitted rather than filled from config or Connect.
+	if v, has := r.cp.lastFlagBody["consumer_display_name"]; has {
+		t.Errorf("flag body must omit consumer_display_name until the workspace is named, got %v", v)
 	}
 	// No provider name on the wire (2026-09-19): the control plane names the
 	// provider side of the thread itself.
@@ -732,9 +747,9 @@ func TestConnectThenFlagLoop(t *testing.T) {
 func TestConnectValidation(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
-	resp, out, _ := r.do(t, http.MethodPost, "/api/connect", map[string]string{"consumer_display_name": "", "collector_name": "prod-eu", "contact_email": "x@y.z"})
+	resp, out, _ := r.do(t, http.MethodPost, "/api/connect", map[string]string{"collector_name": "prod-eu", "contact_email": ""})
 	if resp.StatusCode != 400 || out["error"] != "missing_fields" {
-		t.Errorf("missing org: %d %v", resp.StatusCode, out)
+		t.Errorf("missing email: %d %v", resp.StatusCode, out)
 	}
 	resp, out, _ = r.do(t, http.MethodPost, "/api/connect", map[string]string{"consumer_display_name": "Acme", "collector_name": "prod-eu", "contact_email": "not-an-email"})
 	if resp.StatusCode != 400 || out["error"] != "invalid_email" {
@@ -796,7 +811,7 @@ func decodeThreadList(t *testing.T, raw []byte) threadListBody {
 func TestThreadsListSourceIsTheControlPlane(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
-	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, ConsumerDisplayName: "Acme", ContactEmail: "ops@acme.test", ContactStatus: "confirmed"})
+	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, WorkspaceDisplayName: "Acme", ContactEmail: "ops@acme.test", ContactStatus: "confirmed"})
 	// A local record whose thread the CP does NOT list any more (deleted /
 	// tombstoned): the CP is the list, so it must not appear.
 	_ = saveThread(r.st, threadRecord{ThreadID: "thr_gone", ThreadPublicID: "p", FindingID: "fnd_gone", Endpoint: "POST /v1/charges",
@@ -876,7 +891,7 @@ func TestThreadsListSourceIsTheControlPlane(t *testing.T) {
 func TestThreadsListWritesNoPointers(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
-	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, ConsumerDisplayName: "Acme", ContactEmail: "ops@acme.test", ContactStatus: "confirmed"})
+	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, WorkspaceDisplayName: "Acme", ContactEmail: "ops@acme.test", ContactStatus: "confirmed"})
 	r.cp.mu.Lock()
 	r.cp.state["thr_1"] = "open"
 	r.cp.track("thr_1")
@@ -918,7 +933,7 @@ func TestThreadsListWritesNoPointers(t *testing.T) {
 func TestThreadsReplaceLinkPersistsOnEveryRow(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
-	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, ConsumerDisplayName: "Acme", ContactEmail: "ops@acme.test", ContactStatus: "confirmed"})
+	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, WorkspaceDisplayName: "Acme", ContactEmail: "ops@acme.test", ContactStatus: "confirmed"})
 	r.cp.mu.Lock()
 	r.cp.state["thr_2"] = "open"
 	r.cp.track("thr_2")
@@ -1008,7 +1023,7 @@ func TestFindThreadByIDRejectsAStalePointer(t *testing.T) {
 func TestStaleThreadPointerOperatesOnTheRequestedThread(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
-	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, ConsumerDisplayName: "Acme", ContactEmail: "ops@acme.test", ContactStatus: "confirmed"})
+	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, WorkspaceDisplayName: "Acme", ContactEmail: "ops@acme.test", ContactStatus: "confirmed"})
 	_ = saveThread(r.st, threadRecord{ThreadID: "thr_old", FindingID: "fnd_1", ThreadURL: "https://cp.test/t/pub_old#k=old"})
 	_ = saveThread(r.st, threadRecord{ThreadID: "thr_new", FindingID: "fnd_1", ThreadURL: "https://cp.test/t/pub_new#k=new"})
 	r.cp.mu.Lock()
@@ -1043,7 +1058,7 @@ func TestStaleThreadPointerOperatesOnTheRequestedThread(t *testing.T) {
 func TestThreadsListTruncationIsHonest(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
-	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, ConsumerDisplayName: "Acme", ContactEmail: "ops@acme.test", ContactStatus: "confirmed"})
+	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, WorkspaceDisplayName: "Acme", ContactEmail: "ops@acme.test", ContactStatus: "confirmed"})
 	r.cp.mu.Lock()
 	r.cp.state["thr_1"] = "open"
 	r.cp.track("thr_1")
@@ -1090,7 +1105,7 @@ func TestThreadsListNotConnectedIsNotAnEmptyList(t *testing.T) {
 func TestThreadsListErrorStates(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
-	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, ConsumerDisplayName: "Acme", ContactEmail: "ops@acme.test", ContactStatus: "confirmed"})
+	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, WorkspaceDisplayName: "Acme", ContactEmail: "ops@acme.test", ContactStatus: "confirmed"})
 	// A typed CP error passes through with its status + code.
 	r.cp.mu.Lock()
 	r.cp.listStatus = 429
@@ -1275,7 +1290,7 @@ func TestConnectedAddressUpdate(t *testing.T) {
 func TestFlagGateBeforeFirstConfirmation(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
-	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, ConsumerDisplayName: "Acme", ContactEmail: "ops@acme.test", ContactStatus: "pending"})
+	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, WorkspaceDisplayName: "Acme", ContactEmail: "ops@acme.test", ContactStatus: "pending"})
 	resp, out, _ := r.do(t, http.MethodPost, "/api/flag", map[string]any{"finding_id": "fnd_1", "allowed_domains": []string{"acme-payments.test"}})
 	if resp.StatusCode != 412 || out["error"] != "contact_unconfirmed" {
 		t.Fatalf("flag with no confirmed contact: %d %v", resp.StatusCode, out)
@@ -1295,7 +1310,7 @@ func TestFlagRefusesLocalOnlyKinds(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
 	// Connected with a confirmed contact — the refusal is about the KIND, not the gate.
-	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, ConsumerDisplayName: "Acme",
+	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, WorkspaceDisplayName: "Acme",
 		ContactEmail: "ops@acme.test", ContactStatus: "confirmed", ConfirmedContactEmail: "ops@acme.test"})
 	r.cp.mu.Lock()
 	r.cp.contactEmail, r.cp.contactStatus, r.cp.confirmedEmail = "ops@acme.test", "confirmed", "ops@acme.test"
@@ -1414,7 +1429,7 @@ func TestFlagRefusesLocalOnlyKinds(t *testing.T) {
 func TestFlagEvictedCallStillRefuses(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
-	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, ConsumerDisplayName: "Acme",
+	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, WorkspaceDisplayName: "Acme",
 		ContactEmail: "ops@acme.test", ContactStatus: "confirmed", ConfirmedContactEmail: "ops@acme.test"})
 	r.cp.mu.Lock()
 	r.cp.contactEmail, r.cp.contactStatus, r.cp.confirmedEmail = "ops@acme.test", "confirmed", "ops@acme.test"
@@ -1446,7 +1461,7 @@ func TestFlagNeverSendsProviderDisplayName(t *testing.T) {
 	r := newRig(t)
 	r.ext.cfg.ProviderDisplayName = "Configured Acme Payments" // deprecated config key, still set
 	r.start(t)                                                 // seeds fnd_1 / call_1, integration "acme-payments"
-	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, ConsumerDisplayName: "Acme",
+	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, WorkspaceDisplayName: "Acme",
 		ContactEmail: "ops@acme.test", ContactStatus: "confirmed", ConfirmedContactEmail: "ops@acme.test"})
 	r.cp.mu.Lock()
 	r.cp.contactEmail, r.cp.contactStatus, r.cp.confirmedEmail = "ops@acme.test", "confirmed", "ops@acme.test"
@@ -1474,12 +1489,12 @@ func TestConnectRedactsDisplayNames(t *testing.T) {
 	r.start(t)
 	const pan = "4242424242424242"
 	resp, out, raw := r.do(t, http.MethodPost, "/api/connect", map[string]string{
-		"consumer_display_name": "Acme " + pan + " Ltd", "collector_name": "prod-eu " + pan, "contact_email": "ops@acme.test", "contact_display_name": "Dana " + pan})
+		"collector_name": "prod-eu " + pan, "contact_email": "ops@acme.test", "contact_display_name": "Acme " + pan + " Ltd"})
 	if resp.StatusCode != 202 {
 		t.Fatalf("connect: %d %s", resp.StatusCode, raw)
 	}
-	sent, _ := r.cp.lastRegisterBody["consumer_display_name"].(string)
-	sentContact, _ := r.cp.lastRegisterBody["contact_display_name"].(string)
+	sent, _ := r.cp.lastRegisterBody["contact_display_name"].(string)
+	sentContact, _ := r.cp.lastRegisterBody["collector_name"].(string)
 	if strings.Contains(sent, pan) || strings.Contains(sentContact, pan) {
 		t.Fatalf("PAN left the collector in a display name: %q / %q", sent, sentContact)
 	}
@@ -1497,8 +1512,8 @@ func TestConnectRedactsDisplayNames(t *testing.T) {
 	if bytes.Contains(raw, []byte(pan)) {
 		t.Errorf("PAN echoed in the connect response")
 	}
-	if out["consumer_display_name"] != sent {
-		t.Errorf("response name %v != sent %q", out["consumer_display_name"], sent)
+	if out["contact_display_name"] != sent {
+		t.Errorf("response name %v != sent %q", out["contact_display_name"], sent)
 	}
 }
 
@@ -1637,7 +1652,7 @@ func TestLegacyThreadIndexNeverCleared(t *testing.T) {
 func TestLegacyThreadIndexRecoveryIsLazyAndRepeatable(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
-	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, ConsumerDisplayName: "Acme", ContactEmail: "ops@acme.test", ContactStatus: "confirmed"})
+	_ = saveConnect(r.st, connectState{CollectorKey: r.cp.collectorKey, WorkspaceDisplayName: "Acme", ContactEmail: "ops@acme.test", ContactStatus: "confirmed"})
 	b, _ := json.Marshal(threadRecord{ThreadID: "thr_1", ThreadPublicID: "pub_thr_1", FindingID: "fnd_1", Endpoint: "POST /v1/charges",
 		Provider: "Acme Payments", Integration: "acme-payments", ThreadURL: "https://cp.test/t/pub_thr_1#k=tok_1", CreatedAt: "2026-08-23T10:00:00Z"})
 	_ = r.st.PutSetting(settingThreadPrefix+"fnd_1", string(b))

@@ -36,8 +36,7 @@ the same registry as the image:
 ```bash
 helm install flanj oci://registry-1.docker.io/flanj/flanj-collector \
   --namespace flanj --create-namespace \
-  --set specToken.value="$(openssl rand -hex 32)" \
-  --set integration.consumerDisplayName='Acme Consumer Ltd'
+  --set specToken.value="$(openssl rand -hex 32)"
 ```
 
 It renders both role configs from your values, gives **both roles the same

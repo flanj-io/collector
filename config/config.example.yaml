@@ -47,7 +47,11 @@ extensions:
     ui_endpoint: 127.0.0.1:5335 # loopback only — the collector is outbound-only
     # integration_id: REMOVED (CONTRACTS §8, 2026-09-14). The deployment's identity is its collector
     # NAME, given in the Connect panel; a config that still carries the key boots with a warning.
-    consumer_display_name: Acme Consumer Ltd
+    # consumer_display_name: DEPRECATED (2026-09-19), accepted and IGNORED. The collector no longer names
+    #                         its organization: a workspace has ONE display name, which its contact chooses
+    #                         on the control plane's confirmation page, and the collector reads it back and
+    #                         shows it once known. Kept here only so an existing config keeps loading.
+    # consumer_display_name: Acme Consumer Ltd
     # provider_display_name: DEPRECATED (2026-09-19), accepted and IGNORED. It used to be the fallback
     #                         provider name sent on a flag; the control plane now names the provider side
     #                         of every thread itself (verified domain ownership, else a verified directory

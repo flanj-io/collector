@@ -16,7 +16,6 @@ import { START_THREAD_LABEL } from './edge-names';
 const HEALTH = {
   status: 'ok',
   integration_id: 'acme-payments',
-  consumer_display_name: 'Acme Consumer Ltd',
   connect_status: 'connected'
 };
 
@@ -49,7 +48,7 @@ const EDGES = [
 
 const CONNECT = {
   status: 'connected',
-  consumer_display_name: 'Acme Consumer Ltd',
+  workspace_display_name: 'Acme Consumer Ltd',
   contact_email: 'ops@acme.test',
   confirmed_contact_email: 'ops@acme.test'
 };

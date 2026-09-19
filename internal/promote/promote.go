@@ -51,8 +51,13 @@ import (
 // `contracts/cp-flag-request.schema.json` as optional so a body that omits it
 // entirely — this one — still validates.
 type FlagRequest struct {
-	IdempotencyKey      string `json:"idempotency_key"`
-	ConsumerDisplayName string `json:"consumer_display_name"`
+	IdempotencyKey string `json:"idempotency_key"`
+	// ConsumerDisplayName is DEPRECATED on the wire (CONTRACTS §5, 2026-09-19)
+	// and optional: the control plane names the sender from the flagging
+	// workspace's display name. The relay sends its cached copy of that name
+	// (read back from `me`) when it has one and otherwise omits the field —
+	// never a configured value.
+	ConsumerDisplayName string `json:"consumer_display_name,omitempty"`
 	ProviderHost        string `json:"provider_host,omitempty"`
 	Message             string `json:"message"`
 	// AllowedDomains is who may OPEN the thread (CONTRACTS §5, thread-domain-gate

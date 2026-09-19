@@ -2,7 +2,6 @@
 specToken:
   value: ci-small-prod-token-not-a-real-secret
 integration:
-  consumerDisplayName: Acme Consumer Ltd
   providerDisplayName: Acme Payments
 controlPlane:
   baseUrl: http://cp-api.flanj:3001
