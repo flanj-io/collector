@@ -206,6 +206,25 @@ changed with it; there are no compatibility aliases:
 
 See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the operator checklist.
 
+## Upgrading: the collector derives the integration key
+
+The collector works out which integration a record belongs to when the record arrives, instead of
+reading an id from the SDK. An outbound HTTP call and every MCP record take the key from the peer
+host (`api.acme.com` → `api-acme-com`); an inbound call takes the service name it reached. The SDKs no
+longer send an id, and one that still does is ignored, so old and new SDKs land on the same key.
+
+What that means when you upgrade:
+
+- **Records captured before the upgrade keep their old keys, and there is no backfill.** They are
+  never merged with the new ones. Old calls age out with the rolling retention window; nothing has to
+  be migrated by hand.
+- **An open finding reopens once.** A finding's identity starts with its integration, so the next
+  occurrence of an already-open outbound or MCP finding opens a new finding under the derived key, and
+  the old one stops accruing. Findings from your own published contract are unaffected.
+- **MCP catalogues re-key themselves once, at startup.** A tool list stored under an SDK-sent id moves
+  to the derived key; when two collapse onto one key the newest wins; starting again moves nothing.
+- **Nothing to configure.** There is no id to set any more, in the collector or in an SDK.
+
 ## Status
 
 Pre-release (v0). See [docs/CONCEPTS.md](docs/CONCEPTS.md) and [CLAUDE.md](CLAUDE.md).
