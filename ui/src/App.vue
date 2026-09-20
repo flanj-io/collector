@@ -145,6 +145,7 @@ import {
 import {
   breakingNowTitle,
   countTiers,
+  tabAriaLabel,
   unresolvedCount,
   wouldBreakChipLabel,
   wouldBreakTitle,
@@ -1889,7 +1890,18 @@ watch(tab, (t) => {
       <button role="tab" :aria-selected="tab === 'traffic'" :class="{ active: tab === 'traffic' }" @click="setTab('traffic')">
         Traffic
       </button>
-      <button role="tab" :aria-selected="tab === 'contract'" :class="{ active: tab === 'contract' }" @click="setTab('contract')">
+      <!-- The tab names itself. Without this the three pills' sentences — each
+           there so no tier rests on colour alone — concatenate into the tab's
+           accessible name, and a screen reader reads all forty words on every
+           focus. A name on the button wins over its contents, so the pills keep
+           their own sentences for anything that inspects them directly. -->
+      <button
+        role="tab"
+        :aria-selected="tab === 'contract'"
+        :aria-label="tabAriaLabel('Contracts', contractTiers)"
+        :class="{ active: tab === 'contract' }"
+        @click="setTab('contract')"
+      >
         Contracts
         <!-- Three tiers, in order of urgency: red = breaking in live traffic
              now · copper = would break when a newer contract version takes

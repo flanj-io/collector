@@ -5,6 +5,7 @@ import {
   breakingNowTitle,
   countTiers,
   isAheadOfLive,
+  tabAriaLabel,
   isWouldBreakRow,
   tierOf,
   unresolvedCount,
@@ -253,5 +254,38 @@ describe('each tier says what it counts, so the colour is never the only signal'
       worthKnowingTitle(1, true)
     ];
     expect(new Set(titles).size).toBe(titles.length);
+  });
+});
+
+describe('the tab names itself, so the pills do not name it for it', () => {
+  const counts = (rows: TierFinding[]) => countTiers(rows);
+
+  it('lists each populated tier, short enough to hear on every focus', () => {
+    expect(tabAriaLabel('Contracts', counts([live(), versionDiff(), versionDiff(), versionDiff(), description()]))).toBe(
+      'Contracts: 1 breaking now, 3 would break, 1 worth knowing'
+    );
+  });
+
+  it('leaves out an empty tier rather than announcing a zero', () => {
+    expect(tabAriaLabel('Contracts', counts([versionDiff()]))).toBe('Contracts: 1 would break');
+    expect(tabAriaLabel('Contracts', counts([live(), description()]))).toBe(
+      'Contracts: 1 breaking now, 1 worth knowing'
+    );
+  });
+
+  it('is just the name when there is nothing to count', () => {
+    expect(tabAriaLabel('Contracts', counts([]))).toBe('Contracts');
+    // An acknowledged row is listed but has no pill, so it adds nothing here.
+    expect(tabAriaLabel('Contracts', counts([description({ acked: true, acked_evidence_version: 'sha256:bbbb' })]))).toBe(
+      'Contracts'
+    );
+  });
+
+  it('stays far shorter than the pill sentences it replaces', () => {
+    const c = counts([live(), versionDiff(), description()]);
+    const pillWords = [breakingNowTitle(1), wouldBreakTitle([versionDiff()]), worthKnowingTitle(1, true)]
+      .join(' ')
+      .split(/\s+/).length;
+    expect(tabAriaLabel('Contracts', c).split(/\s+/).length).toBeLessThan(pillWords / 2);
   });
 });

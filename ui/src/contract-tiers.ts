@@ -161,6 +161,31 @@ export function countTiers(rows: readonly TierFinding[]): TierCounts {
   return counts;
 }
 
+/**
+ * The tab button's own accessible name: `Contracts: 1 breaking now, 3 would
+ * break, 1 worth knowing`, or just the name when every tier is empty.
+ *
+ * Why the tab needs one at all. Each pill carries a full sentence as its
+ * `aria-label`, so that no tier is conveyed by colour alone. But the pills sit
+ * INSIDE the tab button, and a button with no name of its own is named by its
+ * contents — so the three sentences concatenated into a forty-word tab name
+ * that a screen reader read out on every focus, in full, every time.
+ *
+ * An explicit name on the button wins over its contents (accname: aria-label
+ * before content), which collapses that to one short phrase while leaving each
+ * pill's own sentence intact for anything that inspects a pill directly, and
+ * leaving the hover titles untouched. Short enough to hear on every focus,
+ * and it still says what each number counts — which is the actual requirement
+ * the long labels were serving.
+ */
+export function tabAriaLabel(name: string, c: TierCounts): string {
+  const parts: string[] = [];
+  if (c.breakingNow) parts.push(`${c.breakingNow} breaking now`);
+  if (c.wouldBreak) parts.push(`${c.wouldBreak} would break`);
+  if (c.worthKnowing) parts.push(`${c.worthKnowing} worth knowing`);
+  return parts.length ? `${name}: ${parts.join(', ')}` : name;
+}
+
 /** Rows a tier pill speaks for — everything the three pills count together. */
 export function unresolvedCount(c: TierCounts): number {
   return c.breakingNow + c.wouldBreak + c.worthKnowing;

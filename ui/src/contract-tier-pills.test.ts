@@ -211,6 +211,19 @@ describe('2 live breaking + 3 version-diff breaking + 1 informational', () => {
     }
   });
 
+  it('the tab names itself, so those three sentences are not read as its name', async () => {
+    // The pill labels sit INSIDE the tab button, and a button with no name of
+    // its own is named by its contents — which made the tab announce all three
+    // sentences, in full, on every focus (QA walk). A name on the button wins
+    // over its contents and collapses that, without touching the pills.
+    const w = await mountApp();
+    const tab = w.findAll('[role="tab"]').find((t) => t.text().includes('Contracts'))!;
+    expect(tab.attributes('aria-label')).toBe('Contracts: 2 breaking now, 3 would break, 1 worth knowing');
+    // ...and each pill still carries its own full sentence for anything that
+    // inspects a pill directly.
+    expect(w.find('.tab-count.bad').attributes('aria-label')).toBe('2 breaking drift findings in live traffic');
+  });
+
   it('the pills add up to the rows the tab lists', async () => {
     const w = await mountApp();
     window.location.hash = '#contracts';
