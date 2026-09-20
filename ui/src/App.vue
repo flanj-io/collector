@@ -1064,7 +1064,12 @@ const contractCards = computed<{ self: ContractCard[]; mcpServers: ContractCard[
   // see findingBelongsToContract. An uploaded contract's integration is derived
   // from its host while a finding's comes from the call, so an
   // integration-only join split one provider into two cards.
-  const unclaimed = [...liveFindings.value, ...versionDiffFindings.value, ...mcpContractFindings.value];
+  const unclaimed = [
+    ...liveFindings.value,
+    ...versionDiffFindings.value,
+    ...deprecationFindings.value,
+    ...mcpContractFindings.value
+  ];
   const hostOfCall = (id: string) => callsById.value[id]?.peer_host;
   const claim = (spec: SpecInfo): Finding[] => {
     const mine: Finding[] = [];
@@ -1291,6 +1296,25 @@ const liveFindings = computed(() => findings.value.filter((f) => f.kind === 'liv
 // `#contracts/<id>` deep link landed on an anchor that did not exist.
 const versionDiffFindings = computed(() => findings.value.filter((f) => f.kind === 'version-diff'));
 
+/**
+ * Deprecation findings: a provider announcing that something your traffic uses
+ * is going away. NOTHING DETECTS THESE YET — this filter matches no row today.
+ *
+ * It exists because the tiering seam is inert without it. `contract-tiers.ts`
+ * counts a deprecation row in the would-break tier, but the tab only ever sees
+ * the rows in `contractTabRows`, and a kind that is in none of the filters
+ * below reaches no surface at all: not its provider's card, not any pill, not
+ * a Flag control. That is exactly how the version diff was lost once — in the
+ * model, produced by the upload path, and rendered nowhere.
+ *
+ * So the row set accepts the kind now. A deprecation row renders through the
+ * generic finding row like every other kind, and carries the same Flag control
+ * (`!isLocalNotice`). Its own badge wording and whatever a sunset date should
+ * look like belong with the change that detects them; this is the plumbing
+ * only, and it adds no detection.
+ */
+const deprecationFindings = computed(() => findings.value.filter((f) => f.kind === 'deprecation'));
+
 // ─── MCP (v0.5 Step D) ───────────────────────────────────────────────────
 // The MCP contract surface is SELF-DELIVERING: the server's observed
 // tools/list arrives with the traffic and is stored as an MCP catalogue, apart
@@ -1431,7 +1455,12 @@ const mcpContractFindings = computed(() =>
 //                              that copper means "would break".
 //
 // Invariant: red + copper + steel + acknowledged = the rows listed on the tab.
-const contractTabRows = computed(() => [...liveFindings.value, ...versionDiffFindings.value, ...mcpContractFindings.value]);
+const contractTabRows = computed(() => [
+  ...liveFindings.value,
+  ...versionDiffFindings.value,
+  ...deprecationFindings.value,
+  ...mcpContractFindings.value
+]);
 const contractTiers = computed(() => countTiers(contractTabRows.value));
 const contractBreakingNowCount = computed(() => contractTiers.value.breakingNow);
 const contractWouldBreakCount = computed(() => contractTiers.value.wouldBreak);

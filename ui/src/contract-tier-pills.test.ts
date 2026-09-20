@@ -273,3 +273,94 @@ describe('with no version diffs, the copper pill is not rendered at all', () => 
     expect(w.find('.tab-count.worth-knowing').exists()).toBe(false);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FORWARD-COMPAT. Nothing in this repo detects deprecations, and nothing here
+// adds detection: this drives a hand-written finding through the stubbed
+// findings API, exactly as the read API would deliver one.
+//
+// It exists because the tiering seam is INERT without the row set. The pure
+// module counts a deprecation row copper, but the tab only ever sees the rows
+// in `contractTabRows` — so a unit test that feeds the module directly passes
+// while the finding reaches no surface at all. That is the version diff's own
+// history repeating: in the model, produced, and rendered nowhere. This test
+// goes through the mounted app for that reason and no other.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const DEPRECATION = {
+  id: 'fnd_dep_1',
+  kind: 'deprecation',
+  severity: 'warning',
+  integration: INTEGRATION,
+  endpoint: 'POST /v1/charges',
+  field_path: 'source',
+  location: 'request',
+  expected: 'source',
+  actual: 'deprecated',
+  rule: 'deprecated-parameter',
+  source_call_id: 'call_1',
+  detected_at: '2026-09-02T12:00:03Z',
+  detail: 'the `source` parameter is marked deprecated',
+  occurrence_count: 1
+};
+
+describe('a deprecation finding reaches the tab and lands in the copper tier', () => {
+  async function mountWith(findings: unknown[]): Promise<VueWrapper> {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const map = { ...bodies(), '/api/findings': { findings } };
+        const path = String(input).split('?')[0];
+        const body = (map as Record<string, unknown>)[path];
+        return json(body ?? {}, body === undefined ? 404 : 200);
+      })
+    );
+    return mountApp();
+  }
+
+  it('is listed on its provider card, not dropped on the floor', async () => {
+    const w = await mountWith([DEPRECATION]);
+    window.location.hash = '#contracts';
+    await w.vm.$nextTick();
+    const row = w.find(`#finding-${DEPRECATION.id}`);
+    expect(row.exists(), 'a kind in none of the row filters renders nowhere at all').toBe(true);
+    expect(w.find('.provider').text()).toContain(DEPRECATION.endpoint);
+    // The generic row gives it the same Flag control as every other non-local
+    // kind — no bespoke row design is needed for the plumbing to be correct.
+    expect(row.find('button.flag').exists()).toBe(true);
+  });
+
+  it('counts copper, never red and never steel — it is not failing yet', async () => {
+    const w = await mountWith([DEPRECATION]);
+    expect(w.find('.tab-count.would-break').text()).toBe('1');
+    expect(w.find('.tab-count.bad').exists()).toBe(false);
+    expect(w.find('.tab-count.worth-knowing').exists()).toBe(false);
+    // ...and the copper sentence describes THIS row, rather than naming a
+    // contract version that has nothing to do with it.
+    const pill = w.find('.tab-count.would-break');
+    expect(pill.attributes('title')).toBe('1 deprecation affecting your traffic — nothing is breaking yet');
+    expect(pill.attributes('aria-label')).toBe(pill.attributes('title'));
+  });
+
+  it('is not live drift: the Overview headline and the tab invariant both hold', async () => {
+    const w = await mountWith([...FINDINGS, DEPRECATION]);
+    // The headline counts LIVE drift only. A deprecation is an announcement,
+    // so the headline must read exactly as it did without it.
+    expect(w.find('.headline').text()).toContain('2 contract drift findings');
+    expect(w.find('.tab-count.bad').text()).toBe('2');
+    // Copper absorbs it beside the version diffs, and the sentence widens to
+    // one true of both rather than keeping a version-only claim.
+    expect(w.find('.tab-count.would-break').text()).toBe('4');
+    expect(w.find('.tab-count.would-break').attributes('title')).toBe(
+      '4 changes that will break you later — nothing is breaking yet'
+    );
+
+    window.location.hash = '#contracts';
+    await w.vm.$nextTick();
+    const n = (sel: string) => (w.find(sel).exists() ? parseInt(w.find(sel).text(), 10) : 0);
+    const pills = n('.tab-count.bad') + n('.tab-count.would-break') + n('.tab-count.worth-knowing');
+    expect(pills, 'red + copper + steel + acknowledged = the rows listed').toBe(
+      w.findAll('.provider .finding').length
+    );
+  });
+});

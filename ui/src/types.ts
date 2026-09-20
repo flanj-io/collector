@@ -69,7 +69,13 @@ export type FindingKind =
   // previously succeeded was rejected with -32602 (change_kind
   // `observed_failure`).
   | 'value_change'
-  | 'input_rejection';
+  | 'input_rejection'
+  // A provider announcing that something your traffic uses is going away. The
+  // collector does not detect these yet; the kind is here so the UI's row set
+  // and its tab tiers ACCEPT one the day it does, rather than dropping it on
+  // the floor silently — a finding that reaches no surface is the failure mode
+  // the version diff already had once.
+  | 'deprecation';
 
 /** WHAT moved. A finer axis than `kind`, independent of `severity`. */
 export type ChangeKind = 'wording' | 'input' | 'output' | 'catalog' | 'value' | 'observed_failure';
