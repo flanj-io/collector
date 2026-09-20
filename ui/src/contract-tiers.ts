@@ -19,10 +19,14 @@
 //                            you read this. Equals the Overview headline's
 //                            count and the drifted rows beside it, by
 //                            construction: same population, same question.
-//   COPPER would break     — breaking changes found by diffing two VERSIONS of
-//                            a contract. Nothing is failing yet; providers
-//                            usually run a deprecation window, so this is a
-//                            warning with time on it, never red.
+//   COPPER would break     — a change that WILL break you, evidenced ahead of
+//                            live traffic: today, breaking changes found by
+//                            diffing two VERSIONS of a contract. Nothing is
+//                            failing yet; providers usually run a deprecation
+//                            window, so this is a warning with time on it,
+//                            never red. A deprecation notice belongs here for
+//                            the same reason, and the kind lists below already
+//                            put it here.
 //   STEEL  worth knowing   — un-acknowledged informational rows (NON-BREAKING
 //                            and DESCRIPTION). Always the steel outline: copper
 //                            means "would break" now, and two coppers with
@@ -62,34 +66,63 @@ export interface TierFinding {
 }
 
 /**
- * The kinds whose evidence is two VERSIONS of a contract rather than live
- * traffic — the copper tier. A finding of one of these kinds describes what
- * WILL break when the newer version takes effect; nothing has failed yet.
+ * The kinds whose evidence sits AHEAD of live traffic — a document or an
+ * announcement, not a call. A row of one of these kinds can never be "breaking
+ * now", however severe it is, because nothing has failed yet.
  *
- * SEAM — deprecation findings: a provider announcing that a field or an
- * operation is going away is the same shape of news (breaking, later, with a
- * window to act in) and belongs in this tier. The collector does not detect
- * them today. When it does, adding that kind to this list is the whole change
- * on this side: the pill, its sentence, the card chip and the invariant all
- * follow from the list. Do NOT add detection here — this module only sorts.
+ * SEAM. `deprecation` is listed before anything emits it, on purpose: a
+ * provider announcing that a field or an operation is going away is the same
+ * shape of news as a version diff (it will break you, later, with a window to
+ * act in), and listing it here means the counting needs no change on the day
+ * the collector starts detecting them. Nothing detects them today and nothing
+ * here pretends otherwise — this module only sorts rows it is handed.
  */
-export const WOULD_BREAK_KINDS: readonly string[] = ['version-diff'];
+export const AHEAD_OF_LIVE_KINDS: readonly string[] = ['version-diff', 'deprecation'];
 
-/** Is this row's evidence a version diff rather than live traffic? */
-export function isWouldBreakKind(f: Pick<TierFinding, 'kind'>): boolean {
-  return WOULD_BREAK_KINDS.includes(f.kind);
+/**
+ * Of those, the kinds that ANNOUNCE a break whatever severity they are stamped
+ * with. A deprecation notice is the announcement itself: it says something
+ * will stop working, and the window is the whole point, so it is copper at
+ * `warning` severity just as much as at `breaking`. A version diff is not —
+ * its non-breaking rows really are only worth knowing, and calling them
+ * "would break" under a sentence that says "breaking changes" would be a lie
+ * the tier exists to prevent.
+ */
+export const ANNOUNCED_BREAK_KINDS: readonly string[] = ['deprecation'];
+
+/** Is this row's evidence ahead of live traffic (a document, an announcement)
+ *  rather than a call that failed? */
+export function isAheadOfLive(f: Pick<TierFinding, 'kind'>): boolean {
+  return AHEAD_OF_LIVE_KINDS.includes(f.kind);
 }
 
 /**
- * Which tier a row counts in. Exactly one, always — the branches are total.
+ * Does this row say something WILL break? True for a breaking version diff,
+ * and for a deprecation at any severity. This is the copper tier's predicate.
+ */
+export function isWouldBreakRow(f: Pick<TierFinding, 'kind' | 'severity'>): boolean {
+  if (!isAheadOfLive(f)) return false;
+  return isBreakingFinding(f) || ANNOUNCED_BREAK_KINDS.includes(f.kind);
+}
+
+/**
+ * Which tier a row counts in. Exactly one, always — the branches are total,
+ * which is what makes the invariant above hold rather than nearly hold.
  *
- * A version-diff row keeps its own `breaking` severity on its own row badge
- * and stays flaggable: only the SUMMARY it counts towards moves. What changed
- * is which number on the tab strip speaks for it, not what the row says about
- * itself.
+ * Evidence is asked FIRST, severity second. A breaking-severity row whose
+ * evidence is a document is not breaking anything yet, and red is reserved for
+ * what is failing in live traffic now.
+ *
+ * A row keeps its own severity on its own row badge and stays flaggable: only
+ * the SUMMARY it counts towards moves. What changed is which number on the tab
+ * strip speaks for it, not what the row says about itself.
  */
 export function tierOf(f: TierFinding): ContractTier {
-  if (isBreakingFinding(f)) return isWouldBreakKind(f) ? 'would-break' : 'breaking-now';
+  if (isWouldBreakRow(f)) return 'would-break';
+  // An ahead-of-live row that will NOT break anyone (a non-breaking version
+  // diff) falls through to the informational tiers below, with everything else
+  // that is merely worth knowing.
+  if (isBreakingFinding(f) && !isAheadOfLive(f)) return 'breaking-now';
   return isAcked(f) ? 'acknowledged' : 'worth-knowing';
 }
 
@@ -139,9 +172,19 @@ export function breakingNowTitle(n: number): string {
   return `${n} breaking drift finding${n === 1 ? '' : 's'} in live traffic`;
 }
 
-/** Copper pill: `3 breaking changes in a newer contract version — nothing is
- *  breaking yet`. The second clause is the tier: red is what is failing now,
- *  copper is what will fail when the newer version takes effect. */
+/**
+ * Copper pill: `3 breaking changes in a newer contract version — nothing is
+ * breaking yet`. The second clause is the tier: red is what is failing now,
+ * copper is what will fail when the newer version takes effect.
+ *
+ * HANDOFF, and the ONE thing on this side a deprecation change must touch:
+ * the tiering already counts a deprecation row here (ANNOUNCED_BREAK_KINDS),
+ * but this sentence names a newer contract VERSION, which does not describe a
+ * deprecation notice. Whoever teaches the collector to detect deprecations
+ * owns making this line true of a mixed tier — the counting needs no change,
+ * the copy does. Leaving it as-is would put a pill over rows it misdescribes,
+ * which is the exact failure the tiers were introduced to end.
+ */
 export function wouldBreakTitle(n: number): string {
   return `${n} breaking change${n === 1 ? '' : 's'} in a newer contract version — nothing is breaking yet`;
 }

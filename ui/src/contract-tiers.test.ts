@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
-  WOULD_BREAK_KINDS,
+  AHEAD_OF_LIVE_KINDS,
+  ANNOUNCED_BREAK_KINDS,
   breakingNowTitle,
   countTiers,
-  isWouldBreakKind,
+  isAheadOfLive,
+  isWouldBreakRow,
   tierOf,
   unresolvedCount,
   wouldBreakChipLabel,
@@ -84,17 +86,48 @@ describe('which tier a row counts in', () => {
   });
 });
 
-describe('the would-break kind list is the seam', () => {
-  it('lists the version diff today and nothing else', () => {
-    expect([...WOULD_BREAK_KINDS]).toEqual(['version-diff']);
+describe('the kind lists are the seam', () => {
+  it('names the kinds whose evidence is ahead of live traffic', () => {
+    expect([...AHEAD_OF_LIVE_KINDS]).toEqual(['version-diff', 'deprecation']);
+    expect(isAheadOfLive({ kind: 'version-diff' })).toBe(true);
+    expect(isAheadOfLive({ kind: 'deprecation' })).toBe(true);
+    expect(isAheadOfLive({ kind: 'live-vs-spec' })).toBe(false);
+    expect(isAheadOfLive({ kind: 'output_mismatch' })).toBe(false);
   });
 
-  it('decides the tier by kind alone, so adding a kind is the whole change', () => {
-    expect(isWouldBreakKind({ kind: 'version-diff' })).toBe(true);
-    expect(isWouldBreakKind({ kind: 'live-vs-spec' })).toBe(false);
-    // Deprecations are not detected yet — the seam is the list above, and
-    // nothing here pretends otherwise.
-    expect(isWouldBreakKind({ kind: 'deprecation' })).toBe(false);
+  it('names the kinds that announce a break whatever severity they carry', () => {
+    expect([...ANNOUNCED_BREAK_KINDS]).toEqual(['deprecation']);
+  });
+
+  // FORWARD-COMPAT. Nothing emits a deprecation finding today; this invents no
+  // detection and asserts none. It pins the tiering so that the day one
+  // arrives, it is already counted copper and no counting code has to change.
+  it('forward-compat: a warning-severity deprecation is copper, not steel', () => {
+    const deprecation: TierFinding = { kind: 'deprecation', severity: 'warning', rule: 'operation-deprecated' };
+    expect(isWouldBreakRow(deprecation)).toBe(true);
+    expect(tierOf(deprecation)).toBe('would-break');
+    // ...and it is not red, whatever severity the collector stamps on it: a
+    // deprecation notice is never something failing right now. That is what
+    // the window is for.
+    expect(tierOf({ ...deprecation, severity: 'breaking' })).toBe('would-break');
+    expect(tierOf({ ...deprecation, severity: 'info' })).toBe('would-break');
+  });
+
+  // The rule that makes the tier by KIND rather than by severity=warning. MCP
+  // wording and schema changes are already stamped `warning`, and they are the
+  // steel tier. Routing every warning to copper would recolour every one of
+  // them and undo the one-vocabulary rule the description class has.
+  it('a warning severity alone never means copper — informational rows are stamped warning too', () => {
+    expect(tierOf(description())).toBe('worth-knowing');
+    expect(tierOf(nonBreaking())).toBe('worth-knowing');
+    expect(isWouldBreakRow(description())).toBe(false);
+  });
+
+  it('a NON-breaking version diff is only worth knowing — it will not break anyone', () => {
+    // The copper sentence says "breaking changes". A non-breaking version diff
+    // under it would be a lie of exactly the kind these tiers exist to end.
+    expect(tierOf(versionDiff({ severity: 'warning' }))).toBe('worth-knowing');
+    expect(isWouldBreakRow(versionDiff({ severity: 'warning' }))).toBe(false);
   });
 });
 
