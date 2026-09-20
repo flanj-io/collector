@@ -331,7 +331,7 @@ async function createThread() {
     } else if (e instanceof ApiError) {
       errorMsg.value = e.message;
     } else {
-      errorMsg.value = "Couldn't reach the control plane — nothing was created or shared.";
+      errorMsg.value = "Couldn't reach Flanj — nothing was created or shared.";
     }
   } finally {
     busy.value = false;
@@ -370,7 +370,7 @@ async function openThread() {
     const out = await openThreadInNewTab(result.value.thread_id);
     if (!out.opened) blockedOwnerUrl.value = out.url;
   } catch (e) {
-    openError.value = e instanceof ApiError ? e.message : "Couldn't reach the control plane.";
+    openError.value = e instanceof ApiError ? e.message : "Couldn't reach Flanj.";
   } finally {
     openBusy.value = false;
   }

@@ -20,16 +20,16 @@ const (
 	// and the mirror changes with it.
 	msgThreadsNotConnected = "Not connected — this collector can't list threads. Connect in Settings to see them."
 	msgContactUnconfirmed  = "Confirm your contact email first — we sent \"Confirm your Flanj contact\"."
-	msgCPUnreachableFlag   = "Couldn't reach the control plane — nothing was created or shared."
-	msgCPUnreachableSend   = "Couldn't reach the control plane — nothing was sent."
-	msgCPUnreachable       = "Couldn't reach the control plane."
-	msgCPNotConfigured     = "The control plane is not configured on this collector (set cp_base_url)."
+	msgCPUnreachableFlag   = "Couldn't reach Flanj — nothing was created or shared."
+	msgCPUnreachableSend   = "Couldn't reach Flanj — nothing was sent."
+	msgCPUnreachable       = "Couldn't reach Flanj."
+	msgCPNotConfigured     = "This collector is not set up to connect to Flanj (set cp_base_url)."
 	// The OTHER shape of "not configured": cp_base_url IS set, but to a name
 	// reserved for documentation, so no host was ever going to answer it. Saying
 	// "couldn't reach" there sends the operator to debug a network that is not the
 	// problem. Reached by anyone who copied config.example.yaml and kept its
 	// cp_base_url; the image itself no longer bakes one (issue #55).
-	msgCPPlaceholderHost   = "This collector's cp_base_url is an example address that can never exist — set it to your control plane, then Connect again."
+	msgCPPlaceholderHost   = "This collector's cp_base_url is an example address that can never exist — set it to your Flanj workspace's address, then Connect again."
 	msgStoreUnavailable    = "The local store is not available."
 	msgPostOnly            = "POST only."
 	msgUIHeaderRequired    = "This action is only available from the collector UI."
@@ -104,7 +104,7 @@ const (
 	msgCallEvicted    = "The failing call is no longer in the local store (it was evicted from the rolling window)."
 	msgThreadNotFound = "No thread with that id was created from this collector."
 	msgWrongOrigin    = "This thread was created by another collector key — it can only be changed from there."
-	msgKeyMissing     = "The control plane already knows this collector, but this store never received its key. Connect again under a different collector name, or set a new cp_deploy_token."
+	msgKeyMissing     = "Flanj already knows this collector, but this store never received its key. Connect again under a different collector name, or set a new cp_deploy_token."
 	// Edge naming.
 	msgEdgeHostRequired = "host is required."
 	msgEdgeNotFound     = "No outbound edge with that host has been discovered."

@@ -78,7 +78,7 @@ export function mailNotice(attempt: MailAttempt | null, nowMs: number): MailNoti
       // `canSend` stays true — a failed send spends no cooldown, so Retry really does retry.
       return {
         kind: 'failed',
-        text: `Not sent — the control plane couldn't reach its mail server, so nothing arrived at ${attempt.email}. Nothing else is wrong: retry, or change the address.`,
+        text: `Not sent — Flanj couldn't reach its mail server, so nothing arrived at ${attempt.email}. Nothing else is wrong: retry, or change the address.`,
         retryable: true,
         canSend: true
       };

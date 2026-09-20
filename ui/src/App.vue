@@ -480,7 +480,7 @@ async function openChipThread(threadId: string) {
     const out = await openThreadInNewTab(threadId);
     if (!out.opened) chipError.value = { ...chipError.value, [threadId]: 'Your browser blocked the new tab — use View thread on the Threads tab.' };
   } catch (e) {
-    chipError.value = { ...chipError.value, [threadId]: e instanceof ApiError ? e.message : "Couldn't reach the control plane." };
+    chipError.value = { ...chipError.value, [threadId]: e instanceof ApiError ? e.message : "Couldn't reach Flanj." };
   } finally {
     openingThread.value = null;
   }
@@ -1609,7 +1609,7 @@ watch(tab, (t) => {
         <!-- Org identity only — never the integration slug (it scopes a spec,
              not this org; it lives on the Overview headline + its Contracts card). -->
         <span v-if="orgPillName" class="pill pill-name" title="Your workspace — the name other organizations see on your threads.">{{ orgPillName }}</span>
-        <span v-if="!health.cp_configured" class="pill warn">control plane not configured</span>
+        <span v-if="!health.cp_configured" class="pill warn">not set up to connect to Flanj</span>
         <!-- Connected: the pill is the one door out to the control plane. The
              LABEL stays the status ("Connected") — a status indicator that hides
              its state on hover would trade a fact for a hint, and there is no
@@ -2309,7 +2309,7 @@ watch(tab, (t) => {
       <section>
         <h2>Settings <small>this collector · {{ health?.collector_version }}</small></h2>
         <p v-if="health && !health.cp_configured" class="empty">
-          The control plane is not configured on this collector (set <code>cp_base_url</code> and <code>cp_deploy_token</code>). Local capture, detection and this UI work without it.
+          This collector is not set up to connect to Flanj (set <code>cp_base_url</code> and <code>cp_deploy_token</code>). Local capture, detection and this UI work without it.
         </p>
         <ConnectPanel
           v-else
