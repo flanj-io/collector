@@ -166,6 +166,19 @@ func DetectVersionDiff(pathV1, pathV2, integration string) ([]model.Finding, err
 			endpoint = ac.Operation + " " + ac.Path
 		}
 		fieldPath := versionDiffFieldPath(c.GetArgs())
+		// A breaking change is described by the two document VERSIONS it moved
+		// between; a deprecation is described by the deprecation itself, and by
+		// the sunset date when the provider published one. The date is the half
+		// that makes the warning actionable rather than merely true, so it is
+		// stated here rather than left for a reader to find in the prose —
+		// which is also what CONTRACTS §4 promises of both arms.
+		expected, actual := "spec "+fromV, "spec "+toV
+		if kind == model.KindDeprecation {
+			expected, actual = "not deprecated", "deprecated"
+			if d := sunsetFromArgs(c.GetArgs()); d != "" {
+				actual = "deprecated, sunset " + d
+			}
+		}
 		vf := model.Finding{
 			SchemaVersion:   model.SchemaVersion,
 			ID:              otlpattr.NewID(),
@@ -174,8 +187,8 @@ func DetectVersionDiff(pathV1, pathV2, integration string) ([]model.Finding, err
 			Integration:     integration,
 			Endpoint:        endpoint,
 			FieldPath:       model.Ptr(fieldPath),
-			Expected:        "spec " + fromV,
-			Actual:          "spec " + toV,
+			Expected:        expected,
+			Actual:          actual,
 			Rule:            c.GetId(),
 			SpecVersionFrom: model.Ptr(fromV),
 			SpecVersionTo:   model.Ptr(toV),
@@ -285,4 +298,36 @@ func versionDiffFieldPath(args []any) string {
 	sum := sha256.Sum256([]byte(p))
 	digest := hex.EncodeToString(sum[:6])
 	return string(r[:maxFieldPath-len(digest)-1]) + "…" + digest
+}
+
+// sunsetFromArgs finds the sunset date among a change's arguments, or "" when
+// it carries none.
+//
+// The arguments are the locale-independent substitutions in the change's
+// message ("request property %s deprecated with sunset date %s"), so the date
+// is in there — but its POSITION differs per rule, and a position is the kind
+// of thing a dependency bump silently renumbers. Matching the SHAPE instead
+// costs nothing and cannot be renumbered: a bare YYYY-MM-DD is unambiguous
+// among the names, types and status codes that make up the rest.
+func sunsetFromArgs(args []any) string {
+	for _, a := range args {
+		s := strings.TrimSpace(fmt.Sprint(a))
+		if len(s) != 10 || s[4] != '-' || s[7] != '-' {
+			continue
+		}
+		digits := true
+		for i, r := range s {
+			if i == 4 || i == 7 {
+				continue
+			}
+			if r < '0' || r > '9' {
+				digits = false
+				break
+			}
+		}
+		if digits {
+			return s
+		}
+	}
+	return ""
 }

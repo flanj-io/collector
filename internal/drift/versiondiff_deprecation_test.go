@@ -134,6 +134,66 @@ func TestDeprecatedWithSunsetCarriesTheDate(t *testing.T) {
 	if !strings.Contains(f.Detail, "2099-12-31") {
 		t.Errorf("detail does not carry the sunset date: %q", f.Detail)
 	}
+	// The structured half, so a reader never has to parse the prose — and the
+	// same shape the live arm produces, so one reader handles both arms.
+	if f.Actual != "deprecated, sunset 2099-12-31" {
+		t.Errorf("actual = %q, want \"deprecated, sunset 2099-12-31\"", f.Actual)
+	}
+	if f.Expected != "not deprecated" {
+		t.Errorf("expected = %q, want \"not deprecated\"", f.Expected)
+	}
+	// The document versions are not lost — they live in the fields that name
+	// versions.
+	if f.SpecVersionFrom == nil || *f.SpecVersionFrom != "1.0.0" || f.SpecVersionTo == nil || *f.SpecVersionTo != "2.0.0" {
+		t.Errorf("spec versions = %v -> %v, want 1.0.0 -> 2.0.0", f.SpecVersionFrom, f.SpecVersionTo)
+	}
+}
+
+// TestDeprecationWithoutSunsetSaysSoPlainly: no published date, no invented one.
+func TestDeprecationWithoutSunsetSaysSoPlainly(t *testing.T) {
+	v2 := strings.Replace(baseDoc,
+		"      operationId: createCharge\n",
+		"      operationId: createCharge\n      deprecated: true\n", 1)
+	v2 = strings.Replace(v2, `version: "1.0.0"`, `version: "2.0.0"`, 1)
+
+	findings, err := DetectVersionDiffData([]byte(baseDoc), []byte(v2), "acme-payments")
+	if err != nil {
+		t.Fatalf("diff: %v", err)
+	}
+	f := findingByRule(t, findings, "endpoint-deprecated")
+	if f.Actual != "deprecated" {
+		t.Errorf("actual = %q, want %q — a date nobody published must not be invented", f.Actual, "deprecated")
+	}
+}
+
+// TestBreakingFindingsKeepTheVersionConvention: the change above must not leak
+// into the ERR path. A breaking version diff is still described by the two
+// document versions it moved between.
+func TestBreakingFindingsKeepTheVersionConvention(t *testing.T) {
+	v2 := strings.Replace(baseDoc, `  /v1/refunds:
+    post:
+      operationId: createRefund
+      responses:
+        "200": {description: ok}
+`, "", 1)
+	v2 = strings.Replace(v2, `version: "1.0.0"`, `version: "2.0.0"`, 1)
+
+	findings, err := DetectVersionDiffData([]byte(baseDoc), []byte(v2), "acme-payments")
+	if err != nil {
+		t.Fatalf("diff: %v", err)
+	}
+	if len(findings) == 0 {
+		t.Fatal("removing an operation produced nothing")
+	}
+	for _, f := range findings {
+		if f.Severity != model.SeverityBreaking {
+			continue
+		}
+		if f.Expected != "spec 1.0.0" || f.Actual != "spec 2.0.0" {
+			t.Errorf("breaking %s: expected/actual = %q/%q, want the spec-version convention",
+				f.Rule, f.Expected, f.Actual)
+		}
+	}
 }
 
 // TestDeprecatedParameterAndFieldRaiseWarnings: the family is not only
