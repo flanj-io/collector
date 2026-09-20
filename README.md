@@ -41,7 +41,7 @@ hosted.
 ## Run it on a laptop
 
 ```bash
-docker pull flanj/collector:v0.1.0
+docker pull flanj/collector:v0.2.0
 ```
 
 ```bash
@@ -50,7 +50,7 @@ docker run -d --name flanj \
   --user "$(id -u):$(id -g)" \
   -v "$PWD/flanj-data:/data" \
   -p 4318:4318 -p 5335:5336 \
-  flanj/collector:v0.1.0
+  flanj/collector:v0.2.0
 ```
 
 The image is `linux/amd64` and `linux/arm64`. `:latest` tracks the newest release; pin the version tag for
@@ -138,7 +138,7 @@ docker run -d --name flanj \
   -v "$PWD/flanj-data:/data" \
   -v "$PWD/config.yaml:/etc/flanj/config.yaml:ro" \
   -p 4318:4318 -p 5335:5336 \
-  flanj/collector:v0.1.0
+  flanj/collector:v0.2.0
 ```
 
 **What leaves your network: nothing, until you Connect.** Unconnected, the collector makes no outbound

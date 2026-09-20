@@ -92,7 +92,7 @@ edge; repeats bump `occurrence_count`); `spec_info` → upsert by integration.
 
 ## Single pod
 
-- Image: **`flanj/collector:v0.1.0`** on Docker Hub (`linux/amd64` +
+- Image: **`flanj/collector:v0.2.0`** on Docker Hub (`linux/amd64` +
   `linux/arm64`; `:latest` tracks the newest release — pin the version tag in a
   manifest). Container: `flanj-collector`, default
   `CMD --config /etc/flanj/config.yaml` (mount your own over it, or a
