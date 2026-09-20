@@ -15,7 +15,6 @@ import {
   afterColLabel,
   beforeColLabel,
   breakingChipLabel,
-  breakingCountTitle,
   defChangeDetail,
   defChangeNoCallSub,
   definitionClass,
@@ -157,7 +156,7 @@ describe('kinds, classes, flaggability', () => {
 });
 
 describe('badge tiers + acknowledge (qfix-2026-08-25)', () => {
-  it('red tier = breaking severity, all sources — never the protocol', () => {
+  it('breaking severity is read from severity, all sources — never the protocol', () => {
     expect(isBreakingFinding(finding({}))).toBe(true); // output_mismatch
     expect(isBreakingFinding(defChange())).toBe(true); // MCP BREAKING
     expect(isBreakingFinding({ severity: 'breaking' })).toBe(true); // REST live-vs-spec
@@ -189,9 +188,10 @@ describe('badge tiers + acknowledge (qfix-2026-08-25)', () => {
     expect(ackedLine('5m ago')).toBe('Acknowledged 5m ago.');
   });
 
+  // The steel tier's sentence. The red and copper tiers' sentences live with
+  // the tiering rule itself (contract-tiers.test.ts): which population a colour
+  // counts is that module's question, not this one's.
   it('tab-pill titles', () => {
-    expect(breakingCountTitle(7)).toBe('7 breaking findings');
-    expect(breakingCountTitle(1)).toBe('1 breaking finding');
     expect(informationalCountTitle(2)).toBe('2 non-breaking — acknowledge to clear');
     expect(informationalCountTitle(1)).toBe('1 non-breaking — acknowledge to clear');
   });

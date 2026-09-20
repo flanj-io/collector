@@ -55,9 +55,10 @@ export function changeKindOf(f: Pick<Finding, 'kind' | 'rule' | 'change_kind'>):
   return '';
 }
 
-/** Class badge of a definition_change finding, from severity + rule. Used for
- *  the local TIERS (red / amber / acknowledge), not as a label: the badge
- *  shows severityLabel and changeKindOf, two separate fields. */
+/** Class badge of a definition_change finding, from severity + rule. Used to
+ *  split the steel tier's card chips and to decide what can be acknowledged,
+ *  not as a label: the badge shows severityLabel and changeKindOf, two
+ *  separate fields. */
 export function definitionClass(f: Pick<Finding, 'kind' | 'severity' | 'rule'>): DefinitionClass | '' {
   if (f.kind !== 'definition_change') return '';
   if (f.rule === 'description-changed') return 'DESCRIPTION';
@@ -101,14 +102,17 @@ export const INFO_STAYS_LOCAL =
   'Info — stays on this collector. Info findings are never flagged to another organisation.';
 
 // ─── Badge tiers + local acknowledge (qfix-2026-08-25) ───────────────────────
-// Two-tier taxonomy: red = breaking-severity (act), amber = informational
-// (review) = NON-BREAKING + DESCRIPTION. Severity decides the tier, never the
-// protocol. Acknowledge is LOCAL ONLY (wire key `ack`): it clears an
-// informational finding out of the amber counts on this collector — nothing is
-// sent to the control plane, and it is never a path to flagging.
+// Severity decides whether a row is breaking, never the protocol. Which COLOUR
+// a breaking row counts under is a second question — whether its evidence is
+// live traffic or a diff of two contract versions — and it is answered in
+// ui/src/contract-tiers.ts, which owns the tab's three tiers. Acknowledge is
+// LOCAL ONLY (wire key `ack`): it clears an informational finding out of the
+// counts on this collector — nothing is sent to the control plane, and it is
+// never a path to flagging.
 
-/** Red tier: breaking-severity findings, all sources (REST live-vs-spec
- *  BREAKING + MCP BREAKING incl. output_mismatch). */
+/** Breaking severity, all sources (REST live-vs-spec BREAKING, version diffs,
+ *  MCP BREAKING incl. output_mismatch). The tier this counts towards is
+ *  tierOf() in contract-tiers.ts; this is only the severity question. */
 export function isBreakingFinding(f: Pick<Finding, 'severity'>): boolean {
   return f.severity === 'breaking';
 }
@@ -116,7 +120,13 @@ export function isBreakingFinding(f: Pick<Finding, 'severity'>): boolean {
 /** Ackable: informational definition changes only — DESCRIPTION or
  *  NON-BREAKING. BREAKING rows are never ackable (resolved by a fix or a
  *  thread, not muted); stale_client keeps no control at all. The relay
- *  enforces the same rule server-side (403 not_ackable). */
+ *  enforces the same rule server-side (403 not_ackable).
+ *
+ *  Note for the would-break tier (contract-tiers.ts): a version-diff row is
+ *  NOT ackable here and cannot be made so from this file — both this rule and
+ *  the collector's own require kind=definition_change, and an acknowledgement
+ *  binds to a snapshot hash a version diff does not carry. Letting the copper
+ *  tier be dismissed is a store-and-API change, not a UI one. */
 export function isAckable(f: Pick<Finding, 'kind' | 'severity' | 'rule'>): boolean {
   const cls = definitionClass(f);
   return cls === 'DESCRIPTION' || cls === 'NON-BREAKING';
@@ -127,7 +137,7 @@ export function isAckable(f: Pick<Finding, 'kind' | 'severity' | 'rule'>): boole
  * snapshot hash for a definition_change, empty for every other kind (mirrors
  * ackEvidenceVersion in extension/flanjui/acks.go).
  */
-export function ackEvidenceVersion(f: Pick<Finding, 'kind' | 'spec_version_to'>): string {
+export function ackEvidenceVersion(f: { kind: string; spec_version_to?: string | null }): string {
   return f.kind === 'definition_change' ? f.spec_version_to || '' : '';
 }
 
@@ -141,9 +151,12 @@ export function ackEvidenceVersion(f: Pick<Finding, 'kind' | 'spec_version_to'>)
  * pre-acknowledged and a breaking change could sit unseen. Two independent
  * checks means one of them failing cannot hide a new change.
  */
-export function isAcked(
-  f: Pick<Finding, 'kind' | 'acked' | 'acked_evidence_version' | 'spec_version_to'>
-): boolean {
+export function isAcked(f: {
+  kind: string;
+  acked?: boolean;
+  acked_evidence_version?: string | null;
+  spec_version_to?: string | null;
+}): boolean {
   if (f.acked !== true) return false;
   return (f.acked_evidence_version || '') === ackEvidenceVersion(f);
 }
@@ -158,12 +171,7 @@ export function ackedLine(relative: string): string {
   return `Acknowledged ${relative}.`;
 }
 
-/** Red tab-pill title: `7 breaking findings`. */
-export function breakingCountTitle(n: number): string {
-  return `${n} breaking finding${n === 1 ? '' : 's'}`;
-}
-
-/** Amber tab-pill title: `2 non-breaking — acknowledge to clear`. */
+/** Steel tab-pill title: `2 non-breaking — acknowledge to clear`. */
 export function informationalCountTitle(n: number): string {
   return `${n} non-breaking — acknowledge to clear`;
 }
@@ -171,9 +179,9 @@ export function informationalCountTitle(n: number): string {
 /**
  * The same tab pill when EVERY un-acked informational row is a DESCRIPTION
  * change: `1 description change — wording only, non-breaking — acknowledge to
- * clear`. The pill then wears the steel outline instead of the copper fill —
- * one wording change must never read as a warning (UX review 2026-09-14) —
- * and the title says so before it repeats the shared tail.
+ * clear`. The pill wears the steel outline either way now; this says "wording
+ * only" before it repeats the shared tail, so a lone wording change never
+ * reads as a warning (UX review 2026-09-14).
  */
 export function descriptionCountTitle(n: number): string {
   return `${n} description change${n === 1 ? '' : 's'} — wording only, non-breaking — acknowledge to clear`;
@@ -184,7 +192,7 @@ export function breakingChipLabel(n: number): string {
   return `${n} BREAKING`;
 }
 
-/** Amber card chip: `2 NON-BREAKING`. */
+/** Steel card chip: `2 NON-BREAKING` — a schema change nothing is failing on. */
 export function informationalChipLabel(n: number): string {
   return `${n} NON-BREAKING`;
 }
@@ -200,7 +208,7 @@ export function descriptionChipTitle(n: number): string {
   return `${n} description change${n === 1 ? '' : 's'} — wording only`;
 }
 
-/** Amber card chip title: `1 non-breaking change · 1 description change`. */
+/** Steel card chip title: `1 non-breaking change · 1 description change`. */
 export function informationalChipTitle(nonBreaking: number, description: number): string {
   const parts: string[] = [];
   if (nonBreaking > 0) parts.push(`${nonBreaking} non-breaking change${nonBreaking === 1 ? '' : 's'}`);
