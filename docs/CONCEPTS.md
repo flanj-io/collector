@@ -12,6 +12,21 @@ live traffic diverges from the contract (a field changes type, an enum gains an 
 definition changes), that **drift** is surfaced with the exact evidence: the redacted call that proves it.
 Raw calls never leave the environment they were captured in.
 
+Not everything worth reporting has broken yet. A provider rarely breaks a consumer overnight: they mark
+a surface **deprecated**, give a window, then remove it. Only the removal is a breaking change, and by
+the time it arrives the window has closed — so the announcement is reported too, at the **warning**
+tier. Two detectors see it. When a call uses an operation, a parameter or a body field the bound
+contract marks deprecated, that use is reported against this deployment's OWN traffic: a deprecated
+operation nobody here calls raises nothing, because there is nothing to change. And when a replacement
+contract deprecates something its predecessor did not, that transition is reported on its own. A
+published sunset date is carried with the finding, since the date is what makes the warning actionable
+rather than merely true.
+
+A deprecation is never red. The operation is still declared and the response still conformed, so the
+call departed from nothing and stays marked conforming; only a breaking finding turns a call, or the
+headline above it, red. Painting conforming traffic red would accuse a provider of breaking a promise
+they are in fact keeping while giving notice of ending it.
+
 ## Two planes
 
 - **Local plane (self-hosted, this is the OSS part):** capture, redaction, storage, drift detection, and a
