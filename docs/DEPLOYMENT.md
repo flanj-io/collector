@@ -340,6 +340,14 @@ Flow specifics:
     - `HTTP_PROXY`/`HTTPS_PROXY` are **not** honoured by these requests: through
       a proxy the collector never sees the target's address, and this policy
       would silently stop applying.
+  - **One document, one request.** A bound contract is never allowed to pull in
+    further documents: a `$ref` that points outside the document — to a URL, a
+    `file://` URI, or an absolute or relative path — is refused when the
+    contract is parsed, before anything is read, so what a provider serves can
+    neither make the collector issue a second request (to an address this
+    policy never judged) nor open a file on the pod. The same holds for an
+    upload. A contract split across files has to be bundled into one document
+    first.
   - **Egress policy.** If you run a default-deny egress NetworkPolicy, these
     fail closed with a stated error in the UI and nothing else breaks — drift
     detection on uploaded contracts is unaffected. To allow them, the UI pod

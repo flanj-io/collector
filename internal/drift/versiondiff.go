@@ -3,7 +3,9 @@ package drift
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,14 +56,11 @@ func DetectVersionDiffData(v1, v2 []byte, integration string) ([]model.Finding, 
 // backward-incompatible change (oasdiff Level==ERR -> severity="breaking").
 // source_call_id is null — the drift is in the documents, not in a call.
 func DetectVersionDiff(pathV1, pathV2, integration string) ([]model.Finding, error) {
-	loader := openapi3.NewLoader()
-	loader.IsExternalRefsAllowed = true
-
-	s1, err := load.NewSpecInfo(loader, load.NewSource(pathV1))
+	s1, err := loadSelfContained(pathV1)
 	if err != nil {
 		return nil, fmt.Errorf("load spec v1: %w", err)
 	}
-	s2, err := load.NewSpecInfo(loader, load.NewSource(pathV2))
+	s2, err := loadSelfContained(pathV2)
 	if err != nil {
 		return nil, fmt.Errorf("load spec v2: %w", err)
 	}
@@ -127,6 +126,57 @@ func DetectVersionDiff(pathV1, pathV2, integration string) ([]model.Finding, err
 	}
 	return findings, nil
 }
+
+// loadSelfContained loads ONE contract document from a local file and lets it
+// read nothing else: no `$ref` to a URL, to a file:// URI, to an absolute or
+// relative path, or to the other version lying beside it.
+//
+// A bound contract is written by the provider, or by whoever answered a
+// fetched URL, so every location in it is chosen by someone else. Following
+// one would be a request to an address the document picked — outside the
+// contract-fetch destination policy, which judges only the URL an operator
+// approved — or a read of the collector's own disk whose content then surfaces
+// in a finding's detail. Nothing legitimate needs it: a document only gets
+// bound after the strict parse (LoadSpecData) has refused external references,
+// so every stored contract is self-contained by construction. This is the same
+// rule held a second time, so the diff stays safe whatever a future caller
+// hands it.
+//
+// Three things enforce it, because no single one covers every route:
+//   - the path must be what oasdiff treats as a plain file. It picks a loading
+//     strategy from the SHAPE of the string: a URL is fetched, and
+//     `<rev>:<path>` is read out of git through a reader of oasdiff's own,
+//     which would replace the one below;
+//   - the reader serves that one file and refuses every other location.
+//     kin-openapi stops enforcing IsExternalRefsAllowed as soon as any
+//     ReadFromURIFunc is installed (the reader then owns the policy), so the
+//     reader is an allowlist of exactly one entry rather than a filter;
+//   - IsExternalRefsAllowed stays false regardless, so removing the reader
+//     falls back to kin-openapi's own refusal instead of its default reader,
+//     which fetches http(s) and opens any local path.
+//
+// Each document gets a loader of its own: the allowlist is per document.
+func loadSelfContained(path string) (*load.SpecInfo, error) {
+	source := load.NewSource(path)
+	if !source.IsFile() {
+		return nil, fmt.Errorf("%q is not a local file", path)
+	}
+	root := filepath.ToSlash(path)
+
+	loader := openapi3.NewLoader()
+	loader.IsExternalRefsAllowed = false
+	loader.ReadFromURIFunc = func(_ *openapi3.Loader, location *url.URL) ([]byte, error) {
+		if location.Scheme != "" || location.Host != "" || location.Path != root {
+			return nil, errExternalRef
+		}
+		return os.ReadFile(path)
+	}
+	return load.NewSpecInfo(loader, source)
+}
+
+// errExternalRef names the rule and not the location: the reference is the
+// document author's text, and this error is logged.
+var errExternalRef = errors.New("the document references another document; a contract is diffed as one self-contained document")
 
 // maxFieldPath is the frozen per-field cap on `field_path` (CONTRACTS §5).
 const maxFieldPath = 256
