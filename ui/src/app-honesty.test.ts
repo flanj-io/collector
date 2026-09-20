@@ -271,7 +271,7 @@ describe('a failing store must not render as a fresh install', () => {
     // Nothing was overwritten: the header pill stayed away, the edge is still
     // on screen, and the page does not invite the operator to fix working config.
     expect(w.find('.pill.warn').exists()).toBe(false);
-    expect(w.text()).not.toContain('control plane not configured');
+    expect(w.text()).not.toContain('not set up to connect to Flanj');
     expect(w.text()).toContain(HOST);
   });
 

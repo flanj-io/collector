@@ -60,7 +60,7 @@ async function open(row: ThreadRow) {
     const out = await openThreadInNewTab(row.thread_id);
     if (!out.opened) blockedOwnerUrl.value = { ...blockedOwnerUrl.value, [row.thread_id]: out.url };
   } catch (e) {
-    errors.value = { ...errors.value, [row.thread_id]: e instanceof ApiError ? e.message : "Couldn't reach the control plane." };
+    errors.value = { ...errors.value, [row.thread_id]: e instanceof ApiError ? e.message : "Couldn't reach Flanj." };
   } finally {
     opening.value = null;
   }
