@@ -322,11 +322,27 @@ func deprecatedBodyFields(schema *openapi3.SchemaRef, body string) []string {
 	if err := json.Unmarshal([]byte(body), &decoded); err != nil {
 		return nil
 	}
-	var out []string
-	walkDeprecated(schema, decoded, "", map[*openapi3.Schema]bool{}, 0, &out)
-	sort.Strings(out)
+	var found []string
+	walkDeprecated(schema, decoded, "", map[*openapi3.Schema]bool{}, 0, &found)
+	// One path, one finding: composition keywords and array elements can each
+	// reach the same property, and the drift is the field, not the route the
+	// walk took to it.
+	sort.Strings(found)
+	out := found[:0]
+	var last string
+	for i, p := range found {
+		if i == 0 || p != last {
+			out = append(out, p)
+		}
+		last = p
+	}
 	return out
 }
+
+// maxArrayElements bounds the per-array element scan (see walkDeprecated). A
+// list endpoint's response is a normal place to find thousands of rows, and
+// they all share one declared item schema.
+const maxArrayElements = 64
 
 // walkDeprecated descends the DECLARED schema and the decoded body together,
 // collecting the paths of deprecated properties the body carries.
@@ -376,28 +392,23 @@ func walkDeprecated(ref *openapi3.SchemaRef, value any, prefix string, visited m
 		if s.Items == nil {
 			return
 		}
-		// Every element shares one declared item schema, so one deprecated
-		// property yields ONE path for the array, not one per element: the
-		// finding is about the field, and a hundred-element response must not
-		// become a hundred findings. The path names the array rather than an
-		// index for the same reason.
-		for _, el := range v {
-			before := len(*out)
-			walkDeprecated(s.Items, el, prefix+"[]", visited, depth+1, out)
-			if len(*out) > before {
-				// Collapse this element's contribution and stop: further
-				// elements can only repeat it.
-				seen := map[string]bool{}
-				uniq := (*out)[:before]
-				for _, p := range (*out)[before:] {
-					if !seen[p] {
-						seen[p] = true
-						uniq = append(uniq, p)
-					}
-				}
-				*out = uniq
+		// Every element shares one declared item schema, so a deprecated
+		// property yields ONE path for the array however many elements carry
+		// it — the finding is about the FIELD, and a hundred-element response
+		// must not become a hundred findings. Paths are deduped by the caller,
+		// and the path names the array rather than an index for the same
+		// reason.
+		//
+		// Elements are scanned to a cap rather than stopping at the first one
+		// that matches: a deprecated field is optional as often as not, so the
+		// first element is no guarantee of what the rest carry. The cap bounds
+		// the walk on a response that is one enormous array, which is a normal
+		// shape for a list endpoint.
+		for i, el := range v {
+			if i >= maxArrayElements {
 				return
 			}
+			walkDeprecated(s.Items, el, prefix+"[]", visited, depth+1, out)
 		}
 	}
 }

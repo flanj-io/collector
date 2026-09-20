@@ -370,3 +370,59 @@ components:
 		t.Fatal("the schema walk did not terminate on a self-referential document")
 	}
 }
+
+// TestDeprecatedFieldsAcrossArrayElements: a deprecated field is usually
+// OPTIONAL, so the first element of a list is no guarantee of what the rest
+// carry. Every element is scanned (to a cap), and one field is still ONE
+// finding however many rows carry it.
+func TestDeprecatedFieldsAcrossArrayElements(t *testing.T) {
+	const listSpec = `
+openapi: 3.0.3
+info: {title: T, version: "1.0.0"}
+servers:
+  - url: http://api.acme.test
+paths:
+  /v1/list:
+    post:
+      operationId: list
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: {type: string}
+                        old_a: {type: string, deprecated: true}
+                        old_b: {type: string, deprecated: true}
+`
+	doc, err := LoadSpecData([]byte(listSpec))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	// old_a appears only in the first row, old_b only in the second, and old_a
+	// again in the third — so a walk that stopped at the first matching element
+	// would miss old_b, and one that did not dedup would report old_a twice.
+	call := depCall("http://api.acme.test/v1/list", "/v1/list",
+		`{"items":[{"id":"1","old_a":"x"},{"id":"2","old_b":"y"},{"id":"3","old_a":"z"}]}`)
+	fs, _, err := JudgeLiveVsSpec(doc, call)
+	if err != nil {
+		t.Fatalf("judge: %v", err)
+	}
+
+	got := map[string]int{}
+	for _, f := range fs {
+		if f.Rule == RuleDeprecatedField && f.FieldPath != nil {
+			got[*f.FieldPath]++
+		}
+	}
+	if len(got) != 2 || got["items[].old_a"] != 1 || got["items[].old_b"] != 1 {
+		t.Errorf("want exactly one finding for each of items[].old_a and items[].old_b; got %v", got)
+	}
+}
