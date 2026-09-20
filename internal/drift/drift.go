@@ -210,7 +210,20 @@ func judgeLiveVsSpec(doc *openapi3.T, call model.RedactedCall) ([]model.Finding,
 		Route:      route,
 	}
 
-	endpoint := endpointLabel(call.Method, call.Route)
+	// The CONTRACT'S path, not the URL this call happened to use. CONTRACTS §4:
+	// "a drift is per endpoint, not per call" — `endpoint` is part of the
+	// signature, so anything that varies per call and leaks into it splits one
+	// drift into one finding per call. Two things vary in ordinary traffic and
+	// both used to land here: a query string, and a path PARAMETER. A provider
+	// whose `/v1/accounts/{id}/balance` returns the wrong type has ONE thing
+	// wrong with it, however many accounts you read; keying on the called URL
+	// filed a fresh finding for every id, each with occurrence_count 1, and the
+	// endpoint list grew without bound.
+	//
+	// route.Path is the template the router matched, which is the same string
+	// the contract itself is written in — so the finding names the endpoint the
+	// provider would recognise.
+	endpoint := endpointLabel(call.Method, route.Path)
 	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00")
 
 	// An ABSENT header is not a header: the validator still assumes JSON (a
