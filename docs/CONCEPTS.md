@@ -84,7 +84,9 @@ Three properties make it safe to hand to a model:
    are operator-initiated — nothing schedules them and no config key enables them — and both are READS:
    no data leaves on either path. The probe only ever asks a host this deployment already sends traffic
    to, and a fetch reaches a private or internal address only on such a host; metadata, link-local and
-   other reserved addresses are refused always, judged after DNS resolution. See `docs/DEPLOYMENT.md` for the exact requests, timeouts, caps and egress-policy notes.
+   other reserved addresses are refused always, judged after DNS resolution. The document itself can
+   cause no further request: a contract must be self-contained, and a `$ref` out of it is refused before
+   anything is read. See `docs/DEPLOYMENT.md` for the exact requests, timeouts, caps and egress-policy notes.
 4. **Technical adherence only.** Drift detection validates fields/types/shapes/enums — never business or
    economic correctness (prices, fees, FX), which are legitimately variable.
 
