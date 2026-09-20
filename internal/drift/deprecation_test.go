@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flanj-io/collector/contract/diff"
 	"github.com/flanj-io/collector/internal/model"
 )
 
@@ -137,14 +136,11 @@ func TestCallingADeprecatedOperationRaisesOneWarning(t *testing.T) {
 	if f.Rule != RuleDeprecatedOperation {
 		t.Errorf("rule = %q, want %q", f.Rule, RuleDeprecatedOperation)
 	}
-	if f.Kind != model.KindLiveVsSpec {
-		t.Errorf("kind = %q, want %q", f.Kind, model.KindLiveVsSpec)
+	if f.Kind != model.KindDeprecation {
+		t.Errorf("kind = %q, want %q — its own kind, not a warning-severity live-vs-spec", f.Kind, model.KindDeprecation)
 	}
 	if f.Severity != model.SeverityWarning {
 		t.Errorf("severity = %q, want warning — nothing has broken yet", f.Severity)
-	}
-	if f.ChangeKind != string(diff.KindLifecycle) {
-		t.Errorf("change_kind = %q, want lifecycle", f.ChangeKind)
 	}
 	if f.SourceCallID == nil || *f.SourceCallID != "call_dep_1" {
 		t.Error("the call must be pinned as evidence, like every other live finding")
@@ -160,8 +156,8 @@ func TestCallingADeprecatedOperationRaisesOneWarning(t *testing.T) {
 	if verdict.Verdict != model.ValidatedClean {
 		t.Errorf("verdict = %q, want clean — a deprecated-but-conforming call did not drift", verdict.Verdict)
 	}
-	if model.MarksCallDrifted(f) {
-		t.Error("a warning finding must not mark its call drifted")
+	if model.MarksCallDrifted(f.Kind) {
+		t.Error("a deprecation must not mark its call drifted — its kind is not a per-call drift kind")
 	}
 }
 

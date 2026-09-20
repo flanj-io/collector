@@ -22,10 +22,11 @@ contract deprecates something its predecessor did not, that transition is report
 published sunset date is carried with the finding, since the date is what makes the warning actionable
 rather than merely true.
 
-A deprecation is never red. The operation is still declared and the response still conformed, so the
-call departed from nothing and stays marked conforming; only a breaking finding turns a call, or the
-headline above it, red. Painting conforming traffic red would accuse a provider of breaking a promise
-they are in fact keeping while giving notice of ending it.
+A deprecation is never red, and it is its own kind of finding rather than a milder grade of drift. The
+operation is still declared and the response still conformed, so the call departed from nothing and
+stays marked conforming; nothing that counts live drift counts a deprecation. Painting conforming
+traffic red would accuse a provider of breaking a promise they are in fact keeping while giving notice
+of ending it.
 
 ## Two planes
 

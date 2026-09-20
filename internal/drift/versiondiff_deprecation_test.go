@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/flanj-io/collector/contract/diff"
 	"github.com/flanj-io/collector/internal/model"
 )
 
@@ -98,12 +97,8 @@ func TestDeprecatedOperationRaisesAWarning(t *testing.T) {
 	if f.Severity != model.SeverityWarning {
 		t.Errorf("severity = %q, want %q — a deprecation is never red", f.Severity, model.SeverityWarning)
 	}
-	if f.Kind != model.KindVersionDiff {
-		t.Errorf("kind = %q, want %q", f.Kind, model.KindVersionDiff)
-	}
-	if f.ChangeKind != string(diff.KindLifecycle) {
-		t.Errorf("change_kind = %q, want %q — readers must not have to recognise rule ids",
-			f.ChangeKind, diff.KindLifecycle)
+	if f.Kind != model.KindDeprecation {
+		t.Errorf("kind = %q, want %q — its own kind, not a warning-severity version-diff", f.Kind, model.KindDeprecation)
 	}
 	if f.Endpoint != "POST /v1/charges" {
 		t.Errorf("endpoint = %q, want POST /v1/charges", f.Endpoint)
@@ -136,9 +131,6 @@ func TestDeprecatedWithSunsetCarriesTheDate(t *testing.T) {
 	if f.Severity != model.SeverityWarning {
 		t.Errorf("severity = %q, want warning", f.Severity)
 	}
-	if f.ChangeKind != string(diff.KindLifecycle) {
-		t.Errorf("change_kind = %q, want lifecycle", f.ChangeKind)
-	}
 	if !strings.Contains(f.Detail, "2099-12-31") {
 		t.Errorf("detail does not carry the sunset date: %q", f.Detail)
 	}
@@ -165,9 +157,6 @@ func TestDeprecatedParameterAndFieldRaiseWarnings(t *testing.T) {
 		f := findingByRule(t, findings, rule)
 		if f.Severity != model.SeverityWarning {
 			t.Errorf("%s severity = %q, want warning", rule, f.Severity)
-		}
-		if f.ChangeKind != string(diff.KindLifecycle) {
-			t.Errorf("%s change_kind = %q, want lifecycle", rule, f.ChangeKind)
 		}
 	}
 }
@@ -197,15 +186,15 @@ func TestBreakingChangesStayBreakingAlongsideADeprecation(t *testing.T) {
 		switch f.Severity {
 		case model.SeverityWarning:
 			warnings++
-			if f.ChangeKind != string(diff.KindLifecycle) {
-				t.Errorf("warning %s carries change_kind %q, want lifecycle", f.Rule, f.ChangeKind)
+			if f.Kind != model.KindDeprecation {
+				t.Errorf("warning %s has kind %q, want %q", f.Rule, f.Kind, model.KindDeprecation)
 			}
 		case model.SeverityBreaking:
 			breakings++
-			// The ERR path is untouched, and that includes carrying no
-			// change_kind: those findings must stay byte-identical.
-			if f.ChangeKind != "" {
-				t.Errorf("breaking %s gained change_kind %q — the ERR path must be unchanged", f.Rule, f.ChangeKind)
+			// The ERR path is untouched, and that includes its KIND: a
+			// breaking change is still a version-diff finding.
+			if f.Kind != model.KindVersionDiff {
+				t.Errorf("breaking %s has kind %q — the ERR path must be unchanged", f.Rule, f.Kind)
 			}
 		default:
 			t.Errorf("finding %s has severity %q — only breaking and warning are emitted", f.Rule, f.Severity)

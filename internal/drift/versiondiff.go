@@ -16,9 +16,6 @@ import (
 	"github.com/oasdiff/oasdiff/diff"
 	"github.com/oasdiff/oasdiff/load"
 
-	// contractdiff is aliased because oasdiff's own `diff` package is imported
-	// here under its plain name.
-	contractdiff "github.com/flanj-io/collector/contract/diff"
 	"github.com/flanj-io/collector/internal/model"
 	"github.com/flanj-io/collector/internal/otlpattr"
 )
@@ -153,13 +150,16 @@ func DetectVersionDiff(pathV1, pathV2, integration string) ([]model.Finding, err
 		// ERR is breaking; a deprecation announcement is a warning; everything
 		// else sub-ERR is dropped as before.
 		severity := model.SeverityBreaking
-		changeKind := ""
+		kind := model.KindVersionDiff
 		if c.GetLevel() < checker.ERR {
 			if !deprecationAnnouncements[c.GetId()] {
 				continue
 			}
+			// A deprecation is its own kind, not a warning-severity version
+			// diff: what it reports is that a surface is GOING AWAY, which is a
+			// different question from how the document changed.
 			severity = model.SeverityWarning
-			changeKind = string(contractdiff.KindLifecycle)
+			kind = model.KindDeprecation
 		}
 		endpoint := ""
 		if ac, ok := c.(checker.ApiChange); ok {
@@ -169,8 +169,7 @@ func DetectVersionDiff(pathV1, pathV2, integration string) ([]model.Finding, err
 		vf := model.Finding{
 			SchemaVersion:   model.SchemaVersion,
 			ID:              otlpattr.NewID(),
-			Kind:            model.KindVersionDiff,
-			ChangeKind:      changeKind,
+			Kind:            kind,
 			Severity:        severity,
 			Integration:     integration,
 			Endpoint:        endpoint,

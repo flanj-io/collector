@@ -10,7 +10,6 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/getkin/kin-openapi/routers"
 
-	contractdiff "github.com/flanj-io/collector/contract/diff"
 	"github.com/flanj-io/collector/internal/model"
 	"github.com/flanj-io/collector/internal/otlpattr"
 )
@@ -29,11 +28,12 @@ import (
 // (endpoint, deprecated thing) like every other finding, with occurrence_count
 // rising while the calling continues.
 //
-// Severity is never breaking, on any of these rules. `calls.drifted` stays
-// clean too (model.MarksCallDrifted): the call conformed: the operation is
-// still declared, the response still matched. Painting it red would accuse the
-// provider of breaking a promise they are in fact keeping while giving notice
-// of ending it.
+// Severity is always WARNING, and the kind is `deprecation` rather than a
+// warning-severity `live-vs-spec`. That is what keeps `calls.drifted` clean
+// with no special case anywhere: the call conformed — the operation is still
+// declared, the response still matched — and only the per-call drift KINDS
+// mark a call. Painting it red would accuse the provider of breaking a promise
+// they are in fact keeping while giving notice of ending it.
 const (
 	// RuleDeprecatedOperation: the call used an operation the contract marks
 	// deprecated.
@@ -148,10 +148,11 @@ func deprecationFinding(
 	f := model.Finding{
 		SchemaVersion: model.SchemaVersion,
 		ID:            otlpattr.NewID(),
-		Kind:          model.KindLiveVsSpec,
-		// The declared axis, so no reader has to recognise rule id strings to
-		// answer "is anything I depend on going away?".
-		ChangeKind:      string(contractdiff.KindLifecycle),
+		// Its OWN kind, not a warning-severity live-vs-spec. A reader asking
+		// "is anything I depend on going away?" answers it from the kind, and
+		// the kind is also what keeps this out of the per-call drifted mark and
+		// the live-drift headline — the call conformed.
+		Kind:            model.KindDeprecation,
 		Severity:        model.SeverityWarning,
 		Integration:     call.Integration,
 		Endpoint:        endpoint,
