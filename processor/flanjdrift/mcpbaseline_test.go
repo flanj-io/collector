@@ -112,7 +112,7 @@ var mcpSnapshotRenamedJSON = func() string {
 // tools/call it sees to a tool the list does not declare is a stale_client.
 func TestMCPBaselineSeedsFromTheSource(t *testing.T) {
 	src := newFakeSource()
-	src.putMCP("acme-payments", "mcp.acme.test", "2026-09-07T10:00:00.000Z", []byte(mcpSnapshotJSON))
+	src.putMCP("mcp-acme-test", "mcp.acme.test", "2026-09-07T10:00:00.000Z", []byte(mcpSnapshotJSON))
 	p := processorWith(t, nil)
 	p.src = src
 
@@ -127,7 +127,7 @@ func TestMCPBaselineSeedsFromTheSource(t *testing.T) {
 	}
 
 	p.refreshSpecs()
-	if src.fetches["acme-payments"] != 1 {
+	if src.fetches["mcp-acme-test"] != 1 {
 		t.Fatalf("fetches after first refresh = %v, want the snapshot downloaded once", src.fetches)
 	}
 	fs := mcpFindings(t, p, "get_account_balance")
@@ -144,7 +144,7 @@ func TestMCPBaselineSeedsFromTheSource(t *testing.T) {
 
 	// Steady state downloads nothing: the row did not move.
 	p.refreshSpecs()
-	if src.fetches["acme-payments"] != 1 {
+	if src.fetches["mcp-acme-test"] != 1 {
 		t.Fatalf("unchanged row re-downloaded: %v", src.fetches)
 	}
 
@@ -155,10 +155,10 @@ func TestMCPBaselineSeedsFromTheSource(t *testing.T) {
 	// may have had no baseline to diff it against — review finding 4; a
 	// front that did report it dedups by signature). The calls in that batch
 	// and after are judged against the NEW list.
-	src.docs["acme-payments"] = []byte(mcpSnapshotRenamedJSON)
+	src.docs["mcp-acme-test"] = []byte(mcpSnapshotRenamedJSON)
 	src.infos[0].LoadedAt = "2026-09-07T11:00:00.000Z"
 	p.refreshSpecs()
-	if src.fetches["acme-payments"] != 2 {
+	if src.fetches["mcp-acme-test"] != 2 {
 		t.Fatalf("moved row not re-downloaded: %v", src.fetches)
 	}
 	changes, calls := splitByKind(mcpFindings(t, p, "get_account_balance"), model.KindDefinitionChange)
@@ -181,9 +181,9 @@ func TestMCPBaselineSeedsFromTheSource(t *testing.T) {
 	// A row that leaves the store and comes back is offered again.
 	src.infos = nil
 	p.refreshSpecs()
-	src.putMCP("acme-payments", "mcp.acme.test", "2026-09-07T11:00:00.000Z", []byte(mcpSnapshotRenamedJSON))
+	src.putMCP("mcp-acme-test", "mcp.acme.test", "2026-09-07T11:00:00.000Z", []byte(mcpSnapshotRenamedJSON))
 	p.refreshSpecs()
-	if src.fetches["acme-payments"] != 3 {
+	if src.fetches["mcp-acme-test"] != 3 {
 		t.Fatalf("returning row not re-offered: %v", src.fetches)
 	}
 }
@@ -195,7 +195,7 @@ func TestMCPBaselineSeedsFromTheSource(t *testing.T) {
 // once, declined, and not fetched again.
 func TestMCPBaselineLiveStateIsForwardedNotOverridden(t *testing.T) {
 	src := newFakeSource()
-	src.putMCP("acme-payments", "mcp.acme.test", "2026-09-07T10:00:00.000Z", []byte(mcpSnapshotJSON))
+	src.putMCP("mcp-acme-test", "mcp.acme.test", "2026-09-07T10:00:00.000Z", []byte(mcpSnapshotJSON))
 	p := processorWith(t, nil)
 	p.src = src
 
@@ -212,7 +212,7 @@ func TestMCPBaselineLiveStateIsForwardedNotOverridden(t *testing.T) {
 	}
 
 	p.refreshSpecs()
-	if src.fetches["acme-payments"] != 1 {
+	if src.fetches["mcp-acme-test"] != 1 {
 		t.Fatalf("fetches = %v, want the older row read once", src.fetches)
 	}
 	// Live wins: the renamed tool is listed, the old name is stale.
@@ -224,7 +224,7 @@ func TestMCPBaselineLiveStateIsForwardedNotOverridden(t *testing.T) {
 	}
 	// Declined rows are remembered, not re-fetched every tick.
 	p.refreshSpecs()
-	if src.fetches["acme-payments"] != 1 {
+	if src.fetches["mcp-acme-test"] != 1 {
 		t.Fatalf("declined row re-downloaded: %v", src.fetches)
 	}
 }
@@ -255,7 +255,7 @@ func stamp(ld plog.Logs, iso string) {
 func TestMCPBaselineOneBadRowDoesNotBlindTheRest(t *testing.T) {
 	src := newFakeSource()
 	src.putMCP("broken", "mcp.broken.test", "v1", []byte("this is not a tools/list"))
-	src.putMCP("acme-payments", "mcp.acme.test", "v1", []byte(mcpSnapshotJSON))
+	src.putMCP("mcp-acme-test", "mcp.acme.test", "v1", []byte(mcpSnapshotJSON))
 	p := processorWith(t, nil)
 	p.src = src
 
@@ -285,7 +285,7 @@ func TestMCPBaselineNilSafe(t *testing.T) {
 	p := &driftProcessor{cfg: &Config{}, mcp: drift.NewMCPDetector()}
 	p.refreshSpecs() // no src: silent
 	src := newFakeSource()
-	src.putMCP("acme-payments", "mcp.acme.test", "v1", []byte(mcpSnapshotJSON))
+	src.putMCP("mcp-acme-test", "mcp.acme.test", "v1", []byte(mcpSnapshotJSON))
 	if a, f, e := p.mcpSeeds.reconcile(src.infos, src, nil); a != nil || f != nil || e != nil {
 		t.Error("nil detector was offered rows")
 	}
@@ -303,7 +303,7 @@ func TestRestartSeedsTheMCPBaselineFromTheStore(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	if err := st.PutMCPCatalogue(model.SpecInfo{
-		Integration: "acme-payments", Role: model.SpecRoleProvider, Format: model.SpecFormatMCP,
+		Integration: "mcp-acme-test", Role: model.SpecRoleProvider, Format: model.SpecFormatMCP,
 		PeerHost: "mcp.acme.test", EdgeClass: "external", Source: model.SpecSourceObserved,
 		LoadedAt: "2026-09-07T10:00:00.000Z",
 	}, []byte(mcpSnapshotJSON)); err != nil {
@@ -365,7 +365,7 @@ func TestMCPBaselineAdoptionReportsTheDiffOnTheNextBatch(t *testing.T) {
 		t.Fatalf("first observation reported %+v", fs)
 	}
 
-	src.putMCP("acme-payments", "mcp.acme.test", "2026-09-07T11:00:00.000Z", []byte(mcpSnapshotRenamedJSON))
+	src.putMCP("mcp-acme-test", "mcp.acme.test", "2026-09-07T11:00:00.000Z", []byte(mcpSnapshotRenamedJSON))
 	p.refreshSpecs()
 
 	changes, calls := splitByKind(mcpFindings(t, p, "get_account_balance"), model.KindDefinitionChange)
@@ -452,12 +452,12 @@ func TestMCPBaselineNeverSeedsLocalProcessRows(t *testing.T) {
 
 func assertNameKeyedRowSeedsNobody(t *testing.T, class string) {
 	rows := []model.SpecInfo{
-		{Integration: "acme-payments", Role: model.SpecRoleProvider, Format: model.SpecFormatMCP, PeerHost: "mcp.acme.test",
+		{Integration: "mcp-acme-test", Role: model.SpecRoleProvider, Format: model.SpecFormatMCP, PeerHost: "mcp.acme.test",
 			EdgeClass: model.EdgeClassExternal, Source: model.SpecSourceObserved, LoadedAt: "2026-09-08T10:00:00.000Z"},
 		{Integration: "filesystem", Role: model.SpecRoleProvider, Format: model.SpecFormatMCP, PeerHost: "filesystem",
 			EdgeClass: class, Source: model.SpecSourceObserved, LoadedAt: "2026-09-08T10:00:00.000Z"},
 	}
-	docs := map[string][]byte{"acme-payments": []byte(mcpSnapshotJSON), "filesystem": []byte(stdioListRead)}
+	docs := map[string][]byte{"mcp-acme-test": []byte(mcpSnapshotJSON), "filesystem": []byte(stdioListRead)}
 
 	// A tiered FRONT: no store, the store pod's channel as its only source.
 	pod := newMCPStorePod(t, rows, docs)
@@ -481,7 +481,7 @@ func assertNameKeyedRowSeedsNobody(t *testing.T, class string) {
 	if n := pod.fetched("filesystem"); n != 0 {
 		t.Errorf("the skipped row was downloaded %d times, want never", n)
 	}
-	if n := pod.fetched("acme-payments"); n != 1 {
+	if n := pod.fetched("mcp-acme-test"); n != 1 {
 		t.Errorf("the external row was downloaded %d times, want once", n)
 	}
 
@@ -500,7 +500,7 @@ func assertNameKeyedRowSeedsNobody(t *testing.T, class string) {
 	if len(findings) != 0 {
 		t.Errorf("seeding reported %d findings from rows nothing observed here", len(findings))
 	}
-	if len(adopted) != 1 || adopted[0].integration != "acme-payments" {
+	if len(adopted) != 1 || adopted[0].integration != "mcp-acme-test" {
 		t.Fatalf("co-located store adopted %+v, want the external row alone", adopted)
 	}
 	if own.mcp.HasBaseline("filesystem", "client") {
@@ -635,7 +635,6 @@ func mcpStdioSnapshotRecord(ld plog.Logs, serverName, snapshotJSON string) {
 	a.PutStr(otlpattr.AttrDirection, "client")
 	a.PutStr(otlpattr.AttrPeerHost, serverName)
 	a.PutStr(otlpattr.AttrEdgeClass, model.EdgeClassLocalProcess)
-	a.PutStr(otlpattr.AttrIntegration, serverName)
 	a.PutStr(otlpattr.AttrMCPContractSnapshot, snapshotJSON)
 	a.PutInt(otlpattr.AttrMCPToolCount, 1)
 	a.PutStr(otlpattr.AttrMCPServerName, serverName)
@@ -651,7 +650,6 @@ func mcpStdioCallRecord(ld plog.Logs, serverName, toolName string) {
 	a.PutStr(otlpattr.AttrDirection, "client")
 	a.PutStr(otlpattr.AttrPeerHost, serverName)
 	a.PutStr(otlpattr.AttrEdgeClass, model.EdgeClassLocalProcess)
-	a.PutStr(otlpattr.AttrIntegration, serverName)
 	a.PutStr(otlpattr.AttrMethod, "tools/call")
 	a.PutStr(otlpattr.AttrRoute, "/"+toolName)
 	a.PutStr(otlpattr.AttrMCPToolName, toolName)
@@ -745,7 +743,7 @@ func TestTwoFrontsObservingTheSameListNeverMoveTheRow(t *testing.T) {
 			t.Fatalf("list: %v", err)
 		}
 		for _, si := range infos {
-			if si.Integration == "acme-payments" {
+			if si.Integration == "mcp-acme-test" {
 				return si.LoadedAt
 			}
 		}
@@ -771,7 +769,7 @@ func TestTwoFrontsObservingTheSameListNeverMoveTheRow(t *testing.T) {
 	// converges on the earlier one. Each downloads the row once to find out.
 	a.refreshSpecs()
 	b.refreshSpecs()
-	if n := src.fetches["acme-payments"]; n != 2 {
+	if n := src.fetches["mcp-acme-test"]; n != 2 {
 		t.Fatalf("fetches after the first ticks = %d, want one per front", n)
 	}
 	// Detector side: front-b now forwards front-a's stamp, and so does front-a.
@@ -789,7 +787,7 @@ func TestTwoFrontsObservingTheSameListNeverMoveTheRow(t *testing.T) {
 		a.refreshSpecs()
 		b.refreshSpecs()
 	}
-	if n := src.fetches["acme-payments"]; n != 2 {
+	if n := src.fetches["mcp-acme-test"]; n != 2 {
 		t.Fatalf("unchanged row re-downloaded: fetches = %d, want still 2", n)
 	}
 	// And both fronts judge calls against the one baseline.
@@ -822,10 +820,10 @@ func TestMCPBaselineRefusesAnOversizedSnapshot(t *testing.T) {
 	rows := []model.SpecInfo{
 		{Integration: "acme-huge", Role: model.SpecRoleProvider, Format: model.SpecFormatMCP, PeerHost: "mcp.huge.test",
 			EdgeClass: model.EdgeClassExternal, Source: model.SpecSourceObserved, LoadedAt: "2026-09-08T10:00:00.000Z"},
-		{Integration: "acme-payments", Role: model.SpecRoleProvider, Format: model.SpecFormatMCP, PeerHost: "mcp.acme.test",
+		{Integration: "mcp-acme-test", Role: model.SpecRoleProvider, Format: model.SpecFormatMCP, PeerHost: "mcp.acme.test",
 			EdgeClass: model.EdgeClassExternal, Source: model.SpecSourceObserved, LoadedAt: "2026-09-08T10:00:00.000Z"},
 	}
-	docs := map[string][]byte{"acme-huge": oversized, "acme-payments": []byte(mcpSnapshotJSON)}
+	docs := map[string][]byte{"acme-huge": oversized, "mcp-acme-test": []byte(mcpSnapshotJSON)}
 
 	pod := newMCPStorePod(t, rows, docs)
 	det := drift.NewMCPDetector()
@@ -847,7 +845,7 @@ func TestMCPBaselineRefusesAnOversizedSnapshot(t *testing.T) {
 
 	// One oversized row does not blind the rest — the same rule every other
 	// per-row failure on this path follows.
-	if len(adopted) != 1 || adopted[0].integration != "acme-payments" {
+	if len(adopted) != 1 || adopted[0].integration != "mcp-acme-test" {
 		t.Fatalf("adopted = %+v, want the row that fits", adopted)
 	}
 	if !det.HasBaseline("mcp.acme.test", "client") {

@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/collector/pdata/plog"
 
 	"github.com/flanj-io/collector/internal/edge"
+	"github.com/flanj-io/collector/internal/integration"
 	"github.com/flanj-io/collector/internal/model"
 )
 
@@ -25,9 +26,12 @@ const (
 	AttrPeerHost       = "flanj.peer.host"
 	// AttrPeerAddr is the optional socket address (IP) of the peer — transport
 	// detail alongside the peer.host identity; omitted when unknown.
-	AttrPeerAddr       = "flanj.peer.addr"
-	AttrEdgeClass      = "flanj.edge.class"
-	AttrCaptureBodies  = "flanj.capture.bodies"
+	AttrPeerAddr      = "flanj.peer.addr"
+	AttrEdgeClass     = "flanj.edge.class"
+	AttrCaptureBodies = "flanj.capture.bodies"
+	// AttrIntegration is deprecated and IGNORED: no decoder reads it, because
+	// the collector derives the key itself (integration.Derive). Kept so tests
+	// can send what an older SDK still does and prove it changes nothing.
 	AttrIntegration    = "flanj.integration"
 	AttrMethod         = "flanj.http.method"
 	AttrRoute          = "flanj.http.route"
@@ -240,9 +244,14 @@ func ServiceNameOf(res pcommon.Resource) string {
 	return ""
 }
 
-// CallFromRecord reconstructs a RedactedCall from a "call" log record. The id is
-// a fresh uuidv7 and captured_at derives from the record timestamp.
-func CallFromRecord(lr plog.LogRecord) model.RedactedCall {
+// CallFromRecord reconstructs a RedactedCall from a "call" log record and the
+// resource it arrived under. The id is a fresh uuidv7 and captured_at derives
+// from the record timestamp. service_name comes off the resource, and the
+// integration is DERIVED (integration.Derive — outbound HTTP and MCP by the
+// peer host, inbound HTTP by that service name); an SDK-sent flanj.integration
+// is ignored (CONTRACTS §2). Every pod decodes through here, so a front and the
+// store pod behind it key one record the same way.
+func CallFromRecord(res pcommon.Resource, lr plog.LogRecord) model.RedactedCall {
 	m := lr.Attributes()
 	var patterns []string
 	if v, ok := m.Get(AttrRedactPatterns); ok {
@@ -277,12 +286,16 @@ func CallFromRecord(lr plog.LogRecord) model.RedactedCall {
 	if validated == "" {
 		validated = model.ValidatedUnknown
 	}
+	direction := getStr(m, AttrDirection)
+	transport := getStr(m, AttrTransport)
+	serviceName := ServiceNameOf(res)
 	return model.RedactedCall{
 		SchemaVersion:         model.SchemaVersion,
 		ID:                    id,
 		CapturedAt:            capturedAt,
-		Integration:           getStr(m, AttrIntegration),
-		Direction:             getStr(m, AttrDirection),
+		Integration:           integration.Derive(transport == TransportMCP, direction, peerHost, serviceName),
+		ServiceName:           serviceName,
+		Direction:             direction,
 		PeerHost:              peerHost,
 		PeerAddr:              getStr(m, AttrPeerAddr),
 		EdgeClass:             edgeClass,
@@ -314,7 +327,7 @@ func CallFromRecord(lr plog.LogRecord) model.RedactedCall {
 			SpecAware: getBool(m, AttrRedactSpecAwr),
 			Fields:    fields,
 		},
-		Transport:          getStr(m, AttrTransport),
+		Transport:          transport,
 		MCPToolName:        getStr(m, AttrMCPToolName),
 		MCPIsError:         getBool(m, AttrMCPIsError),
 		MCPErrorCode:       getInt(m, AttrMCPErrorCode),
@@ -433,10 +446,13 @@ func ContractSnapshotFromRecord(lr plog.LogRecord) (ContractSnapshot, error) {
 	if raw == "" {
 		return ContractSnapshot{}, errNoSnapshot
 	}
+	direction, peerHost := getStr(m, AttrDirection), getStr(m, AttrPeerHost)
 	return ContractSnapshot{
-		Integration:       getStr(m, AttrIntegration),
-		Direction:         getStr(m, AttrDirection),
-		PeerHost:          getStr(m, AttrPeerHost),
+		// Derived by the call rule, never read off the record: a server's
+		// catalogue and its calls must share one key (CONTRACTS §2).
+		Integration:       integration.Derive(true, direction, peerHost, ""),
+		Direction:         direction,
+		PeerHost:          peerHost,
 		EdgeClass:         getStr(m, AttrEdgeClass),
 		ServerName:        getStr(m, AttrMCPServerName),
 		ServerVersion:     getStr(m, AttrMCPServerVersion),
@@ -473,6 +489,28 @@ func FindingToRecord(lr plog.LogRecord, f model.Finding) error {
 	lr.Attributes().PutStr(AttrRecordType, RecordTypeFinding)
 	lr.Attributes().PutStr(AttrFindingJSON, string(b))
 	return nil
+}
+
+// AttrFindingInbound marks a finding record whose finding was born from an
+// INBOUND call: raised against the self spec and keyed by the service the call
+// reached, a name that never leaves the collector (CONTRACTS §3). It is an
+// attribute of the collector's own finding record — the processor→exporter
+// path and the tiered front→store hop — and never part of the finding's JSON,
+// so it cannot reach the control plane. The store persists it
+// (store.Store.InsertInboundFinding) whether or not the call is ever stored.
+const AttrFindingInbound = "flanj.finding.inbound"
+
+// MarkFindingInbound stamps AttrFindingInbound on a finding record.
+func MarkFindingInbound(lr plog.LogRecord) {
+	lr.Attributes().PutBool(AttrFindingInbound, true)
+}
+
+// FindingInbound reports whether a finding record carries AttrFindingInbound.
+// Absent (every record from an older front) is false; the store's own join on
+// the source call's direction still applies then.
+func FindingInbound(lr plog.LogRecord) bool {
+	v, ok := lr.Attributes().Get(AttrFindingInbound)
+	return ok && v.Type() == pcommon.ValueTypeBool && v.Bool()
 }
 
 // FindingFromRecord reconstructs a Finding from a "finding" log record.

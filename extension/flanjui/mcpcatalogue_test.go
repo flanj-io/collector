@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/flanj-io/collector/internal/integration"
 	"github.com/flanj-io/collector/internal/model"
 )
 
@@ -19,7 +20,7 @@ const mcpToolsDoc = `{"tools":[{"name":"charge","inputSchema":{"type":"object"}}
 func seedCatalogue(t *testing.T, r *testRig, host string) {
 	t.Helper()
 	if err := r.st.PutMCPCatalogue(model.SpecInfo{
-		Integration: integrationForHost(host), Role: model.SpecRoleProvider, PeerHost: host,
+		Integration: integration.ForHost(host), Role: model.SpecRoleProvider, PeerHost: host,
 		Format: model.SpecFormatMCP, Source: model.SpecSourceObserved, EdgeClass: model.EdgeClassExternal,
 		Title: "acme-tools-mcp", LoadedAt: "2026-09-19T10:00:00Z",
 	}, []byte(mcpToolsDoc)); err != nil {
@@ -32,7 +33,7 @@ func seedCatalogue(t *testing.T, r *testRig, host string) {
 // row's own document by format.
 func assertBothCards(t *testing.T, r *testRig, host, wantOpenAPI string) {
 	t.Helper()
-	integration := integrationForHost(host)
+	integration := integration.ForHost(host)
 	resp, out, raw := r.do(t, http.MethodGet, "/api/contracts", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /api/contracts = %d: %s", resp.StatusCode, raw)

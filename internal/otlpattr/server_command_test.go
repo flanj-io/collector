@@ -18,7 +18,6 @@ func stdioSnapshotRecord(command *string) plog.LogRecord {
 	a.PutStr(AttrDirection, "client")
 	a.PutStr(AttrPeerHost, "stripe-mcp")
 	a.PutStr(AttrEdgeClass, model.EdgeClassLocalProcess)
-	a.PutStr(AttrIntegration, "stripe-mcp-stdio")
 	a.PutStr(AttrMCPServerName, "stripe-mcp")
 	a.PutStr(AttrMCPServerVersion, "0.2.1")
 	a.PutStr(AttrMCPContractSnapshot, `{"tools":[{"name":"list_charges","inputSchema":{"type":"object"}}]}`)
@@ -79,7 +78,7 @@ func TestContractSnapshotDropsAMalformedServerCommand(t *testing.T) {
 				t.Errorf("server command = %q, want it dropped", snap.ServerCommand)
 			}
 			if snap.SnapshotJSON == "" || snap.ServerName != "stripe-mcp" || snap.EdgeClass != model.EdgeClassLocalProcess ||
-				snap.Integration != "stripe-mcp-stdio" {
+				snap.Integration != "stripe-mcp" {
 				t.Errorf("the rest of the record did not survive: %+v", snap)
 			}
 		})
@@ -91,7 +90,7 @@ func TestContractSnapshotDropsAMalformedServerCommand(t *testing.T) {
 // and a row without one stays without one.
 func TestSpecInfoRecordCarriesServerCommand(t *testing.T) {
 	const cmd = `["npx","-y","@stripe/mcp@0.2.1"]`
-	info := model.SpecInfo{Integration: "stripe-mcp-stdio", Role: model.SpecRoleProvider, PeerHost: "stripe-mcp",
+	info := model.SpecInfo{Integration: "stripe-mcp", Role: model.SpecRoleProvider, PeerHost: "stripe-mcp",
 		EdgeClass: model.EdgeClassLocalProcess, Format: model.SpecFormatMCP, Source: model.SpecSourceObserved,
 		Endpoints: 1, LoadedAt: "2026-09-18T10:00:00Z", ServerCommand: cmd}
 	lr := plog.NewLogs().ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()

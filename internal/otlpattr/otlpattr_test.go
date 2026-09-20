@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 
 	"github.com/flanj-io/collector/contract"
@@ -63,7 +64,7 @@ func recordFromFixture(t *testing.T, name string) plog.LogRecord {
 // TestCallFromRecord_ClientDirection asserts the egress (client) golden call maps
 // to a consumer-side edge with the external peer host + class carried through.
 func TestCallFromRecord_ClientDirection(t *testing.T) {
-	call := CallFromRecord(recordFromFixture(t, "golden-otlp-call.json"))
+	call := CallFromRecord(pcommon.NewResource(), recordFromFixture(t, "golden-otlp-call.json"))
 	if call.Direction != "client" {
 		t.Errorf("direction = %q, want client", call.Direction)
 	}
@@ -81,7 +82,7 @@ func TestCallFromRecord_ClientDirection(t *testing.T) {
 // TestCallFromRecord_ServerDirection asserts the ingress (server) golden call maps
 // to a provider-side edge with the external peer host + class carried through.
 func TestCallFromRecord_ServerDirection(t *testing.T) {
-	call := CallFromRecord(recordFromFixture(t, "golden-otlp-server-call.json"))
+	call := CallFromRecord(pcommon.NewResource(), recordFromFixture(t, "golden-otlp-server-call.json"))
 	if call.Direction != "server" {
 		t.Errorf("direction = %q, want server", call.Direction)
 	}
@@ -98,7 +99,7 @@ func TestCallFromRecord_ServerDirection(t *testing.T) {
 // identity — and keeps the client-generated JSON-RPC id in its OWN correlation
 // slot, never folded into the provider-issued request_id.
 func TestCallFromRecord_MCPGolden(t *testing.T) {
-	call := CallFromRecord(recordFromFixture(t, "golden-otlp-mcp-call.json"))
+	call := CallFromRecord(pcommon.NewResource(), recordFromFixture(t, "golden-otlp-mcp-call.json"))
 	if call.Transport != TransportMCP {
 		t.Errorf("transport = %q, want mcp", call.Transport)
 	}
@@ -141,7 +142,7 @@ func TestContractSnapshotFromRecord_Golden(t *testing.T) {
 	if err != nil {
 		t.Fatalf("from record: %v", err)
 	}
-	if snap.Integration != "acme-payments" || snap.PeerHost != "mcp.acme.test" || snap.Direction != "client" || snap.EdgeClass != "external" {
+	if snap.Integration != "mcp-acme-test" || snap.PeerHost != "mcp.acme.test" || snap.Direction != "client" || snap.EdgeClass != "external" {
 		t.Errorf("edge identity = %+v", snap)
 	}
 	if snap.ServerName != "acme-payments-mcp" || snap.ServerVersion != "3.2.0" || snap.ProtocolVersion != "2025-06-18" {
@@ -178,7 +179,7 @@ func TestCallFromRecord_ClassFallback(t *testing.T) {
 	lr.Attributes().PutStr(AttrPeerHost, "10.0.0.5:8080")
 	lr.Attributes().PutStr(AttrMethod, "POST")
 	lr.Attributes().PutStr(AttrRoute, "/internal")
-	call := CallFromRecord(lr)
+	call := CallFromRecord(pcommon.NewResource(), lr)
 	if call.EdgeClass != "internal" {
 		t.Errorf("edge_class fallback = %q, want internal (RFC1918)", call.EdgeClass)
 	}
@@ -276,8 +277,51 @@ func TestCallFromRecord_ConvergesTheEdgeKey(t *testing.T) {
 		if c.urlFull != "" {
 			lr.Attributes().PutStr(AttrURLFull, c.urlFull)
 		}
-		if got := CallFromRecord(lr).PeerHost; got != c.want {
+		if got := CallFromRecord(pcommon.NewResource(), lr).PeerHost; got != c.want {
 			t.Errorf("peer_host %q on %q = %q, want %q", c.peerHost, c.urlFull, got, c.want)
 		}
+	}
+}
+
+// TestDecoders_DeriveTheIntegration: the decoders derive every record's key and
+// read no SDK id — the canonical goldens no longer carry one, and a record
+// that still does (an older SDK) lands on the same key. Inbound keys by the
+// resource's service.name (the server golden's "our-api"), and by
+// "unknown-integration" under a resource that names none.
+func TestDecoders_DeriveTheIntegration(t *testing.T) {
+	withService := func(name string) pcommon.Resource {
+		res := pcommon.NewResource()
+		res.Attributes().PutStr(ResourceServiceName, name)
+		return res
+	}
+	for _, c := range []struct {
+		fixture string
+		res     pcommon.Resource
+		want    string
+	}{
+		{"golden-otlp-call.json", withService("our-api"), "api-acme-test"},
+		{"golden-otlp-mcp-call.json", withService("our-api"), "mcp-acme-test"},
+		{"golden-otlp-server-call.json", withService("our-api"), "our-api"},
+		{"golden-otlp-server-call.json", pcommon.NewResource(), "unknown-integration"},
+	} {
+		for _, sdkID := range []string{"", "sdk-sent-id"} {
+			lr := recordFromFixture(t, c.fixture)
+			if sdkID != "" {
+				lr.Attributes().PutStr(AttrIntegration, sdkID)
+			}
+			call := CallFromRecord(c.res, lr)
+			if call.Integration != c.want {
+				t.Errorf("%s (sdk id %q): integration = %q, want %q", c.fixture, sdkID, call.Integration, c.want)
+			}
+		}
+	}
+	lr := recordFromFixture(t, "golden-otlp-mcp-snapshot.json")
+	lr.Attributes().PutStr(AttrIntegration, "sdk-sent-id")
+	snap, err := ContractSnapshotFromRecord(lr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Integration != "mcp-acme-test" {
+		t.Errorf("snapshot integration = %q, want the call rule's mcp-acme-test", snap.Integration)
 	}
 }

@@ -210,6 +210,10 @@ ALTER TABLE calls ADD COLUMN IF NOT EXISTS drifted INTEGER NOT NULL DEFAULT 0;
 -- every pre-existing row and nothing else ever writes '' (InsertCall always
 -- supplies the column) — see the sqlite backend's callsAddedColumns note.
 ALTER TABLE calls ADD COLUMN IF NOT EXISTS validated TEXT NOT NULL DEFAULT '';
+-- findings.inbound: the finding's source call was inbound, so its key is a
+-- service name that never leaves the collector (Store.InboundFindingIDs). A
+-- row from before the column is 0, and was keyed by the constant 'self'.
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS inbound INTEGER NOT NULL DEFAULT 0;
 `
 	tx, err := p.db.Begin()
 	if err != nil {
@@ -227,6 +231,11 @@ ALTER TABLE calls ADD COLUMN IF NOT EXISTS validated TEXT NOT NULL DEFAULT '';
 	// The MCP rows move out of spec_infos in the same transaction, under the
 	// same schema lock, so N pods starting at once move each row exactly once.
 	if err := moveMCPRowsOutOfSpecInfos(tx); err != nil {
+		return fmt.Errorf("migrate: %w", err)
+	}
+	// Then every catalogue moves to the key the collector derives from its
+	// peer host (rekeyMCPCatalogues), in the same transaction.
+	if err := rekeyMCPCatalogues(tx, p.rebind); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -328,7 +337,16 @@ func (p *postgresStore) upsertEdgeTx(tx *sql.Tx, peerHost, direction, class, at 
 // ACK, the same batch landing on two pods — applies nothing the second time.
 // The ledger row commits with the finding or not at all, so a write that fails
 // half-way leaves nothing behind for the retry to trip over.
-func (p *postgresStore) InsertFinding(f model.Finding) (err error) {
+func (p *postgresStore) InsertFinding(f model.Finding) error {
+	return p.insertFinding(f, false)
+}
+
+// InsertInboundFinding: see Store.InsertInboundFinding.
+func (p *postgresStore) InsertInboundFinding(f model.Finding) error {
+	return p.insertFinding(f, true)
+}
+
+func (p *postgresStore) insertFinding(f model.Finding, inbound bool) (err error) {
 	defer func() { err = classify(err) }() // ErrRejected on SQLSTATE class 23/22
 	if f.Signature == "" {
 		f.Signature = f.ComputeSignature()
@@ -390,6 +408,13 @@ func (p *postgresStore) InsertFinding(f model.Finding) (err error) {
 	if err != nil {
 		return fmt.Errorf("insert finding: %w", err)
 	}
+	// The row exists now, new or deduped: an inbound record sets the mark on
+	// it. Only ever set — an unmarked occurrence leaves it alone.
+	if inbound {
+		if _, err := tx.Exec(p.rebind(`UPDATE findings SET inbound=1 WHERE signature=? AND inbound=0`), f.Signature); err != nil {
+			return fmt.Errorf("mark inbound finding: %w", err)
+		}
+	}
 	// mark-on-finding: THIS call drifted, whether or not its signature is new.
 	// Distinct from the pin, which marks the ONE representative call kept
 	// reproducible — drift is a property of every call that produced a finding,
@@ -426,6 +451,9 @@ func (p *postgresStore) InsertFinding(f model.Finding) (err error) {
 				return fmt.Errorf("pin source call: %w", err)
 			}
 			if err := bumpEdgeDrift(tx, p.rebind, *sourceCallID); err != nil {
+				return err
+			}
+			if err := markFindingInbound(tx, p.rebind, f.ID, *sourceCallID); err != nil {
 				return err
 			}
 		}

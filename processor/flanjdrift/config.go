@@ -34,9 +34,9 @@ type Config struct {
 	// problem that moved provider contracts into the UI.
 	SelfSpecPath string `mapstructure:"self_spec_path"`
 	// SelfIntegrationID is DEPRECATED and IGNORED (2026-09-14, with
-	// integration_id): self-spec findings are always labelled "self", which
-	// no SDK-stamped integration is, so self and provider findings never
-	// merge without a knob. Decodable so an old config boots.
+	// integration_id): self-spec findings carry their inbound call's key, the
+	// service the call reached, while provider findings key by host, so the two
+	// never merge without a knob. Decodable so an old config boots.
 	SelfIntegrationID string `mapstructure:"self_integration_id"`
 
 	// StorePodEndpoint is the tiered topology's spec channel: the base URL of
@@ -80,9 +80,10 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// selfIntegration is the label for self-spec findings: always "self" since
-// 2026-09-14 (self_integration_id is ignored). Kept as a method so the two call
-// sites read the rule from one place.
+// selfIntegration is the key of the self contract's own row: always "self"
+// (self_integration_id is ignored). The findings it produces are NOT keyed by
+// it: each carries its inbound call's key, the service the call reached
+// (integration.Derive), and the flag relay sends "self" in its place.
 func (c *Config) selfIntegration() string {
 	return "self"
 }

@@ -177,9 +177,17 @@ func copyPinnedCalls(src *sql.DB, tx *sql.Tx) (int, error) {
 }
 
 func copyFindings(src *sql.DB, tx *sql.Tx) (int, error) {
+	// findings.inbound arrived later than the table: a file from before it
+	// has no such column, and its findings were keyed by the constant "self".
+	inbound := "0"
+	if ok, err := sqliteHasColumn(src, "findings", "inbound"); err != nil {
+		return 0, fmt.Errorf("migrate-from-sqlite: probe findings.inbound: %w", err)
+	} else if ok {
+		inbound = "inbound"
+	}
 	rows, err := src.Query(
 		`SELECT id, signature, kind, severity, integration, endpoint, rule, source_call_id,
-		        occurrence_count, first_seen, last_seen, detected_at, doc
+		        occurrence_count, first_seen, last_seen, detected_at, doc, ` + inbound + `
 		   FROM findings ORDER BY seq ASC`)
 	if err != nil {
 		return 0, fmt.Errorf("migrate-from-sqlite: read findings: %w", err)
@@ -191,19 +199,19 @@ func copyFindings(src *sql.DB, tx *sql.Tx) (int, error) {
 			id, signature, kind, severity, integration, endpoint, rule string
 			firstSeen, lastSeen, detectedAt, doc                       string
 			sourceCallID                                               sql.NullString
-			occ                                                        int
+			occ, in                                                    int
 		)
 		if err := rows.Scan(&id, &signature, &kind, &severity, &integration, &endpoint, &rule, &sourceCallID,
-			&occ, &firstSeen, &lastSeen, &detectedAt, &doc); err != nil {
+			&occ, &firstSeen, &lastSeen, &detectedAt, &doc, &in); err != nil {
 			return n, fmt.Errorf("migrate-from-sqlite: scan finding: %w", err)
 		}
 		res, err := tx.Exec(
 			`INSERT INTO findings
-			  (id, signature, kind, severity, integration, endpoint, rule, source_call_id, occurrence_count, first_seen, last_seen, detected_at, doc)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+			  (id, signature, kind, severity, integration, endpoint, rule, source_call_id, occurrence_count, first_seen, last_seen, detected_at, doc, inbound)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
 			 ON CONFLICT (signature) DO NOTHING`,
 			id, signature, kind, severity, integration, endpoint, rule, sourceCallID,
-			occ, firstSeen, lastSeen, detectedAt, doc,
+			occ, firstSeen, lastSeen, detectedAt, doc, in,
 		)
 		if err != nil {
 			return n, fmt.Errorf("migrate-from-sqlite: insert finding %s: %w", id, err)

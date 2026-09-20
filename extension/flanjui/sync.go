@@ -122,7 +122,13 @@ func (e *uiExtension) syncFindingsOnce(ctx context.Context) {
 	// not drift — its CP deep link would dead-end — so it never syncs; every
 	// other kind (version-diff included) does.
 	findings = slices.DeleteFunc(findings, func(f model.Finding) bool { return f.Kind == model.KindStaleClient })
-	shapes := promote.BuildFindingShapes(findings)
+	// Self-spec findings are keyed by a service name, which crosses as "self"
+	// (CONTRACTS §3). No answer, no post: a tick that cannot tell must not send.
+	inbound, err := st.InboundFindingIDs()
+	if err != nil {
+		return
+	}
+	shapes := promote.BuildFindingShapes(findings, inbound)
 	if len(shapes) == 0 {
 		return
 	}

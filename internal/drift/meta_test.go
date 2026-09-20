@@ -16,7 +16,7 @@ func metaSurface(t *testing.T, d *MCPDetector) {
 	doc := `{"tools":[
 	  {"name":"search_tools","description":"Search the catalog.","inputSchema":{"type":"object","properties":{"query":{"type":"string"}}}},
 	  {"name":"call_tool","description":"Call a catalog tool.","inputSchema":{"type":"object","properties":{"name":{"type":"string"},"arguments":{"type":"object"}}}}]}`
-	if _, _, _, err := d.LoadSnapshot(otlpattr.ContractSnapshot{Integration: "acme-payments", PeerHost: "mcp.acme.test",
+	if _, _, _, err := d.LoadSnapshot(otlpattr.ContractSnapshot{Integration: "mcp-acme-test", PeerHost: "mcp.acme.test",
 		Direction: "client", ObservedAt: "2026-08-24T09:00:00.000Z", SnapshotJSON: doc}); err != nil {
 		t.Fatal(err)
 	}

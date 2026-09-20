@@ -181,6 +181,13 @@ CREATE INDEX IF NOT EXISTS idx_calls_captured_edge ON calls(captured_at, peer_ho
 			return fmt.Errorf("migrate calls: add %s: %w", col, err)
 		}
 	}
+	// findings.inbound — same additive widening (findingsAddedColumns).
+	for _, col := range findingsAddedColumns {
+		if _, err := s.db.Exec(`ALTER TABLE findings ADD COLUMN ` + col); err != nil &&
+			!strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("migrate findings: add %s: %w", col, err)
+		}
+	}
 	// The MCP rows move out of spec_infos (moveMCPRowsOutOfSpecInfos), in one
 	// transaction so a crash never leaves a catalogue in both tables or in
 	// neither. Runs blind on every start; after the first it matches nothing.
@@ -190,6 +197,11 @@ CREATE INDEX IF NOT EXISTS idx_calls_captured_edge ON calls(captured_at, peer_ho
 	}
 	defer func() { _ = tx.Rollback() }()
 	if err := moveMCPRowsOutOfSpecInfos(tx); err != nil {
+		return fmt.Errorf("migrate: %w", err)
+	}
+	// Then every catalogue moves to the key the collector derives from its
+	// peer host (rekeyMCPCatalogues), in the same transaction.
+	if err := rekeyMCPCatalogues(tx, s.rebind); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -211,6 +223,15 @@ CREATE INDEX IF NOT EXISTS idx_calls_captured_edge ON calls(captured_at, peer_ho
 var callsAddedColumns = []string{
 	`drifted INTEGER NOT NULL DEFAULT 0`,
 	`validated TEXT NOT NULL DEFAULT ''`,
+}
+
+// findingsAddedColumns are the findings columns introduced after the table
+// shipped. `inbound` records that the finding's source call was inbound (see
+// Store.InboundFindingIDs); LOCAL only — no read path puts it on the wire. A
+// row from before the column is 0, and that is right: such a finding was keyed
+// by the constant "self", never by a service name.
+var findingsAddedColumns = []string{
+	`inbound INTEGER NOT NULL DEFAULT 0`,
 }
 
 var specInfoAddedColumns = []string{
@@ -305,7 +326,16 @@ func (s *sqliteStore) upsertEdgeLocked(peerHost, direction, class, at string) er
 // failed write, a front re-sending after a lost ACK — changes nothing the
 // second time. Every statement runs in one transaction, so a write that fails
 // half-way leaves no ledger row behind and the retry applies the finding in full.
-func (s *sqliteStore) InsertFinding(f model.Finding) (err error) {
+func (s *sqliteStore) InsertFinding(f model.Finding) error {
+	return s.insertFinding(f, false)
+}
+
+// InsertInboundFinding: see Store.InsertInboundFinding.
+func (s *sqliteStore) InsertInboundFinding(f model.Finding) error {
+	return s.insertFinding(f, true)
+}
+
+func (s *sqliteStore) insertFinding(f model.Finding, inbound bool) (err error) {
 	defer func() { err = classify(err) }() // ErrRejected on a constraint the ON CONFLICT does not absorb
 	if f.Signature == "" {
 		f.Signature = f.ComputeSignature()
@@ -369,6 +399,13 @@ func (s *sqliteStore) InsertFinding(f model.Finding) (err error) {
 	if err != nil {
 		return fmt.Errorf("insert finding: %w", err)
 	}
+	// The row exists now, new or deduped: an inbound record sets the mark on
+	// it. Only ever set — an unmarked occurrence leaves it alone.
+	if inbound {
+		if _, err := tx.Exec(s.rebind(`UPDATE findings SET inbound=1 WHERE signature=? AND inbound=0`), f.Signature); err != nil {
+			return fmt.Errorf("mark inbound finding: %w", err)
+		}
+	}
 	// mark-on-finding: THIS call drifted, whether or not its signature is new.
 	// Distinct from the pin, which marks the ONE representative call kept
 	// reproducible — drift is a property of every call that produced a finding,
@@ -395,6 +432,9 @@ func (s *sqliteStore) InsertFinding(f model.Finding) (err error) {
 			}
 			// Attribute the drift to the source call's edge (one per signature).
 			if err := bumpEdgeDrift(tx, s.rebind, *sourceCallID); err != nil {
+				return err
+			}
+			if err := markFindingInbound(tx, s.rebind, f.ID, *sourceCallID); err != nil {
 				return err
 			}
 		}

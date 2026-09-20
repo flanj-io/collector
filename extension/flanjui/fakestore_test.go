@@ -16,6 +16,7 @@ type fakeStore struct {
 	findings map[string]model.Finding
 	settings map[string]string
 	promoted []string
+	inbound  map[string]bool // InsertInboundFinding's mark
 	// edges + specInfos back the v1p1 naming surface: ListEdges serves the
 	// seeded rows (externalOnly filters on class) and ListSpecInfos serves the
 	// seeded spec rows (config→edge linkage for the boot migration).
@@ -54,6 +55,16 @@ func (f *fakeStore) InsertFinding(x model.Finding) error {
 	f.findings[x.ID] = x
 	return nil
 }
+func (f *fakeStore) InsertInboundFinding(x model.Finding) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.findings[x.ID] = x
+	if f.inbound == nil {
+		f.inbound = map[string]bool{}
+	}
+	f.inbound[x.ID] = true
+	return nil
+}
 func (f *fakeStore) MarkPromoted(id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -90,6 +101,28 @@ func (f *fakeStore) ListFindings(limit int) ([]model.Finding, error) {
 	}
 	return out, nil
 }
+
+// InboundFindingIDs: a finding whose source call is held and inbound. The real
+// backends record it on the finding row so it outlives the call; this fake
+// keeps every call, so the join is the same answer.
+func (f *fakeStore) InboundFindingIDs() (map[string]bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := map[string]bool{}
+	for id := range f.inbound {
+		out[id] = true
+	}
+	for _, fd := range f.findings {
+		if fd.SourceCallID == nil {
+			continue
+		}
+		if c, ok := f.calls[*fd.SourceCallID]; ok && c.Direction == "server" {
+			out[fd.ID] = true
+		}
+	}
+	return out, nil
+}
+
 func (f *fakeStore) CallPeerHosts(ids []string) (map[string]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

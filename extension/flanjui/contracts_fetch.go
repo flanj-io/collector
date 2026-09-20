@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/flanj-io/collector/internal/drift"
+	"github.com/flanj-io/collector/internal/integration"
 	"github.com/flanj-io/collector/internal/model"
 	"github.com/flanj-io/collector/internal/store"
 )
@@ -296,7 +297,7 @@ func (e *uiExtension) bindStagedFetch(w http.ResponseWriter, st store.Store, tok
 		return
 	}
 
-	integration := integrationForHost(staged.peerHost)
+	integration := integration.ForHost(staged.peerHost)
 	// The same ownership refusal the upload path applies, and it must apply
 	// here too: a fetch that silently replaced the org's own self contract, or
 	// a differently-spelled host that slugs the same, is the wrong-contract

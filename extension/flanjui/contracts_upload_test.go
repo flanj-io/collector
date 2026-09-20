@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/collector/component"
 
 	"github.com/flanj-io/collector/internal/drift"
+	"github.com/flanj-io/collector/internal/integration"
 	"github.com/flanj-io/collector/internal/model"
 )
 
@@ -577,14 +578,14 @@ func TestIntegrationForHostIsStableAndSafe(t *testing.T) {
 		"10.0.0.7":           "10-0-0-7",
 	}
 	for host, want := range cases {
-		if got := integrationForHost(host); got != want {
-			t.Errorf("integrationForHost(%q) = %q, want %q", host, got, want)
+		if got := integration.ForHost(host); got != want {
+			t.Errorf("integration.ForHost(%q) = %q, want %q", host, got, want)
 		}
-		if integrationForHost(host) != integrationForHost(host) {
-			t.Errorf("integrationForHost(%q) is not stable", host)
+		if integration.ForHost(host) != integration.ForHost(host) {
+			t.Errorf("integration.ForHost(%q) is not stable", host)
 		}
 	}
-	if got := integrationForHost("api.acme.test"); got == integrationForHost("api.globex.test") {
+	if got := integration.ForHost("api.acme.test"); got == integration.ForHost("api.globex.test") {
 		t.Error("two different hosts derived the same id")
 	}
 }
@@ -925,13 +926,13 @@ func TestRemoveNeverTouchesAnMCPCatalogue(t *testing.T) {
 	}
 	upload("api.acme.test")
 	if err := r.st.PutMCPCatalogue(model.SpecInfo{
-		Integration: integrationForHost("api.acme.test"), Role: model.SpecRoleProvider, PeerHost: "api.acme.test",
+		Integration: integration.ForHost("api.acme.test"), Role: model.SpecRoleProvider, PeerHost: "api.acme.test",
 		Format: model.SpecFormatMCP, LoadedAt: "t0",
 	}, []byte(`{"tools":[]}`)); err != nil {
 		t.Fatal(err)
 	}
 	resp, out, raw = r.do(t, http.MethodPost, "/api/contracts/remove", map[string]string{
-		"integration": integrationForHost("api.acme.test"),
+		"integration": integration.ForHost("api.acme.test"),
 	})
 	if resp.StatusCode != http.StatusOK || out["removed"] != true {
 		t.Fatalf("remove the REST contract = %d %s, want 200 removed:true", resp.StatusCode, raw)

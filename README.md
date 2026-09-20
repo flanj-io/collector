@@ -109,7 +109,6 @@ npm install @flanj/sdk
 ```
 
 ```bash
-export FLANJ_INTEGRATION_ID=acme-payments        # labels this integration
 export FLANJ_OTLP_ENDPOINT=http://localhost:4318/v1/logs   # this is the default
 node -r @flanj/sdk/register app.js
 ```

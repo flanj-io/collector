@@ -100,7 +100,6 @@ func mcpSnapshotRecord(ld plog.Logs, snapshotJSON string) {
 	a.PutStr(otlpattr.AttrDirection, "client")
 	a.PutStr(otlpattr.AttrPeerHost, "mcp.acme.test")
 	a.PutStr(otlpattr.AttrEdgeClass, "external")
-	a.PutStr(otlpattr.AttrIntegration, "acme-payments")
 	a.PutStr(otlpattr.AttrMCPContractSnapshot, snapshotJSON)
 	a.PutInt(otlpattr.AttrMCPToolCount, 2)
 	a.PutStr(otlpattr.AttrMCPServerName, "acme-payments-mcp")
@@ -115,7 +114,6 @@ func mcpCallRecord(ld plog.Logs, toolName, respBody string) {
 	a.PutStr(otlpattr.AttrDirection, "client")
 	a.PutStr(otlpattr.AttrPeerHost, "mcp.acme.test")
 	a.PutStr(otlpattr.AttrEdgeClass, "external")
-	a.PutStr(otlpattr.AttrIntegration, "acme-payments")
 	a.PutStr(otlpattr.AttrMethod, "tools/call")
 	a.PutStr(otlpattr.AttrRoute, "/"+toolName)
 	a.PutStr(otlpattr.AttrMCPToolName, toolName)
@@ -174,7 +172,7 @@ func TestMCPPipeline(t *testing.T) {
 	if finding.SourceCallID == nil || *finding.SourceCallID == "" {
 		t.Errorf("finding must reference its stamped source call id")
 	}
-	if info.Format != model.SpecFormatMCP || info.Integration != "acme-payments" || info.Endpoints != 2 || string(raw) != mcpSnapshotJSON {
+	if info.Format != model.SpecFormatMCP || info.Integration != "mcp-acme-test" || info.Endpoints != 2 || string(raw) != mcpSnapshotJSON {
 		t.Errorf("spec_info = %+v raw=%q", info, raw)
 	}
 

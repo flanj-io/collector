@@ -34,6 +34,7 @@ import (
 	sqlite3 "modernc.org/sqlite/lib"
 
 	"github.com/flanj-io/collector/internal/edge"
+	"github.com/flanj-io/collector/internal/integration"
 	"github.com/flanj-io/collector/internal/model"
 )
 
@@ -84,12 +85,27 @@ type Store interface {
 	// ONE exception to the frozen doc: a definition_change whose EVIDENCE has
 	// moved on — see refreshedFindingDoc.
 	InsertFinding(f model.Finding) error
+	// InsertInboundFinding is InsertFinding for a finding born from an INBOUND
+	// call (the finding record's otlpattr.AttrFindingInbound): the same insert,
+	// and findings.inbound set on its row in the same transaction — whether or
+	// not the call is ever stored. Never cleared by a later InsertFinding.
+	InsertInboundFinding(f model.Finding) error
 	// MarkPromoted implements evict-after-promote: unpin + stamp promoted_at.
 	MarkPromoted(id string) error
 	GetCall(id string) (model.RedactedCall, bool, error)
 	GetFinding(id string) (model.Finding, bool, error)
 	ListCalls(limit int) ([]model.RedactedCall, error)
 	ListFindings(limit int) ([]model.Finding, error)
+	// InboundFindingIDs names the findings whose source call was INBOUND — a
+	// finding raised against the self spec, keyed locally by the service the
+	// call reached. That service name never crosses to the control plane
+	// (CONTRACTS §3): the flag relay and the findings sync send "self" in its
+	// place, and they read the fact here because the call itself does not
+	// last — a flagged finding's call is unpinned and ages out, and the sync
+	// never has one in hand. Recorded on the finding row (findings.inbound, a
+	// local column that never leaves) when the store first holds both the
+	// finding and its call, whichever arrived first.
+	InboundFindingIDs() (map[string]bool, error)
 	// CallPeerHosts resolves call ids to the peer host each call was captured
 	// against. Ids with no stored call — and calls stored without a host, e.g.
 	// a local-process MCP server — are absent from the map rather than present
@@ -424,6 +440,39 @@ func evictOldest(ex execer, rebind func(string) string, keepID string, batch int
 // identical bodies modulo rebind until 2026-09-08). A call with no row, or one
 // captured without a peer host (a local-process MCP server), attributes to no
 // edge and is a no-op.
+// markFindingInbound records on a NEW finding row that its source call was
+// inbound, when the store already holds that call (latePin covers the other
+// order). Idempotent.
+func markFindingInbound(ex execer, rebind func(string) string, findingID, sourceCallID string) error {
+	if _, err := ex.Exec(rebind(
+		`UPDATE findings SET inbound=1
+		  WHERE id=? AND inbound=0
+		    AND EXISTS (SELECT 1 FROM calls WHERE id=? AND direction=?)`),
+		findingID, sourceCallID, integration.DirectionServer,
+	); err != nil {
+		return fmt.Errorf("mark inbound finding: %w", err)
+	}
+	return nil
+}
+
+// inboundFindingIDs is Store.InboundFindingIDs for both backends.
+func inboundFindingIDs(q queryExecer) (map[string]bool, error) {
+	rows, err := q.Query(`SELECT id FROM findings WHERE inbound=1`)
+	if err != nil {
+		return nil, fmt.Errorf("list inbound findings: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("list inbound findings: %w", err)
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
+
 func bumpEdgeDrift(q queryExecer, rebind func(string) string, sourceCallID string) error {
 	var peerHost, direction sql.NullString
 	err := q.QueryRow(rebind(`SELECT peer_host, direction FROM calls WHERE id=?`), sourceCallID).Scan(&peerHost, &direction)
@@ -510,6 +559,15 @@ func latePin(ex execer, rebind func(string) string, c model.RedactedCall) (pinne
 		args...,
 	); err != nil {
 		return false, fmt.Errorf("late pin: repair drifted: %w", err)
+	}
+	// The finding arrived first, so InsertFinding could not tell whether its
+	// call was inbound: record it now (findings.inbound — see
+	// Store.InboundFindingIDs). Before the pin, which returns early when there
+	// is nothing to pin.
+	if c.Direction == integration.DirectionServer {
+		if _, err := ex.Exec(rebind(`UPDATE findings SET inbound=1 WHERE source_call_id=? AND inbound=0`), c.ID); err != nil {
+			return false, fmt.Errorf("late pin: mark inbound finding: %w", err)
+		}
 	}
 	res, err := ex.Exec(rebind(
 		`UPDATE calls SET pinned=1
@@ -681,6 +739,11 @@ func (b *base) ListFindings(limit int) ([]model.Finding, error) {
 		limit = 100
 	}
 	return b.scanFindings(`SELECT doc, occurrence_count, last_seen FROM findings ORDER BY seq DESC LIMIT ?`, limit)
+}
+
+// InboundFindingIDs: see Store.InboundFindingIDs.
+func (b *base) InboundFindingIDs() (map[string]bool, error) {
+	return inboundFindingIDs(b.db)
 }
 
 // callPeerHostBatch caps how many ids go into one IN list. A read-API page asks
@@ -1048,6 +1111,83 @@ func moveMCPRowsOutOfSpecInfos(tx execer) error {
 	}
 	if _, err := tx.Exec(`DELETE FROM spec_infos WHERE format='mcp'`); err != nil {
 		return fmt.Errorf("move mcp rows to mcp_catalogues: clear spec_infos: %w", err)
+	}
+	return nil
+}
+
+// rekeyMCPCatalogues is the one-time move of every MCP catalogue stored under
+// an SDK-sent id to the key the collector derives from its peer host
+// (integration.Derive: the call rule, which every new snapshot and call now
+// lands on). A search-learned row (source search_result) moves to the derived
+// key's <key>:search sibling. Run at open by both backends inside the
+// migration transaction (postgres: under the schema lock, so N pods starting
+// at once move each row once).
+//
+// The mis-keyed rows are read out whole, deleted, then upserted at their
+// derived keys with the newer loaded_at winning — so two rows that collapse
+// onto one key keep the NEWEST, a row already on its key competes on the same
+// terms, and a row whose old id happens to be another row's derived key
+// cannot shadow it on the way. Idempotent: once every row is on its derived
+// key the scan selects nothing to move.
+func rekeyMCPCatalogues(tx queryExecer, rebind func(string) string) error {
+	type row struct {
+		key, role, host, edgeClass, title, version, docsURL, loadedAt, doc, source, serverCommand string
+		endpoints                                                                                 int
+	}
+	rows, err := tx.Query(`SELECT integration, role, COALESCE(peer_host,''), COALESCE(edge_class,''), COALESCE(title,''),
+	        COALESCE(version,''), COALESCE(docs_url,''), endpoints, loaded_at, doc, source, COALESCE(server_command,'')
+	   FROM mcp_catalogues`)
+	if err != nil {
+		return fmt.Errorf("rekey mcp catalogues: read: %w", err)
+	}
+	type move struct {
+		from string
+		to   row
+	}
+	var moves []move
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.key, &r.role, &r.host, &r.edgeClass, &r.title, &r.version, &r.docsURL,
+			&r.endpoints, &r.loadedAt, &r.doc, &r.source, &r.serverCommand); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("rekey mcp catalogues: scan: %w", err)
+		}
+		derived := integration.Derive(true, "", r.host, "")
+		if r.source == model.SpecSourceSearchResult {
+			derived = model.SearchSpecIntegration(derived)
+		}
+		if derived == r.key {
+			continue
+		}
+		from := r.key
+		r.key = derived
+		moves = append(moves, move{from: from, to: r})
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("rekey mcp catalogues: read: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("rekey mcp catalogues: read: %w", err)
+	}
+	for _, m := range moves {
+		if _, err := tx.Exec(rebind(`DELETE FROM mcp_catalogues WHERE integration=?`), m.from); err != nil {
+			return fmt.Errorf("rekey mcp catalogues: delete %q: %w", m.from, err)
+		}
+	}
+	for _, m := range moves {
+		r := m.to
+		if _, err := tx.Exec(rebind(
+			`INSERT INTO mcp_catalogues (`+mcpCatalogueColumns+`)
+			 VALUES (?,?,NULLIF(?,''),NULLIF(?,''),NULLIF(?,''),NULLIF(?,''),NULLIF(?,''),?,?,?,?,NULLIF(?,''))
+			 ON CONFLICT (integration) DO UPDATE SET
+			   role=excluded.role, peer_host=excluded.peer_host, edge_class=excluded.edge_class, title=excluded.title,
+			   version=excluded.version, docs_url=excluded.docs_url, endpoints=excluded.endpoints,
+			   loaded_at=excluded.loaded_at, doc=excluded.doc, source=excluded.source, server_command=excluded.server_command
+			 WHERE excluded.loaded_at > mcp_catalogues.loaded_at`),
+			r.key, r.role, r.host, r.edgeClass, r.title, r.version, r.docsURL, r.endpoints, r.loadedAt, r.doc, r.source, r.serverCommand,
+		); err != nil {
+			return fmt.Errorf("rekey mcp catalogues: move to %q: %w", r.key, err)
+		}
 	}
 	return nil
 }

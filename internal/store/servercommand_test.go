@@ -14,7 +14,7 @@ const stdioCommand = `["npx","-y","@stripe/mcp@0.2.1","…"]`
 
 func stdioSpec(command string) model.SpecInfo {
 	return model.SpecInfo{
-		Integration: "stripe-mcp-stdio", Role: model.SpecRoleProvider, PeerHost: "stripe-mcp",
+		Integration: "stripe-mcp", Role: model.SpecRoleProvider, PeerHost: "stripe-mcp",
 		EdgeClass: model.EdgeClassLocalProcess, Format: model.SpecFormatMCP, Source: model.SpecSourceObserved,
 		Title: "stripe-mcp", Version: "0.2.1", Endpoints: 1, LoadedAt: "2026-09-18T10:00:00Z",
 		ServerCommand: command,
@@ -51,13 +51,13 @@ func TestSpecInfo_ServerCommandRoundTrip(t *testing.T) {
 		if err := PutSpecRecord(s, stdioSpec(stdioCommand), []byte(stdioSnapshot)); err != nil {
 			t.Fatalf("put: %v", err)
 		}
-		if got := onlySpec(t, s, "stripe-mcp-stdio", "after put"); got.ServerCommand != stdioCommand {
+		if got := onlySpec(t, s, "stripe-mcp", "after put"); got.ServerCommand != stdioCommand {
 			t.Fatalf("after put: server_command = %q, want %q", got.ServerCommand, stdioCommand)
 		}
 
 		_ = s.Close()
 		s = b.reopen(t, 0, 0)
-		if got := onlySpec(t, s, "stripe-mcp-stdio", "after reopen"); got.ServerCommand != stdioCommand {
+		if got := onlySpec(t, s, "stripe-mcp", "after reopen"); got.ServerCommand != stdioCommand {
 			t.Errorf("after reopen: server_command = %q, want %q", got.ServerCommand, stdioCommand)
 		}
 
@@ -68,7 +68,7 @@ func TestSpecInfo_ServerCommandRoundTrip(t *testing.T) {
 		if err := PutSpecRecord(s, later, []byte(stdioSnapshot)); err != nil {
 			t.Fatalf("re-observe: %v", err)
 		}
-		got := onlySpec(t, s, "stripe-mcp-stdio", "after a re-observation")
+		got := onlySpec(t, s, "stripe-mcp", "after a re-observation")
 		if got.ServerCommand != bumped {
 			t.Errorf("after a re-observation: server_command = %q, want the latest %q", got.ServerCommand, bumped)
 		}
@@ -102,13 +102,13 @@ func TestSpecInfo_ServerCommandColumnWidensAnOldDatabase(t *testing.T) {
 		b.rawExec(t, `ALTER TABLE spec_infos DROP COLUMN server_command`)
 
 		s = b.reopen(t, 0, 0)
-		if got := onlySpec(t, s, "stripe-mcp-stdio", "pre-column row"); got.ServerCommand != "" {
+		if got := onlySpec(t, s, "stripe-mcp", "pre-column row"); got.ServerCommand != "" {
 			t.Errorf("pre-column row: server_command = %q, want empty", got.ServerCommand)
 		}
 		if err := PutSpecRecord(s, stdioSpec(stdioCommand), []byte(stdioSnapshot)); err != nil {
 			t.Fatalf("write after widening: %v", err)
 		}
-		if got := onlySpec(t, s, "stripe-mcp-stdio", "after widening"); got.ServerCommand != stdioCommand {
+		if got := onlySpec(t, s, "stripe-mcp", "after widening"); got.ServerCommand != stdioCommand {
 			t.Errorf("after widening: server_command = %q, want %q", got.ServerCommand, stdioCommand)
 		}
 	})
@@ -146,7 +146,7 @@ func TestMigrateFromSQLite_CarriesServerCommand(t *testing.T) {
 				`DROP TABLE mcp_catalogues`,
 				`ALTER TABLE spec_infos DROP COLUMN server_command`,
 				`INSERT INTO spec_infos (integration, role, peer_host, edge_class, format, title, version, endpoints, loaded_at, doc, source)
-				 VALUES ('stripe-mcp-stdio', 'provider', 'stripe-mcp', 'local-process', 'mcp', 'stripe-mcp', '0.2.1', 1,
+				 VALUES ('stripe-mcp', 'provider', 'stripe-mcp', 'local-process', 'mcp', 'stripe-mcp', '0.2.1', 1,
 				         '2026-09-18T10:00:00Z', '` + stdioSnapshot + `', 'observed')`,
 			} {
 				if _, err := raw.Exec(stmt); err != nil {
@@ -163,7 +163,7 @@ func TestMigrateFromSQLite_CarriesServerCommand(t *testing.T) {
 		if _, err := MigrateFromSQLite(pg, build(t, false)); err != nil {
 			t.Fatalf("migrate: %v", err)
 		}
-		if got := onlySpec(t, pg, "stripe-mcp-stdio", "migrated"); got.ServerCommand != stdioCommand {
+		if got := onlySpec(t, pg, "stripe-mcp", "migrated"); got.ServerCommand != stdioCommand {
 			t.Errorf("migrated row: server_command = %q, want %q", got.ServerCommand, stdioCommand)
 		}
 	})
@@ -172,7 +172,7 @@ func TestMigrateFromSQLite_CarriesServerCommand(t *testing.T) {
 		if _, err := MigrateFromSQLite(pg, build(t, true)); err != nil {
 			t.Fatalf("migrate a file predating server_command: %v", err)
 		}
-		got := onlySpec(t, pg, "stripe-mcp-stdio", "migrated legacy")
+		got := onlySpec(t, pg, "stripe-mcp", "migrated legacy")
 		if got.ServerCommand != "" || got.Title != "stripe-mcp" {
 			t.Errorf("migrated legacy row: title=%q server_command=%q, want the row with an EMPTY command",
 				got.Title, got.ServerCommand)

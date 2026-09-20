@@ -12,6 +12,7 @@ import (
 
 	"github.com/flanj-io/collector/internal/drift"
 	"github.com/flanj-io/collector/internal/edge"
+	"github.com/flanj-io/collector/internal/integration"
 	"github.com/flanj-io/collector/internal/model"
 	"github.com/flanj-io/collector/internal/store"
 )
@@ -177,7 +178,7 @@ func (e *uiExtension) handleContractUpload(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	integration := integrationForHost(req.PeerHost)
+	integration := integration.ForHost(req.PeerHost)
 	// Refuse to write over a row this upload does not own. Slugs are a pure
 	// function of the host, so a clash is either a different host that slugs
 	// the same or — the one that matters — a CONFIG contract (the self spec)
@@ -347,7 +348,7 @@ func uploadFilenameNote(filename string) string {
 
 // previewFor describes the binding an upload would produce.
 func (e *uiExtension) previewFor(st store.Store, host string, sum drift.SpecSummary) contractPreview {
-	integration := integrationForHost(host)
+	integration := integration.ForHost(host)
 	p := contractPreview{
 		PeerHost:    host,
 		Integration: integration,
@@ -513,24 +514,4 @@ func normalizeHost(raw string) (string, error) {
 		return "", fmt.Errorf("%s", msgContractHostBadPort)
 	}
 	return host + ":" + port, nil
-}
-
-// integrationForHost derives the contract's id from the host it binds to. The
-// operator is never asked for one — the consult's rule — and because it is a
-// pure function of the host, two uploads for one host always address one row.
-func integrationForHost(host string) string {
-	s := strings.Map(func(r rune) rune {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			return r
-		case r >= 'A' && r <= 'Z':
-			return r + ('a' - 'A')
-		default:
-			return '-'
-		}
-	}, host)
-	for strings.Contains(s, "--") {
-		s = strings.ReplaceAll(s, "--", "-")
-	}
-	return strings.Trim(s, "-")
 }

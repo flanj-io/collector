@@ -508,7 +508,8 @@ type findingView struct {
 	// The Contracts tab pairs a finding with the contract card for its host,
 	// because host is the only thing the two genuinely share — an uploaded
 	// contract's integration id is derived from the host it binds to while a
-	// finding's integration comes from the call, stamped by the SDK. The SPA
+	// finding's integration comes from its call (derived at ingest; an older
+	// collector stored whatever id the SDK sent). The SPA
 	// used to resolve that host by looking the source call up in GET /api/calls,
 	// which returns the 200 newest rows: source_call_id is frozen at the FIRST
 	// occurrence, so once that call aged out of the page the finding detached
@@ -522,6 +523,12 @@ type findingView struct {
 	// model.Finding itself never gains the field — it mirrors the frozen schema
 	// and is what promotes to the CP.
 	PeerHost string `json:"peer_host,omitempty"`
+	// Inbound: the finding's source call was inbound, so it was raised against
+	// the self spec and its integration is the service the call reached
+	// (store.Store.InboundFindingIDs). The Contracts tab puts it on the self
+	// contract's card by this, since its key is no longer the self row's.
+	// Local read API only, like the rest of this view.
+	Inbound bool `json:"inbound,omitempty"`
 }
 
 // findingPeerHosts resolves the peer host of every finding's source call in one
@@ -557,9 +564,13 @@ func (e *uiExtension) findingRows(st store.Store) ([]findingView, string, error)
 	if err != nil {
 		return nil, "resolve finding hosts", err
 	}
+	inbound, err := st.InboundFindingIDs()
+	if err != nil {
+		return nil, "list inbound findings", err
+	}
 	views := make([]findingView, len(findings))
 	for i, f := range findings {
-		views[i] = findingView{Finding: f}
+		views[i] = findingView{Finding: f, Inbound: inbound[f.ID]}
 		if f.SourceCallID != nil {
 			views[i].PeerHost = hosts[*f.SourceCallID]
 		}
@@ -759,6 +770,13 @@ func (e *uiExtension) handleFlag(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, refuseCode, refuseMsg)
 		return
 	}
+	// A self-spec finding is keyed by a service name, which crosses as "self"
+	// (CONTRACTS §3). The store's record says so even when the call is gone.
+	inbound, err := st.InboundFindingIDs()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "store_error", msgStoreUnavailable)
+		return
+	}
 	req := promote.Build(promote.Input{
 		ConsumerDisplayName: consumerName,
 		Message:             body.Message,
@@ -766,6 +784,7 @@ func (e *uiExtension) handleFlag(w http.ResponseWriter, r *http.Request) {
 		Finding:             finding,
 		AllowedDomains:      allowedDomains,
 		AllowedEmails:       allowedEmails,
+		Inbound:             inbound[finding.ID],
 	})
 
 	resp, code, err := cli.Post(r.Context(), req)

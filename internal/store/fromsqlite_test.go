@@ -289,3 +289,41 @@ func TestMigrateFromSQLite_CarriesDriftedFlag(t *testing.T) {
 			"relabel retained drift evidence as conforming")
 	}
 }
+
+// TestMigrateFromSQLite_CarriesInboundFindings: findings.inbound is what keeps a
+// self-spec finding's service-name key off the wire once its call is gone, so
+// a backend switch carries it rather than leaving it to a call that may not
+// have made the trip.
+func TestMigrateFromSQLite_CarriesInboundFindings(t *testing.T) {
+	pods := pgPods(t, 1, 0, 0)
+	pg := pods[0]
+
+	path := filepath.Join(t.TempDir(), "flanj.db")
+	s, err := OpenSQLite(path, 0, 0)
+	if err != nil {
+		t.Fatalf("open legacy sqlite: %v", err)
+	}
+	call := makeEdgeCall(301, "partner.acme.test", "server", "external")
+	if err := s.InsertCall(call); err != nil {
+		t.Fatalf("insert call: %v", err)
+	}
+	const fid = "0191e8c4-eeee-7000-8000-000000000001"
+	if err := s.InsertFinding(driftFinding(fid, call.ID)); err != nil {
+		t.Fatalf("insert finding: %v", err)
+	}
+	if got, _ := s.InboundFindingIDs(); !got[fid] {
+		t.Fatalf("precondition: legacy finding not recorded inbound: %v", got)
+	}
+	s.Close()
+
+	if _, err := MigrateFromSQLite(pg, path); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	got, err := pg.InboundFindingIDs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got[fid] {
+		t.Errorf("migrated inbound findings = %v, want %s carried over", got, fid)
+	}
+}

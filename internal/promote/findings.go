@@ -94,11 +94,19 @@ type FindingsResponse struct {
 // with the CONTRACTS §4 convention. Every string field is truncated to its CP
 // DTO cap (liveness: one oversized value must not 400 the whole batch on every
 // tick). At most FindingsSyncMaxItems rows are returned.
-func BuildFindingShapes(findings []model.Finding) []FindingShape {
+//
+// inbound names the findings whose source call was inbound
+// (store.Store.InboundFindingIDs): they are keyed locally by the service the
+// call reached, a name that never leaves the collector (CONTRACTS §3), so they
+// cross as integration "self" with the signature recomputed on it.
+func BuildFindingShapes(findings []model.Finding, inbound map[string]bool) []FindingShape {
 	out := make([]FindingShape, 0, len(findings))
 	for _, f := range findings {
 		if len(out) == FindingsSyncMaxItems {
 			break
+		}
+		if inbound[f.ID] {
+			f = wireSelf(f)
 		}
 		sig := f.Signature
 		if sig == "" {

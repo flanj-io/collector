@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 
 	"github.com/flanj-io/collector/internal/drift"
@@ -48,7 +49,7 @@ func callRecords(ld plog.Logs) []plog.LogRecord {
 // will — through CallFromRecord — so the test sees exactly what the store sees.
 func stampOf(t *testing.T, lr plog.LogRecord) model.Validation {
 	t.Helper()
-	c := otlpattr.CallFromRecord(lr)
+	c := otlpattr.CallFromRecord(pcommon.NewResource(), lr)
 	if c.Validated == model.ValidatedUnknown {
 		t.Fatalf("call record left the processor with NO verdict stamped (decodes as unknown)")
 	}

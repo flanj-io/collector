@@ -725,6 +725,10 @@ export interface AttributableFinding {
    *  GET /api/findings. Present whenever the store still holds that call —
    *  which is whenever a finding exists, since a finding pins its evidence. */
   peer_host?: string;
+  /** The finding's source call was INBOUND, as the store recorded it: it was
+   *  raised against the self contract and is keyed by the service the call
+   *  reached, not by the self contract's own key. */
+  inbound?: boolean;
 }
 
 /**
@@ -734,9 +738,11 @@ export interface AttributableFinding {
  *
  * An uploaded contract's integration id is DERIVED from the host it binds to
  * (`api.acme.test` → `api-acme-test`), because the operator is never asked for
- * one. A finding's integration comes from the CALL, stamped by the SDK
- * (`acme-payments`). Those two are unrelated strings for the same provider, so
- * an integration-only join split one provider into two cards: the contract card
+ * one. A finding's integration comes from the CALL — derived from the same
+ * host by the collector today, but a row stored by an older collector carries
+ * whatever id the SDK sent (`acme-payments`). Those two are unrelated strings
+ * for the same provider, so an integration-only join split one provider into
+ * two cards: the contract card
  * claiming CONFORMING, and beside it a second card carrying the BREAKING
  * finding under "No contract for this provider" — denying the contract while
  * rendering a verdict only that contract could produce.
@@ -767,6 +773,11 @@ export function findingBelongsToContract(
   // other finding to a REST contract. A finding with no kind (an older
   // collector's row) is judged on host and integration alone, as before.
   if (finding.kind !== undefined && isMcpFindingKind(finding.kind) !== (spec.format === 'mcp')) return false;
+  // A finding on an INBOUND call was judged against the self contract and
+  // nothing else. Its key is the service the call reached (never the self
+  // row's `self`), and its call's host is the consumer that called us — which
+  // may well be a provider we hold a contract for. Neither join applies.
+  if (finding.inbound) return spec.role === 'self';
   const callHost =
     finding.peer_host || (finding.source_call_id ? hostOfCall(finding.source_call_id) : undefined);
   if (callHost && spec.peer_host) return callHost === spec.peer_host;
@@ -820,24 +831,26 @@ export interface ProviderEdge {
  * The name the flag sheet addresses and the flag sends for a finding — the
  * "New thread with <name>" title, the default message, the paste text.
  *
- * Two kinds of `integration` reach this from `GET /api/findings`:
+ * It resolves to something the collector actually KNOWS, never to prose built
+ * out of a key. Since the collector derives a record's integration, every key
+ * reaching here is a host slug (`mcp-acme-test`) or, for an inbound call, the
+ * service it reached — and humanize() turned those into title-cased
+ * pseudo-names: `Mcp Acme Test`, a company that does not exist, pasted to the
+ * other organization while the card above read the real title (QA 2026-09-14,
+ * and the composed lane 2026-09-20).
  *
- *   - a call-evidenced finding (live-vs-spec, the MCP kinds) carries the SDK's
- *     own integration id (`acme-payments`, `acme-tools`) — a slug the operator
- *     chose, which humanizes honestly and which the relay humanizes the same
- *     way;
- *   - a version-diff carries the CONTRACT's id, and an uploaded contract is
- *     keyed by the host it was bound to (`api-acme-test` for `api.acme.test`) —
- *     a slug nobody chose. humanize() turned it into `Api Acme Test`, a
- *     title-cased pseudo-name the Edges panel already forbids (its unnamed rows
- *     show the host itself), and the sheet pasted it to the other organization
- *     while the card above read `Acme Payments API` (QA 2026-09-14).
+ * The order is the one the whole product uses, ending at the counterparty's
+ * domain — what the Edges panel shows for an unnamed row, and what the flag
+ * sheet now addresses:
  *
- * So a version-diff resolves through the contract it came from, to the host
- * that contract is bound to, and takes — in order — the Edges panel's display
- * name for that host, the contract's own title, then the host itself. Never a
- * humanized host slug. The configured `provider_display_name` still wins for
- * the integration it names, as before.
+ *   1. the configured `provider_display_name`, for a call-evidenced REST
+ *      finding only (the v0 one-provider shape);
+ *   2. the Edges panel's display name for the finding's host;
+ *   3. for a version diff, the contract's own title (a document the operator
+ *      uploaded names itself);
+ *   4. the HOST ITSELF, as written — for a stdio MCP server that is its
+ *      self-reported name, so one rule covers both transports;
+ *   5. the raw key, when even the host is unknown.
  */
 export function providerNameForFinding(
   f: { kind: string; integration: string; peer_host?: string },
@@ -849,22 +862,15 @@ export function providerNameForFinding(
 ): string {
   // The configured `provider_display_name` is a REST provider's name — the v0
   // one-provider shape — and it names ONLY a call-evidenced REST finding. Never
-  // an MCP server, which
-  // names itself through its tools/list (`New thread with Acme Tools`, pinned
-  // by the integration tests), and never a version diff, which resolves through
-  // its contract below. Until 2026-09-14 the scope was the config
-  // `integration_id` (the name applied to findings under that slug alone); with
-  // the key gone, the KIND is the scope.
+  // an MCP server, and never a version diff, which resolves through its
+  // contract below.
   if (ctx.providerDisplayName && f.kind === 'live-vs-spec') {
     return ctx.providerDisplayName;
   }
-  if (f.kind === 'version-diff') {
-    const spec = ctx.contracts.find((s) => s.integration === f.integration);
-    const host = spec?.peer_host || f.peer_host || '';
-    const edge = host ? ctx.edges.find((e) => e.peer_host === host) : undefined;
-    const named = edge?.display_name || spec?.title || host;
-    if (named) return named;
-    return f.integration || 'the provider';
-  }
-  return humanize(f.integration) || f.integration || 'the provider';
+  const spec = ctx.contracts.find((s) => s.integration === f.integration);
+  const host = f.peer_host || spec?.peer_host || '';
+  const edge = host ? ctx.edges.find((e) => e.peer_host === host) : undefined;
+  if (edge?.display_name) return edge.display_name;
+  if (f.kind === 'version-diff' && spec?.title) return spec.title;
+  return host || f.integration || 'the provider';
 }

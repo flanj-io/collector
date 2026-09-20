@@ -98,8 +98,8 @@ processors:
   # Keep the processor in the pipeline even with nothing uploaded: it stamps
   # flanj.call.id, which capture and edge discovery depend on.
   flanjdrift:
-    # integration_id / self_integration_id: REMOVED (CONTRACTS §8, 2026-09-14) — a finding's integration is the
-    # one the SDK stamped on the call; self-spec findings are always labelled `self`.
+    # integration_id / self_integration_id: REMOVED (CONTRACTS §8, 2026-09-14) — a finding's integration is its
+    # call's, which the collector derives (CONTRACTS §2): the host for outbound and MCP, the service for inbound.
     # The contract YOU publish as a provider: validates your INBOUND responses so
     # providers see their own drift, not just their dependencies'. Still config —
     # it is one document per deployment, not one per vendor.

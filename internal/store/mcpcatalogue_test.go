@@ -189,7 +189,7 @@ func TestOpenMovesMCPRowsOutOfSpecInfos(t *testing.T) {
 		b.rawExec(t, `INSERT INTO spec_infos (integration, role, peer_host, edge_class, format, title, version, endpoints, loaded_at, doc, source)
 			VALUES ('mcp-acme-test', 'provider', 'mcp.acme.test', 'external', 'mcp', 'acme-tools-mcp', '0.3.0', 1, '2026-09-18T09:00:00Z', '{"tools":[]}', 'config')`)
 		b.rawExec(t, `INSERT INTO spec_infos (integration, role, peer_host, edge_class, format, title, endpoints, loaded_at, doc, source, server_command)
-			VALUES ('acme-stdio', 'provider', 'acme-stdio-mcp', 'local-process', 'mcp', 'acme-stdio-mcp', 1, '2026-09-18T09:00:00Z', '{"tools":[{"name":"x"}]}', 'observed', '["npx","acme"]')`)
+			VALUES ('acme-stdio-mcp', 'provider', 'acme-stdio-mcp', 'local-process', 'mcp', 'acme-stdio-mcp', 1, '2026-09-18T09:00:00Z', '{"tools":[{"name":"x"}]}', 'observed', '["npx","acme"]')`)
 
 		check := func(s Store) {
 			t.Helper()
@@ -210,10 +210,10 @@ func TestOpenMovesMCPRowsOutOfSpecInfos(t *testing.T) {
 				remote.LoadedAt != "2026-09-18T09:00:00Z" || remote.PeerHost != "mcp.acme.test" || remote.EdgeClass != "external" {
 				t.Errorf("moved remote row = %+v, want its metadata intact and the source repaired to observed", remote)
 			}
-			if stdio := byID["acme-stdio"]; stdio.ServerCommand != `["npx","acme"]` || stdio.EdgeClass != model.EdgeClassLocalProcess {
+			if stdio := byID["acme-stdio-mcp"]; stdio.ServerCommand != `["npx","acme"]` || stdio.EdgeClass != model.EdgeClassLocalProcess {
 				t.Errorf("moved stdio row = %+v, want its launch line and edge class", stdio)
 			}
-			if doc, ok, _ := s.GetMCPCatalogueDoc("acme-stdio"); !ok || string(doc) != `{"tools":[{"name":"x"}]}` {
+			if doc, ok, _ := s.GetMCPCatalogueDoc("acme-stdio-mcp"); !ok || string(doc) != `{"tools":[{"name":"x"}]}` {
 				t.Errorf("moved stdio document = %q ok=%v", doc, ok)
 			}
 		}
@@ -231,22 +231,22 @@ func TestOpenMovesMCPRowsOutOfSpecInfos(t *testing.T) {
 func TestOpenMoveKeepsTheNewerCatalogue(t *testing.T) {
 	forEachBackend(t, func(t *testing.T, b *testBackend) {
 		s := b.open(t, 0, 0)
-		if err := s.PutMCPCatalogue(model.SpecInfo{Integration: "old-wins", PeerHost: "a.test", Format: model.SpecFormatMCP, LoadedAt: "2026-09-19T12:00:00Z"}, []byte(`{"tools":["current"]}`)); err != nil {
+		if err := s.PutMCPCatalogue(model.SpecInfo{Integration: "a-test", PeerHost: "a.test", Format: model.SpecFormatMCP, LoadedAt: "2026-09-19T12:00:00Z"}, []byte(`{"tools":["current"]}`)); err != nil {
 			t.Fatal(err)
 		}
-		if err := s.PutMCPCatalogue(model.SpecInfo{Integration: "new-wins", PeerHost: "b.test", Format: model.SpecFormatMCP, LoadedAt: "2026-09-19T08:00:00Z"}, []byte(`{"tools":["stale"]}`)); err != nil {
+		if err := s.PutMCPCatalogue(model.SpecInfo{Integration: "b-test", PeerHost: "b.test", Format: model.SpecFormatMCP, LoadedAt: "2026-09-19T08:00:00Z"}, []byte(`{"tools":["stale"]}`)); err != nil {
 			t.Fatal(err)
 		}
 		_ = s.Close()
 		b.rawExec(t, `INSERT INTO spec_infos (integration, role, peer_host, format, endpoints, loaded_at, doc, source) VALUES
-			('old-wins', 'provider', 'a.test', 'mcp', 0, '2026-09-19T09:00:00Z', '{"tools":["rolled-back-older"]}', 'observed'),
-			('new-wins', 'provider', 'b.test', 'mcp', 0, '2026-09-19T11:00:00Z', '{"tools":["rolled-back-newer"]}', 'observed')`)
+			('a-test', 'provider', 'a.test', 'mcp', 0, '2026-09-19T09:00:00Z', '{"tools":["rolled-back-older"]}', 'observed'),
+			('b-test', 'provider', 'b.test', 'mcp', 0, '2026-09-19T11:00:00Z', '{"tools":["rolled-back-newer"]}', 'observed')`)
 		s = b.reopen(t, 0, 0)
-		if doc, _, _ := s.GetMCPCatalogueDoc("old-wins"); string(doc) != `{"tools":["current"]}` {
-			t.Errorf("old-wins = %s, want the newer catalogue kept", doc)
+		if doc, _, _ := s.GetMCPCatalogueDoc("a-test"); string(doc) != `{"tools":["current"]}` {
+			t.Errorf("a-test = %s, want the newer catalogue kept", doc)
 		}
-		if doc, _, _ := s.GetMCPCatalogueDoc("new-wins"); string(doc) != `{"tools":["rolled-back-newer"]}` {
-			t.Errorf("new-wins = %s, want the newer (rolled-back) snapshot adopted", doc)
+		if doc, _, _ := s.GetMCPCatalogueDoc("b-test"); string(doc) != `{"tools":["rolled-back-newer"]}` {
+			t.Errorf("b-test = %s, want the newer (rolled-back) snapshot adopted", doc)
 		}
 		if infos, _ := s.ListSpecInfos(); len(infos) != 0 {
 			t.Errorf("mcp rows left in spec_infos after the move: %+v", infos)
