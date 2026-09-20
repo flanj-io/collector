@@ -22,3 +22,17 @@ export function isoStamp(iso: string | null | undefined): string {
     ` ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
   );
 }
+
+/** `2026-09-13T20:44:52.964Z` → `2026-09-13` (local time, date only).
+ *
+ * The Edges tables read a bare date for First/Last seen — the hour is noise
+ * for "when did this counterparty first show up", and the collector's Last
+ * seen column already carries a live relative suffix (`· 2m ago`) beside it
+ * for the moment-to-moment fact `isoStamp` exists for. Same honesty rule as
+ * `isoStamp`: an empty or unparseable input comes back as given. */
+export function isoDate(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
