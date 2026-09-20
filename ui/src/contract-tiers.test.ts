@@ -190,9 +190,50 @@ describe('each tier says what it counts, so the colour is never the only signal'
     expect(breakingNowTitle(1)).toBe('1 breaking drift finding in live traffic');
   });
 
-  it('copper says nothing is breaking yet, in the same breath as "breaking"', () => {
-    expect(wouldBreakTitle(3)).toBe('3 breaking changes in a newer contract version — nothing is breaking yet');
-    expect(wouldBreakTitle(1)).toBe('1 breaking change in a newer contract version — nothing is breaking yet');
+  // The copper sentence reads its own rows, so it is true of whatever the tier
+  // holds at the time — not a string that has to be swapped later by whoever
+  // adds the next would-break kind.
+  it('copper, version diffs only: names the newer version', () => {
+    expect(wouldBreakTitle([versionDiff(), versionDiff(), versionDiff()])).toBe(
+      '3 breaking changes in a newer contract version — nothing is breaking yet'
+    );
+    expect(wouldBreakTitle([versionDiff()])).toBe(
+      '1 breaking change in a newer contract version — nothing is breaking yet'
+    );
+  });
+
+  it('copper counts only the would-break rows out of whatever it is handed', () => {
+    // The whole tab goes in. Count and wording therefore cannot be derived
+    // from two different populations.
+    expect(wouldBreakTitle([live(), versionDiff(), description(), nonBreaking()])).toBe(
+      '1 breaking change in a newer contract version — nothing is breaking yet'
+    );
+  });
+
+  // FORWARD-COMPAT, both cases. Nothing emits a deprecation finding today.
+  it('copper, deprecations only: names the deprecations, never a contract version', () => {
+    const dep = (): TierFinding => ({ kind: 'deprecation', severity: 'warning', rule: 'operation-deprecated' });
+    expect(wouldBreakTitle([dep(), dep()])).toBe('2 deprecations affecting your traffic — nothing is breaking yet');
+    expect(wouldBreakTitle([dep()])).toBe('1 deprecation affecting your traffic — nothing is breaking yet');
+  });
+
+  it('copper, mixed: falls back to wording true of both', () => {
+    const dep = (): TierFinding => ({ kind: 'deprecation', severity: 'warning', rule: 'operation-deprecated' });
+    expect(wouldBreakTitle([versionDiff(), dep()])).toBe(
+      '2 changes that will break you later — nothing is breaking yet'
+    );
+    // The mixed wording is the fallback for an unknown would-break kind too:
+    // it must never borrow the version-diff sentence and say something false.
+    expect(wouldBreakTitle([{ kind: 'deprecation', severity: 'warning', rule: 'r' }, versionDiff()])).toMatch(
+      /^2 changes that will break you later/
+    );
+  });
+
+  it('every copper variant keeps the clause that IS the tier', () => {
+    const dep = (): TierFinding => ({ kind: 'deprecation', severity: 'warning', rule: 'operation-deprecated' });
+    for (const rows of [[versionDiff()], [dep()], [versionDiff(), dep()]]) {
+      expect(wouldBreakTitle(rows)).toMatch(/ — nothing is breaking yet$/);
+    }
   });
 
   it('the copper card chip carries the tier in its own words', () => {
@@ -205,7 +246,12 @@ describe('each tier says what it counts, so the colour is never the only signal'
   });
 
   it('no two tiers share a sentence', () => {
-    const titles = [breakingNowTitle(1), wouldBreakTitle(1), worthKnowingTitle(1, false), worthKnowingTitle(1, true)];
+    const titles = [
+      breakingNowTitle(1),
+      wouldBreakTitle([versionDiff()]),
+      worthKnowingTitle(1, false),
+      worthKnowingTitle(1, true)
+    ];
     expect(new Set(titles).size).toBe(titles.length);
   });
 });

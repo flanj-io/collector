@@ -173,23 +173,43 @@ export function breakingNowTitle(n: number): string {
 }
 
 /**
- * Copper pill: `3 breaking changes in a newer contract version — nothing is
- * breaking yet`. The second clause is the tier: red is what is failing now,
- * copper is what will fail when the newer version takes effect.
+ * Copper pill and copper card chip title. Takes the ROWS, not a number, and
+ * reads them — so the sentence is true of its own input at every point in
+ * time, including the window after deprecations are detected and before
+ * anyone revisits this copy.
  *
- * HANDOFF, and the ONE thing on this side a deprecation change must touch:
- * the tiering already counts a deprecation row here (ANNOUNCED_BREAK_KINDS),
- * but this sentence names a newer contract VERSION, which does not describe a
- * deprecation notice. Whoever teaches the collector to detect deprecations
- * owns making this line true of a mixed tier — the counting needs no change,
- * the copy does. Leaving it as-is would put a pill over rows it misdescribes,
- * which is the exact failure the tiers were introduced to end.
+ * Pass the whole tab (or a card's whole list): it filters to the would-break
+ * rows itself, so the count and the wording can never be derived from two
+ * different populations.
+ *
+ *   only version diffs → `N breaking changes in a newer contract version …`
+ *   only deprecations  → `N deprecations affecting your traffic …`
+ *   any other mix      → `N changes that will break you later …`
+ *
+ * The mixed wording is also the FALLBACK, deliberately: a would-break kind
+ * nobody has written a sentence for yet still gets one that is true of it,
+ * rather than borrowing the version-diff sentence and lying.
+ *
+ * Every variant ends in the same clause. That clause is the tier — red is what
+ * is failing now, copper is what will fail later — and it must survive
+ * whatever the first half says.
  */
-export function wouldBreakTitle(n: number): string {
-  return `${n} breaking change${n === 1 ? '' : 's'} in a newer contract version — nothing is breaking yet`;
+export function wouldBreakTitle(rows: readonly Pick<TierFinding, 'kind' | 'severity'>[]): string {
+  const mine = rows.filter((f) => isWouldBreakRow(f));
+  const n = mine.length;
+  const tail = ' — nothing is breaking yet';
+  const only = (kind: string) => mine.length > 0 && mine.every((f) => f.kind === kind);
+  if (only('version-diff')) {
+    return `${n} breaking change${n === 1 ? '' : 's'} in a newer contract version${tail}`;
+  }
+  if (only('deprecation')) {
+    return `${n} deprecation${n === 1 ? '' : 's'} affecting your traffic${tail}`;
+  }
+  return `${n} change${n === 1 ? '' : 's'} that will break you later${tail}`;
 }
 
-/** Copper card chip: `3 WOULD BREAK`. */
+/** Copper card chip: `3 WOULD BREAK`. Names no source, so unlike the title it
+ *  needs no per-kind wording — it stays true whatever the tier holds. */
 export function wouldBreakChipLabel(n: number): string {
   return `${n} WOULD BREAK`;
 }

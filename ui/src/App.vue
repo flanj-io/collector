@@ -1876,8 +1876,8 @@ watch(tab, (t) => {
         <span
           v-if="contractWouldBreakCount"
           class="tab-count would-break"
-          :title="wouldBreakTitle(contractWouldBreakCount)"
-          :aria-label="wouldBreakTitle(contractWouldBreakCount)"
+          :title="wouldBreakTitle(contractTabRows)"
+          :aria-label="wouldBreakTitle(contractTabRows)"
         >{{ contractWouldBreakCount }}</span>
         <span
           v-if="contractWorthKnowingCount"
@@ -2313,7 +2313,7 @@ watch(tab, (t) => {
               <span v-if="cardBreakingNowCount(p)" class="tag drift" :title="breakingNowTitle(cardBreakingNowCount(p))">{{ breakingChipLabel(cardBreakingNowCount(p)) }}</span>
               <!-- Copper: breaking against the version this contract replaced,
                    not against live traffic. Nothing is failing yet. -->
-              <span v-if="cardWouldBreakCount(p)" class="tag would-break" :title="wouldBreakTitle(cardWouldBreakCount(p))">{{ wouldBreakChipLabel(cardWouldBreakCount(p)) }}</span>
+              <span v-if="cardWouldBreakCount(p)" class="tag would-break" :title="wouldBreakTitle(p.findings)">{{ wouldBreakChipLabel(cardWouldBreakCount(p)) }}</span>
               <!-- The steel tier, split by class so each keeps its own word.
                    Both are steel: copper now means "would break". -->
               <span v-if="cardNonBreakingCount(p)" class="tag nonbreaking" :title="cardNonBreakingTitle(p)">{{ informationalChipLabel(cardNonBreakingCount(p)) }}</span>
