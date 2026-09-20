@@ -426,3 +426,66 @@ paths:
 		t.Errorf("want exactly one finding for each of items[].old_a and items[].old_b; got %v", got)
 	}
 }
+
+// TestDeprecatedRequestFieldIsReported: the request half of the field rule —
+// what this caller SENDS, which is the half they can change on their own.
+func TestDeprecatedRequestFieldIsReported(t *testing.T) {
+	const reqSpec = `
+openapi: 3.0.3
+info: {title: T, version: "1.0.0"}
+servers:
+  - url: http://api.acme.test
+paths:
+  /v1/charges:
+    post:
+      operationId: createCharge
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                amount: {type: integer}
+                legacy_token: {type: string, deprecated: true}
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: {type: object, properties: {id: {type: string}}}
+`
+	doc, err := LoadSpecData([]byte(reqSpec))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	call := depCall("http://api.acme.test/v1/charges", "/v1/charges", `{"id":"ch_1"}`)
+	call.RequestBody = `{"amount":1200,"legacy_token":"tok_old"}`
+	// No request Content-Type on purpose: a header-less JSON body is common,
+	// and the only question asked of it is which keys it carries.
+	fs, _, err := JudgeLiveVsSpec(doc, call)
+	if err != nil {
+		t.Fatalf("judge: %v", err)
+	}
+	f := onlyRule(t, fs, RuleDeprecatedField)
+	if f.FieldPath == nil || *f.FieldPath != "legacy_token" {
+		t.Errorf("field_path = %v, want legacy_token", f.FieldPath)
+	}
+	if f.Location == nil || *f.Location != "$.request.body.legacy_token" {
+		t.Errorf("location = %v, want $.request.body.legacy_token", f.Location)
+	}
+	if !strings.Contains(f.Detail, "sends it") {
+		t.Errorf("detail should say the caller sends it: %q", f.Detail)
+	}
+
+	// Not sending it raises nothing.
+	call.RequestBody = `{"amount":1200}`
+	clean, _, err := JudgeLiveVsSpec(doc, call)
+	if err != nil {
+		t.Fatalf("judge: %v", err)
+	}
+	for _, f := range clean {
+		if f.Rule == RuleDeprecatedField {
+			t.Error("a deprecated request field the call does not send must raise nothing")
+		}
+	}
+}

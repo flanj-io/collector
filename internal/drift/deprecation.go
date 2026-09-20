@@ -100,7 +100,16 @@ func deprecatedUsage(
 
 	// Request body first, then response: a caller can act on their own request
 	// immediately, which makes it the more useful of the two to see first.
-	if schema := requestBodySchema(op, call.RequestContentType); schema != nil {
+	//
+	// An absent request Content-Type is read as JSON, the same assumption the
+	// response side makes and for the same reason: a header-less JSON body is
+	// common enough to keep judging, and the only question asked of the body
+	// here is which KEYS it carries.
+	reqContentType := call.RequestContentType
+	if reqContentType == "" {
+		reqContentType = "application/json"
+	}
+	if schema := requestBodySchema(op, reqContentType); schema != nil {
 		for _, p := range deprecatedBodyFields(schema, call.RequestBody) {
 			path := p
 			out = append(out, deprecationFinding(call, endpoint, now,
