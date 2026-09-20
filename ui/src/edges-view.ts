@@ -157,6 +157,15 @@ export function isNew(firstSeen: string | undefined | null, now: number = Date.n
   return diff >= 0 && diff < NEW_WINDOW_MS;
 }
 
+/** Whether the NEW badge says anything. NEW means new RELATIVE TO WHAT WAS ALREADY
+ *  THERE: in a deployment's first week every edge is inside the window, and a badge
+ *  on every row is noise — the first Overview anyone sees would be a wall of them.
+ *  So the badge is drawn only once some edge is older than the window. Judged over
+ *  every edge, in every direction, so one table can never disagree with the other. */
+export function newBadgeIsInformative(edges: ReadonlyArray<{ first_seen?: string | null }>, now: number = Date.now()): boolean {
+  return edges.some((e) => !isNew(e.first_seen, now));
+}
+
 /* ── The cross-direction twin link ───────────────────────────────────────
  *
  * Matched on registrable domain, never on host — two hosts under one domain

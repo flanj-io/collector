@@ -17,7 +17,8 @@ import {
   sortEdges,
   twinEdge,
   type EdgeSortState,
-  type SortableEdge
+  type SortableEdge,
+  newBadgeIsInformative
 } from './edges-view';
 
 const edge = (over: Partial<SortableEdge> & { peer_host: string }): SortableEdge => ({
@@ -253,5 +254,22 @@ describe('caption sub-lines', () => {
   it('inbound branches on whether a self contract is loaded', () => {
     expect(inboundCaptionSub(3, 'v2.1.0')).toBe('3 consumers · checked against the contract you publish (self, v2.1.0)');
     expect(inboundCaptionSub(1, null)).toBe('1 consumer · no self contract loaded — inbound calls are captured, not validated');
+  });
+});
+
+describe('newBadgeIsInformative', () => {
+  const NOW = Date.parse('2026-09-20T12:00:00.000Z');
+  const daysAgo = (d: number) => new Date(NOW - d * 24 * 60 * 60 * 1000).toISOString();
+
+  it('is false while every edge is inside the window — a first-week deployment draws no badge at all', () => {
+    expect(newBadgeIsInformative([{ first_seen: daysAgo(1) }, { first_seen: daysAgo(6) }], NOW)).toBe(false);
+  });
+
+  it('turns true as soon as one edge is older than the window', () => {
+    expect(newBadgeIsInformative([{ first_seen: daysAgo(1) }, { first_seen: daysAgo(8) }], NOW)).toBe(true);
+  });
+
+  it('is false for no edges at all', () => {
+    expect(newBadgeIsInformative([], NOW)).toBe(false);
   });
 });

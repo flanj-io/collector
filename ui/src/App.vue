@@ -168,6 +168,7 @@ import {
   isDirectionUnknown,
   isInbound,
   isNew,
+  newBadgeIsInformative,
   isOutbound,
   nextSort,
   outboundCaptionSub,
@@ -679,8 +680,10 @@ function inboundTwin(e: Edge) {
   return twinEdge(e, outboundEdges.value);
 }
 
+// A badge on every row says nothing, so NEW stays silent until some edge is older than its window.
+const newIsInformative = computed(() => newBadgeIsInformative(edges.value));
 function isNewEdge(e: Edge): boolean {
-  return isNew(e.first_seen);
+  return newIsInformative.value && isNew(e.first_seen);
 }
 
 // "checked" is never claimed from the contract list alone — it costs at
