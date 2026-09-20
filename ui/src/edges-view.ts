@@ -17,8 +17,8 @@ import { NOT_CHECKED_LABEL } from './coverage';
 
 /* ── Copy (exact strings) ──────────────────────────────────────────────── */
 
-export const OUTBOUND_CAPTION = 'Outbound — you call them';
-export const INBOUND_CAPTION = 'Inbound — they call you';
+export const OUTBOUND_CAPTION = 'Outbound';
+export const INBOUND_CAPTION = 'Inbound';
 export const LOCAL_MCP_CAPTION = 'Local MCP servers';
 export const LOCAL_MCP_SUB = 'MCP servers this deployment runs as a subprocess — no network edge.';
 export const UNKNOWN_DIRECTION_CAPTION = 'Direction not recorded';
@@ -303,9 +303,18 @@ export function driftLabel(n: number): string {
  *  an outbound row, a consumer on an inbound one, an edge when the direction
  *  itself was not recorded. */
 export function driftChipTitle(n: number, direction: 'client' | 'server' | 'unknown'): string {
-  const who = direction === 'server' ? 'consumer' : direction === 'client' ? 'provider' : 'edge';
+  // Drift on an INBOUND edge is not the consumer's doing: it is one of THIS org's own responses
+  // departing from the contract this org publishes. Say so, or the chip reads as an accusation.
+  if (direction === 'server') {
+    return `${n} of your responses to this consumer drifted from the contract you publish — open Contracts`;
+  }
+  const who = direction === 'client' ? 'provider' : 'edge';
   return `${n} drifted ${n === 1 ? 'call' : 'calls'} — open Contracts for this ${who}`;
 }
+
+/** The words beside the DRIFTED chip on an inbound row: whose drift it is, in the open — a
+ *  tooltip alone is invisible on touch and to anyone who does not hover. */
+export const INBOUND_DRIFT_CLAUSE = 'your responses, against the contract you publish';
 
 /* ── Caption sub-lines ────────────────────────────────────────────────── */
 

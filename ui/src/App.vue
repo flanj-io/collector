@@ -169,6 +169,7 @@ import {
   isInbound,
   isNew,
   newBadgeIsInformative,
+  INBOUND_DRIFT_CLAUSE,
   isOutbound,
   nextSort,
   outboundCaptionSub,
@@ -2090,6 +2091,7 @@ watch(tab, (t) => {
                       :title="driftChipTitle(row.e.drift_count, 'server')"
                       @click="goToContracts(row.e.peer_host)"
                     >{{ driftLabel(row.e.drift_count) }}</button>
+                    <span v-if="row.status.kind === 'drift'" class="edge-status-clause">· {{ INBOUND_DRIFT_CLAUSE }}</span>
                     <template v-else>
                       <span class="edge-status-word" :title="row.status.kind === 'mcp' ? MCP_BADGE_TOOLTIP : undefined">{{ row.status.word }}</span>
                       <span v-if="row.status.clause" class="edge-status-clause" :title="statusClauseTitle(row)">· {{ row.status.clause }}</span>

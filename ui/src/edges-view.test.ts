@@ -230,7 +230,10 @@ describe('edgeStatus — resolution order and every branch', () => {
   it('drift chip title names the row for what it is', () => {
     expect(driftChipTitle(1, 'client')).toBe('1 drifted call — open Contracts for this provider');
     expect(driftChipTitle(3, 'client')).toBe('3 drifted calls — open Contracts for this provider');
-    expect(driftChipTitle(2, 'server')).toBe('2 drifted calls — open Contracts for this consumer');
+    // Inbound drift is THIS org's own response departing from the contract it publishes — never
+    // the consumer's doing — and the title says whose it is.
+    expect(driftChipTitle(2, 'server')).toBe('2 of your responses to this consumer drifted from the contract you publish — open Contracts');
+    expect(driftChipTitle(1, 'server')).toBe('1 of your responses to this consumer drifted from the contract you publish — open Contracts');
     expect(driftChipTitle(1, 'unknown')).toBe('1 drifted call — open Contracts for this edge');
   });
 });

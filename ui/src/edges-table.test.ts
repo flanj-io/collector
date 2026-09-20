@@ -10,7 +10,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mount, type VueWrapper } from '@vue/test-utils';
 import App from './App.vue';
 import { START_THREAD_LABEL, REMOVE_NAME_LABEL } from './edge-names';
-import { INBOUND_CAPTION, INBOUND_EMPTY, OUTBOUND_CAPTION, OUTBOUND_EMPTY, ALSO_CALLS_YOU } from './edges-view';
+import { INBOUND_CAPTION, INBOUND_DRIFT_CLAUSE, INBOUND_EMPTY, OUTBOUND_CAPTION, OUTBOUND_EMPTY, ALSO_CALLS_YOU } from './edges-view';
 
 const HEALTH = { status: 'ok', connect_status: 'disconnected' };
 
@@ -66,6 +66,18 @@ const EDGES = [
     last_seen: '2026-09-20T00:09:00Z',
     call_count: 1880,
     drift_count: 0
+  },
+  // An INBOUND edge with drift: this org's own responses departed from the contract it publishes.
+  {
+    peer_host: 'gw.consumer-b.test',
+    registrable_domain: 'consumer-b.test',
+    direction: 'server',
+    role: 'provider',
+    class: 'external',
+    first_seen: '2026-08-19T00:00:00Z',
+    last_seen: '2026-09-20T00:30:00Z',
+    call_count: 204,
+    drift_count: 2
   }
 ];
 
@@ -192,6 +204,20 @@ describe('the Edges section renders two real tables, split by direction', () => 
     const outboundRow = w.find('#edge-out-api-globex-test');
     expect(outboundRow.find('.cell-actions').exists()).toBe(true);
     expect(outboundRow.text()).toContain(START_THREAD_LABEL);
+  });
+
+  it('an INBOUND drifted row says whose drift it is — your responses, never the consumer’s', async () => {
+    stubFetch();
+    const w = await mountApp();
+    const row = w.find('#edge-in-gw-consumer-b-test');
+    expect(row.exists()).toBe(true);
+    const chip = row.find('.edge-chip.drift');
+    expect(chip.exists()).toBe(true);
+    // Visible, not only a tooltip: a title is invisible on touch and to anyone who does not hover.
+    expect(row.find('.cell-status').text()).toContain(INBOUND_DRIFT_CLAUSE);
+    expect(chip.attributes('title')).toBe('2 of your responses to this consumer drifted from the contract you publish — open Contracts');
+    // …and the OUTBOUND drifted row carries no such clause: there it IS the provider that drifted.
+    expect(w.find('#edge-out-api-initech-test .cell-status').text()).not.toContain(INBOUND_DRIFT_CLAUSE);
   });
 
   it('the DRIFTED chip is the row’s only chip and routes to Contracts', async () => {
