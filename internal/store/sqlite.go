@@ -419,7 +419,7 @@ func (s *sqliteStore) insertFinding(f model.Finding, inbound bool) (err error) {
 	// back to asking "does this TOOL have a mismatch?" — a set keyed by
 	// integration and tool, which relabelled every historic call of the tool and
 	// accused the provider over results nothing had judged.
-	if sourceCallID != nil && marksSourceCallDrifted(f.Kind) {
+	if sourceCallID != nil && marksSourceCallDrifted(f) {
 		if _, err := tx.Exec(`UPDATE calls SET drifted=1 WHERE id=?`, *sourceCallID); err != nil {
 			return fmt.Errorf("mark call drifted: %w", err)
 		}

@@ -281,7 +281,7 @@ func NotValidated(reason string) Validation {
 // arguments, not the provider's response.
 func VerdictOf(findings []Finding) Validation {
 	for _, f := range findings {
-		if MarksCallDrifted(f.Kind) {
+		if MarksCallDrifted(f) {
 			return Validation{Verdict: ValidatedDrifted}
 		}
 	}
@@ -309,8 +309,34 @@ func VerdictOf(findings []Finding) Validation {
 // which record arrived first.
 var PerCallDriftKinds = []string{KindLiveVsSpec, KindOutputMismatch}
 
-// MarksCallDrifted reports whether kind is one of PerCallDriftKinds.
-func MarksCallDrifted(kind string) bool {
+// MarksCallDrifted reports whether this FINDING means the call it names
+// departed from its contract: a per-call drift KIND at severity BREAKING.
+//
+// The severity half is not decoration. `calls.drifted` is the red per-call
+// state — the one the UI renders DRIFTED and the edge's drift_count counts —
+// and red means broken, never "worth knowing". Every finding of these two kinds
+// was breaking until deprecation detection, which raises a live-vs-spec finding
+// at WARNING when a call uses a surface the contract marks deprecated. That
+// call did not depart from its contract: the operation is still declared and
+// the response still conformed. Marking it drifted would paint conforming
+// traffic red and say the provider broke a promise they are in fact keeping
+// while they give notice of ending it.
+//
+// So the mark reads the severity, and for every finding that existed before
+// deprecation detection the answer is unchanged — all of them are breaking.
+// The finding still lists, still counts in the WARNING tier, and still pins its
+// call as evidence; only the call's own verdict stays clean.
+//
+// KindIsPerCallDrift below is the KIND half on its own, for the one caller that
+// has no finding in hand.
+func MarksCallDrifted(f Finding) bool {
+	return f.Severity == SeverityBreaking && KindIsPerCallDrift(f.Kind)
+}
+
+// KindIsPerCallDrift reports whether kind is one of PerCallDriftKinds. Callers
+// that hold a whole finding want MarksCallDrifted, which also reads the
+// severity.
+func KindIsPerCallDrift(kind string) bool {
 	for _, k := range PerCallDriftKinds {
 		if kind == k {
 			return true

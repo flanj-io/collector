@@ -430,7 +430,7 @@ func (p *postgresStore) insertFinding(f model.Finding, inbound bool) (err error)
 	// accused the provider over results nothing had judged.
 	//
 	// Inside the transaction so it lands with the finding or not at all.
-	if sourceCallID != nil && marksSourceCallDrifted(f.Kind) {
+	if sourceCallID != nil && marksSourceCallDrifted(f) {
 		if _, err := tx.Exec(p.rebind(`SELECT pg_advisory_xact_lock(?, hashtext(?))`), pgLockNSCallPin, *sourceCallID); err != nil {
 			return fmt.Errorf("insert finding: lock: %w", err)
 		}

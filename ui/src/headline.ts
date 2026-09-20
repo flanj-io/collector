@@ -79,6 +79,30 @@ export interface HeadlineFinding {
   endpoint: string;
   /** The integration the finding is filed under (the SDK's stamp); informational here. */
   integration?: string;
+  /**
+   * `breaking` | `warning` | `info`. The headline speaks for BREAKING findings
+   * only (see isHeadlineDrift): a deprecation is a live-vs-spec finding at
+   * `warning`, and it must not turn this line red.
+   *
+   * Optional, and absent counts as breaking — every live-vs-spec finding was
+   * breaking before deprecation detection, and a reader that omits the field is
+   * describing one of those.
+   */
+  severity?: string;
+}
+
+/**
+ * Does this finding belong on the divergence headline? Only a BREAKING one.
+ *
+ * The line reads "N contract drift findings" in a red tone, and drift means the
+ * provider departed from what they published. A deprecation is the opposite
+ * shape of news: the contract still holds, and the provider is telling you in
+ * advance that it will stop. It lists on the Contracts tab, in the warning
+ * tier, where it can be read and acted on — turning the Overview red for it
+ * would spend the one alarm this product has on a surface that still works.
+ */
+export function isHeadlineDrift(f: HeadlineFinding): boolean {
+  return (f.severity ?? 'breaking') === 'breaking';
 }
 
 /** The minimum a call needs to be weighed as headline evidence. */
@@ -99,8 +123,10 @@ export interface HeadlineCall {
 
 export interface HeadlineInput {
   /**
-   * LIVE drift findings only — spec-version diffs are informational and stay
-   * out of the divergence status (unchanged from the original computed).
+   * LIVE findings only — spec-version diffs are informational and stay out of
+   * the divergence status (unchanged from the original computed). Of these,
+   * only the BREAKING ones reach the line (isHeadlineDrift); the caller passes
+   * them all and the filter lives here, beside the tests that pin it.
    */
   liveFindings: readonly HeadlineFinding[];
   /**
@@ -136,10 +162,11 @@ export function isRestCall(c: Pick<HeadlineCall, 'transport'>): boolean {
  */
 export function headlineFor(input: HeadlineInput): Headline {
   const rest = input.calls.filter(isRestCall);
-  const n = input.liveFindings.length;
+  const drifts = input.liveFindings.filter(isHeadlineDrift);
+  const n = drifts.length;
 
   if (n > 0) {
-    const endpoints = Array.from(new Set(input.liveFindings.map((f) => f.endpoint)));
+    const endpoints = Array.from(new Set(drifts.map((f) => f.endpoint)));
     return {
       you: `${n} contract drift finding${n === 1 ? '' : 's'} on ${endpoints.join(', ')}`,
       tone: 'drift'

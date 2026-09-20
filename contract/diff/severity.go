@@ -34,6 +34,17 @@ const (
 	// previously valid arguments; stale_client on a real call). Collector-only,
 	// for the same reason as KindValue; Classify never emits it.
 	KindObservedFailure Kind = "observed_failure"
+	// KindLifecycle — a surface was marked deprecated, or a sunset date was
+	// announced for one. It is the only kind that describes a change to how
+	// long something will KEEP working rather than to its shape, which is why
+	// it needs a name of its own: a reader asking "is anything I depend on
+	// going away?" must not have to recognise a list of rule ids to answer it.
+	//
+	// Collector-only and OpenAPI-only, for a reason the other two collector-only
+	// kinds do not share: `tools/list` declares no deprecation field, so an MCP
+	// tool has no way to say this on the wire at all. Declared here so the whole
+	// vocabulary lives in one place; Classify never emits it.
+	KindLifecycle Kind = "lifecycle"
 )
 
 // Severity is HOW MUCH it matters. The spellings are upper-case because this

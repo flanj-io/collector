@@ -16,6 +16,9 @@ import (
 	"github.com/oasdiff/oasdiff/diff"
 	"github.com/oasdiff/oasdiff/load"
 
+	// contractdiff is aliased because oasdiff's own `diff` package is imported
+	// here under its plain name.
+	contractdiff "github.com/flanj-io/collector/contract/diff"
 	"github.com/flanj-io/collector/internal/model"
 	"github.com/flanj-io/collector/internal/otlpattr"
 )
@@ -52,9 +55,53 @@ func DetectVersionDiffData(v1, v2 []byte, integration string) ([]model.Finding, 
 	return DetectVersionDiff(p1, p2, integration)
 }
 
-// DetectVersionDiff diffs spec v1 -> v2 and emits one breaking Finding per
-// backward-incompatible change (oasdiff Level==ERR -> severity="breaking").
+// deprecationAnnouncements are the oasdiff change ids that ANNOUNCE a
+// deprecation — a surface marked deprecated, with or without a sunset date.
+// They are emitted as severity="warning" findings (CONTRACTS §4) rather than
+// dropped with the rest of the sub-ERR output.
+//
+// Why they need naming at all: oasdiff grades these INFO, because a
+// deprecation breaks no caller on the day it is published. But it is the
+// earliest honest warning a consumer ever gets — providers rarely break you
+// overnight, they deprecate, give a window, then remove — and dropping it
+// meant the collector said nothing until the removal, when the window had
+// already closed. So the window is the finding, and WARNING is its tier.
+//
+// Only this family is promoted. The rest of oasdiff's sub-ERR output stays
+// dropped: lifting every WARN and INFO would bury these under exactly the
+// noise they exist to stand out from.
+//
+// The `*-reactivated` ids are deliberately absent. A deprecation being LIFTED
+// constrains nobody and breaks nothing, and CONTRACTS §4 already fixes that
+// posture for its mirror image ("Additive changes are not reported"). A
+// warning that carries good news costs the tier its meaning.
+//
+// The sunset ids oasdiff already grades ERR — a missing, unparseable or
+// too-near sunset date, a deleted one, a removal before one — are NOT here and
+// are untouched. Those describe a promise already broken, not one being made,
+// and they keep landing as severity="breaking" through the ERR path below.
+var deprecationAnnouncements = map[string]bool{
+	checker.EndpointDeprecatedId:                   true,
+	checker.EndpointDeprecatedWithSunsetId:         true,
+	checker.RequestParameterDeprecatedId:           true,
+	checker.RequestPropertyDeprecatedId:            true,
+	checker.RequestPropertyDeprecatedWithSunsetId:  true,
+	checker.ResponsePropertyDeprecatedId:           true,
+	checker.ResponsePropertyDeprecatedWithSunsetId: true,
+}
+
+// DetectVersionDiff diffs spec v1 -> v2 and emits one Finding per reported
+// change: a backward-incompatible one as severity="breaking" (oasdiff
+// Level==ERR), and a deprecation ANNOUNCEMENT as severity="warning"
+// (deprecationAnnouncements above).
 // source_call_id is null — the drift is in the documents, not in a call.
+//
+// Note what this can and cannot see: oasdiff's deprecation checks fire only
+// where the `deprecated` flag CHANGED between the two documents, so this is
+// the transition — "the provider just deprecated X" — and never the standing
+// state. A contract that arrived already carrying `deprecated: true` produces
+// nothing here. The standing state is the live-vs-spec path's job, where it is
+// judged against the org's own traffic.
 func DetectVersionDiff(pathV1, pathV2, integration string) ([]model.Finding, error) {
 	s1, err := loadSelfContained(pathV1)
 	if err != nil {
@@ -85,7 +132,16 @@ func DetectVersionDiff(pathV1, pathV2, integration string) ([]model.Finding, err
 			checker.ResponseMediaTypeEnumValueRemovedId: checker.ERR,
 		}),
 	)
-	changes := checker.CheckBackwardCompatibility(config, diffReport, sources)
+	// INFO, not the default. checker.CheckBackwardCompatibility is
+	// CheckBackwardCompatibilityUntilLevel(…, WARN), which drops everything
+	// below WARN before a caller sees it — and oasdiff grades the whole
+	// deprecation family INFO, because a deprecation breaks nobody on the day
+	// it is published. Asking only down to WARN therefore returned the family
+	// as an empty set, not as changes to be filtered: the old `< ERR` skip
+	// below was never what discarded them. Everything sub-ERR that is not a
+	// deprecation announcement is still dropped in the loop, so widening the
+	// request widens nothing that is reported.
+	changes := checker.CheckBackwardCompatibilityUntilLevel(config, diffReport, sources, checker.INFO)
 
 	localizer := checker.NewDefaultLocalizer()
 	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00")
@@ -94,8 +150,16 @@ func DetectVersionDiff(pathV1, pathV2, integration string) ([]model.Finding, err
 
 	var findings []model.Finding
 	for _, c := range changes {
+		// ERR is breaking; a deprecation announcement is a warning; everything
+		// else sub-ERR is dropped as before.
+		severity := model.SeverityBreaking
+		changeKind := ""
 		if c.GetLevel() < checker.ERR {
-			continue // v0 emits only breaking (ERR) changes
+			if !deprecationAnnouncements[c.GetId()] {
+				continue
+			}
+			severity = model.SeverityWarning
+			changeKind = string(contractdiff.KindLifecycle)
 		}
 		endpoint := ""
 		if ac, ok := c.(checker.ApiChange); ok {
@@ -106,7 +170,8 @@ func DetectVersionDiff(pathV1, pathV2, integration string) ([]model.Finding, err
 			SchemaVersion:   model.SchemaVersion,
 			ID:              otlpattr.NewID(),
 			Kind:            model.KindVersionDiff,
-			Severity:        model.SeverityBreaking,
+			ChangeKind:      changeKind,
+			Severity:        severity,
 			Integration:     integration,
 			Endpoint:        endpoint,
 			FieldPath:       model.Ptr(fieldPath),

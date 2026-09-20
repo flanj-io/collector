@@ -506,9 +506,14 @@ func bumpEdgeDrift(q queryExecer, rebind func(string) string, sourceCallID strin
 // marksSourceCallDrifted) and latePin's repair (which expands it into the SQL
 // `IN` list). A kind marked on one path and not the other makes drift depend on
 // record ORDER.
+// The SEVERITY half of the same question lives here too: a per-call drift kind
+// marks its call drifted only at severity BREAKING (model.MarksCallDrifted says
+// why). The latePin repair below expands both halves into SQL, so the two paths
+// keep agreeing — a finding honoured by one and not the other is exactly the
+// order-dependence this list exists to prevent.
 var perCallDriftKinds = model.PerCallDriftKinds
 
-func marksSourceCallDrifted(kind string) bool { return model.MarksCallDrifted(kind) }
+func marksSourceCallDrifted(f model.Finding) bool { return model.MarksCallDrifted(f) }
 
 // insertDrifted is the `drifted` a NEW call row starts with: 1 when the drift
 // processor's own stamp says the call drifted. Its finding record follows in the
@@ -551,11 +556,12 @@ func latePin(ex execer, rebind func(string) string, c model.RedactedCall) (pinne
 	for _, k := range perCallDriftKinds {
 		args = append(args, k)
 	}
+	args = append(args, model.SeverityBreaking)
 	if _, err := ex.Exec(rebind(
 		`UPDATE calls SET drifted=1
 		  WHERE id=? AND drifted=0
 		    AND EXISTS (SELECT 1 FROM findings WHERE source_call_id=? AND kind IN (`+
-			placeholders(len(perCallDriftKinds))+`))`),
+			placeholders(len(perCallDriftKinds))+`) AND severity=?)`),
 		args...,
 	); err != nil {
 		return false, fmt.Errorf("late pin: repair drifted: %w", err)
