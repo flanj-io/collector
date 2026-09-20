@@ -583,12 +583,23 @@ func latePin(ex execer, rebind func(string) string, c model.RedactedCall) (pinne
 	}
 	if c.PeerHost != "" {
 		// One bump per finding that references this call — exactly what
-		// bumpEdgeDrift would have done had the call been present.
+		// bumpEdgeDrift would have done had the call been present, which means
+		// the SAME kind list and no other. A deprecation names a call that
+		// CONFORMED, so it must not reach the Edges row's DRIFTED chip; and a
+		// kind honoured on one arrival order but not the other would make that
+		// chip depend on which record landed first.
+		countArgs := []any{c.ID}
+		for _, k := range perCallDriftKinds {
+			countArgs = append(countArgs, k)
+		}
+		countArgs = append(countArgs, c.PeerHost, c.Direction)
 		if _, err := ex.Exec(rebind(
 			`UPDATE edges
-			    SET drift_count = drift_count + (SELECT COUNT(*) FROM findings WHERE source_call_id=?)
+			    SET drift_count = drift_count + (
+			          SELECT COUNT(*) FROM findings
+			           WHERE source_call_id=? AND kind IN (`+placeholders(len(perCallDriftKinds))+`))
 			  WHERE peer_host=? AND direction=?`),
-			c.ID, c.PeerHost, c.Direction,
+			countArgs...,
 		); err != nil {
 			return false, fmt.Errorf("late pin: repair edge drift: %w", err)
 		}
