@@ -3506,8 +3506,8 @@ pre.body { background: var(--surface); border: var(--border-w) solid var(--rule)
    plus a 3-digit rpm ("12,345 · 120/min") — with room to spare for a
    locally-installed IBM Plex Mono, which measures wider than the system
    monospace fallback most visitors actually see. 92px clipped ordinary
-   values ("764 · 9/min") past FIRST SEEN; a Playwright check in e2e pins
-   scrollWidth <= clientWidth on this cell so a future value can't regress it. */
+   values ("764 · 9/min") past FIRST SEEN. ui/src/edges-table-columns.test.ts
+   pins the minimum width, so a narrower value can't come back. */
 .edges-table col.col-calls { width: 128px; }
 .edges-table col.col-first { width: 124px; }
 /* Same reasoning as col-calls: fits "2026-09-21 · just now" (the longest

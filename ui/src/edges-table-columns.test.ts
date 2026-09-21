@@ -10,12 +10,10 @@ import { join } from 'node:path';
  * very component before writing this file) — so a real overflow (content
  * wider than its column) is invisible to a mounted-component test here.
  * Pinned on the raw source instead, the same way `tokens.test.ts` pins badge
- * rules and CP's `client-assets.spec.ts` pinned the sibling counterparty-cell
- * fix on this same track: assert the declared width, not a browser
- * measurement this harness cannot make.
+ * rules: assert the declared width, not a browser measurement this test
+ * environment cannot make.
  *
- * QA walkthrough (2026-09-22, must-fix on fix/edges-alignment): `col-calls`
- * at 92px left ~68px of content after the cell's 24px of padding, but the
+ * `col-calls` at 92px left ~68px of content after the cell's 24px of padding, but the
  * cell holds `<count> · <rpm>/min` and never wraps — "764 · 9/min",
  * "2562 · 30/min" and "849 · 10/min" all spilled past the column's right
  * edge toward FIRST SEEN. `col-last` at 168px had the same problem on a
