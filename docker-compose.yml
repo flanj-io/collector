@@ -30,7 +30,7 @@ services:
     restart: "no"
 
   collector:
-    image: flanj/collector:v0.1.0
+    image: flanj/collector:v0.2.0
     depends_on:
       init:
         condition: service_completed_successfully

@@ -146,7 +146,7 @@ docker run -d --name flanj \
   --user "$(id -u):$(id -g)" \
   -v "$PWD/flanj-data:/data" \
   -p 4318:4318 -p 127.0.0.1:5335:5336 \
-  flanj/collector:v0.1.0
+  flanj/collector:v0.2.0
 
 docker run -d --name flanj-ui --network container:flanj \
   alpine/socat TCP-LISTEN:5336,fork,reuseaddr TCP:127.0.0.1:5335
