@@ -103,8 +103,8 @@ describe('a DESCRIPTION change wears one vocabulary from the tab to the row', ()
     // The steel outline is now the tier's one colour, so it no longer depends
     // on every row happening to be a wording change — but the SENTENCE still
     // does, and it still ends with the tier's shared tail.
-    expect(pill.attributes('title')).toBe('1 description change — wording only, non-breaking — acknowledge to clear');
-    expect(pill.attributes('title')).toMatch(/non-breaking — acknowledge to clear$/);
+    expect(pill.attributes('title')).toBe('1 description change — wording only, non-breaking — resolve to clear');
+    expect(pill.attributes('title')).toMatch(/non-breaking — resolve to clear$/);
     expect(pill.attributes('aria-label')).toBe(pill.attributes('title'));
     // Nothing is failing and nothing would break: no other pill at all.
     expect(w.find('.tab-count.bad').exists()).toBe(false);
@@ -129,7 +129,7 @@ describe('a DESCRIPTION change wears one vocabulary from the tab to the row', ()
     const pill = w.find('.tab-count.worth-knowing');
     expect(pill.text()).toBe('2');
     // Mixed classes: the tier's shared sentence, not the wording-only one.
-    expect(pill.attributes('title')).toBe('2 non-breaking — acknowledge to clear');
+    expect(pill.attributes('title')).toBe('2 non-breaking — resolve to clear');
     // Both chips are steel now — copper means "would break" — but they keep
     // two different words, so the classes are still told apart without hue.
     const nb = w.find('.provider .tag.nonbreaking');

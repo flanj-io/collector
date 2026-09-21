@@ -77,7 +77,7 @@ const versionDiffFinding = (n: number, endpoint: string) => ({
   occurrence_count: 1
 });
 
-/** One un-acknowledged wording change on the same provider. */
+/** One open wording change on the same provider. */
 const INFORMATIONAL = {
   id: 'fnd_desc_1',
   kind: 'definition_change',
@@ -202,7 +202,7 @@ describe('2 live breaking + 3 version-diff breaking + 1 informational', () => {
 
     expect(red.attributes('title')).toBe('2 breaking drift findings in live traffic');
     expect(copper.attributes('title')).toBe('3 breaking changes in a newer contract version — nothing is breaking yet');
-    expect(steel.attributes('title')).toBe('1 description change — wording only, non-breaking — acknowledge to clear');
+    expect(steel.attributes('title')).toBe('1 description change — wording only, non-breaking — resolve to clear');
 
     // The accessible name matches the title: a screen reader hears the tier,
     // not a bare digit it cannot place.
@@ -232,7 +232,7 @@ describe('2 live breaking + 3 version-diff breaking + 1 informational', () => {
     const n = (sel: string) => (w.find(sel).exists() ? parseInt(w.find(sel).text(), 10) : 0);
     const pills = n('.tab-count.bad') + n('.tab-count.would-break') + n('.tab-count.worth-knowing');
 
-    // Nothing is acknowledged here, so the three pills account for every row.
+    // Nothing is resolved here, so the three pills account for every row.
     const rows = w.findAll('.provider .finding').length;
     expect(rows).toBe(FINDINGS.length);
     expect(pills).toBe(rows);
@@ -372,7 +372,7 @@ describe('a deprecation finding reaches the tab and lands in the copper tier', (
     await w.vm.$nextTick();
     const n = (sel: string) => (w.find(sel).exists() ? parseInt(w.find(sel).text(), 10) : 0);
     const pills = n('.tab-count.bad') + n('.tab-count.would-break') + n('.tab-count.worth-knowing');
-    expect(pills, 'red + copper + steel + acknowledged = the rows listed').toBe(
+    expect(pills, 'red + copper + steel + resolved = the rows listed').toBe(
       w.findAll('.provider .finding').length
     );
   });

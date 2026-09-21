@@ -32,12 +32,11 @@ const versionDiff = (over: Partial<TierFinding> = {}): TierFinding => ({
   ...over
 });
 
-/** A wording-only MCP definition change: informational, ackable. */
+/** A wording-only MCP definition change: informational. */
 const description = (over: Partial<TierFinding> = {}): TierFinding => ({
   kind: 'definition_change',
   severity: 'warning',
   rule: 'description-changed',
-  spec_version_to: 'sha256:bbbb',
   ...over
 });
 
@@ -64,26 +63,36 @@ describe('which tier a row counts in', () => {
     expect(tierOf(versionDiff())).toBe('would-break');
   });
 
-  it('an un-acknowledged informational row is steel, whatever its class', () => {
+  it('an open informational row is steel, whatever its class', () => {
     expect(tierOf(description())).toBe('worth-knowing');
     expect(tierOf(nonBreaking())).toBe('worth-knowing');
     expect(tierOf(description({ severity: 'info' }))).toBe('worth-knowing');
   });
 
-  it('an acknowledged informational row leaves every pill but stays on the tab', () => {
-    expect(tierOf(description({ acked: true, acked_evidence_version: 'sha256:bbbb' }))).toBe('acknowledged');
+  it('a resolved informational row leaves the steel pill but stays on the tab', () => {
+    expect(tierOf(description({ resolved: true }))).toBe('resolved');
+    expect(tierOf(nonBreaking({ resolved: true }))).toBe('resolved');
   });
 
-  it('an ack bound to the WRONG evidence version does not clear the row', () => {
-    // The second change on the same tool shares a signature; a stale ack must
-    // not pre-acknowledge it (isAcked's evidence-version rule, repeated here
-    // because the tiers are what the operator actually reads).
-    expect(tierOf(description({ acked: true, acked_evidence_version: 'sha256:aaaa' }))).toBe('worth-knowing');
+  // Resolved is asked FIRST, ahead of would-break and breaking-now: a
+  // resolved row leaves whichever pill it would otherwise have counted
+  // towards, whatever its own severity or evidence.
+  it('a resolved breaking LIVE row leaves the red pill, not the informational one', () => {
+    expect(tierOf(live({ resolved: true }))).toBe('resolved');
+    expect(tierOf(live({ kind: 'output_mismatch', resolved: true }))).toBe('resolved');
   });
 
-  it('a breaking row is never acknowledged away, however it is flagged in the store', () => {
-    expect(tierOf(live({ acked: true, acked_evidence_version: '' }))).toBe('breaking-now');
-    expect(tierOf(versionDiff({ acked: true, acked_evidence_version: '' }))).toBe('would-break');
+  it('a resolved VERSION DIFF or DEPRECATION leaves the copper pill', () => {
+    expect(tierOf(versionDiff({ resolved: true }))).toBe('resolved');
+    expect(tierOf({ kind: 'deprecation', severity: 'warning', rule: 'operation-deprecated', resolved: true })).toBe(
+      'resolved'
+    );
+  });
+
+  it('an unresolved row of every tier is never resolved by default', () => {
+    expect(tierOf(live({ resolved: false }))).toBe('breaking-now');
+    expect(tierOf(versionDiff({ resolved: false }))).toBe('would-break');
+    expect(tierOf(description({ resolved: false }))).toBe('worth-knowing');
   });
 });
 
@@ -147,23 +156,23 @@ describe('the counts partition the rows listed on the tab', () => {
       breakingNow: 2,
       wouldBreak: 3,
       worthKnowing: 1,
-      acknowledged: 0,
+      resolved: 0,
       total: 6
     });
   });
 
-  it('red + copper + steel + acknowledged = the rows listed, always', () => {
+  it('red + copper + steel + resolved = the rows listed, always', () => {
     const rows = [
       live(),
       live({ kind: 'output_mismatch' }),
       versionDiff(),
       description(),
       nonBreaking(),
-      description({ acked: true, acked_evidence_version: 'sha256:bbbb' }),
+      description({ resolved: true }),
       description({ severity: 'info' })
     ];
     const c = countTiers(rows);
-    expect(c.breakingNow + c.wouldBreak + c.worthKnowing + c.acknowledged).toBe(c.total);
+    expect(c.breakingNow + c.wouldBreak + c.worthKnowing + c.resolved).toBe(c.total);
     expect(c.total).toBe(rows.length);
   });
 
@@ -172,15 +181,15 @@ describe('the counts partition the rows listed on the tab', () => {
       breakingNow: 0,
       wouldBreak: 0,
       worthKnowing: 0,
-      acknowledged: 0,
+      resolved: 0,
       total: 0
     });
   });
 
   it('unresolvedCount is what the three pills show together', () => {
-    const c = countTiers([live(), versionDiff(), description(), description({ acked: true, acked_evidence_version: 'sha256:bbbb' })]);
+    const c = countTiers([live(), versionDiff(), description(), description({ resolved: true })]);
     expect(unresolvedCount(c)).toBe(3);
-    // The acknowledged row is still listed on the tab — it just has no pill.
+    // The resolved row is still listed on the tab — it just has no pill.
     expect(c.total).toBe(4);
   });
 });
@@ -242,8 +251,8 @@ describe('each tier says what it counts, so the colour is never the only signal'
   });
 
   it('steel keeps both of the sentences the tier already had', () => {
-    expect(worthKnowingTitle(2, false)).toBe('2 non-breaking — acknowledge to clear');
-    expect(worthKnowingTitle(1, true)).toBe('1 description change — wording only, non-breaking — acknowledge to clear');
+    expect(worthKnowingTitle(2, false)).toBe('2 non-breaking — resolve to clear');
+    expect(worthKnowingTitle(1, true)).toBe('1 description change — wording only, non-breaking — resolve to clear');
   });
 
   it('no two tiers share a sentence', () => {
@@ -275,10 +284,8 @@ describe('the tab names itself, so the pills do not name it for it', () => {
 
   it('is just the name when there is nothing to count', () => {
     expect(tabAriaLabel('Contracts', counts([]))).toBe('Contracts');
-    // An acknowledged row is listed but has no pill, so it adds nothing here.
-    expect(tabAriaLabel('Contracts', counts([description({ acked: true, acked_evidence_version: 'sha256:bbbb' })]))).toBe(
-      'Contracts'
-    );
+    // A resolved row is listed but has no pill, so it adds nothing here.
+    expect(tabAriaLabel('Contracts', counts([description({ resolved: true })]))).toBe('Contracts');
   });
 
   it('stays far shorter than the pill sentences it replaces', () => {

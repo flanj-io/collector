@@ -1,17 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ACK_LABEL,
-  ACK_TITLE,
+  RESOLVE_LABEL,
+  REOPEN_LABEL,
+  RESOLVED_RECURRED_NOTICE,
   JSONRPC_ID_TITLE,
   FLAG_DESCRIPTION_GUARD,
   LOCAL_NOTICES_TITLE,
   MCP_BADGE_TOOLTIP,
   MCP_ERROR_TOOLTIP,
   MCP_NO_SPEC_NEEDED,
-  UNDO_LABEL,
-  UNDO_TITLE,
-  ackEvidenceVersion,
-  ackedLine,
+  resolvedLine,
+  reopenedLine,
   afterColLabel,
   beforeColLabel,
   breakingChipLabel,
@@ -24,8 +23,7 @@ import {
   descriptionChipLabel,
   descriptionChipTitle,
   descriptionCountTitle,
-  isAckable,
-  isAcked,
+  isResolved,
   isBreakingFinding,
   isDescriptionChange,
   isFlaggableMcp,
@@ -155,7 +153,7 @@ describe('kinds, classes, flaggability', () => {
   });
 });
 
-describe('badge tiers + acknowledge (qfix-2026-08-25)', () => {
+describe('badge tiers + resolve', () => {
   it('breaking severity is read from severity, all sources — never the protocol', () => {
     expect(isBreakingFinding(finding({}))).toBe(true); // output_mismatch
     expect(isBreakingFinding(defChange())).toBe(true); // MCP BREAKING
@@ -164,36 +162,37 @@ describe('badge tiers + acknowledge (qfix-2026-08-25)', () => {
     expect(isBreakingFinding(defChange({ severity: 'warning', rule: 'description-changed' }))).toBe(false);
   });
 
-  it('ackable: DESCRIPTION + NON-BREAKING definition changes ONLY', () => {
-    expect(isAckable(defChange({ severity: 'warning', rule: 'description-changed' }))).toBe(true);
-    expect(isAckable(defChange({ severity: 'info' }))).toBe(true);
-    // Never: BREAKING, output_mismatch, stale_client, live-vs-spec.
-    expect(isAckable(defChange())).toBe(false);
-    expect(isAckable(finding({}))).toBe(false);
-    expect(isAckable(finding({ kind: 'stale_client' }))).toBe(false);
-    expect(isAckable({ kind: 'live-vs-spec', severity: 'breaking', rule: 'type' })).toBe(false);
-  });
-
-  it('acked state comes from the read-API join', () => {
-    expect(isAcked(finding({ acked: true }))).toBe(true);
-    expect(isAcked(finding({}))).toBe(false);
-    expect(isAcked({ kind: 'output_mismatch', acked: undefined } as Finding)).toBe(false);
+  it('resolved state comes from the read-API join — a plain read, never re-derived', () => {
+    expect(isResolved(finding({ resolved: true }))).toBe(true);
+    expect(isResolved(finding({}))).toBe(false);
+    expect(isResolved({ kind: 'output_mismatch', resolved: undefined } as Finding)).toBe(false);
+    // Available on every kind and severity — unlike the earlier local-only
+    // control, resolve is never gated by definitionClass.
+    expect(isResolved(finding({ severity: 'breaking', resolved: true }))).toBe(true);
+    expect(isResolved({ kind: 'live-vs-spec', severity: 'breaking', resolved: true } as Finding)).toBe(true);
   });
 
   it('control + footer strings (verbatim)', () => {
-    expect(ACK_LABEL).toBe('Acknowledge');
-    expect(ACK_TITLE).toBe('Local only — clears it from the counts on this collector. Nothing is sent anywhere.');
-    expect(UNDO_LABEL).toBe('Undo');
-    expect(UNDO_TITLE).toBe('Puts it back in the count.');
-    expect(ackedLine('5m ago')).toBe('Acknowledged 5m ago.');
+    expect(RESOLVE_LABEL).toBe('Resolve');
+    expect(REOPEN_LABEL).toBe('Reopen');
+    expect(RESOLVED_RECURRED_NOTICE).toBe('It happened again while you were resolving — still open.');
+    expect(resolvedLine('5m ago')).toBe('Resolved 5m ago.');
+  });
+
+  it('reopenedLine names WHAT came back — a document/announcement changed, everything else happened', () => {
+    expect(reopenedLine('definition_change', '2h ago')).toBe('Resolved 2h ago — it has changed again since.');
+    expect(reopenedLine('version-diff', '2h ago')).toBe('Resolved 2h ago — it has changed again since.');
+    expect(reopenedLine('deprecation', '2h ago')).toBe('Resolved 2h ago — it has changed again since.');
+    expect(reopenedLine('live-vs-spec', '2h ago')).toBe('Resolved 2h ago — it has happened again since.');
+    expect(reopenedLine('output_mismatch', '2h ago')).toBe('Resolved 2h ago — it has happened again since.');
   });
 
   // The steel tier's sentence. The red and copper tiers' sentences live with
   // the tiering rule itself (contract-tiers.test.ts): which population a colour
   // counts is that module's question, not this one's.
   it('tab-pill titles', () => {
-    expect(informationalCountTitle(2)).toBe('2 non-breaking — acknowledge to clear');
-    expect(informationalCountTitle(1)).toBe('1 non-breaking — acknowledge to clear');
+    expect(informationalCountTitle(2)).toBe('2 non-breaking — resolve to clear');
+    expect(informationalCountTitle(1)).toBe('1 non-breaking — resolve to clear');
   });
 
   it('card chips + composition title', () => {
@@ -257,8 +256,8 @@ describe('health', () => {
     expect(cold.text).toBe(h.text);
     // A wording change is chipped DESCRIPTION everywhere it is counted — the
     // tab's steel title and the card's steel chip use the row badge's word.
-    expect(descriptionCountTitle(1)).toBe('1 description change — wording only, non-breaking — acknowledge to clear');
-    expect(descriptionCountTitle(2)).toBe('2 description changes — wording only, non-breaking — acknowledge to clear');
+    expect(descriptionCountTitle(1)).toBe('1 description change — wording only, non-breaking — resolve to clear');
+    expect(descriptionCountTitle(2)).toBe('2 description changes — wording only, non-breaking — resolve to clear');
     expect(descriptionChipLabel(1)).toBe('1 DESCRIPTION');
     expect(descriptionChipTitle(2)).toBe('2 description changes — wording only');
   });
@@ -509,50 +508,6 @@ describe('flag sheet', () => {
     expect(mcpDefaultMessage(defChange(), fmt)).toBe(
       'Your tools/list changed get_balance between Aug 18 and Aug 18 — input-required-property-added. Was this intentional? Anything we should migrate to?'
     );
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// qfix2-2026-08-26: the ack key
-// ─────────────────────────────────────────────────────────────────────────────
-
-describe('an ack binds to the evidence version it acknowledged', () => {
-  it('a SECOND change on the same tool + field arrives UN-acknowledged', () => {
-    // Both rows carry the IDENTICAL finding signature
-    // (integration|endpoint|kind|rule|field_path) — that is the whole problem.
-    const v1 = descChange({ spec_version_to: 'sha256:bbbb33334444' });
-    const acked = { ...v1, acked: true, acked_evidence_version: 'sha256:bbbb33334444' };
-    expect(isAcked(acked)).toBe(true);
-
-    // <P> edits the same description again: same signature, NEW after-hash.
-    const v2 = { ...acked, id: 'f2', spec_version_to: 'sha256:cccc55556666' };
-    expect(isAcked(v2)).toBe(false);
-  });
-
-  it('acknowledging the new evidence re-covers the row', () => {
-    const v2 = descChange({
-      spec_version_to: 'sha256:cccc55556666',
-      acked: true,
-      acked_evidence_version: 'sha256:cccc55556666'
-    });
-    expect(isAcked(v2)).toBe(true);
-  });
-
-  it('a LEGACY ack (no evidence version) does not cover a definition_change', () => {
-    // Fail-safe migration: the finding re-surfaces un-acknowledged rather than
-    // staying silently acked behind a record that predates the key change.
-    expect(isAcked(descChange({ acked: true }))).toBe(false);
-    expect(isAcked(defChange({ severity: 'info', acked: true }))).toBe(false);
-  });
-
-  it('occurrence-counted kinds key on the signature alone — recurrence is text, not a re-alarm', () => {
-    expect(ackEvidenceVersion(finding({}))).toBe('');
-    expect(ackEvidenceVersion(descChange())).toBe('sha256:bbbb33334444');
-    expect(ackEvidenceVersion({ kind: 'definition_change' } as Finding)).toBe('');
-    // An output_mismatch stays acked no matter how many more calls land.
-    expect(isAcked(finding({ acked: true, occurrence_count: 47 }))).toBe(true);
-    // …even if a snapshot hash happens to ride along on the record.
-    expect(isAcked(finding({ acked: true, spec_version_to: 'sha256:bbbb33334444' }))).toBe(true);
   });
 });
 

@@ -56,9 +56,8 @@ export function changeKindOf(f: Pick<Finding, 'kind' | 'rule' | 'change_kind'>):
 }
 
 /** Class badge of a definition_change finding, from severity + rule. Used to
- *  split the steel tier's card chips and to decide what can be acknowledged,
- *  not as a label: the badge shows severityLabel and changeKindOf, two
- *  separate fields. */
+ *  split the steel tier's card chips, not as a label: the badge shows
+ *  severityLabel and changeKindOf, two separate fields. */
 export function definitionClass(f: Pick<Finding, 'kind' | 'severity' | 'rule'>): DefinitionClass | '' {
   if (f.kind !== 'definition_change') return '';
   if (f.rule === 'description-changed') return 'DESCRIPTION';
@@ -101,14 +100,16 @@ export function staysLocalAsInfo(f: Pick<Finding, 'severity'>): boolean {
 export const INFO_STAYS_LOCAL =
   'Info — stays on this collector. Info findings are never flagged to another organisation.';
 
-// ─── Badge tiers + local acknowledge (qfix-2026-08-25) ───────────────────────
+// ─── Badge tiers + resolve ────────────────────────────────────────────────
 // Severity decides whether a row is breaking, never the protocol. Which COLOUR
 // a breaking row counts under is a second question — whether its evidence is
 // live traffic or a diff of two contract versions — and it is answered in
-// ui/src/contract-tiers.ts, which owns the tab's three tiers. Acknowledge is
-// LOCAL ONLY (wire key `ack`): it clears an informational finding out of the
-// counts on this collector — nothing is sent to the control plane, and it is
-// never a path to flagging.
+// ui/src/contract-tiers.ts, which owns the tab's three tiers. Resolve is one
+// "I have dealt with this" action, available on every row of every kind and
+// severity — it POSTs to this collector's own API (never the control plane),
+// and it never deletes a finding: a resolved row leaves every count and moves
+// to the dimmed band, and the server reopens it automatically when the
+// trouble recurs.
 
 /** Breaking severity, all sources (REST live-vs-spec BREAKING, version diffs,
  *  MCP BREAKING incl. output_mismatch). The tier this counts towards is
@@ -117,74 +118,57 @@ export function isBreakingFinding(f: Pick<Finding, 'severity'>): boolean {
   return f.severity === 'breaking';
 }
 
-/** Ackable: informational definition changes only — DESCRIPTION or
- *  NON-BREAKING. BREAKING rows are never ackable (resolved by a fix or a
- *  thread, not muted); stale_client keeps no control at all. The relay
- *  enforces the same rule server-side (403 not_ackable).
- *
- *  Note for the would-break tier (contract-tiers.ts): a version-diff row is
- *  NOT ackable here and cannot be made so from this file — both this rule and
- *  the collector's own require kind=definition_change, and an acknowledgement
- *  binds to a snapshot hash a version diff does not carry. Letting the copper
- *  tier be dismissed is a store-and-API change, not a UI one. */
-export function isAckable(f: Pick<Finding, 'kind' | 'severity' | 'rule'>): boolean {
-  const cls = definitionClass(f);
-  return cls === 'DESCRIPTION' || cls === 'NON-BREAKING';
+/**
+ * Resolved (from the read-API join). The SERVER decides whether the
+ * resolution still covers the finding — this is a read, never a re-derived
+ * rule, so it must not repeat any evidence-matching the server already did.
+ */
+export function isResolved(f: Pick<Finding, 'resolved'>): boolean {
+  return f.resolved === true;
 }
+
+export const RESOLVE_LABEL = 'Resolve';
+export const REOPEN_LABEL = 'Reopen';
+
+/** The neutral inline hint when a resolve raced a recurrence: the row stays
+ *  open, and the operator is told why the control did not take. */
+export const RESOLVED_RECURRED_NOTICE = 'It happened again while you were resolving — still open.';
+
+/** Resolved footer line: `Resolved 5m ago.` */
+export function resolvedLine(relative: string): string {
+  return `Resolved ${relative}.`;
+}
+
+/** Kinds whose evidence is a document or an announcement, never a call — the
+ *  same seam contract-tiers.ts uses for the copper tier. Named again here
+ *  because the two files must not import row-shaping rules from each other. */
+const EVIDENCE_IS_DOCUMENT_KINDS: readonly string[] = ['definition_change', 'version-diff', 'deprecation'];
 
 /**
- * The evidence version an acknowledgement on this finding binds to: the AFTER
- * snapshot hash for a definition_change, empty for every other kind (mirrors
- * ackEvidenceVersion in extension/flanjui/acks.go).
+ * The hint on an OPEN row that carries `reopened_after` — it was resolved and
+ * came back. The verb names WHAT came back: a document/announcement kind
+ * changed again; every other kind (a live call, an MCP output mismatch)
+ * happened again.
  */
-export function ackEvidenceVersion(f: { kind: string; spec_version_to?: string | null }): string {
-  return f.kind === 'definition_change' ? f.spec_version_to || '' : '';
+export function reopenedLine(kind: string, relative: string): string {
+  const verb = EVIDENCE_IS_DOCUMENT_KINDS.includes(kind) ? 'changed' : 'happened';
+  return `Resolved ${relative} — it has ${verb} again since.`;
 }
 
-/**
- * Acknowledged on this collector (from the read-API join).
- *
- * The collector applies the evidence-version rule server-side; this repeats it
- * client-side on purpose (the highest-severity
- * risk in this feature). A SECOND definition change on the same tool and field has
- * the IDENTICAL signature, so a signature-only ack would render it silently
- * pre-acknowledged and a breaking change could sit unseen. Two independent
- * checks means one of them failing cannot hide a new change.
- */
-export function isAcked(f: {
-  kind: string;
-  acked?: boolean;
-  acked_evidence_version?: string | null;
-  spec_version_to?: string | null;
-}): boolean {
-  if (f.acked !== true) return false;
-  return (f.acked_evidence_version || '') === ackEvidenceVersion(f);
-}
-
-export const ACK_LABEL = 'Acknowledge';
-export const ACK_TITLE = 'Local only — clears it from the counts on this collector. Nothing is sent anywhere.';
-export const UNDO_LABEL = 'Undo';
-export const UNDO_TITLE = 'Puts it back in the count.';
-
-/** Acked footer line: `Acknowledged 5m ago.` */
-export function ackedLine(relative: string): string {
-  return `Acknowledged ${relative}.`;
-}
-
-/** Steel tab-pill title: `2 non-breaking — acknowledge to clear`. */
+/** Steel tab-pill title: `2 non-breaking — resolve to clear`. */
 export function informationalCountTitle(n: number): string {
-  return `${n} non-breaking — acknowledge to clear`;
+  return `${n} non-breaking — resolve to clear`;
 }
 
 /**
- * The same tab pill when EVERY un-acked informational row is a DESCRIPTION
- * change: `1 description change — wording only, non-breaking — acknowledge to
+ * The same tab pill when EVERY open informational row is a DESCRIPTION
+ * change: `1 description change — wording only, non-breaking — resolve to
  * clear`. The pill wears the steel outline either way now; this says "wording
  * only" before it repeats the shared tail, so a lone wording change never
- * reads as a warning (UX review 2026-09-14).
+ * reads as a warning.
  */
 export function descriptionCountTitle(n: number): string {
-  return `${n} description change${n === 1 ? '' : 's'} — wording only, non-breaking — acknowledge to clear`;
+  return `${n} description change${n === 1 ? '' : 's'} — wording only, non-breaking — resolve to clear`;
 }
 
 /** Red card chip: `1 BREAKING`. */

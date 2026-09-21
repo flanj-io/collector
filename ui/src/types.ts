@@ -121,15 +121,18 @@ export interface Finding {
    *  frozen at the first occurrence, so resolving the host in the browser lost
    *  the join as soon as that call aged out. Absent on a call-less finding. */
   peer_host?: string;
-  /** Local acknowledge state (read-API join, never part of the wire contract):
-   *  true when this finding's signature is acknowledged on this collector. */
-  acked?: boolean;
-  /** When the acknowledge landed (RFC3339); set only with acked. */
-  acked_at?: string;
-  /** The evidence version the acknowledgement covers — the AFTER snapshot hash
-   *  on a definition_change, absent on every other kind. The SPA re-checks it
-   *  against spec_version_to so a NEW change can never inherit an old ack. */
-  acked_evidence_version?: string;
+  /** True only while the resolution still covers the finding — the SERVER
+   *  decides this (read-API join, never part of the wire contract). The SPA
+   *  renders it as given and never re-derives it client-side. */
+  resolved?: boolean;
+  /** When the resolution landed (RFC 3339); set only with resolved. */
+  resolved_at?: string;
+  /** The operator's optional note, already redacted server-side. */
+  resolved_note?: string;
+  /** Set on an OPEN row that had been resolved and came back — the trouble
+   *  recurred, or the evidence changed — naming the OLD resolution's
+   *  timestamp. Never set together with resolved. */
+  reopened_after?: string;
   /** The finding's source call was INBOUND (the store's record, local read API
    *  only): raised against the self contract, keyed by the service the call
    *  reached. Absent from an older collector, whose self findings keyed `self`. */

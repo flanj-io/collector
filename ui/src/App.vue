@@ -58,17 +58,17 @@ import {
   type ThemePref
 } from './theme';
 import {
-  ACK_LABEL,
-  ACK_TITLE,
+  RESOLVE_LABEL,
+  REOPEN_LABEL,
+  RESOLVED_RECURRED_NOTICE,
   JSONRPC_ID_TITLE,
   LOCAL_NOTICES_TITLE,
   MCP_BADGE_TOOLTIP,
   MCP_ERROR_TOOLTIP,
   MCP_NO_SPEC_NEEDED,
   MCP_TOOL_CHIP,
-  UNDO_LABEL,
-  UNDO_TITLE,
-  ackedLine,
+  resolvedLine,
+  reopenedLine,
   afterColLabel,
   beforeColLabel,
   breakingChipLabel,
@@ -81,8 +81,7 @@ import {
   descriptionChipTitle,
   informationalChipLabel,
   informationalChipTitle,
-  isAckable,
-  isAcked,
+  isResolved,
   isBreakingFinding,
   isLocalNotice,
   staysLocalAsInfo,
@@ -255,7 +254,8 @@ const contracts = ref<SpecInfo[]>([]);
 // and only a real answer lets us assert "no contract loaded" per provider.
 const contractsKnown = ref(false);
 /** The relay itself was unreachable — no response to quote. Shared by the poll
- *  banner and the per-finding ack error so one failure never wears two names. */
+ *  banner and the per-finding resolve/reopen error so one failure never wears
+ *  two names. */
 const COLLECTOR_UNREACHABLE = 'Could not reach this collector.';
 const loadError = ref('');
 // ─── Connect + threads (v0.1a) ───────────────────────────────────────────
@@ -1416,10 +1416,9 @@ const mcpOverview = computed(() => {
 // Contracts tab with a Flag control, like every other definition change.
 // Visible to you only; these items NEVER carry a flag control.
 //
-// Nor an acknowledged state: ackable() (extension/flanjui/acks.go) requires
-// kind=definition_change, so a stale_client finding can never be acknowledged
-// and the band carries no acked rendering. The band's items used to be able to
-// be acked back when DESCRIPTION lived here.
+// Nor a Resolve control: this band is never the Contracts tab, and
+// stale_client never reaches it (mcpContractFindings excludes it), so the
+// band carries no resolve rendering at all.
 const localNotices = computed(() =>
   mcpFindings.value
     .filter((f) => isLocalNotice(f))
@@ -1451,11 +1450,11 @@ const mcpContractFindings = computed(() =>
 //                              construction rather than by coincidence.
 //   copper = would break     — breaking changes found by diffing two VERSIONS
 //                              of a contract. Nothing is failing yet.
-//   steel  = worth knowing   — un-acknowledged informational rows
+//   steel  = worth knowing   — open informational rows
 //                              (NON-BREAKING + DESCRIPTION), always steel now
 //                              that copper means "would break".
 //
-// Invariant: red + copper + steel + acknowledged = the rows listed on the tab.
+// Invariant: red + copper + steel + resolved = the rows listed on the tab.
 const contractTabRows = computed(() => [
   ...liveFindings.value,
   ...versionDiffFindings.value,
@@ -1466,14 +1465,14 @@ const contractTiers = computed(() => countTiers(contractTabRows.value));
 const contractBreakingNowCount = computed(() => contractTiers.value.breakingNow);
 const contractWouldBreakCount = computed(() => contractTiers.value.wouldBreak);
 const contractWorthKnowingCount = computed(() => contractTiers.value.worthKnowing);
-// Every un-acked informational row is a DESCRIPTION change. The steel tier
+// Every open informational row is a DESCRIPTION change. The steel tier
 // wears one colour either way now; this picks which SENTENCE it carries, so a
 // lone wording change still says "wording only" rather than borrowing the
 // shared non-breaking line.
 const contractDescOnly = computed(
   () =>
     contractWorthKnowingCount.value > 0 &&
-    contractTabRows.value.every((f) => isBreakingFinding(f) || isAcked(f) || definitionClass(f) === 'DESCRIPTION')
+    contractTabRows.value.every((f) => isBreakingFinding(f) || isResolved(f) || definitionClass(f) === 'DESCRIPTION')
 );
 
 // Per-card chip counts — the same tiers as the tab pills, tier by tier, so the
@@ -1501,30 +1500,100 @@ function cardUnresolvedCount(p: ContractCard): number {
 // one vocabulary from the tab through the card to the row badge. Their sum is
 // still the tab pill's number.
 function cardNonBreakingCount(p: ContractCard): number {
-  return p.findings.filter((f) => !isBreakingFinding(f) && !isAcked(f) && definitionClass(f) !== 'DESCRIPTION').length;
+  return p.findings.filter((f) => !isBreakingFinding(f) && !isResolved(f) && definitionClass(f) !== 'DESCRIPTION').length;
 }
 function cardDescriptionCount(p: ContractCard): number {
-  return p.findings.filter((f) => !isBreakingFinding(f) && !isAcked(f) && definitionClass(f) === 'DESCRIPTION').length;
+  return p.findings.filter((f) => !isBreakingFinding(f) && !isResolved(f) && definitionClass(f) === 'DESCRIPTION').length;
 }
 function cardNonBreakingTitle(p: ContractCard): string {
   return informationalChipTitle(cardNonBreakingCount(p), 0);
 }
 
-// ─── Local acknowledge (qfix-2026-08-25) ─────────────────────────────────
-// POST /api/findings/{id}/ack|unack — local-only (nothing is sent to the CP);
-// the refreshed /api/findings join carries acked/acked_at back.
-const ackBusy = ref<Record<string, boolean>>({});
-const ackError = ref<Record<string, string>>({});
-async function setAck(f: Finding, ack: boolean) {
-  ackBusy.value = { ...ackBusy.value, [f.id]: true };
-  ackError.value = { ...ackError.value, [f.id]: '' };
+// ─── Resolve — "I have dealt with this" ───────────────────────────────────
+// POST /api/findings/{id}/resolve|reopen. Available on EVERY row, every kind
+// and severity — the earlier local-only control covered informational rows only.
+// A resolved finding is never deleted: it leaves every count, the refreshed
+// /api/findings join carries resolved/resolved_at/resolved_note back, and the
+// server reopens it on its own when the trouble recurs (reopened_after).
+//
+// The inline editor's draft — which finding is open, its typed note, busy,
+// error — lives in ONE ref here, never on the row (the edge-rename
+// poll-clobber discipline, edge-names.ts): the 5s refresh REPLACES the whole
+// findings array, and keying the draft by finding id rather than by object
+// identity means that replacement can never clobber an open editor.
+interface ResolveDraft {
+  id: string;
+  note: string;
+  busy: boolean;
+  error: string;
+}
+const resolveDraft = ref<ResolveDraft | null>(null);
+const resolveBusy = ref<Record<string, boolean>>({});
+const resolveError = ref<Record<string, string>>({});
+// The "it recurred while you were resolving" notice: NEVER an error — the
+// resolve call succeeded, the row is just still open — so it is kept apart
+// from resolveError, which is red.
+const resolveRecurredNotice = ref<Record<string, string>>({});
+// ref_for (declared inside the finding v-for): normalize to a single element
+// on read, same as renameInput above.
+const resolveNoteInput = ref<HTMLTextAreaElement | HTMLTextAreaElement[] | null>(null);
+
+function focusResolveNoteInput() {
+  const el = resolveNoteInput.value;
+  (Array.isArray(el) ? el[0] : el)?.focus();
+}
+
+function startResolve(f: Finding) {
+  resolveDraft.value = { id: f.id, note: '', busy: false, error: '' };
+  resolveRecurredNotice.value = { ...resolveRecurredNotice.value, [f.id]: '' };
+  nextTick(focusResolveNoteInput);
+}
+
+/** Escape and the Cancel button both land here: inert while a save is in
+ *  flight, same guard as cancelRename. */
+function cancelResolve() {
+  if (resolveDraft.value && resolveDraft.value.busy) return;
+  resolveDraft.value = null;
+}
+
+function onResolveNoteInput(ev: globalThis.Event) {
+  if (!resolveDraft.value) return;
+  resolveDraft.value = { ...resolveDraft.value, note: (ev.target as HTMLTextAreaElement).value, error: '' };
+}
+
+async function saveResolve(f: Finding) {
+  if (!resolveDraft.value || resolveDraft.value.busy || resolveDraft.value.id !== f.id) return;
+  const d = (resolveDraft.value = { ...resolveDraft.value, busy: true, error: '' });
+  const note = d.note.trim();
   try {
-    await apiPost(`/api/findings/${encodeURIComponent(f.id)}/${ack ? 'ack' : 'unack'}`);
+    // Always the count the row is showing: the server uses it so an
+    // occurrence the operator never saw is not covered by this resolve.
+    const out = await apiPost<{ finding_id: string; resolved: boolean; resolved_at?: string }>(
+      `/api/findings/${encodeURIComponent(f.id)}/resolve`,
+      { ...(note ? { note } : {}), seen_occurrence_count: f.occurrence_count }
+    );
+    resolveDraft.value = null;
+    if (!out.resolved) {
+      resolveRecurredNotice.value = { ...resolveRecurredNotice.value, [f.id]: RESOLVED_RECURRED_NOTICE };
+    }
     await refresh();
   } catch (e) {
-    ackError.value = { ...ackError.value, [f.id]: e instanceof ApiError ? e.message : COLLECTOR_UNREACHABLE };
+    if (resolveDraft.value) {
+      resolveDraft.value = { ...resolveDraft.value, busy: false, error: e instanceof ApiError ? e.message : COLLECTOR_UNREACHABLE };
+    }
+  }
+}
+
+async function reopenFinding(f: Finding) {
+  resolveBusy.value = { ...resolveBusy.value, [f.id]: true };
+  resolveError.value = { ...resolveError.value, [f.id]: '' };
+  try {
+    await apiPost(`/api/findings/${encodeURIComponent(f.id)}/reopen`);
+    await refresh();
+  } catch (e) {
+    resolveError.value = { ...resolveError.value, [f.id]: e instanceof ApiError ? e.message : COLLECTOR_UNREACHABLE };
   } finally {
-    ackBusy.value = { ...ackBusy.value, [f.id]: false };
+    resolveBusy.value = { ...resolveBusy.value, [f.id]: false };
   }
 }
 
@@ -1684,7 +1753,7 @@ async function refresh() {
     // The relay's own one-sentence message when it answered, and the fixed
     // line when it did not answer at all. `String(e)` put a raw
     // `TypeError: Failed to fetch` in front of the operator (exploratory testing,
-    // 2026-09-02) — the same string the ack path already refuses to show.
+    // 2026-09-02) — the same string the resolve path already refuses to show.
     loadError.value = e instanceof ApiError ? e.message : COLLECTOR_UNREACHABLE;
   }
   await refreshContracts();
@@ -1905,7 +1974,7 @@ watch(tab, (t) => {
         Contracts
         <!-- Three tiers, in order of urgency: red = breaking in live traffic
              now · copper = would break when a newer contract version takes
-             effect · steel = worth knowing (un-acked informational). Each
+             effect · steel = worth knowing (open informational). Each
              carries its own sentence as title AND accessible name, so the
              tier is never conveyed by colour alone. -->
         <span
@@ -2461,10 +2530,10 @@ watch(tab, (t) => {
             </div>
           </div>
 
-          <!-- Acked rows stay in place, dimmed — evidence is never hidden.
+          <!-- Resolved rows stay in place, dimmed — evidence is never hidden.
                The id is the `#contracts/<finding_id>` deep-link anchor: the
                control plane's findings index lands on this exact row. -->
-          <article v-for="f in p.findings" :id="'finding-' + f.id" :key="f.id" class="finding nested" :class="{ acked: isAcked(f), highlight: f.id === highlightFindingId }">
+          <article v-for="f in p.findings" :id="'finding-' + f.id" :key="f.id" class="finding nested" :class="{ resolved: isResolved(f), highlight: f.id === highlightFindingId }">
             <div class="finding-head">
               <!-- TWO labels — the severity (coloured:
                    BREAKING red · WARNING copper · INFO steel) and, separately,
@@ -2580,13 +2649,6 @@ watch(tab, (t) => {
                 <button type="button" class="btn ghost small" @click="goToThread(threadsByFinding[f.id].thread_id)">Threads ›</button>
                 <span v-if="chipError[threadsByFinding[f.id].thread_id]" class="error small-err">{{ chipError[threadsByFinding[f.id].thread_id] }}</span>
               </template>
-              <!-- Acknowledged (DESCRIPTION / NON-BREAKING only): the footer swaps
-                   to the acked line + Undo. Local-only; never touches the CP. -->
-              <template v-else-if="isAcked(f)">
-                <span class="hint-inline">{{ ackedLine(timeAgo(f.acked_at)) }}</span>
-                <button type="button" class="btn ghost small" :disabled="ackBusy[f.id]" :title="UNDO_TITLE" @click="setAck(f, false)">{{ UNDO_LABEL }}</button>
-                <span v-if="ackError[f.id]" class="error small-err">{{ ackError[f.id] }}</span>
-              </template>
               <!-- Evidence rule: local notices NEVER carry a flag control.
                    stale_client only — and it never reaches the Contracts tab
                    (mcpContractFindings excludes it), so this branch is a GUARD,
@@ -2599,12 +2661,9 @@ watch(tab, (t) => {
                    already be in a thread — offering Create thread would be a
                    claim we cannot make. Say what we don't know instead. -->
               <!-- INFO stays local, on every kind. Shown, never
-                   flaggable — the relay and the control plane refuse it too.
-                   Acknowledge stays available: it is local-only. -->
+                   flaggable — the relay and the control plane refuse it too. -->
               <template v-else-if="staysLocalAsInfo(f)">
                 <span class="hint-inline info-local">{{ INFO_STAYS_LOCAL }}</span>
-                <button v-if="isAckable(f)" type="button" class="btn ghost small" :disabled="ackBusy[f.id]" :title="ACK_TITLE" @click="setAck(f, true)">{{ ACK_LABEL }}</button>
-                <span v-if="ackError[f.id]" class="error small-err">{{ ackError[f.id] }}</span>
               </template>
               <template v-else-if="!threadsKnown"><span class="hint-inline">{{ THREAD_STATE_UNKNOWN }}</span></template>
               <!-- definition_change, EVERY class incl. DESCRIPTION:
@@ -2615,8 +2674,6 @@ watch(tab, (t) => {
               <template v-else-if="f.kind === 'definition_change'">
                 <button type="button" class="btn primary flag" @click="openSheet(f)">Flag this</button>
                 <span class="hint-inline">{{ defChangeNoCallSub(providerNameFor(f)) }}</span>
-                <button v-if="isAckable(f)" type="button" class="btn ghost small" :disabled="ackBusy[f.id]" :title="ACK_TITLE" @click="setAck(f, true)">{{ ACK_LABEL }}</button>
-                <span v-if="ackError[f.id]" class="error small-err">{{ ackError[f.id] }}</span>
               </template>
               <!-- The !isLocalNotice guards are redundant with the branch above
                    and deliberately so: a stale_client row must NEVER reach a
@@ -2636,6 +2693,56 @@ watch(tab, (t) => {
               <template v-else-if="!isLocalNotice(f)">
                 <button type="button" class="btn primary flag" @click="openSheet(f)">Flag this</button>
                 <span v-if="!f.source_call_id" class="hint-inline">{{ VERSION_DIFF_NO_CALL }}</span>
+              </template>
+
+              <!-- Resolve — "I have dealt with this". ONE control on EVERY row,
+                   every kind and severity, deliberately OUTSIDE the thread/flag
+                   chain above rather than another v-else-if branch in it: the
+                   earlier local-only control sat inside that chain and only
+                   ever rendered for a row with NO thread, so a row that was
+                   BOTH marked done and later flagged into a thread silently
+                   lost its footer the moment the thread branch started
+                   matching first. Resolve must stay visible on a threaded row
+                   too, so it is a second, independent block — the thread state
+                   above it is never hidden by resolving, and resolving is
+                   never hidden by a thread. stale_client is guarded out anyway
+                   (it never reaches p.findings, mcpContractFindings excludes
+                   it), and the guard is repeated here for the same
+                   belt-and-suspenders reason as the branch above. -->
+              <template v-if="!isLocalNotice(f)">
+                <template v-if="isResolved(f)">
+                  <span class="hint-inline">{{ resolvedLine(timeAgo(f.resolved_at)) }}</span>
+                  <span v-if="f.resolved_note" class="resolved-note">{{ f.resolved_note }}</span>
+                  <button type="button" class="btn ghost small" :disabled="resolveBusy[f.id]" @click="reopenFinding(f)">{{ REOPEN_LABEL }}</button>
+                  <span v-if="resolveError[f.id]" class="error small-err">{{ resolveError[f.id] }}</span>
+                </template>
+                <template v-else-if="resolveDraft && resolveDraft.id === f.id">
+                  <div class="resolve-editor">
+                    <textarea
+                      ref="resolveNoteInput"
+                      class="resolve-note-input"
+                      :value="resolveDraft.note"
+                      :disabled="resolveDraft.busy"
+                      placeholder="Optional note"
+                      @input="onResolveNoteInput"
+                      @keydown.esc.prevent="cancelResolve"
+                    ></textarea>
+                    <div class="resolve-editor-foot">
+                      <span class="resolve-counter">{{ [...resolveDraft.note].length }} / 500</span>
+                      <button type="button" class="btn primary small" :disabled="resolveDraft.busy" @click="saveResolve(f)">{{ RESOLVE_LABEL }}</button>
+                      <button type="button" class="btn ghost small" :disabled="resolveDraft.busy" @click="cancelResolve">{{ CANCEL_LABEL }}</button>
+                    </div>
+                    <span v-if="resolveDraft.error" class="error small-err">{{ resolveDraft.error }}</span>
+                  </div>
+                </template>
+                <template v-else>
+                  <button type="button" class="btn ghost small" @click="startResolve(f)">{{ RESOLVE_LABEL }}</button>
+                  <span v-if="resolveRecurredNotice[f.id]" class="hint-inline">{{ resolveRecurredNotice[f.id] }}</span>
+                </template>
+                <!-- An OPEN row that was resolved and came back: a neutral hint,
+                     never a pill or a recolour — the row keeps its own severity,
+                     that is the point. Never set together with resolved. -->
+                <span v-if="f.reopened_after" class="hint-inline">{{ reopenedLine(f.kind, timeAgo(f.reopened_after)) }}</span>
               </template>
             </div>
           </article>
@@ -3206,7 +3313,8 @@ h2 small { font: 400 12.5px/1.5 var(--f-sans); letter-spacing: 0.04em; text-tran
 .live-btn:focus-visible, .pending-bar:focus-visible, .tr-search:focus-visible, .tr-select:focus-visible, .tr-row:focus-visible,
 .tr-clear:focus-visible, .tr-chk input:focus-visible, .doc-link:focus-visible, .edge-contract-link:focus-visible,
 .pill-link:focus-visible, .uncovered-toggle:focus-visible, .edge-rename-input:focus-visible, .edge-suggest input:focus-visible,
-.th-sort:focus-visible, .edge-name-edit:focus-visible, .edge-chip.drift:focus-visible, .edge-also:focus-visible {
+.th-sort:focus-visible, .edge-name-edit:focus-visible, .edge-chip.drift:focus-visible, .edge-also:focus-visible,
+.resolve-note-input:focus-visible {
   outline: var(--focus-ring); outline-offset: var(--focus-offset);
 }
 /* A thread chip is a state, not a verdict: muted ink with a steel bolt, and
@@ -3367,21 +3475,34 @@ pre.body { background: var(--surface); border: var(--border-w) solid var(--rule)
 
 /* Findings: framed cards. Head row (bolted severity chip · endpoint · rule id ·
    ×N calls) → expected ≠ actual ≠ location in mono cells → detail →
-   correlation → actions. Acknowledged rows dim in place; evidence is never
+   correlation → actions. Resolved rows dim in place; evidence is never
    hidden. */
 .finding { background: var(--surface); border: var(--border-w) solid var(--rule); border-radius: var(--radius); margin-bottom: 14px; transition: border-color var(--dur) var(--ease), color var(--dur) var(--ease); }
 .finding.nested { margin: 12px 0 0; }
-/* Acknowledged: dimmed IN PLACE with the palette, never with opacity — the
+/* Resolved: dimmed IN PLACE with the palette, never with opacity — the
    design's `opacity: .55` put 12–13px evidence at 2.6:1, which hides it for
    low-vision readers while promising it is never hidden. Text drops to
    --ink-soft, the frame to --rule-soft, the chip and its bolts to steel; every
-   pair stays at or above 4.5:1 in both schemes. */
-.finding.acked { border-color: var(--rule-soft); }
-.finding.acked .finding-head, .finding.acked .drift-row, .finding.acked .col { border-color: var(--rule-soft); }
-.finding.acked .endpoint, .finding.acked .v, .finding.acked .v.expected, .finding.acked .v.actual,
-.finding.acked .detail, .finding.acked .corr code { color: var(--ink-soft); }
-.finding.acked .badge { color: var(--ink-soft); border-color: var(--rule); }
-.finding.acked .badge .hx { color: var(--ink-soft); --l: var(--sev-info-bolt); }
+   pair stays at or above 4.5:1 in both schemes. Never red, whatever severity
+   the row itself carries — a resolved breaking row is dealt with, not
+   failing. */
+.finding.resolved { border-color: var(--rule-soft); }
+.finding.resolved .finding-head, .finding.resolved .drift-row, .finding.resolved .col { border-color: var(--rule-soft); }
+.finding.resolved .endpoint, .finding.resolved .v, .finding.resolved .v.expected, .finding.resolved .v.actual,
+.finding.resolved .detail, .finding.resolved .corr code { color: var(--ink-soft); }
+.finding.resolved .badge { color: var(--ink-soft); border-color: var(--rule); }
+.finding.resolved .badge .hx { color: var(--ink-soft); --l: var(--sev-info-bolt); }
+/* The resolve note editor: an optional multi-line note under a live counter,
+   the same neutral surface as the edge-rename editor beside it. */
+.resolve-editor { display: flex; flex-direction: column; gap: 8px; width: 100%; max-width: 480px; }
+.resolve-note-input { width: 100%; min-height: 60px; padding: 6px 8px; border: var(--border-w) solid var(--rule); border-radius: var(--radius); background: var(--surface); color: var(--ink); font: inherit; font-size: 13px; resize: vertical; }
+.resolve-note-input:focus { border-color: var(--ink); }
+.resolve-editor-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* A count, never a to-do or a verdict — neutral ink always, including past
+   the server's 500-char refusal line: the refusal itself is what tells the
+   operator, not a red digit pre-empting it. */
+.resolve-counter { color: var(--ink-soft); font-size: 12px; font-family: var(--f-mono); }
+.resolved-note { color: var(--ink-soft); font-size: 12.5px; }
 /* The #contracts/<finding_id> deep-link target — same accent rule as the
    Threads tab's highlighted row. */
 .finding.highlight { box-shadow: inset var(--border-w-stripe-lg) 0 0 var(--accent); }

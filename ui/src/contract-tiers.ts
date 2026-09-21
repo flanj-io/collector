@@ -27,7 +27,7 @@
 //                            never red. A deprecation notice belongs here for
 //                            the same reason, and the kind lists below already
 //                            put it here.
-//   STEEL  worth knowing   — un-acknowledged informational rows (NON-BREAKING
+//   STEEL  worth knowing   — open informational rows (NON-BREAKING
 //                            and DESCRIPTION). Always the steel outline: copper
 //                            means "would break" now, and two coppers with
 //                            different meanings is exactly the confusion the
@@ -35,7 +35,7 @@
 //
 // Invariant, and the reason this module is worth its own file:
 //
-//     red + copper + steel + acknowledged = the rows listed on the tab
+//     red + copper + steel + resolved = the rows listed on the tab
 //
 // Every row lands in exactly one tier, so the pills can never over- or
 // under-count the list underneath them. countTiers returns all four counts
@@ -46,11 +46,11 @@
 // (breakingNowTitle / wouldBreakTitle / worthKnowingTitle), rendered as both
 // the pill's title and its accessible name.
 
-import { isAcked, isBreakingFinding, informationalCountTitle, descriptionCountTitle } from './mcp';
+import { isResolved, isBreakingFinding, informationalCountTitle, descriptionCountTitle } from './mcp';
 
-/** The four tiers. `acknowledged` is a tier with no pill: it is what the other
+/** The four tiers. `resolved` is a tier with no pill: it is what the other
  *  three do not count, and it is in the union so the invariant is total. */
-export type ContractTier = 'breaking-now' | 'would-break' | 'worth-knowing' | 'acknowledged';
+export type ContractTier = 'breaking-now' | 'would-break' | 'worth-knowing' | 'resolved';
 
 /** The minimum a finding needs to be tiered. Structural on purpose: the
  *  module never sees a whole Finding and cannot come to depend on one. */
@@ -58,11 +58,9 @@ export interface TierFinding {
   kind: string;
   severity: string;
   rule: string;
-  acked?: boolean;
-  /** Nullable like the read API's own column: an ack bound to nothing is not
-   *  an ack (isAcked applies the evidence-version rule). */
-  acked_evidence_version?: string | null;
-  spec_version_to?: string | null;
+  /** True only while the resolution still covers the finding — decided
+   *  server-side (isResolved just reads it). */
+  resolved?: boolean;
 }
 
 /**
@@ -109,21 +107,27 @@ export function isWouldBreakRow(f: Pick<TierFinding, 'kind' | 'severity'>): bool
  * Which tier a row counts in. Exactly one, always — the branches are total,
  * which is what makes the invariant above hold rather than nearly hold.
  *
- * Evidence is asked FIRST, severity second. A breaking-severity row whose
- * evidence is a document is not breaking anything yet, and red is reserved for
- * what is failing in live traffic now.
+ * Resolved is asked FIRST, ahead of would-break and breaking-now: a resolved
+ * row leaves whichever pill it would otherwise have counted towards — a
+ * resolved breaking row leaves red, a resolved version-diff or deprecation
+ * leaves copper, a resolved informational row leaves steel — and moves to the
+ * dimmed band instead. Only then does evidence get asked (ahead-of-live vs
+ * live), then severity: a breaking-severity row whose evidence is a document
+ * is not breaking anything yet, and red is reserved for what is failing in
+ * live traffic now.
  *
  * A row keeps its own severity on its own row badge and stays flaggable: only
  * the SUMMARY it counts towards moves. What changed is which number on the tab
  * strip speaks for it, not what the row says about itself.
  */
 export function tierOf(f: TierFinding): ContractTier {
+  if (isResolved(f)) return 'resolved';
   if (isWouldBreakRow(f)) return 'would-break';
   // An ahead-of-live row that will NOT break anyone (a non-breaking version
   // diff) falls through to the informational tiers below, with everything else
   // that is merely worth knowing.
   if (isBreakingFinding(f) && !isAheadOfLive(f)) return 'breaking-now';
-  return isAcked(f) ? 'acknowledged' : 'worth-knowing';
+  return 'worth-knowing';
 }
 
 /** The three pill counts, the silent fourth tier, and the list they partition. */
@@ -134,15 +138,15 @@ export interface TierCounts {
   wouldBreak: number;
   /** STEEL. */
   worthKnowing: number;
-  /** No pill: acknowledged locally, still listed on the tab. */
-  acknowledged: number;
+  /** No pill: resolved, still listed on the tab, dimmed. */
+  resolved: number;
   /** The rows listed on the tab. Equals the four above, by construction. */
   total: number;
 }
 
 /** Tier every row, in one pass. */
 export function countTiers(rows: readonly TierFinding[]): TierCounts {
-  const counts: TierCounts = { breakingNow: 0, wouldBreak: 0, worthKnowing: 0, acknowledged: 0, total: rows.length };
+  const counts: TierCounts = { breakingNow: 0, wouldBreak: 0, worthKnowing: 0, resolved: 0, total: rows.length };
   for (const f of rows) {
     switch (tierOf(f)) {
       case 'breaking-now':
@@ -155,7 +159,7 @@ export function countTiers(rows: readonly TierFinding[]): TierCounts {
         counts.worthKnowing++;
         break;
       default:
-        counts.acknowledged++;
+        counts.resolved++;
     }
   }
   return counts;
