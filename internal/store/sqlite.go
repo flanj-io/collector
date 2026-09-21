@@ -430,9 +430,16 @@ func (s *sqliteStore) insertFinding(f model.Finding, inbound bool) (err error) {
 			if _, err := tx.Exec(`UPDATE calls SET pinned=1 WHERE id=?`, *sourceCallID); err != nil {
 				return fmt.Errorf("pin source call: %w", err)
 			}
-			// Attribute the drift to the source call's edge (one per signature).
-			if err := bumpEdgeDrift(tx, s.rebind, *sourceCallID); err != nil {
-				return err
+			// Attribute the drift to the source call's edge (one per
+			// signature) — but only for a finding that says the CALL
+			// departed, exactly as `calls.drifted` above. The edge's
+			// drift_count drives the Edges row's DRIFTED chip, and a
+			// deprecation names a call that conformed: counting it there
+			// would put that chip on traffic nothing is wrong with.
+			if marksSourceCallDrifted(f.Kind) {
+				if err := bumpEdgeDrift(tx, s.rebind, *sourceCallID); err != nil {
+					return err
+				}
 			}
 			if err := markFindingInbound(tx, s.rebind, f.ID, *sourceCallID); err != nil {
 				return err

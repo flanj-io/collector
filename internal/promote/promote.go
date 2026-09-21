@@ -230,10 +230,29 @@ func defaultMessage(f model.Finding) string {
 		}
 		return fmt.Sprintf("Your tools/list description for %s changed%s. The schema didn't change, but the wording did, and our agent picks tools from that text. Can you confirm the new wording is intended and stable?", f.Endpoint, on)
 	}
+	// A DEPRECATION is not a defect either, and for a plainer reason than the
+	// wording case above: the provider is KEEPING their contract and telling us
+	// in advance that they will stop. "Contract drift on <endpoint>" would open
+	// a thread accusing them of breaking something that still works — and the
+	// one thing this org actually wants from them is the date and the
+	// replacement, so the default asks for exactly that.
+	if f.Kind == model.KindDeprecation {
+		return fmt.Sprintf("%s %s We still call this, so we would like to plan the move: can you confirm the sunset date and what replaces it?",
+			deprecationLead(f), strings.TrimSpace(f.Detail))
+	}
 	if f.Detail != "" {
 		return fmt.Sprintf("%s on %s. %s", drift(f), f.Endpoint, f.Detail)
 	}
 	return fmt.Sprintf("%s on %s: expected %s, saw %s.", drift(f), f.Endpoint, f.Expected, f.Actual)
+}
+
+// deprecationLead opens a deprecation thread by naming the endpoint, so the
+// sentence stands on its own when the detail is empty.
+func deprecationLead(f model.Finding) string {
+	if strings.TrimSpace(f.Detail) == "" {
+		return fmt.Sprintf("Your published contract marks %s deprecated.", f.Endpoint)
+	}
+	return fmt.Sprintf("Deprecation on %s.", f.Endpoint)
 }
 
 // shortDate renders an ISO-8601 instant the way the sheet does (ui/src/threads.ts
