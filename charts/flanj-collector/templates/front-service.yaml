@@ -27,3 +27,60 @@ spec:
       protocol: TCP
   selector:
     {{- include "flanj-collector.front.selectorLabels" . | nindent 4 }}
+{{- if .Values.service.front.fixedName }}
+---
+{{/*
+An ADDITIONAL Service for the same front pods, at a name that does NOT move with
+the release name.
+
+Why it exists: the Service above is called `<release>-flanj-collector-front`, so
+the address an application has to be given depends on what the operator typed
+after `helm install`. Every piece of documentation then either guesses that
+name or refuses to print one. With a fixed name there is one address that is
+right for everyone who ran the documented install, and it can be printed
+literally — in this chart's NOTES, in the collector's README, and in the SDKs'.
+
+Same selector, same port, same pods: this is a second name, not a second path.
+The release-scoped Service stays, so an existing deployment upgrades with
+nothing to change.
+
+TWO RELEASES IN ONE NAMESPACE COLLIDE HERE, and that is the intended failure:
+Helm refuses the second install because this object already belongs to another
+release, before anything is created. It is a clean, legible refusal rather than
+a silent takeover of an address the first release's applications are using. Set
+`service.front.fixedName: ""` on the second release to turn this Service off —
+its applications then use the release-scoped name above.
+
+The name cannot collide with anything else this chart makes, for any release
+name: every other Service it renders ends in `-front`, `-store`,
+`-store-headless` or `-postgres`. `_validate.tpl` refuses a `fixedName` that
+matches one anyway, since `fullnameOverride` can aim at it. The ServiceAccount
+may share the name (a release literally called `flanj-collector` produces one) —
+different kinds do not collide.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.service.front.fixedName }}
+  labels:
+    {{- include "flanj-collector.labels" . | nindent 4 }}
+    app.kubernetes.io/component: front
+  {{- if or .Values.service.front.annotations .Values.commonAnnotations }}
+  annotations:
+    {{- with .Values.commonAnnotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.service.front.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.front.type }}
+  ports:
+    - name: otlp-http
+      port: {{ int .Values.service.front.port }}
+      targetPort: otlp-http
+      protocol: TCP
+  selector:
+    {{- include "flanj-collector.front.selectorLabels" . | nindent 4 }}
+{{- end }}

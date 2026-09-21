@@ -47,6 +47,11 @@ CHART_FLAGS="${CHART_FLAGS:-}"
 PULL_POLICY="${PULL_POLICY:-Never}"
 CLUSTER="${KIND_CLUSTER:-flanj-helm-smoke}"
 NS="${SMOKE_NAMESPACE:-flanj-smoke}"
+# A second namespace standing in for an application's: the endpoint ConfigMap
+# has to reach it, because a pod can only reference a ConfigMap in its OWN
+# namespace and the collector never lives there.
+APP_NS="${SMOKE_APP_NAMESPACE:-$NS-apps}"
+EXTRA_CM_NAMESPACES=("$APP_NS")
 SKIP_CLUSTER="${SKIP_CLUSTER:-}"
 KEEP="${KEEP_CLUSTER:-}"
 
@@ -110,6 +115,7 @@ if [ -z "$SKIP_CLUSTER" ]; then
 fi
 
 kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+kubectl create namespace "$APP_NS" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 
 # --- 5. the refusal, before anything is installed --------------------------
 say "the chart refuses the tiered shape with no contract token"
@@ -126,7 +132,34 @@ helm template smoke "$CHART" $CHART_FLAGS --set specToken.value=t --set store.re
 helm template smoke "$CHART" $CHART_FLAGS --set specToken.value=t --set store.backend=postgres \
   --set store.dsn.value=x >/dev/null 2>&1 \
   && fail "chart accepted a PVC on the postgres tier"
-echo "  refused: no token (schema + render), sqlite replicas>1, postgres+PVC"
+helm template smoke "$CHART" $CHART_FLAGS --set specToken.value=t \
+  --set service.front.fixedName=smoke-flanj-collector-front >/dev/null 2>&1 \
+  && fail "chart accepted a service.front.fixedName that is already another Service's name — that manifest has two objects with one name"
+echo "  refused: no token (schema + render), sqlite replicas>1, postgres+PVC, a fixedName that collides with another Service"
+
+# --- the fixed front name, at render time ----------------------------------
+# The whole point of the fixed Service is that ONE address can be printed in
+# documentation. If the rendered name or the rendered ConfigMap value ever stops
+# matching what the README and the SDKs print, every quickstart is wrong and
+# nothing else in this script notices.
+say "the documented address renders, and switches off cleanly"
+rendered=$(helm template smoke "$CHART" $CHART_FLAGS -n "$NS" --set specToken.value=t)
+grep -qE '^  name: flanj-collector$' <<<"$rendered" \
+  || fail "no Service/flanj-collector in the default render — the address the README prints does not exist"
+grep -qF "FLANJ_OTLP_ENDPOINT: \"http://flanj-collector.$NS:4318/v1/logs\"" <<<"$rendered" \
+  || fail "ConfigMap/flanj-endpoint does not carry http://flanj-collector.$NS:4318/v1/logs"
+off=$(helm template smoke "$CHART" $CHART_FLAGS -n "$NS" --set specToken.value=t \
+        --set service.front.fixedName= --set endpointConfigMap.enabled=false)
+grep -qE '^  name: flanj-collector$' <<<"$off" \
+  && fail "service.front.fixedName= still rendered the fixed Service"
+grep -q 'flanj-endpoint' <<<"$off" \
+  && fail "endpointConfigMap.enabled=false still rendered the ConfigMap"
+# ...and with the fixed name off, the ConfigMap must fall back to the
+# release-scoped Service rather than naming an address nothing serves.
+fallback=$(helm template smoke "$CHART" $CHART_FLAGS -n "$NS" --set specToken.value=t --set service.front.fixedName=)
+grep -qF "FLANJ_OTLP_ENDPOINT: \"http://smoke-flanj-collector-front.$NS:4318/v1/logs\"" <<<"$fallback" \
+  || fail "with no fixed name, ConfigMap/flanj-endpoint does not fall back to the release-scoped front Service"
+echo "  Service/flanj-collector + ConfigMap/flanj-endpoint render, disable, and fall back"
 
 # install_and_check <keep|drop> <release> [--set ...]
 #
@@ -146,6 +179,7 @@ install_and_check() {
     --set specToken.value=smoke-shared-contract-token \
     --set integration.id=acme-payments \
     --set integration.consumerDisplayName='Smoke Consumer' \
+    --set "endpointConfigMap.namespaces={$APP_NS}" \
     --wait --timeout 5m "$@"
 
   local front="$release-flanj-collector-front"
@@ -196,6 +230,46 @@ install_and_check() {
     sleep 2
   done
   echo "  front -> store hop: calls $before -> $after"
+
+  # 3b. THE DOCUMENTED ADDRESS. Everything the README, the chart NOTES and the
+  #     SDKs print points at `flanj-collector` in the release namespace, not at
+  #     the release-scoped Service above. A name that renders but selects no pod
+  #     is a quickstart that fails on somebody else's cluster, so drive a call
+  #     through THAT Service, by name, and watch it land in the same store.
+  kubectl -n "$NS" get svc flanj-collector >/dev/null 2>&1 \
+    || fail "$release: no Service/flanj-collector — the address every quickstart prints does not resolve"
+  local fixed_port=14319
+  kubectl -n "$NS" port-forward svc/flanj-collector "$fixed_port:4318" >/dev/null 2>&1 &
+  local fixed_pf=$!
+  sleep 3
+  before=$after
+  curl -fsS --max-time 10 -X POST "http://127.0.0.1:$fixed_port/v1/logs" \
+    -H 'Content-Type: application/json' \
+    --data-binary @<(jq 'del(._comment)' contracts/golden-otlp-call.json) \
+    >/dev/null || fail "$release: Service/flanj-collector exists but refused a call — it selects no front pod"
+  kill "$fixed_pf" 2>/dev/null || true
+  i=0
+  while :; do
+    after=$(curl -fsS --max-time 10 http://127.0.0.1:5335/api/health | jq -r '.calls')
+    [ "$after" -gt "$before" ] && break
+    i=$((i+1))
+    [ $i -ge 30 ] && fail "$release: a call sent to Service/flanj-collector never reached the store — the fixed name resolves but routes nowhere"
+    sleep 2
+  done
+  echo "  flanj-collector.$NS -> store hop: calls $before -> $after"
+
+  # ...and the envFrom convenience carries the SAME address, in every namespace
+  # it was asked for. A ConfigMap naming an address nothing serves is worse than
+  # no ConfigMap.
+  local want="http://flanj-collector.$NS:4318/v1/logs"
+  local cm_ns
+  for cm_ns in "$NS" "${EXTRA_CM_NAMESPACES[@]}"; do
+    local got
+    got=$(kubectl -n "$cm_ns" get configmap flanj-endpoint -o jsonpath='{.data.FLANJ_OTLP_ENDPOINT}' 2>/dev/null || true)
+    [ "$got" = "$want" ] \
+      || fail "$release: ConfigMap/flanj-endpoint in $cm_ns is '${got:-missing}', not '$want'"
+  done
+  echo "  ConfigMap/flanj-endpoint: $want in $NS ${EXTRA_CM_NAMESPACES[*]:-}"
 
   # 4. the silent failure. A front with a wrong token is Ready and detects
   #    nothing; it says so once per refresh, in its own log, and nowhere else.
@@ -295,6 +369,7 @@ helm upgrade sq "$CHART" $CHART_FLAGS -n "$NS" \
   --set image.repository="$IMAGE_REPO" --set image.tag="$IMAGE_TAG" --set image.pullPolicy="$PULL_POLICY" \
   --set specToken.value=smoke-shared-contract-token \
   --set store.persistence.size=1Gi \
+  --set "endpointConfigMap.namespaces={$APP_NS}" \
   --set collector.replicas=3 --wait --timeout 5m
 kubectl -n "$NS" rollout status deploy/sq-flanj-collector-front --timeout=120s
 [ "$(kubectl -n "$NS" get deploy sq-flanj-collector-front -o jsonpath='{.status.readyReplicas}')" = "3" ] \

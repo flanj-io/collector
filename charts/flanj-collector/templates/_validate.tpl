@@ -73,6 +73,27 @@ honours).
   {{- end -}}
 {{- end -}}
 
+{{/*
+The fixed-name front Service must not be aimed at a name this chart already
+gives another Service. It cannot happen by accident — every other Service here
+ends in -front, -store, -store-headless or -postgres, so the default
+`flanj-collector` is safe for every release name — but `fullnameOverride` plus a
+hand-picked `fixedName` can aim at one, and the result would be two objects with
+one name in a single manifest: an install that half-applies.
+*/}}
+{{- if .Values.service.front.fixedName -}}
+  {{- $taken := list
+        (include "flanj-collector.front.fullname" .)
+        (include "flanj-collector.store.fullname" .)
+        (include "flanj-collector.store.headlessName" .)
+        (include "flanj-collector.postgres.fullname" .) -}}
+  {{- if has .Values.service.front.fixedName $taken -}}
+  {{- fail (printf "%s\n%s\n"
+    (printf "flanj-collector: service.front.fixedName=%q is already the name of another Service this chart renders (%s)." .Values.service.front.fixedName (join ", " $taken))
+    "  Pick a different name, or set service.front.fixedName=\"\" and use the release-scoped Service.") -}}
+  {{- end -}}
+{{- end -}}
+
 {{- if and .Values.controlPlane.deployToken.value .Values.controlPlane.deployToken.existingSecret -}}
 {{- fail "flanj-collector: set controlPlane.deployToken.value OR controlPlane.deployToken.existingSecret, not both." -}}
 {{- end -}}
