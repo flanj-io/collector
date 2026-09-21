@@ -3,7 +3,9 @@ package drift
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,18 +52,59 @@ func DetectVersionDiffData(v1, v2 []byte, integration string) ([]model.Finding, 
 	return DetectVersionDiff(p1, p2, integration)
 }
 
-// DetectVersionDiff diffs spec v1 -> v2 and emits one breaking Finding per
-// backward-incompatible change (oasdiff Level==ERR -> severity="breaking").
-// source_call_id is null — the drift is in the documents, not in a call.
-func DetectVersionDiff(pathV1, pathV2, integration string) ([]model.Finding, error) {
-	loader := openapi3.NewLoader()
-	loader.IsExternalRefsAllowed = true
+// deprecationAnnouncements are the oasdiff change ids that ANNOUNCE a
+// deprecation — a surface marked deprecated, with or without a sunset date.
+// They are emitted as severity="warning" findings (CONTRACTS §4) rather than
+// dropped with the rest of the sub-ERR output.
+//
+// Why they need naming at all: oasdiff grades these INFO, because a
+// deprecation breaks no caller on the day it is published. But it is the
+// earliest honest warning a consumer ever gets — providers rarely break you
+// overnight, they deprecate, give a window, then remove — and dropping it
+// meant the collector said nothing until the removal, when the window had
+// already closed. So the window is the finding, and WARNING is its tier.
+//
+// Only this family is promoted. The rest of oasdiff's sub-ERR output stays
+// dropped: lifting every WARN and INFO would bury these under exactly the
+// noise they exist to stand out from.
+//
+// The `*-reactivated` ids are deliberately absent. A deprecation being LIFTED
+// constrains nobody and breaks nothing, and CONTRACTS §4 already fixes that
+// posture for its mirror image ("Additive changes are not reported"). A
+// warning that carries good news costs the tier its meaning.
+//
+// The sunset ids oasdiff already grades ERR — a missing, unparseable or
+// too-near sunset date, a deleted one, a removal before one — are NOT here and
+// are untouched. Those describe a promise already broken, not one being made,
+// and they keep landing as severity="breaking" through the ERR path below.
+var deprecationAnnouncements = map[string]bool{
+	checker.EndpointDeprecatedId:                   true,
+	checker.EndpointDeprecatedWithSunsetId:         true,
+	checker.RequestParameterDeprecatedId:           true,
+	checker.RequestPropertyDeprecatedId:            true,
+	checker.RequestPropertyDeprecatedWithSunsetId:  true,
+	checker.ResponsePropertyDeprecatedId:           true,
+	checker.ResponsePropertyDeprecatedWithSunsetId: true,
+}
 
-	s1, err := load.NewSpecInfo(loader, load.NewSource(pathV1))
+// DetectVersionDiff diffs spec v1 -> v2 and emits one Finding per reported
+// change: a backward-incompatible one as severity="breaking" (oasdiff
+// Level==ERR), and a deprecation ANNOUNCEMENT as severity="warning"
+// (deprecationAnnouncements above).
+// source_call_id is null — the drift is in the documents, not in a call.
+//
+// Note what this can and cannot see: oasdiff's deprecation checks fire only
+// where the `deprecated` flag CHANGED between the two documents, so this is
+// the transition — "the provider just deprecated X" — and never the standing
+// state. A contract that arrived already carrying `deprecated: true` produces
+// nothing here. The standing state is the live-vs-spec path's job, where it is
+// judged against the org's own traffic.
+func DetectVersionDiff(pathV1, pathV2, integration string) ([]model.Finding, error) {
+	s1, err := loadSelfContained(pathV1)
 	if err != nil {
 		return nil, fmt.Errorf("load spec v1: %w", err)
 	}
-	s2, err := load.NewSpecInfo(loader, load.NewSource(pathV2))
+	s2, err := loadSelfContained(pathV2)
 	if err != nil {
 		return nil, fmt.Errorf("load spec v2: %w", err)
 	}
@@ -86,7 +129,16 @@ func DetectVersionDiff(pathV1, pathV2, integration string) ([]model.Finding, err
 			checker.ResponseMediaTypeEnumValueRemovedId: checker.ERR,
 		}),
 	)
-	changes := checker.CheckBackwardCompatibility(config, diffReport, sources)
+	// INFO, not the default. checker.CheckBackwardCompatibility is
+	// CheckBackwardCompatibilityUntilLevel(…, WARN), which drops everything
+	// below WARN before a caller sees it — and oasdiff grades the whole
+	// deprecation family INFO, because a deprecation breaks nobody on the day
+	// it is published. Asking only down to WARN therefore returned the family
+	// as an empty set, not as changes to be filtered: the old `< ERR` skip
+	// below was never what discarded them. Everything sub-ERR that is not a
+	// deprecation announcement is still dropped in the loop, so widening the
+	// request widens nothing that is reported.
+	changes := checker.CheckBackwardCompatibilityUntilLevel(config, diffReport, sources, checker.INFO)
 
 	localizer := checker.NewDefaultLocalizer()
 	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00")
@@ -95,24 +147,48 @@ func DetectVersionDiff(pathV1, pathV2, integration string) ([]model.Finding, err
 
 	var findings []model.Finding
 	for _, c := range changes {
+		// ERR is breaking; a deprecation announcement is a warning; everything
+		// else sub-ERR is dropped as before.
+		severity := model.SeverityBreaking
+		kind := model.KindVersionDiff
 		if c.GetLevel() < checker.ERR {
-			continue // v0 emits only breaking (ERR) changes
+			if !deprecationAnnouncements[c.GetId()] {
+				continue
+			}
+			// A deprecation is its own kind, not a warning-severity version
+			// diff: what it reports is that a surface is GOING AWAY, which is a
+			// different question from how the document changed.
+			severity = model.SeverityWarning
+			kind = model.KindDeprecation
 		}
 		endpoint := ""
 		if ac, ok := c.(checker.ApiChange); ok {
 			endpoint = ac.Operation + " " + ac.Path
 		}
 		fieldPath := versionDiffFieldPath(c.GetArgs())
+		// A breaking change is described by the two document VERSIONS it moved
+		// between; a deprecation is described by the deprecation itself, and by
+		// the sunset date when the provider published one. The date is the half
+		// that makes the warning actionable rather than merely true, so it is
+		// stated here rather than left for a reader to find in the prose —
+		// which is also what CONTRACTS §4 promises of both arms.
+		expected, actual := "spec "+fromV, "spec "+toV
+		if kind == model.KindDeprecation {
+			expected, actual = "not deprecated", "deprecated"
+			if d := sunsetFromArgs(c.GetArgs()); d != "" {
+				actual = "deprecated, sunset " + d
+			}
+		}
 		vf := model.Finding{
 			SchemaVersion:   model.SchemaVersion,
 			ID:              otlpattr.NewID(),
-			Kind:            model.KindVersionDiff,
-			Severity:        model.SeverityBreaking,
+			Kind:            kind,
+			Severity:        severity,
 			Integration:     integration,
 			Endpoint:        endpoint,
 			FieldPath:       model.Ptr(fieldPath),
-			Expected:        "spec " + fromV,
-			Actual:          "spec " + toV,
+			Expected:        expected,
+			Actual:          actual,
 			Rule:            c.GetId(),
 			SpecVersionFrom: model.Ptr(fromV),
 			SpecVersionTo:   model.Ptr(toV),
@@ -127,6 +203,57 @@ func DetectVersionDiff(pathV1, pathV2, integration string) ([]model.Finding, err
 	}
 	return findings, nil
 }
+
+// loadSelfContained loads ONE contract document from a local file and lets it
+// read nothing else: no `$ref` to a URL, to a file:// URI, to an absolute or
+// relative path, or to the other version lying beside it.
+//
+// A bound contract is written by the provider, or by whoever answered a
+// fetched URL, so every location in it is chosen by someone else. Following
+// one would be a request to an address the document picked — outside the
+// contract-fetch destination policy, which judges only the URL an operator
+// approved — or a read of the collector's own disk whose content then surfaces
+// in a finding's detail. Nothing legitimate needs it: a document only gets
+// bound after the strict parse (LoadSpecData) has refused external references,
+// so every stored contract is self-contained by construction. This is the same
+// rule held a second time, so the diff stays safe whatever a future caller
+// hands it.
+//
+// Three things enforce it, because no single one covers every route:
+//   - the path must be what oasdiff treats as a plain file. It picks a loading
+//     strategy from the SHAPE of the string: a URL is fetched, and
+//     `<rev>:<path>` is read out of git through a reader of oasdiff's own,
+//     which would replace the one below;
+//   - the reader serves that one file and refuses every other location.
+//     kin-openapi stops enforcing IsExternalRefsAllowed as soon as any
+//     ReadFromURIFunc is installed (the reader then owns the policy), so the
+//     reader is an allowlist of exactly one entry rather than a filter;
+//   - IsExternalRefsAllowed stays false regardless, so removing the reader
+//     falls back to kin-openapi's own refusal instead of its default reader,
+//     which fetches http(s) and opens any local path.
+//
+// Each document gets a loader of its own: the allowlist is per document.
+func loadSelfContained(path string) (*load.SpecInfo, error) {
+	source := load.NewSource(path)
+	if !source.IsFile() {
+		return nil, fmt.Errorf("%q is not a local file", path)
+	}
+	root := filepath.ToSlash(path)
+
+	loader := openapi3.NewLoader()
+	loader.IsExternalRefsAllowed = false
+	loader.ReadFromURIFunc = func(_ *openapi3.Loader, location *url.URL) ([]byte, error) {
+		if location.Scheme != "" || location.Host != "" || location.Path != root {
+			return nil, errExternalRef
+		}
+		return os.ReadFile(path)
+	}
+	return load.NewSpecInfo(loader, source)
+}
+
+// errExternalRef names the rule and not the location: the reference is the
+// document author's text, and this error is logged.
+var errExternalRef = errors.New("the document references another document; a contract is diffed as one self-contained document")
 
 // maxFieldPath is the frozen per-field cap on `field_path` (CONTRACTS §5).
 const maxFieldPath = 256
@@ -171,4 +298,36 @@ func versionDiffFieldPath(args []any) string {
 	sum := sha256.Sum256([]byte(p))
 	digest := hex.EncodeToString(sum[:6])
 	return string(r[:maxFieldPath-len(digest)-1]) + "…" + digest
+}
+
+// sunsetFromArgs finds the sunset date among a change's arguments, or "" when
+// it carries none.
+//
+// The arguments are the locale-independent substitutions in the change's
+// message ("request property %s deprecated with sunset date %s"), so the date
+// is in there — but its POSITION differs per rule, and a position is the kind
+// of thing a dependency bump silently renumbers. Matching the SHAPE instead
+// costs nothing and cannot be renumbered: a bare YYYY-MM-DD is unambiguous
+// among the names, types and status codes that make up the rest.
+func sunsetFromArgs(args []any) string {
+	for _, a := range args {
+		s := strings.TrimSpace(fmt.Sprint(a))
+		if len(s) != 10 || s[4] != '-' || s[7] != '-' {
+			continue
+		}
+		digits := true
+		for i, r := range s {
+			if i == 4 || i == 7 {
+				continue
+			}
+			if r < '0' || r > '9' {
+				digits = false
+				break
+			}
+		}
+		if digits {
+			return s
+		}
+	}
+	return ""
 }

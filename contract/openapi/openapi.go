@@ -24,6 +24,15 @@ import (
 // LoadFile reads and validates an OpenAPI document from disk.
 // (Moved verbatim from internal/drift.LoadSpecFile — the collector's drift
 // detector delegates here; behavior is identical.)
+//
+// It FOLLOWS external references, and is for a document the operator wrote and
+// placed on this machine themselves — the collector's own `self_spec_path` —
+// where a contract split across sibling files is legitimate and every location
+// in it was chosen by the person running the process. Never hand it a document
+// that arrived from somewhere else (an upload, bytes fetched from a URL, a
+// stored contract written back to disk): a reference in one of those is a
+// request to an address, or a read of a local file, that its AUTHOR picked.
+// Those go through LoadData, which refuses every reference out of the document.
 func LoadFile(path string) (*openapi3.T, error) {
 	loader := openapi3.NewLoader()
 	loader.IsExternalRefsAllowed = true
@@ -39,6 +48,13 @@ func LoadFile(path string) (*openapi3.T, error) {
 
 // LoadData parses an OpenAPI document from bytes.
 // (Moved verbatim from internal/drift.LoadSpecData.)
+//
+// It is the STRICT parse: the document must be self-contained. A `$ref` to a
+// URL, a file:// URI or an absolute or relative path is refused before anything
+// is read, so parsing a document somebody else wrote makes no request and opens
+// no file. That holds only while the loader has no ReadFromURIFunc —
+// kin-openapi stops enforcing IsExternalRefsAllowed once one is installed, and
+// the reader then owns the policy (loaddata_external_refs_test.go pins it).
 func LoadData(b []byte) (*openapi3.T, error) {
 	loader := openapi3.NewLoader()
 	doc, err := loader.LoadFromData(b)

@@ -450,8 +450,14 @@ func (p *postgresStore) insertFinding(f model.Finding, inbound bool) (err error)
 			if _, err := tx.Exec(p.rebind(`UPDATE calls SET pinned=1 WHERE id=?`), *sourceCallID); err != nil {
 				return fmt.Errorf("pin source call: %w", err)
 			}
-			if err := bumpEdgeDrift(tx, p.rebind, *sourceCallID); err != nil {
-				return err
+			// Only a finding that says the CALL departed may move the edge's
+			// drift_count, exactly as `calls.drifted` above — that count
+			// drives the Edges row's DRIFTED chip, and a deprecation names a
+			// call that conformed.
+			if marksSourceCallDrifted(f.Kind) {
+				if err := bumpEdgeDrift(tx, p.rebind, *sourceCallID); err != nil {
+					return err
+				}
 			}
 			if err := markFindingInbound(tx, p.rebind, f.ID, *sourceCallID); err != nil {
 				return err

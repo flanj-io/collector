@@ -254,3 +254,128 @@ func TestLatePin_DoesNotMarkNonDriftKinds(t *testing.T) {
 		}
 	})
 }
+
+// TestDeprecationPinsItsCallWithoutMarkingItDrifted is the store half of the
+// deprecation rule (CONTRACTS §4): the evidence is kept, and nothing is
+// accused.
+//
+// A deprecation names a call — that call is what proves the org actually USES
+// the surface going away, so it must be PINNED and survive the rolling window
+// like any other evidence. But it must not be marked `drifted`, and the edge's
+// `drift_count` must not move: the operation is still declared and the response
+// still conformed, so the call departed from nothing. Painting it red would
+// accuse a provider of breaking a promise they are in fact keeping while giving
+// notice of ending it.
+//
+// Both halves fall out of `deprecation` being its own KIND, outside
+// model.PerCallDriftKinds — this pins that, so a future edit that folds it back
+// into a per-call kind fails here rather than in a screenshot.
+func TestDeprecationPinsItsCallWithoutMarkingItDrifted(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, b *testBackend) {
+		s := b.open(t, 50, 0)
+		defer s.Close()
+
+		call := makeEdgeCall(2200, "api.acme.test", "client", "external")
+		if err := s.InsertCall(call); err != nil {
+			t.Fatalf("insert call: %v", err)
+		}
+		before, err := s.ListEdges(false)
+		if err != nil {
+			t.Fatalf("list edges: %v", err)
+		}
+		driftBefore := map[string]int{}
+		for _, e := range before {
+			driftBefore[e.PeerHost] = e.DriftCount
+		}
+
+		f := driftFinding("0191e8c4-dddd-7000-8000-000000000001", call.ID)
+		f.Kind = model.KindDeprecation
+		f.Severity = model.SeverityWarning
+		f.Rule = "deprecated-operation"
+		f.Signature = f.ComputeSignature()
+		if err := s.InsertFinding(f); err != nil {
+			t.Fatalf("insert deprecation finding: %v", err)
+		}
+
+		got, ok, err := s.GetCall(call.ID)
+		if err != nil || !ok {
+			t.Fatalf("GetCall(%s) ok=%v err=%v", call.ID, ok, err)
+		}
+		if got.Drifted {
+			t.Error("a deprecation marked its call drifted — the call conformed; " +
+				"only a per-call drift KIND may set that flag")
+		}
+
+		after, err := s.ListEdges(false)
+		if err != nil {
+			t.Fatalf("list edges: %v", err)
+		}
+		for _, e := range after {
+			if e.DriftCount != driftBefore[e.PeerHost] {
+				t.Errorf("edge %s drift_count moved %d -> %d on a deprecation — the Edges row "+
+					"would show a DRIFTED chip for traffic that conformed",
+					e.PeerHost, driftBefore[e.PeerHost], e.DriftCount)
+			}
+		}
+
+		// The evidence half, asked the way it matters rather than by reading a
+		// column: a pinned call OUTLIVES the rolling window. Push far more
+		// traffic through than the window holds; the deprecated call must
+		// still be there.
+		for i := 0; i < 60; i++ {
+			other := makeEdgeCall(3000+i, "api.acme.test", "client", "external")
+			if err := s.InsertCall(other); err != nil {
+				t.Fatalf("insert filler %d: %v", i, err)
+			}
+		}
+		if _, ok, err := s.GetCall(call.ID); err != nil || !ok {
+			t.Errorf("the deprecated call was evicted (ok=%v err=%v) — the one call proving this "+
+				"org USES the surface going away must be pinned as evidence", ok, err)
+		}
+	})
+}
+
+// TestLatePin_DeprecationDoesNotBumpTheEdge is the other arrival order of the
+// same rule. A finding may land before its call (a front re-sending, a retried
+// batch), and latePin repairs the attribution the insert could not make. That
+// repair counts findings by kind, so it has to use the SAME list — a kind
+// honoured on one path and not the other makes the Edges row's DRIFTED chip
+// depend on which record happened to arrive first.
+func TestLatePin_DeprecationDoesNotBumpTheEdge(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, b *testBackend) {
+		s := b.open(t, 50, 0)
+		defer s.Close()
+		call := makeEdgeCall(2300, "api.globex.test", "client", "external")
+
+		f := driftFinding("0191e8c4-dddd-7000-8000-000000000002", call.ID)
+		f.Kind = model.KindDeprecation
+		f.Severity = model.SeverityWarning
+		f.Rule = "deprecated-operation"
+		f.Signature = f.ComputeSignature()
+		if err := s.InsertFinding(f); err != nil {
+			t.Fatalf("insert deprecation before its call: %v", err)
+		}
+		if err := s.InsertCall(call); err != nil {
+			t.Fatalf("insert late call: %v", err)
+		}
+
+		got, ok, err := s.GetCall(call.ID)
+		if err != nil || !ok {
+			t.Fatalf("GetCall(%s) ok=%v err=%v", call.ID, ok, err)
+		}
+		if got.Drifted {
+			t.Error("the late repair marked a deprecation's call drifted — it must mirror " +
+				"InsertFinding's kind list exactly, in both arrival orders")
+		}
+		edges, err := s.ListEdges(false)
+		if err != nil {
+			t.Fatalf("list edges: %v", err)
+		}
+		for _, e := range edges {
+			if e.PeerHost == "api.globex.test" && e.DriftCount != 0 {
+				t.Errorf("edge %s drift_count = %d after a late deprecation, want 0",
+					e.PeerHost, e.DriftCount)
+			}
+		}
+	})
+}

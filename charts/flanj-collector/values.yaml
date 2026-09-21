@@ -234,9 +234,48 @@ service:
     type: ClusterIP
     port: 4318
     annotations: {}
+    # An ADDITIONAL Service for the same front pods, at a name that does not
+    # move with the release name — so there is ONE address that is right for
+    # everyone who ran the documented install, and documentation can print it
+    # literally instead of guessing what you called the release:
+    #
+    #   http://flanj-collector.<release namespace>:4318/v1/logs
+    #
+    # The release-scoped Service (`<release>-flanj-collector-front`) stays and
+    # keeps working; this is a second name for the same pods, so an existing
+    # deployment upgrades with nothing to change.
+    #
+    # TWO RELEASES IN ONE NAMESPACE COLLIDE ON IT. That is deliberate: Helm
+    # refuses the second install outright, because the object belongs to the
+    # first release — a clean refusal before anything is created, rather than
+    # one release quietly taking over an address the other's applications are
+    # already using. Set this to "" on the second release (its applications then
+    # use the release-scoped name) or install it in its own namespace.
+    fixedName: flanj-collector
   # Intra-cluster only: :4318 front->store ingest, :5337 the contract read.
   store:
     annotations: {}
+
+# -- ConfigMap/flanj-endpoint ------------------------------------------------
+# One key, FLANJ_OTLP_ENDPOINT, holding the same address the fixed Service
+# serves — for teams who would rather write
+#
+#   envFrom:
+#     - configMapRef: { name: flanj-endpoint }
+#
+# on their workload than the literal string. A POD CAN ONLY REFERENCE A
+# CONFIGMAP IN ITS OWN NAMESPACE, and this chart installs into the collector's,
+# so list every application namespace that wants one. They must already exist
+# (`--create-namespace` creates the release's and nothing else) and the
+# installing credential must be allowed to write there.
+#
+# The release namespace is always included. The value follows
+# service.front.fixedName, falling back to the release-scoped front Service when
+# that is empty. Two releases in one namespace collide on this name too — set
+# enabled: false on the second.
+endpointConfigMap:
+  enabled: true
+  namespaces: []
 
 # -- NetworkPolicy (optional) ------------------------------------------------
 # Restricts the store pod's two cluster ports to the front pods of this

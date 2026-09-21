@@ -126,3 +126,105 @@ func TestRedactSnapshotServerCommand(t *testing.T) {
 		t.Errorf("a malformed command carried a card number past the floor: %s", got)
 	}
 }
+
+// callRecord is a call record carrying the given route and target, the shape
+// any OTLP sender can deliver.
+func callRecord(route, target string) plog.LogRecord {
+	lr := plog.NewLogRecord()
+	lr.Attributes().PutStr(otlpattr.AttrRecordType, otlpattr.RecordTypeCall)
+	lr.Attributes().PutStr(otlpattr.AttrRoute, route)
+	lr.Attributes().PutStr(otlpattr.AttrTarget, target)
+	return lr
+}
+
+func strAttr(lr plog.LogRecord, key string) string {
+	v, _ := lr.Attributes().Get(key)
+	return v.Str()
+}
+
+// TestRedactRouteAttribute: `flanj.http.route` is stored and shown beside the
+// target, so the floor must cover it for any sender — not only the SDKs, which
+// redact it at source. A raw email or card number carried as a path segment is
+// tokenised, the fired patterns reach flanj.redaction.patterns (canonical
+// order) and flanj.redaction.applied flips, and route gets no field records.
+func TestRedactRouteAttribute(t *testing.T) {
+	p := newRedactionProcessor(&Config{})
+	lr := callRecord("/v1/users/jane.doe@example.com/cards/4111111111111111", "/v1/users/x")
+	lr.Attributes().PutStr(otlpattr.AttrRedactPatterns, `["PAN"]`)
+
+	p.redactRecord(lr)
+
+	route := strAttr(lr, otlpattr.AttrRoute)
+	if strings.Contains(route, "jane.doe") || strings.Contains(route, "4111") ||
+		!strings.Contains(route, "⟦REDACTED:EMAIL⟧") || !strings.Contains(route, "⟦REDACTED:PAN⟧") {
+		t.Fatalf("route not redacted: %s", route)
+	}
+	if a, _ := lr.Attributes().Get(otlpattr.AttrRedactApplied); !a.Bool() {
+		t.Errorf("redaction.applied not set")
+	}
+	if got := strAttr(lr, otlpattr.AttrRedactPatterns); got != `["EMAIL","PAN"]` {
+		t.Errorf("patterns = %s, want [\"EMAIL\",\"PAN\"] (canonical order, SDK's set kept)", got)
+	}
+	if _, ok := lr.Attributes().Get(otlpattr.AttrRedactFields); ok {
+		t.Errorf("route must carry no field records")
+	}
+
+	// Idempotent: a second pass neither changes the route nor double-wraps.
+	p.redactRecord(lr)
+	if again := strAttr(lr, otlpattr.AttrRoute); again != route {
+		t.Errorf("second pass mutated the route:\n  %s\n  %s", route, again)
+	}
+}
+
+// TestRedactRouteCleanAndMCPUnchanged: routes with nothing to redact — a
+// templated HTTP route and an MCP route (`/<tool.name>`) — pass through
+// byte-identical and set no bookkeeping.
+func TestRedactRouteCleanAndMCPUnchanged(t *testing.T) {
+	p := newRedactionProcessor(&Config{})
+	for _, route := range []string{"/v1/users/{id}/profile", "/create_refund", "/"} {
+		lr := callRecord(route, route)
+		p.redactRecord(lr)
+		if got := strAttr(lr, otlpattr.AttrRoute); got != route {
+			t.Errorf("route %q mutated to %q", route, got)
+		}
+		if _, ok := lr.Attributes().Get(otlpattr.AttrRedactApplied); ok {
+			t.Errorf("route %q: a clean route must not set redaction.applied", route)
+		}
+	}
+}
+
+// TestRouteScanMatchesTargetScan pins how the floor treats a `cvv=123` path
+// segment. That verdict depends on the query string beside it: with a query
+// the segment is tokenised, without one it is left alone — in the target as
+// much as in the route. So scanning `route` alone is exactly as strong as
+// scanning `target` for the same string, but NOT as strong as the target of
+// the same call when the sender's raw target carries a query and its raw route
+// is the bare path: the target comes back tokenised and the route does not.
+// `route` is deliberately not derived from the target (a sender may send a
+// templated route that is not a prefix of it); the residual gap is the floor's
+// own context-dependence and is reported, not fixed, here.
+func TestRouteScanMatchesTargetScan(t *testing.T) {
+	p := newRedactionProcessor(&Config{})
+
+	// Same string, judged the same in either attribute.
+	for _, path := range []string{"/v1/pay/cvv=123", "/v1/pay/cvv=123?x=1"} {
+		lr := callRecord(path, path)
+		p.redactRecord(lr)
+		if r, tg := strAttr(lr, otlpattr.AttrRoute), strAttr(lr, otlpattr.AttrTarget); r != tg {
+			t.Errorf("route and target of %q are judged differently: route %q, target %q", path, r, tg)
+		}
+	}
+
+	// With a query the segment is tokenised — in the route too.
+	lr := callRecord("/v1/pay/cvv=123?x=1", "/v1/pay/cvv=123?x=1")
+	p.redactRecord(lr)
+	if got := strAttr(lr, otlpattr.AttrRoute); got != "/v1/pay/cvv=⟦REDACTED:CVV⟧?x=1" {
+		t.Errorf("route with a query not tokenised: %s", got)
+	}
+
+	// The residual: a bare route beside a target that has the query.
+	lr = callRecord("/v1/pay/cvv=123", "/v1/pay/cvv=123?x=1")
+	p.redactRecord(lr)
+	t.Logf("bare route %q beside target %q (the floor's context-dependence, reported in the PR)",
+		strAttr(lr, otlpattr.AttrRoute), strAttr(lr, otlpattr.AttrTarget))
+}

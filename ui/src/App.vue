@@ -33,6 +33,7 @@ import {
   hasFetchedSource,
   contractOrigin,
   provenanceWord,
+  endpointCount,
   findingBelongsToContract,
   mcpOnlyHosts,
   contractsByHost,
@@ -44,7 +45,8 @@ import {
   uncoveredHeading,
   uncoveredProviders,
   providerContractsEmptyText,
-  MCP_NEEDS_NO_SETUP
+  MCP_NEEDS_NO_SETUP,
+  versionLabel
 } from './contracts';
 import {
   THEME_FLIP_NOTICE_KEY,
@@ -70,7 +72,6 @@ import {
   afterColLabel,
   beforeColLabel,
   breakingChipLabel,
-  breakingCountTitle,
   defChangeDetail,
   defChangeNoCallSub,
   definitionClass,
@@ -78,10 +79,8 @@ import {
   changeKindOf,
   descriptionChipLabel,
   descriptionChipTitle,
-  descriptionCountTitle,
   informationalChipLabel,
   informationalChipTitle,
-  informationalCountTitle,
   isAckable,
   isAcked,
   isBreakingFinding,
@@ -143,13 +142,61 @@ import {
   type Coverage,
   type CoverageVerdict
 } from './coverage';
+import {
+  breakingNowTitle,
+  countTiers,
+  tabAriaLabel,
+  unresolvedCount,
+  wouldBreakChipLabel,
+  wouldBreakTitle,
+  worthKnowingTitle,
+  type TierCounts
+} from './contract-tiers';
+import {
+  ALSO_CALLS_YOU,
+  INBOUND_CAPTION,
+  INBOUND_EMPTY,
+  LOCAL_MCP_CAPTION,
+  LOCAL_MCP_SUB,
+  NEW_LABEL,
+  NOTHING_VALIDATED_CLAUSE,
+  OUTBOUND_CAPTION,
+  OUTBOUND_EMPTY,
+  UNKNOWN_DIRECTION_CAPTION,
+  UNKNOWN_DIRECTION_SUB,
+  VIEW_CATALOGUE_LABEL,
+  YOU_ALSO_CALL_THEM,
+  ariaSort,
+  driftChipTitle,
+  driftLabel,
+  edgeRowId,
+  edgeStatus,
+  inboundCaptionSub,
+  isDirectionUnknown,
+  isInbound,
+  isNew,
+  newBadgeIsInformative,
+  INBOUND_DRIFT_CLAUSE,
+  isOutbound,
+  nextSort,
+  outboundCaptionSub,
+  pluralCount,
+  sortEdges,
+  twinEdge,
+  type EdgeSortKey,
+  type EdgeSortState
+} from './edges-view';
 import { headlineFor } from './headline';
-import { isoStamp } from './time';
+import { isoDate, isoStamp } from './time';
 import type { Correlation, Finding, FlagResult, Health, RedactedCall } from './types';
 
 interface Edge {
   peer_host: string;
-  direction: 'client' | 'server';
+  // Widened past the two known values on purpose: the wire carries whatever
+  // string the SDK stamped, and a row whose direction is neither `client` nor
+  // `server` must still land in the "Direction not recorded" table rather
+  // than vanish once the two known directions each get their own table.
+  direction: string;
   role: 'consumer' | 'provider';
   class: string;
   first_seen: string;
@@ -480,7 +527,7 @@ async function openChipThread(threadId: string) {
     const out = await openThreadInNewTab(threadId);
     if (!out.opened) chipError.value = { ...chipError.value, [threadId]: 'Your browser blocked the new tab — use View thread on the Threads tab.' };
   } catch (e) {
-    chipError.value = { ...chipError.value, [threadId]: e instanceof ApiError ? e.message : "Couldn't reach the control plane." };
+    chipError.value = { ...chipError.value, [threadId]: e instanceof ApiError ? e.message : "Couldn't reach Flanj." };
   } finally {
     openingThread.value = null;
   }
@@ -599,14 +646,132 @@ const callsById = computed(() => {
   return m;
 });
 
-// Stable row order: the store returns ORDER BY last_seen DESC, which re-sorts the
-// rows on every 5s poll and moves buttons out from under the cursor. Sort
-// client-side by registrable domain (then host) so a row keeps its place.
-const byDomain = (a: Edge, b: Edge) =>
-  (a.registrable_domain || a.peer_host).localeCompare(b.registrable_domain || b.peer_host) ||
-  a.peer_host.localeCompare(b.peer_host);
-const outboundEdges = computed(() => edges.value.filter((e) => e.direction === 'client').slice().sort(byDomain));
-const inboundEdges  = computed(() => edges.value.filter((e) => e.direction === 'server').slice().sort(byDomain));
+// ─── Edges: direction split, sort, status (ui/src/edges-view.ts) ──────────
+// The store returns ORDER BY last_seen DESC, which re-sorts the rows on every
+// 5s poll and moves buttons out from under the cursor — sortEdges's stable
+// tiebreak (registrable domain, then host) is what keeps a row in place. One
+// sort selection drives every table on the page, so the two directions stay
+// comparable and clicking a header on one table does not desync the other.
+const edgeSort = ref<EdgeSortState>({ key: 'name', dir: 'asc' });
+function sortBy(key: EdgeSortKey) {
+  edgeSort.value = nextSort(edgeSort.value, key);
+}
+function headerAriaSort(key: EdgeSortKey): 'ascending' | 'descending' | 'none' {
+  return ariaSort(edgeSort.value, key);
+}
+
+const outboundEdges = computed(() => sortEdges(edges.value.filter(isOutbound), edgeSort.value));
+const inboundEdges = computed(() => sortEdges(edges.value.filter(isInbound), edgeSort.value));
+// A row whose direction is neither `client` nor `server` — an older or
+// misbehaving sender, or hand-seeded data — used to simply not match either
+// filter and disappear. It gets its own catch-all table instead.
+const unknownDirEdges = computed(() => sortEdges(edges.value.filter(isDirectionUnknown), edgeSort.value));
+
+// Local MCP servers: stdio subprocesses never appear on GET /api/edges at all
+// (they are not a network edge), so their only home is the contracts list —
+// this is the one place on Overview that reads it directly rather than
+// through the edges array.
+const localMcpRows = computed(() => contracts.value.filter((s) => s.format === 'mcp' && s.edge_class === 'local-process'));
+
+// The contract WE publish — validates inbound responses. Read once here so
+// both the Inbound table's Status column and its caption sub-line agree with
+// each other and with the Contracts tab's "Your contract" card.
+const selfSpec = computed(() => contracts.value.find((s) => s.role === 'self') || null);
+
+// A counterparty present in both directions gets a quiet cross-link on each
+// side ("also calls you" / "you also call them") rather than being merged
+// into one row — merging would lose the fact that they are two edges.
+function outboundTwin(e: Edge) {
+  return twinEdge(e, inboundEdges.value);
+}
+function inboundTwin(e: Edge) {
+  return twinEdge(e, outboundEdges.value);
+}
+
+// A badge on every row says nothing, so NEW stays silent until some edge is older than its window.
+const newIsInformative = computed(() => newBadgeIsInformative(edges.value));
+function isNewEdge(e: Edge): boolean {
+  return newIsInformative.value && isNew(e.first_seen);
+}
+
+// "checked" is never claimed from the contract list alone — it costs at
+// least one call, in the loaded window, that the drift processor actually
+// validated. Built once from `calls` rather than per row: a linear scan per
+// edge would be O(edges × calls) on every poll tick.
+const validatedEdgeKeys = computed(() => {
+  const s = new Set<string>();
+  for (const c of calls.value) {
+    if ((c.direction !== 'client' && c.direction !== 'server') || !c.peer_host) continue;
+    if (isValidated(c)) s.add(c.direction + '|' + c.peer_host);
+  }
+  return s;
+});
+function edgeHasValidatedCall(e: Edge): boolean {
+  return validatedEdgeKeys.value.has(e.direction + '|' + e.peer_host);
+}
+
+/** The Status cell's resolved word/chip + clause for one row (ui/src/edges-view.ts).
+ *  The "checked" clause is built HERE, not inside edgeStatus, because the two
+ *  directions have always said it differently: outbound reuses the existing
+ *  rich per-row contract line (edgeContractLine — version, provenance,
+ *  recency), inbound is the newer, simpler "self <version>". */
+function statusFor(e: Edge) {
+  const outbound = e.direction === 'client';
+  const bound = outbound ? contractByHost.value.get(e.peer_host) : selfSpec.value;
+  const checkedClause = !bound ? '' : outbound ? edgeContractLine(bound) : `self ${versionLabel(bound.version)}`;
+  return edgeStatus({
+    direction: outbound ? 'client' : 'server',
+    driftCount: e.drift_count,
+    isMcpOnly: mcpOnly.value.has(e.peer_host),
+    contractsKnown: contractsKnown.value,
+    hasContract: !!bound,
+    checkedClause,
+    hasValidatedCall: edgeHasValidatedCall(e)
+  });
+}
+
+/** The "· nothing validated yet" clause's tooltip: the actual reason a
+ *  representative not-checked call on this edge was skipped, when one exists
+ *  in the loaded window. No call at all (a quiet edge) leaves it empty rather
+ *  than inventing a reason nothing on screen supports. */
+function notCheckedTitleForEdge(e: Edge): string {
+  const c = calls.value.find(
+    (c) => c.peer_host === e.peer_host && c.direction === e.direction && coverageOf(c) === 'not-checked'
+  );
+  return c ? notCheckedTitleOf(c) : '';
+}
+
+/** The Status cell's clause tooltip — only the "nothing validated yet" clause
+ *  gets one; the others (Add REST contract, no self contract) are already
+ *  self-explanatory. */
+function statusClauseTitle(row: { e: Edge; status: ReturnType<typeof edgeStatus> }): string | undefined {
+  return row.status.kind === 'not-checked' && row.status.clause === NOTHING_VALIDATED_CLAUSE
+    ? notCheckedTitleForEdge(row.e)
+    : undefined;
+}
+
+/** One row's edge + its resolved Status — computed together so a row's
+ *  status is read from one place instead of recomputed once per cell. */
+interface EdgeRow {
+  e: Edge;
+  status: ReturnType<typeof edgeStatus>;
+}
+const outboundRows = computed<EdgeRow[]>(() => outboundEdges.value.map((e) => ({ e, status: statusFor(e) })));
+const inboundRows = computed<EdgeRow[]>(() => inboundEdges.value.map((e) => ({ e, status: statusFor(e) })));
+
+const outboundCaptionSubText = computed(() =>
+  outboundRollCall.value
+    ? outboundCaptionSub(outboundEdges.value.length, outboundRollCall.value)
+    : pluralCount(outboundEdges.value.length, 'provider', 'providers')
+);
+// Degrades to a bare count when /api/contracts has not answered — an older
+// collector cannot say whether a self contract is loaded, so the sentence
+// must not guess "no self contract" any more than it may guess "checked".
+const inboundCaptionSubText = computed(() =>
+  contractsKnown.value
+    ? inboundCaptionSub(inboundEdges.value.length, selfSpec.value ? versionLabel(selfSpec.value.version) : null)
+    : pluralCount(inboundEdges.value.length, 'consumer', 'consumers')
+);
 
 // ─── One host → name index, shared by every surface that shows a host ─────
 // Display names substitute for raw hosts everywhere a
@@ -900,7 +1065,12 @@ const contractCards = computed<{ self: ContractCard[]; mcpServers: ContractCard[
   // see findingBelongsToContract. An uploaded contract's integration is derived
   // from its host while a finding's comes from the call, so an
   // integration-only join split one provider into two cards.
-  const unclaimed = [...liveFindings.value, ...versionDiffFindings.value, ...mcpContractFindings.value];
+  const unclaimed = [
+    ...liveFindings.value,
+    ...versionDiffFindings.value,
+    ...deprecationFindings.value,
+    ...mcpContractFindings.value
+  ];
   const hostOfCall = (id: string) => callsById.value[id]?.peer_host;
   const claim = (spec: SpecInfo): Finding[] => {
     const mine: Finding[] = [];
@@ -1011,9 +1181,21 @@ function closeUploader() {
  * A host with a contract lands on its card; a host without one expands the
  * collapsed section and highlights its row. Either way the uploader that opens
  * already knows the host, which is the whole ergonomic prize for routing here.
+ *
+ * An MCP host — including a DRIFTED one, which reaches here from the Status
+ * chip too — has no REST contract to add: its tools/list IS the contract, and
+ * its card lives at a different anchor (shared-host-cards.test.ts). Routing
+ * it through the REST branches below would open the uploader on a host that
+ * already self-reports, which is exactly the setup MCP_NEEDS_NO_SETUP exists
+ * to say nobody needs.
  */
 function goToContracts(host: string) {
   setTab('contract');
+  if (mcpHosts.value.has(host)) {
+    highlightUncoveredHost.value = null;
+    nextTick(() => document.getElementById('mcp-contract-' + host)?.scrollIntoView({ block: 'center' }));
+    return;
+  }
   if (contractByHost.value.has(host)) {
     highlightUncoveredHost.value = null;
     nextTick(() => document.getElementById('contract-' + host)?.scrollIntoView({ block: 'center' }));
@@ -1114,6 +1296,25 @@ const liveFindings = computed(() => findings.value.filter((f) => f.kind === 'liv
 // replaced" over a tab showing none of them, and the control plane's
 // `#contracts/<id>` deep link landed on an anchor that did not exist.
 const versionDiffFindings = computed(() => findings.value.filter((f) => f.kind === 'version-diff'));
+
+/**
+ * Deprecation findings: a provider announcing that something your traffic uses
+ * is going away. NOTHING DETECTS THESE YET — this filter matches no row today.
+ *
+ * It exists because the tiering seam is inert without it. `contract-tiers.ts`
+ * counts a deprecation row in the would-break tier, but the tab only ever sees
+ * the rows in `contractTabRows`, and a kind that is in none of the filters
+ * below reaches no surface at all: not its provider's card, not any pill, not
+ * a Flag control. That is exactly how the version diff was lost once — in the
+ * model, produced by the upload path, and rendered nowhere.
+ *
+ * So the row set accepts the kind now. A deprecation row renders through the
+ * generic finding row like every other kind, and carries the same Flag control
+ * (`!isLocalNotice`). Its own badge wording and whatever a sunset date should
+ * look like belong with the change that detects them; this is the plumbing
+ * only, and it adds no detection.
+ */
+const deprecationFindings = computed(() => findings.value.filter((f) => f.kind === 'deprecation'));
 
 // ─── MCP (v0.5 Step D) ───────────────────────────────────────────────────
 // The MCP contract surface is SELF-DELIVERING: the server's observed
@@ -1240,31 +1441,60 @@ const mcpContractFindings = computed(() =>
     f.kind === 'output_mismatch' || f.kind === 'definition_change' || f.kind === 'value_change' || f.kind === 'input_rejection')
 );
 
-// Contracts tab pills (two-tier): red = breaking-severity rows (all sources —
-// severity decides the tier, never the protocol); amber = informational rows
-// (NON-BREAKING + DESCRIPTION) not yet acknowledged. Invariant: red + amber +
-// acknowledged = the rows listed on the tab.
-const contractTabRows = computed(() => [...liveFindings.value, ...versionDiffFindings.value, ...mcpContractFindings.value]);
-const contractBreakingCount = computed(() => contractTabRows.value.filter((f) => isBreakingFinding(f)).length);
-const contractInfoCount = computed(
-  () => contractTabRows.value.filter((f) => !isBreakingFinding(f) && !isAcked(f)).length
-);
-// Every un-acked informational row is a DESCRIPTION change: the pill keeps its
-// class and its count (tests read `.tab-count.warn`) but wears the steel
-// outline, not the copper fill — a wording change is not a warning.
+// Contracts tab pills — three tiers, one colour each, in order of urgency
+// (ui/src/contract-tiers.ts holds the rule and the reasoning):
+//
+//   red    = breaking NOW    — breaking-severity LIVE rows (live-vs-spec plus
+//                              the MCP kinds this tab already treats as live
+//                              evidence). Same population as the Overview
+//                              headline, so the two numbers agree by
+//                              construction rather than by coincidence.
+//   copper = would break     — breaking changes found by diffing two VERSIONS
+//                              of a contract. Nothing is failing yet.
+//   steel  = worth knowing   — un-acknowledged informational rows
+//                              (NON-BREAKING + DESCRIPTION), always steel now
+//                              that copper means "would break".
+//
+// Invariant: red + copper + steel + acknowledged = the rows listed on the tab.
+const contractTabRows = computed(() => [
+  ...liveFindings.value,
+  ...versionDiffFindings.value,
+  ...deprecationFindings.value,
+  ...mcpContractFindings.value
+]);
+const contractTiers = computed(() => countTiers(contractTabRows.value));
+const contractBreakingNowCount = computed(() => contractTiers.value.breakingNow);
+const contractWouldBreakCount = computed(() => contractTiers.value.wouldBreak);
+const contractWorthKnowingCount = computed(() => contractTiers.value.worthKnowing);
+// Every un-acked informational row is a DESCRIPTION change. The steel tier
+// wears one colour either way now; this picks which SENTENCE it carries, so a
+// lone wording change still says "wording only" rather than borrowing the
+// shared non-breaking line.
 const contractDescOnly = computed(
   () =>
-    contractInfoCount.value > 0 &&
+    contractWorthKnowingCount.value > 0 &&
     contractTabRows.value.every((f) => isBreakingFinding(f) || isAcked(f) || definitionClass(f) === 'DESCRIPTION')
 );
 
-// Per-card chip counts — the same taxonomy as the tab pills, so the sum of
-// card chips always equals the pills.
-function cardBreakingCount(p: ContractCard): number {
-  return p.findings.filter((f) => isBreakingFinding(f)).length;
+// Per-card chip counts — the same tiers as the tab pills, tier by tier, so the
+// card chips of each tier sum to that tier's pill.
+function cardTiers(p: ContractCard): TierCounts {
+  return countTiers(p.findings);
+}
+function cardBreakingNowCount(p: ContractCard): number {
+  return cardTiers(p).breakingNow;
+}
+function cardWouldBreakCount(p: ContractCard): number {
+  return cardTiers(p).wouldBreak;
 }
 function cardInfoCount(p: ContractCard): number {
-  return p.findings.filter((f) => !isBreakingFinding(f) && !isAcked(f)).length;
+  return cardTiers(p).worthKnowing;
+}
+/** Everything the three pills count on this card. Zero is what lets the card
+ *  claim `conforming` — a row in ANY tier, including a version diff, means the
+ *  card has something to say. */
+function cardUnresolvedCount(p: ContractCard): number {
+  return unresolvedCount(cardTiers(p));
 }
 // The card splits its informational chip by class — copper `N NON-BREAKING`
 // for schema changes, steel `N DESCRIPTION` for wording — so each class wears
@@ -1609,7 +1839,7 @@ watch(tab, (t) => {
         <!-- Org identity only — never the integration slug (it scopes a spec,
              not this org; it lives on the Overview headline + its Contracts card). -->
         <span v-if="orgPillName" class="pill pill-name" title="Your workspace — the name other organizations see on your threads.">{{ orgPillName }}</span>
-        <span v-if="!health.cp_configured" class="pill warn">control plane not configured</span>
+        <span v-if="!health.cp_configured" class="pill warn">not set up to connect to Flanj</span>
         <!-- Connected: the pill is the one door out to the control plane. The
              LABEL stays the status ("Connected") — a status indicator that hides
              its state on hover would trade a fact for a hint, and there is no
@@ -1660,11 +1890,42 @@ watch(tab, (t) => {
       <button role="tab" :aria-selected="tab === 'traffic'" :class="{ active: tab === 'traffic' }" @click="setTab('traffic')">
         Traffic
       </button>
-      <button role="tab" :aria-selected="tab === 'contract'" :class="{ active: tab === 'contract' }" @click="setTab('contract')">
+      <!-- The tab names itself. Without this the three pills' sentences — each
+           there so no tier rests on colour alone — concatenate into the tab's
+           accessible name, and a screen reader reads all forty words on every
+           focus. A name on the button wins over its contents, so the pills keep
+           their own sentences for anything that inspects them directly. -->
+      <button
+        role="tab"
+        :aria-selected="tab === 'contract'"
+        :aria-label="tabAriaLabel('Contracts', contractTiers)"
+        :class="{ active: tab === 'contract' }"
+        @click="setTab('contract')"
+      >
         Contracts
-        <!-- red = act (breaking) · copper = review (informational, un-acked) -->
-        <span v-if="contractBreakingCount" class="tab-count bad" :title="breakingCountTitle(contractBreakingCount)">{{ contractBreakingCount }}</span>
-        <span v-if="contractInfoCount" class="tab-count warn" :class="{ desc: contractDescOnly }" :title="contractDescOnly ? descriptionCountTitle(contractInfoCount) : informationalCountTitle(contractInfoCount)">{{ contractInfoCount }}</span>
+        <!-- Three tiers, in order of urgency: red = breaking in live traffic
+             now · copper = would break when a newer contract version takes
+             effect · steel = worth knowing (un-acked informational). Each
+             carries its own sentence as title AND accessible name, so the
+             tier is never conveyed by colour alone. -->
+        <span
+          v-if="contractBreakingNowCount"
+          class="tab-count bad"
+          :title="breakingNowTitle(contractBreakingNowCount)"
+          :aria-label="breakingNowTitle(contractBreakingNowCount)"
+        >{{ contractBreakingNowCount }}</span>
+        <span
+          v-if="contractWouldBreakCount"
+          class="tab-count would-break"
+          :title="wouldBreakTitle(contractTabRows)"
+          :aria-label="wouldBreakTitle(contractTabRows)"
+        >{{ contractWouldBreakCount }}</span>
+        <span
+          v-if="contractWorthKnowingCount"
+          class="tab-count worth-knowing"
+          :title="worthKnowingTitle(contractWorthKnowingCount, contractDescOnly)"
+          :aria-label="worthKnowingTitle(contractWorthKnowingCount, contractDescOnly)"
+        >{{ contractWorthKnowingCount }}</span>
       </button>
       <button role="tab" :aria-selected="tab === 'threads'" :class="{ active: tab === 'threads' }" @click="setTab('threads')">
         Threads
@@ -1730,7 +1991,7 @@ watch(tab, (t) => {
         </ul>
       </section>
 
-      <section>
+      <section class="edges-section">
         <h2>
           Edges <small>discovered from traffic — external only</small>
         </h2>
@@ -1739,140 +2000,288 @@ watch(tab, (t) => {
           integration graph appears here automatically.
         </p>
 
-        <div v-else class="edge-groups">
-          <div class="edge-group">
-            <h3 class="edge-title">
-              <span class="dir-badge in">Inbound</span> consumer → you
-              <small>this org is the provider</small>
-            </h3>
-            <p v-if="inboundEdges.length === 0" class="empty small">No inbound edges.</p>
-            <div v-else class="edge-table">
-              <!-- The evidence the design's table carries: calls in the window, drifted
-                   calls (red mono when any), last seen. The observed rate rides as a
-                   muted suffix on the call count and only when it is non-zero — a
-                   column of `0 /min` made a live install look dead. -->
-              <div class="edge-head">
-                <span>peer host</span><span>calls</span><span>drift</span><span>last seen</span>
-              </div>
-              <div v-for="e in inboundEdges" :key="'i-' + e.peer_host" class="edge-row" :class="{ drift: e.drift_count > 0 }">
-                <span class="peer mono">
-                  {{ e.peer_host }}
-                  <span v-if="mcpHosts.has(e.peer_host)" class="mcp-badge" :title="MCP_BADGE_TOOLTIP">{{ mcpBadgeLabel(e.class) }}</span>
-                </span>
-                <span class="num calls">{{ e.call_count }}<span v-if="e.rpm" class="unit">· {{ fmtRPM(e.rpm) }}/min</span></span>
-                <span class="num drift-n" :class="{ some: e.drift_count > 0 }">{{ e.drift_count }}</span>
-                <span class="num seen">{{ timeAgo(e.last_seen) }}</span>
-              </div>
-            </div>
+        <template v-else>
+          <!-- Outbound first: the reader's first question is "who do we depend
+               on", and this is the side that carries names, contracts and
+               threads. Always rendered once there is at least one edge, even
+               when this table's own rows are empty — the layout must not jump
+               the moment the first outbound (or inbound) call arrives. -->
+          <div class="edges-wrap">
+            <table class="edges-table">
+              <caption class="edges-cap">
+                <span class="edges-cap-title">{{ OUTBOUND_CAPTION }}</span>
+                <span class="edges-cap-sub">{{ outboundCaptionSubText }}</span>
+              </caption>
+              <thead>
+                <tr>
+                  <th scope="col" :aria-sort="headerAriaSort('name')">
+                    <button type="button" class="th-sort" @click="sortBy('name')">Counterparty<span class="th-arrow" aria-hidden="true">{{ edgeSort.key === 'name' ? (edgeSort.dir === 'desc' ? '↓' : '↑') : '' }}</span></button>
+                  </th>
+                  <th scope="col">Status</th>
+                  <th scope="col" class="num" :aria-sort="headerAriaSort('calls')">
+                    <button type="button" class="th-sort" @click="sortBy('calls')">Calls<span class="th-arrow" aria-hidden="true">{{ edgeSort.key === 'calls' ? (edgeSort.dir === 'desc' ? '↓' : '↑') : '' }}</span></button>
+                  </th>
+                  <th scope="col" class="num" :aria-sort="headerAriaSort('first')">
+                    <button type="button" class="th-sort" @click="sortBy('first')">First seen<span class="th-arrow" aria-hidden="true">{{ edgeSort.key === 'first' ? (edgeSort.dir === 'desc' ? '↓' : '↑') : '' }}</span></button>
+                  </th>
+                  <th scope="col" class="num" :aria-sort="headerAriaSort('last')">
+                    <button type="button" class="th-sort" @click="sortBy('last')">Last seen<span class="th-arrow" aria-hidden="true">{{ edgeSort.key === 'last' ? (edgeSort.dir === 'desc' ? '↓' : '↑') : '' }}</span></button>
+                  </th>
+                  <th scope="col" class="cell-actions"><span class="vh">Actions</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-if="!outboundRows.length" class="edges-empty">
+                  <td colspan="6">{{ OUTBOUND_EMPTY }}</td>
+                </tr>
+                <template v-for="row in outboundRows" :key="'o-' + row.e.peer_host">
+                  <tr class="edge-row" :class="{ drift: row.status.kind === 'drift' }" :id="edgeRowId('client', row.e.peer_host)" tabindex="-1">
+                    <th scope="row" class="cell-name">
+                      <span class="edge-name-line">
+                        <!-- Unnamed rows render the HOST ITSELF, once, in the name slot —
+                             never a title-cased pseudo-name (humanize() is for integration
+                             SLUGS, and running a dotted host through it mangles it). -->
+                        <span class="edge-name" :class="{ unnamed: !row.e.display_name }" :title="row.e.display_name || row.e.peer_host">{{ row.e.display_name || row.e.peer_host }}</span>
+                        <span v-if="mcpHosts.has(row.e.peer_host)" class="mcp-badge" :title="MCP_BADGE_TOOLTIP">{{ mcpBadgeLabel(row.e.class) }}</span>
+                        <span v-if="isNewEdge(row.e)" class="edge-new" :title="'First seen ' + isoDate(row.e.first_seen)">{{ NEW_LABEL }}</span>
+                        <!-- Naming lives beside the name it renames — the row's Actions
+                             cell holds one button, the only action that reaches the other
+                             organization; a rename is local housekeeping. -->
+                        <button type="button" class="edge-name-edit" @click="startRename(row.e)">{{ renameLabel(row.e.name_source) }}</button>
+                      </span>
+                      <span v-if="row.e.display_name" class="edge-host" :title="row.e.peer_host">{{ row.e.peer_host }}</span>
+                      <a v-if="outboundTwin(row.e)" class="edge-also" :href="'#' + edgeRowId('server', outboundTwin(row.e)!.peer_host)">{{ ALSO_CALLS_YOU }}</a>
+                    </th>
+                    <td class="cell-status" data-label="Status">
+                      <button
+                        v-if="row.status.kind === 'drift'"
+                        type="button"
+                        class="edge-chip drift"
+                        :title="driftChipTitle(row.e.drift_count, 'client')"
+                        @click="goToContracts(row.e.peer_host)"
+                      >{{ driftLabel(row.e.drift_count) }}</button>
+                      <template v-else>
+                        <span class="edge-status-word" :title="row.status.kind === 'mcp' ? MCP_BADGE_TOOLTIP : undefined">{{ row.status.word }}</span>
+                        <button
+                          v-if="row.status.clauseLinksContracts"
+                          type="button"
+                          class="edge-contract-link"
+                          :class="{ add: row.status.clauseIsAdd }"
+                          @click="goToContracts(row.e.peer_host)"
+                        >· {{ row.status.clause }}</button>
+                        <span v-else-if="row.status.clause" class="edge-status-clause" :title="statusClauseTitle(row)">· {{ row.status.clause }}</span>
+                      </template>
+                    </td>
+                    <td class="cell-calls num" data-label="Calls">{{ row.e.call_count }}<span v-if="row.e.rpm" class="unit">· {{ fmtRPM(row.e.rpm) }}/min</span></td>
+                    <td class="cell-first num" data-label="First seen">{{ isoDate(row.e.first_seen) }}</td>
+                    <td class="cell-last num" data-label="Last seen">{{ isoDate(row.e.last_seen) }}<span class="seen-rel">· {{ timeAgo(row.e.last_seen) }}</span></td>
+                    <td class="cell-actions">
+                      <span class="edge-actions">
+                        <button type="button" class="btn ghost small" @click="openEdgeSheet(row.e)">{{ START_THREAD_LABEL }}</button>
+                      </span>
+                    </td>
+                  </tr>
+                  <tr v-if="nameEdit && nameEdit.host === row.e.peer_host" class="edge-edit-row">
+                    <td colspan="6">
+                      <div class="edge-rename">
+                        <input
+                          ref="renameInput"
+                          class="edge-rename-input"
+                          type="text"
+                          :placeholder="placeholderFor(nameEdit.domain)"
+                          :value="nameEdit.draft"
+                          :disabled="nameEdit.busy"
+                          @input="onRenameInput"
+                          @keydown.enter.prevent="saveRename"
+                          @keydown.esc.prevent="cancelRename"
+                        />
+                        <!-- The opt-in: per mapping, default UNCHECKED, names the egress plainly. -->
+                        <label class="edge-suggest">
+                          <input type="checkbox" :checked="nameEdit.suggest" :disabled="nameEdit.busy" @change="onSuggestToggle" />
+                          <span>{{ suggestLabelFor(nameEdit.domain) }}</span>
+                        </label>
+                        <!-- The directory-cap pre-check: shown only while the box is
+                             ticked AND the name exceeds 64 chars; Save is blocked,
+                             unticking (or shortening) saves fine. -->
+                        <p v-if="suggestTooLong(nameEdit)" class="edge-name-note">{{ SUGGEST_TOO_LONG }}</p>
+                        <div class="edge-rename-actions">
+                          <button type="button" class="btn primary small" :disabled="nameEdit.busy || suggestTooLong(nameEdit)" @click="saveRename">{{ SAVE_LABEL }}</button>
+                          <button type="button" class="btn ghost small" :disabled="nameEdit.busy" @click="cancelRename">{{ CANCEL_LABEL }}</button>
+                          <!-- Removing a name is a decision about the name, so it now lives
+                               where the name is being decided — beside Save and Cancel,
+                               not as a permanent third button on every user-named row. -->
+                          <button
+                            v-if="row.e.name_source === 'user'"
+                            type="button"
+                            class="btn ghost small"
+                            :disabled="removeNameBusy[edgeDomain(row.e)]"
+                            @click="removeName(row.e)"
+                          >{{ REMOVE_NAME_LABEL }}</button>
+                          <span v-if="nameEdit.error" class="error small-err">
+                            {{ nameEdit.error }}
+                            <button type="button" class="btn ghost small" @click="saveRename">{{ RETRY_LABEL }}</button>
+                          </span>
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr v-if="nameNotice[edgeDomain(row.e)]" class="edge-note-row"><td colspan="6">{{ nameNotice[edgeDomain(row.e)] }}</td></tr>
+                  <tr v-if="removeNameError[edgeDomain(row.e)]" class="edge-note-row error">
+                    <td colspan="6">
+                      {{ removeNameError[edgeDomain(row.e)] }}
+                      <button type="button" class="btn ghost small" @click="removeName(row.e)">{{ RETRY_LABEL }}</button>
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
           </div>
 
-          <div class="edge-group">
-            <h3 class="edge-title">
-              <span class="dir-badge out">Outbound</span> you → provider
-              <small>this org is the consumer</small>
-            </h3>
-            <!-- The roll call. Counted POSITIVE, one line for the whole panel,
-                 and it sits BELOW a fully rendered graph: the zero-config
-                 install-to-graph moment is untouched and nothing is gated. -->
-            <p v-if="outboundRollCall && outboundEdges.length" class="edge-rollcall">{{ outboundRollCall }}</p>
-            <p v-if="outboundEdges.length === 0" class="empty small">No outbound edges.</p>
-            <div v-else class="edge-table">
-              <div class="edge-head named">
-                <span>provider</span><span>calls</span><span>drift</span><span>last seen</span><span></span>
-              </div>
-              <!-- A NAME renders OVER the host, never instead of it — the registrable domain
-                   stays visible (it is the identity; the name is decoration). An UNNAMED row
-                   has no name to render over anything, so it shows the host once, plain, with
-                   the `auto` badge — never a title-cased pseudo-name, never an empty state. -->
-              <template v-for="e in outboundEdges" :key="'o-' + e.peer_host">
-                <div class="edge-row named" :class="{ drift: e.drift_count > 0 }">
-                  <span class="edge-name-cell">
+          <div class="edges-wrap">
+            <table class="edges-table">
+              <caption class="edges-cap">
+                <span class="edges-cap-title">{{ INBOUND_CAPTION }}</span>
+                <span class="edges-cap-sub">{{ inboundCaptionSubText }}</span>
+              </caption>
+              <thead>
+                <tr>
+                  <th scope="col" :aria-sort="headerAriaSort('name')">
+                    <button type="button" class="th-sort" @click="sortBy('name')">Counterparty<span class="th-arrow" aria-hidden="true">{{ edgeSort.key === 'name' ? (edgeSort.dir === 'desc' ? '↓' : '↑') : '' }}</span></button>
+                  </th>
+                  <th scope="col">Status</th>
+                  <th scope="col" class="num" :aria-sort="headerAriaSort('calls')">
+                    <button type="button" class="th-sort" @click="sortBy('calls')">Calls<span class="th-arrow" aria-hidden="true">{{ edgeSort.key === 'calls' ? (edgeSort.dir === 'desc' ? '↓' : '↑') : '' }}</span></button>
+                  </th>
+                  <th scope="col" class="num" :aria-sort="headerAriaSort('first')">
+                    <button type="button" class="th-sort" @click="sortBy('first')">First seen<span class="th-arrow" aria-hidden="true">{{ edgeSort.key === 'first' ? (edgeSort.dir === 'desc' ? '↓' : '↑') : '' }}</span></button>
+                  </th>
+                  <th scope="col" class="num" :aria-sort="headerAriaSort('last')">
+                    <button type="button" class="th-sort" @click="sortBy('last')">Last seen<span class="th-arrow" aria-hidden="true">{{ edgeSort.key === 'last' ? (edgeSort.dir === 'desc' ? '↓' : '↑') : '' }}</span></button>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-if="!inboundRows.length" class="edges-empty">
+                  <td colspan="5">{{ INBOUND_EMPTY }}</td>
+                </tr>
+                <tr v-for="row in inboundRows" :key="'i-' + row.e.peer_host" class="edge-row" :class="{ drift: row.status.kind === 'drift' }" :id="edgeRowId('server', row.e.peer_host)" tabindex="-1">
+                  <th scope="row" class="cell-name">
                     <span class="edge-name-line">
-                      <!-- Unnamed rows render the HOST ITSELF, once, in the name slot — never a
-                           title-cased pseudo-name. humanize() is the integration-SLUG helper
-                           (splits on -/_, never dots), so humanize('api.stripe.com') is
-                           'Api.stripe.com': a mangled duplicate of the host line right below it.
-                           The domain is the identity; when there is no name there is nothing to
-                           render over it. -->
-                      <span class="edge-name" :class="{ unnamed: !e.display_name }" :title="e.display_name || e.peer_host">{{ e.display_name || e.peer_host }}</span>
-                      <span v-if="mcpHosts.has(e.peer_host)" class="mcp-badge" :title="MCP_BADGE_TOOLTIP">{{ mcpBadgeLabel(e.class) }}</span>
+                      <span class="edge-name" :class="{ unnamed: !row.e.display_name }" :title="row.e.display_name || row.e.peer_host">{{ row.e.display_name || row.e.peer_host }}</span>
+                      <span v-if="mcpHosts.has(row.e.peer_host)" class="mcp-badge" :title="MCP_BADGE_TOOLTIP">{{ mcpBadgeLabel(row.e.class) }}</span>
+                      <span v-if="isNewEdge(row.e)" class="edge-new" :title="'First seen ' + isoDate(row.e.first_seen)">{{ NEW_LABEL }}</span>
                     </span>
-                    <span v-if="e.display_name" class="peer mono edge-host" :title="e.peer_host">{{ e.peer_host }}</span>
-                    <!-- Coverage, in the SAME muted text channel that renders
-                         the host — not the badge lane, not the actions cell.
-                         Zero new chips: on ~40 rows a chip is a wall, and a
-                         chip would be a label where a control does more work.
-                         MCP rows get nothing new — their transport badge and
-                         its tooltip already say "covered, self-delivering,
-                         nothing for you to do". -->
-                    <span v-if="!mcpOnly.has(e.peer_host) && contractsKnown" class="edge-contract">
-                      <template v-if="contractByHost.get(e.peer_host)">
-                        <button type="button" class="edge-contract-link" @click="goToContracts(e.peer_host)">
-                          {{ edgeContractLine(contractByHost.get(e.peer_host)!) }}
-                        </button>
-                      </template>
-                      <button v-else type="button" class="edge-contract-link add" @click="goToContracts(e.peer_host)">
-                        {{ ADD_CONTRACT }}
-                      </button>
-                    </span>
-                  </span>
-                  <span class="num calls">{{ e.call_count }}<span v-if="e.rpm" class="unit">· {{ fmtRPM(e.rpm) }}/min</span></span>
-                  <span class="num drift-n" :class="{ some: e.drift_count > 0 }">{{ e.drift_count }}</span>
-                  <span class="num seen">{{ timeAgo(e.last_seen) }}</span>
-                  <span class="edge-actions">
-                    <!-- It sits FIRST because it is the only action
-                         on this row that reaches the other org; Rename is
-                         local housekeeping beside it. -->
-                    <button type="button" class="btn ghost small" @click="openEdgeSheet(e)">{{ START_THREAD_LABEL }}</button>
-                    <button type="button" class="btn ghost small" @click="startRename(e)">{{ renameLabel(e.name_source) }}</button>
+                    <span v-if="row.e.display_name" class="edge-host" :title="row.e.peer_host">{{ row.e.peer_host }}</span>
+                    <a v-if="inboundTwin(row.e)" class="edge-also" :href="'#' + edgeRowId('client', inboundTwin(row.e)!.peer_host)">{{ YOU_ALSO_CALL_THEM }}</a>
+                  </th>
+                  <td class="cell-status" data-label="Status">
                     <button
-                      v-if="e.name_source === 'user'"
+                      v-if="row.status.kind === 'drift'"
                       type="button"
-                      class="btn ghost small"
-                      :disabled="removeNameBusy[edgeDomain(e)]"
-                      @click="removeName(e)"
-                    >{{ REMOVE_NAME_LABEL }}</button>
-                  </span>
-                </div>
-                <div v-if="nameEdit && nameEdit.host === e.peer_host" class="edge-rename">
-                  <input
-                    ref="renameInput"
-                    class="edge-rename-input"
-                    type="text"
-                    :placeholder="placeholderFor(nameEdit.domain)"
-                    :value="nameEdit.draft"
-                    :disabled="nameEdit.busy"
-                    @input="onRenameInput"
-                    @keydown.enter.prevent="saveRename"
-                    @keydown.esc.prevent="cancelRename"
-                  />
-                  <!-- The opt-in: per mapping, default UNCHECKED, names the egress plainly. -->
-                  <label class="edge-suggest">
-                    <input type="checkbox" :checked="nameEdit.suggest" :disabled="nameEdit.busy" @change="onSuggestToggle" />
-                    <span>{{ suggestLabelFor(nameEdit.domain) }}</span>
-                  </label>
-                  <!-- The directory-cap pre-check: shown only while the box is
-                       ticked AND the name exceeds 64 chars; Save is blocked,
-                       unticking (or shortening) saves fine. -->
-                  <p v-if="suggestTooLong(nameEdit)" class="edge-name-note">{{ SUGGEST_TOO_LONG }}</p>
-                  <div class="edge-rename-actions">
-                    <button type="button" class="btn primary small" :disabled="nameEdit.busy || suggestTooLong(nameEdit)" @click="saveRename">{{ SAVE_LABEL }}</button>
-                    <button type="button" class="btn ghost small" :disabled="nameEdit.busy" @click="cancelRename">{{ CANCEL_LABEL }}</button>
-                    <span v-if="nameEdit.error" class="error small-err">
-                      {{ nameEdit.error }}
-                      <button type="button" class="btn ghost small" @click="saveRename">{{ RETRY_LABEL }}</button>
-                    </span>
-                  </div>
-                </div>
-                <p v-if="nameNotice[edgeDomain(e)]" class="edge-name-note">{{ nameNotice[edgeDomain(e)] }}</p>
-                <p v-if="removeNameError[edgeDomain(e)]" class="edge-name-note error small-err">
-                  {{ removeNameError[edgeDomain(e)] }}
-                  <button type="button" class="btn ghost small" @click="removeName(e)">{{ RETRY_LABEL }}</button>
-                </p>
-              </template>
-            </div>
+                      class="edge-chip drift"
+                      :title="driftChipTitle(row.e.drift_count, 'server')"
+                      @click="goToContracts(row.e.peer_host)"
+                    >{{ driftLabel(row.e.drift_count) }}</button>
+                    <span v-if="row.status.kind === 'drift'" class="edge-status-clause">· {{ INBOUND_DRIFT_CLAUSE }}</span>
+                    <template v-else>
+                      <span class="edge-status-word" :title="row.status.kind === 'mcp' ? MCP_BADGE_TOOLTIP : undefined">{{ row.status.word }}</span>
+                      <span v-if="row.status.clause" class="edge-status-clause" :title="statusClauseTitle(row)">· {{ row.status.clause }}</span>
+                    </template>
+                  </td>
+                  <td class="cell-calls num" data-label="Calls">{{ row.e.call_count }}<span v-if="row.e.rpm" class="unit">· {{ fmtRPM(row.e.rpm) }}/min</span></td>
+                  <td class="cell-first num" data-label="First seen">{{ isoDate(row.e.first_seen) }}</td>
+                  <td class="cell-last num" data-label="Last seen">{{ isoDate(row.e.last_seen) }}<span class="seen-rel">· {{ timeAgo(row.e.last_seen) }}</span></td>
+                </tr>
+              </tbody>
+            </table>
           </div>
-        </div>
+
+          <!-- Local MCP servers: stdio subprocesses are never a network edge
+               (they never appear on GET /api/edges at all), so "Outbound"
+               would be a lie about the network — they get a table of their
+               own, rendered only when there is one to show. -->
+          <div v-if="localMcpRows.length" class="edges-wrap">
+            <table class="edges-table minor">
+              <caption class="edges-cap">
+                <span class="edges-cap-title">{{ LOCAL_MCP_CAPTION }}</span>
+                <span class="edges-cap-sub">{{ LOCAL_MCP_SUB }}</span>
+              </caption>
+              <thead>
+                <tr>
+                  <th scope="col">Counterparty</th>
+                  <th scope="col">Status</th>
+                  <th scope="col" class="num">Last seen</th>
+                  <th scope="col" class="cell-actions"><span class="vh">Actions</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="s in localMcpRows" :key="'mcp-local-' + s.integration" class="edge-row">
+                  <th scope="row" class="cell-name">
+                    <span class="edge-name-line">
+                      <span class="edge-name">{{ s.title || s.integration }}</span>
+                      <span class="mcp-badge" :title="MCP_BADGE_TOOLTIP">{{ mcpBadgeLabel(s.edge_class) }}</span>
+                    </span>
+                  </th>
+                  <td class="cell-status" data-label="Status">
+                    <span class="edge-status-word" :title="MCP_BADGE_TOOLTIP">self-reported</span>
+                    <span class="edge-status-clause">· tools/list · {{ endpointCount(s.endpoints) }}</span>
+                  </td>
+                  <td class="cell-last num" data-label="Last seen">{{ isoDate(s.loaded_at) }}<span class="seen-rel">· {{ timeAgo(s.loaded_at) }}</span></td>
+                  <td class="cell-actions">
+                    <span class="edge-actions">
+                      <button type="button" class="btn ghost small" @click="goToContracts(s.peer_host || '')">{{ VIEW_CATALOGUE_LABEL }}</button>
+                    </span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- A row whose direction is neither client nor server used to
+               vanish the moment this view became a hard split by direction.
+               It is shown instead, so nothing observed is hidden. -->
+          <div v-if="unknownDirEdges.length" class="edges-wrap">
+            <table class="edges-table minor">
+              <caption class="edges-cap">
+                <span class="edges-cap-title">{{ UNKNOWN_DIRECTION_CAPTION }}</span>
+                <span class="edges-cap-sub">{{ UNKNOWN_DIRECTION_SUB }}</span>
+              </caption>
+              <thead>
+                <tr>
+                  <th scope="col">Counterparty</th>
+                  <th scope="col">Status</th>
+                  <th scope="col" class="num">Calls</th>
+                  <th scope="col" class="num">First seen</th>
+                  <th scope="col" class="num">Last seen</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="e in unknownDirEdges" :key="'u-' + e.peer_host" class="edge-row" :class="{ drift: e.drift_count > 0 }">
+                  <th scope="row" class="cell-name">
+                    <span class="edge-name-line">
+                      <span class="edge-name" :class="{ unnamed: !e.display_name }">{{ e.display_name || e.peer_host }}</span>
+                      <span v-if="isNewEdge(e)" class="edge-new" :title="'First seen ' + isoDate(e.first_seen)">{{ NEW_LABEL }}</span>
+                    </span>
+                  </th>
+                  <td class="cell-status" data-label="Status">
+                    <button
+                      v-if="e.drift_count > 0"
+                      type="button"
+                      class="edge-chip drift"
+                      :title="driftChipTitle(e.drift_count, 'unknown')"
+                      @click="goToContracts(e.peer_host)"
+                    >{{ driftLabel(e.drift_count) }}</button>
+                    <span v-else class="edge-status-word">—</span>
+                  </td>
+                  <td class="cell-calls num" data-label="Calls">{{ e.call_count }}<span v-if="e.rpm" class="unit">· {{ fmtRPM(e.rpm) }}/min</span></td>
+                  <td class="cell-first num" data-label="First seen">{{ isoDate(e.first_seen) }}</td>
+                  <td class="cell-last num" data-label="Last seen">{{ isoDate(e.last_seen) }}<span class="seen-rel">· {{ timeAgo(e.last_seen) }}</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </template>
+
         <p class="hint">
           Internal same-team edges (RFC1918 / cluster-local / single-label hosts) are
           classified out and never surfaced or body-captured.
@@ -1940,22 +2349,27 @@ watch(tab, (t) => {
                    yet" forever, and without this the operator reads that as a
                    quiet edge rather than as a channel that is refusing. -->
               <span v-if="cardOverCap(p)" class="tag warn">{{ CONTRACT_OVER_CAP_TAG }}</span>
-              <!-- Tier-split chips — same taxonomy as the tab pills, so the sums always agree. -->
-              <span v-if="cardBreakingCount(p)" class="tag drift">{{ breakingChipLabel(cardBreakingCount(p)) }}</span>
-              <span v-if="cardNonBreakingCount(p)" class="tag warn" :title="cardNonBreakingTitle(p)">{{ informationalChipLabel(cardNonBreakingCount(p)) }}</span>
-              <!-- A wording change is not a warning: steel outline, the row badge's own word. -->
+              <!-- Tier-split chips — the same three tiers as the tab pills, so
+                   each tier's card chips sum to that tier's pill. -->
+              <span v-if="cardBreakingNowCount(p)" class="tag drift" :title="breakingNowTitle(cardBreakingNowCount(p))">{{ breakingChipLabel(cardBreakingNowCount(p)) }}</span>
+              <!-- Copper: breaking against the version this contract replaced,
+                   not against live traffic. Nothing is failing yet. -->
+              <span v-if="cardWouldBreakCount(p)" class="tag would-break" :title="wouldBreakTitle(p.findings)">{{ wouldBreakChipLabel(cardWouldBreakCount(p)) }}</span>
+              <!-- The steel tier, split by class so each keeps its own word.
+                   Both are steel: copper now means "would break". -->
+              <span v-if="cardNonBreakingCount(p)" class="tag nonbreaking" :title="cardNonBreakingTitle(p)">{{ informationalChipLabel(cardNonBreakingCount(p)) }}</span>
               <span v-if="cardDescriptionCount(p)" class="tag desc" :title="descriptionChipTitle(cardDescriptionCount(p))">{{ descriptionChipLabel(cardDescriptionCount(p)) }}</span>
               <span
-                v-if="!cardBreakingCount(p) && !cardInfoCount(p) && p.spec && cardValidatedCalls(p)"
+                v-if="!cardUnresolvedCount(p) && p.spec && cardValidatedCalls(p)"
                 class="tag ok"
               >conforming</span>
               <!-- Loaded, but nothing has run against it yet: "conforming" would
                    be a clean bill of health nobody performed. -->
               <span
-                v-else-if="!cardBreakingCount(p) && !cardInfoCount(p) && p.spec"
+                v-else-if="!cardUnresolvedCount(p) && p.spec"
                 class="tag none"
               >no calls validated yet</span>
-              <span v-else-if="!cardBreakingCount(p) && !cardInfoCount(p)" class="tag none">no contract loaded</span>
+              <span v-else-if="!cardUnresolvedCount(p)" class="tag none">no contract loaded</span>
             </span>
           </div>
 
@@ -2309,7 +2723,7 @@ watch(tab, (t) => {
       <section>
         <h2>Settings <small>this collector · {{ health?.collector_version }}</small></h2>
         <p v-if="health && !health.cp_configured" class="empty">
-          The control plane is not configured on this collector (set <code>cp_base_url</code> and <code>cp_deploy_token</code>). Local capture, detection and this UI work without it.
+          This collector is not set up to connect to Flanj (set <code>cp_base_url</code> and <code>cp_deploy_token</code>). Local capture, detection and this UI work without it.
         </p>
         <ConnectPanel
           v-else
@@ -2708,14 +3122,17 @@ code { font-family: var(--f-mono); }
 .tabs button.active { color: var(--ink); border-bottom-color: var(--ink); }
 .tabs button.active::before { content: ''; position: absolute; left: 0; right: 0; bottom: calc(-1 * var(--border-w)); height: var(--border-w-hair); background: var(--accent); }
 .tab-right { margin-left: auto; }
-/* Square count chips: red = breaking (act), copper = review — each carries its
-   number, so the two filled chips never rely on hue alone. */
+/* Square count chips, one class per tier: red = breaking in live traffic now,
+   copper = would break when a newer contract version takes effect, steel =
+   worth knowing. Each carries its number and its own sentence (title +
+   aria-label), so no chip relies on hue alone. */
 .tab-count { font: 500 10px/1.4 var(--f-mono); letter-spacing: 0; text-transform: none; padding: 1px 6px; min-width: 20px; text-align: center; border: var(--border-w-hair) solid var(--rule); border-radius: var(--radius); color: var(--ink-soft); background: var(--surface); }
 .tab-count.bad { background: var(--sev-breaking); border-color: var(--sev-breaking); color: var(--sev-breaking-contrast); }
-.tab-count.warn { background: var(--sev-warning); border-color: var(--sev-warning); color: var(--sev-warning-contrast); }
-/* Every row in the count is a DESCRIPTION change: the steel outline the row
-   badge wears, not the warning fill — a wording change is not a warning. */
-.tab-count.warn.desc { background: var(--surface); border-color: var(--ink-soft); color: var(--ink-soft); }
+.tab-count.would-break { background: var(--sev-warning); border-color: var(--sev-warning); color: var(--sev-warning-contrast); }
+/* The steel outline the informational row badges wear. Always steel now:
+   copper carries the would-break tier, and two coppers meaning two different
+   things is the confusion the tiers exist to end. */
+.tab-count.worth-knowing { background: var(--surface); border-color: var(--ink-soft); color: var(--ink-soft); }
 .tab-dot { width: 8px; height: 8px; border-radius: var(--radius); background: var(--accent); display: inline-block; }
 .tab-dot.disconnected { background: var(--ink-soft); }
 
@@ -2788,7 +3205,8 @@ h2 small { font: 400 12.5px/1.5 var(--f-sans); letter-spacing: 0.04em; text-tran
 .btn:focus-visible, .tabs button:focus-visible, .seg button:focus-visible, .pill-btn:focus-visible,
 .live-btn:focus-visible, .pending-bar:focus-visible, .tr-search:focus-visible, .tr-select:focus-visible, .tr-row:focus-visible,
 .tr-clear:focus-visible, .tr-chk input:focus-visible, .doc-link:focus-visible, .edge-contract-link:focus-visible,
-.pill-link:focus-visible, .uncovered-toggle:focus-visible, .edge-rename-input:focus-visible, .edge-suggest input:focus-visible {
+.pill-link:focus-visible, .uncovered-toggle:focus-visible, .edge-rename-input:focus-visible, .edge-suggest input:focus-visible,
+.th-sort:focus-visible, .edge-name-edit:focus-visible, .edge-chip.drift:focus-visible, .edge-also:focus-visible {
   outline: var(--focus-ring); outline-offset: var(--focus-offset);
 }
 /* A thread chip is a state, not a verdict: muted ink with a steel bolt, and
@@ -2865,8 +3283,12 @@ h2 small { font: 400 12.5px/1.5 var(--f-sans); letter-spacing: 0.04em; text-tran
 .tag.ok { color: var(--ok-ink); border-color: var(--ok); }
 .tag.drift { background: var(--sev-breaking); border-color: var(--sev-breaking); color: var(--sev-breaking-contrast); }
 .tag.warn { background: var(--sev-warning); border-color: var(--sev-warning); color: var(--sev-warning-contrast); }
-/* `N DESCRIPTION`: the row badge's steel outline — one vocabulary per class. */
-.tag.desc { color: var(--ink-soft); border-color: var(--ink-soft); }
+/* `N WOULD BREAK`: the copper tier's card chip — breaking against the version
+   this contract replaced, with a deprecation window still to run. */
+.tag.would-break { background: var(--sev-warning); border-color: var(--sev-warning); color: var(--sev-warning-contrast); }
+/* `N NON-BREAKING` and `N DESCRIPTION`: the steel tier's two chips, each with
+   the row badge's own word. Steel, not copper — copper is would-break. */
+.tag.desc, .tag.nonbreaking { color: var(--ink-soft); border-color: var(--ink-soft); }
 .tag.none { color: var(--ink-soft); border-color: var(--rule); }
 
 /* Traffic counterparty cell. Direction is a fact, not a verdict: `out` is the
@@ -3019,68 +3441,97 @@ pre.body { background: var(--surface); border: var(--border-w) solid var(--rule)
 .tool-tag.partial { color: var(--ink-soft); border-color: var(--rule); }
 .tool-note { color: var(--ink-soft); font-size: 12.5px; margin: 4px 0 0; }
 
-/* Edges overview: two framed groups stacked, each a framed table — the
-   inbound / outbound split is a group rule, not two half-width boxes that
-   squeezed every name and number. */
-.edge-groups { display: grid; grid-template-columns: 1fr; gap: 14px; }
-.edge-group { background: var(--surface); border: var(--border-w) solid var(--rule); border-radius: var(--radius); padding: 14px 16px 18px; }
-.edge-title { font-size: 13.5px; font-weight: 600; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.edge-title small { color: var(--ink-soft); font-weight: 400; font-size: 12.5px; }
-.dir-badge { font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; padding: 2px 7px; border: var(--border-w-hair) solid currentColor; border-radius: var(--radius); }
-.dir-badge.out { color: var(--accent-ink); }
-.dir-badge.in { color: var(--ink-soft); }
-.edge-table { border: var(--border-w) solid var(--rule); border-radius: var(--radius); background: var(--surface); }
-.edge-head, .edge-row { display: grid; grid-template-columns: minmax(0, 2.4fr) max-content max-content max-content; gap: 14px; align-items: center; padding: 10px 14px; }
-.edge-head { font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-soft); background: var(--surface-sunk); border-bottom: var(--border-w) solid var(--rule); }
-/* The column labels never wrap ("OBSERVED RPM" used to become the tallest thing
-   in the header row). */
-.edge-head span { white-space: nowrap; }
-.edge-row { border-top: var(--border-w-hair) solid var(--rule-soft); font-size: 13.5px; transition: background-color var(--dur-fast) var(--ease); }
-.edge-head + .edge-row { border-top: 0; }
+/* Edges overview: one real <table> per direction (plus the two minor,
+   conditionally-rendered ones), real <th scope> headers, real sort buttons.
+   Direction lives in the caption, never in a per-row badge or colour — the
+   caption already says which table this is, so a per-row chip repeating it
+   would be pure redundancy. */
+.edges-wrap { overflow-x: auto; margin: 0 0 18px; }
+.edges-table { width: 100%; border-collapse: collapse; background: var(--surface); border: var(--border-w) solid var(--rule); font-size: 13.5px; }
+.edges-cap { caption-side: top; text-align: left; padding: 0 0 8px; }
+.edges-cap-title { display: block; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; color: var(--ink); }
+.edges-cap-sub { display: block; font-size: 12.5px; color: var(--ink-soft); margin-top: 2px; }
+/* The two catch-all tables (Local MCP servers, Direction not recorded) are
+   demoted: a smaller caption and no sub-line, so up to four headings never
+   compete with the two tables that matter on every install. */
+.edges-table.minor .edges-cap-title { font-size: 13.5px; }
+.edges-table th[scope='col'] {
+  font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-soft);
+  background: var(--surface-sunk); text-align: left; padding: 8px 12px; border-bottom: var(--border-w) solid var(--rule); white-space: nowrap;
+}
+.edges-table th[scope='col'].num { text-align: right; }
+.th-sort { background: none; border: 0; padding: 0; font: inherit; color: inherit; letter-spacing: inherit; text-transform: inherit; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+.th-sort:hover { color: var(--ink); }
+.th-arrow { color: var(--accent-ink); }
+.edges-table td, .edges-table th[scope='row'] { padding: 10px 12px; border-bottom: var(--border-w-hair) solid var(--rule-soft); vertical-align: top; text-align: left; font-weight: 400; }
+.edges-table tbody tr:last-child > td, .edges-table tbody tr:last-child > th[scope='row'] { border-bottom: 0; }
 .edge-row:hover { background: var(--surface-sunk); }
-.edge-row.drift { box-shadow: inset var(--border-w-stripe) 0 0 var(--sev-breaking); }
-.edge-row .peer { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
-/* v1p1 edge naming: outbound rows carry name-over-host + actions. The name cell
-   gets a real floor — a fractional track collapsed it to ~59px at every width. */
-.edge-head.named, .edge-row.named { grid-template-columns: minmax(144px, 1fr) max-content max-content max-content auto; }
-.edge-name-cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.edge-name-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.edge-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* An unnamed row IS its host: the same mono treatment the named row's host line
-   gets, so the two row shapes read as one column. */
+.edge-row.drift td:first-of-type, .edge-row.drift th[scope='row'] { box-shadow: inset var(--border-w-stripe) 0 0 var(--sev-breaking); }
+
+.cell-name { min-width: 200px; }
+.edge-name-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.edge-name { font-weight: 600; overflow-wrap: anywhere; }
+/* An unnamed row IS its host: mono, regular weight — never a title-cased
+   pseudo-name (humanize() is for integration SLUGS, not dotted hosts). */
 .edge-name.unnamed { color: var(--ink); font-weight: 400; font-family: var(--f-mono); font-size: 12.5px; }
-.edge-host { color: var(--ink-soft); font-size: 12px; }
-/* Contract coverage on an outbound row: the SAME muted text channel as
-   .edge-host, one line below it — a text link, not a chip, so it is present
-   when you look at a row and invisible when you scan the column. */
-.edge-contract { font-size: 12px; line-height: 1.35; }
+.edge-host { display: block; color: var(--ink-soft); font-size: 12px; overflow-wrap: anywhere; }
+.edge-also { display: inline-block; margin-top: 2px; font-size: 12px; color: var(--ink-soft); }
+/* NEW: a quiet outline badge, never a severity hue — `.mcp-badge` (unchanged,
+   defined once above for every surface that carries one) already owns the
+   accent treatment, so NEW gets its own quieter register rather than sharing
+   that rule and pulling every MCP badge in the app toward it. Fixed order in
+   the markup: MCP first (it changes what the row means), then NEW. */
+.edge-new { font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); border: var(--border-w-hair) solid var(--rule); padding: 0 5px; line-height: 1.6; white-space: nowrap; }
+
+/* Status: one word, one clause. The ONLY chip in this column is DRIFTED. */
+.cell-status { min-width: 184px; }
+.edge-status-word { font-size: 12.5px; }
+.edge-status-clause { display: block; font-size: 12px; color: var(--ink-soft); }
+.edge-chip.drift {
+  display: inline-flex; align-items: center; gap: 6px;
+  font: 600 11px/1.5 var(--f-mono); letter-spacing: 0.06em; text-transform: uppercase;
+  background: var(--sev-breaking); border: var(--border-w-hair) solid var(--sev-breaking); color: var(--sev-breaking-contrast);
+  padding: 2px 8px; border-radius: var(--radius); cursor: pointer;
+}
+/* Naming moves to the name line: a quiet link-button in the same muted
+   dotted-underline register as `Add REST contract`, so it never competes
+   with the name it sits beside. */
+.edge-name-edit { background: none; border: 0; padding: 0; margin: 0; font: inherit; font-size: 12px; color: var(--ink-soft); cursor: pointer; border-bottom: 1px dotted var(--rule); }
+.edge-name-edit:hover, .edge-name-edit:focus-visible { color: var(--ink); border-bottom-color: currentColor; }
 .edge-contract-link {
   background: none; border: 0; padding: 0; margin: 0;
   font: inherit; color: var(--ink-soft); cursor: pointer;
   text-align: left; text-decoration: none; transition: color var(--dur-fast) var(--ease);
 }
 .edge-contract-link:hover, .edge-contract-link:focus-visible { color: var(--ink); text-decoration: underline; }
-/* `Add contract` stays muted: rendered at 30 rows an accent link marched down
-   the column louder than the chip this design avoids. The dotted underline
-   marks it as a control without spending colour on it. */
+/* `Add REST contract` stays muted: rendered on every uncovered row an accent
+   link marched down the column louder than the chip this design avoids. The
+   dotted underline marks it as a control without spending colour on it. */
 .edge-contract-link.add { border-bottom: 1px dotted var(--rule); }
 .edge-contract-link.add:hover, .edge-contract-link.add:focus-visible { border-bottom-color: currentColor; text-decoration: none; }
-.edge-rollcall { margin: -2px 0 8px; font-size: 12.5px; color: var(--ink-soft); }
+
+.cell-calls, .cell-first, .cell-last { font-family: var(--f-mono); font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--ink); }
+.cell-first, .cell-last { color: var(--ink-soft); }
+.edges-table td.num { text-align: right; }
+.unit, .seen-rel { color: var(--ink-soft); font-size: 11px; margin-left: 4px; }
+.cell-actions { white-space: nowrap; }
+/* One button now, so flex-wrap and the right-aligned justify stay but
+   nothing in it wraps at desktop width any more. */
 .edge-actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
-.edge-rename { border-top: var(--border-w-hair) solid var(--rule-soft); background: var(--surface-sunk); padding: 10px 14px; display: flex; flex-direction: column; gap: 8px; }
+.edges-empty td { color: var(--ink-soft); font-size: 13px; }
+.edge-edit-row > td { padding: 0; }
+.edge-rename { background: var(--surface-sunk); padding: 10px 14px; display: flex; flex-direction: column; gap: 8px; }
 .edge-rename-input { width: 100%; max-width: 416px; padding: 6px 8px; border: var(--border-w) solid var(--rule); border-radius: var(--radius); background: var(--surface); color: var(--ink); font: inherit; font-size: 13px; }
 .edge-rename-input:focus { border-color: var(--ink); }
 .edge-suggest { display: flex; align-items: flex-start; gap: 6px; font-size: 12px; color: var(--ink-soft); }
 .edge-suggest input { margin-top: 2px; accent-color: var(--ink); }
 .edge-rename-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .edge-name-note { margin: 0; padding: 6px 14px; font-size: 12px; color: var(--ink-soft); border-top: var(--border-w-hair) solid var(--rule-soft); }
-.edge-row .num { text-align: right; font-family: var(--f-mono); font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.edge-row .unit { color: var(--ink-soft); font-size: 11px; margin-left: 4px; }
-/* Drifted calls: a number in red mono when there are any, muted at zero —
-   the count is the label. Last seen rides the muted register. */
-.edge-row .drift-n { color: var(--ink-soft); }
-.edge-row .drift-n.some { color: var(--sev-breaking-ink); font-weight: 600; }
-.edge-row .seen { color: var(--ink-soft); }
+.edge-note-row > td { padding: 6px 12px; font-size: 12px; color: var(--ink-soft); }
+.edge-note-row.error > td { color: var(--sev-breaking-ink); }
+/* Visually hidden: the Actions column's accessible name, present for a
+   screen reader with no visible header cell to duplicate it. */
+.vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 /* Providers with no contract — rows, not cards. Collapsed by default. */
 .uncovered h2 { margin-bottom: 6px; }
@@ -3166,9 +3617,40 @@ pre.body { background: var(--surface); border: var(--border-w) solid var(--rule)
   .tr-row .c-corr { grid-area: corr; }
   .tr-row .c-mark { grid-area: mark; justify-self: end; }
   .reqres { grid-template-columns: 1fr; }
-  .edge-head, .edge-row { gap: 10px; }
-  .edge-head.named, .edge-row.named { grid-template-columns: minmax(0, 1fr) max-content max-content max-content; }
-  .edge-row.named .edge-actions { grid-column: 1 / -1; justify-content: flex-start; }
+
+  /* Edges tables: every table becomes a stack of labelled lines. The wrapper
+     stops scrolling the table sideways (nothing left to scroll — everything
+     is a block now) and the caption is forced to block too: left as
+     `display: table-caption` inside a block-level table it shrink-wraps and
+     wraps its title to three lines, sitting oddly inside the table's own
+     frame instead of reading as the header band it is. */
+  .edges-wrap { overflow-x: visible; }
+  .edges-table, .edges-table tbody, .edges-table tr, .edges-table td, .edges-table th { display: block; width: auto; }
+  .edges-table thead { display: none; }
+  .edges-table caption { display: block; padding: 12px 16px; background: var(--surface-sunk); border-bottom: var(--border-w) solid var(--rule); }
+  .edges-cap { padding-bottom: 0; }
+  .edges-table tbody tr { padding: 12px 16px; border-bottom: var(--border-w-hair) solid var(--rule-soft); }
+  .edges-table tbody tr:last-child { border-bottom: 0; }
+  .edges-table td, .edges-table th[scope='row'] { padding: 0; border: 0; display: flex; gap: 8px; align-items: baseline; text-align: left; }
+  .edges-table td.num { text-align: left; }
+  .edges-table td::before {
+    content: attr(data-label);
+    flex: 0 0 88px; /* fits "FIRST SEEN" at this column's mono size, measured */
+    font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-soft);
+  }
+  .edges-table th[scope='row'] { display: block; margin-bottom: 8px; }
+  .edges-table th[scope='row']::before { content: none; } /* the name needs no label */
+  .edges-table td.cell-actions::before, .edges-empty td::before, .edge-edit-row td::before, .edge-note-row td::before { content: none; }
+  /* The rename editor and the name-notice rows carry free-form content (a
+     form, a sentence + Retry) that spans the full row width, not a
+     label/value pair — block, not the labelled flex row every other cell is. */
+  .edge-edit-row td, .edge-note-row td { display: block; }
+  .edge-actions { justify-content: flex-start; margin-top: 8px; }
+  /* The drift stripe moves from the first cell to the whole row, and the row
+     gains the stripe's width back as padding so the first character does not
+     sit under it. */
+  .edge-row.drift td:first-of-type, .edge-row.drift th[scope='row'] { box-shadow: none; }
+  .edge-row.drift { box-shadow: inset var(--border-w-stripe) 0 0 var(--sev-breaking); padding-left: calc(16px + var(--border-w-stripe)); }
 }
 
 /* Reduced motion keeps the colour fades and drops everything that moves. */

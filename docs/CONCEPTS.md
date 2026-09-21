@@ -12,6 +12,22 @@ live traffic diverges from the contract (a field changes type, an enum gains an 
 definition changes), that **drift** is surfaced with the exact evidence: the redacted call that proves it.
 Raw calls never leave the environment they were captured in.
 
+Not everything worth reporting has broken yet. A provider rarely breaks a consumer overnight: they mark
+a surface **deprecated**, give a window, then remove it. Only the removal is a breaking change, and by
+the time it arrives the window has closed — so the announcement is reported too, at the **warning**
+tier. Two detectors see it. When a call uses an operation, a parameter or a body field the bound
+contract marks deprecated, that use is reported against this deployment's OWN traffic: a deprecated
+operation nobody here calls raises nothing, because there is nothing to change. And when a replacement
+contract deprecates something its predecessor did not, that transition is reported on its own. A
+published sunset date is carried with the finding, since the date is what makes the warning actionable
+rather than merely true.
+
+A deprecation is never red, and it is its own kind of finding rather than a milder grade of drift. The
+operation is still declared and the response still conformed, so the call departed from nothing and
+stays marked conforming; nothing that counts live drift counts a deprecation. Painting conforming
+traffic red would accuse a provider of breaking a promise they are in fact keeping while giving notice
+of ending it.
+
 ## Two planes
 
 - **Local plane (self-hosted, this is the OSS part):** capture, redaction, storage, drift detection, and a
@@ -84,7 +100,9 @@ Three properties make it safe to hand to a model:
    are operator-initiated — nothing schedules them and no config key enables them — and both are READS:
    no data leaves on either path. The probe only ever asks a host this deployment already sends traffic
    to, and a fetch reaches a private or internal address only on such a host; metadata, link-local and
-   other reserved addresses are refused always, judged after DNS resolution. See `docs/DEPLOYMENT.md` for the exact requests, timeouts, caps and egress-policy notes.
+   other reserved addresses are refused always, judged after DNS resolution. The document itself can
+   cause no further request: a contract must be self-contained, and a `$ref` out of it is refused before
+   anything is read. See `docs/DEPLOYMENT.md` for the exact requests, timeouts, caps and egress-policy notes.
 4. **Technical adherence only.** Drift detection validates fields/types/shapes/enums — never business or
    economic correctness (prices, fees, FX), which are legitimately variable.
 

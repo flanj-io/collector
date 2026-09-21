@@ -38,46 +38,129 @@ A detection becomes something you can act on with the provider. The SDK is Apach
 Elastic License 2.0 (source-available); the network layer that carries threads between the two teams is
 hosted.
 
-## Run it on a laptop
+## Run it on Kubernetes
 
 ```bash
-docker pull flanj/collector:v0.2.0
+helm install flanj oci://registry-1.docker.io/flanj/flanj-collector \
+  --namespace flanj --create-namespace \
+  --set specToken.value="$(openssl rand -hex 32)"
 ```
+
+`specToken` is a secret you generate: the store pod serves the contracts you upload to the front
+collectors over an in-cluster port, and it will not open that port without one.
+
+That installs the tiered shape — N stateless front collectors and one store pod, which is where the UI and
+the rolling window live. The front collectors answer at a fixed Service name, so the address below is the
+same on every cluster that ran the command above. Put it on **your own** workload, next to your app's
+container:
+
+```yaml
+env:
+  - name: FLANJ_OTLP_ENDPOINT
+    value: http://flanj-collector.flanj:4318/v1/logs
+```
+
+The chart also renders `ConfigMap/flanj-endpoint` — one key, `FLANJ_OTLP_ENDPOINT`, the same value — if you
+prefer `envFrom: [{configMapRef: {name: flanj-endpoint}}]`. A pod can only reference a ConfigMap in its own
+namespace and the chart installs into `flanj`, so list your application's namespaces in
+`endpointConfigMap.namespaces` and the chart writes one into each.
+
+Then open the UI:
+
+```bash
+kubectl -n flanj port-forward sts/flanj-flanj-collector-store 5335:5335
+```
+
+Values, tiers (sqlite on an emptyDir / sqlite on a PVC / postgres) and what the chart refuses to install:
+[`charts/flanj-collector`](charts/flanj-collector/README.md). The single-pod and shared-postgres shapes,
+and the objects behind all three, are in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
+
+### Already running the OpenTelemetry Operator?
+
+If your cluster runs the [OpenTelemetry
+Operator](https://github.com/open-telemetry/opentelemetry-operator), an `Instrumentation` resource can carry
+the variable for you, so no workload spec has to name it:
+
+```yaml
+apiVersion: opentelemetry.io/v1alpha1
+kind: Instrumentation
+metadata:
+  name: flanj
+spec:
+  env:
+    - name: FLANJ_OTLP_ENDPOINT
+      value: http://flanj-collector.flanj:4318/v1/logs
+```
+
+Annotate the pods that should get it with `instrumentation.opentelemetry.io/inject-sdk: "true"` (or
+`"<namespace>/<name>"` to name this resource across namespaces). The operator's `spec.env` is its *common*
+env list: it is appended to the application container on every injection path, and it never overwrites a
+variable the container already sets.
+
+Two things this does **not** do. It injects environment only — `inject-sdk` adds no agent and no init
+container, so the Flanj SDK still has to be installed in your image and preloaded exactly as it is without
+the operator. And it is **not** `spec.exporter.endpoint`: that field is translated into the generic
+`OTEL_EXPORTER_OTLP_ENDPOINT`, which every OpenTelemetry SDK in the pod reads, so setting it would redirect
+all of them — and collide with an `Instrumentation` already pointed at your tracing vendor.
+
+## Run it with Docker
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/flanj-io/collector/main/docker-compose.yml
+docker compose up -d
+```
+
+Then open <http://localhost:5335>; health is at <http://localhost:5335/api/health>. OTLP ingest is on
+`:4318`, and there is nothing to point anywhere: `http://localhost:4318/v1/logs` is already both SDKs'
+default. Stop it with `docker compose down`, or `docker compose down -v` to discard the captured window
+too.
+
+(If you would rather not keep the file: `curl -fsSL https://raw.githubusercontent.com/flanj-io/collector/main/docker-compose.yml | docker compose -f - up -d`. You then need the same pipe for every later
+`docker compose` command, which is why the two-line form is the one above.)
+
+The image is `linux/amd64` and `linux/arm64`. `:latest` tracks the newest release; the compose file pins a
+version tag, which is what you want for anything you keep. To build it yourself instead:
+`docker build -t flanj-collector .` and edit `image:`.
+
+**The UI binds container loopback, by design, and that is not a setting to relax.** It serves every captured
+call and it has no credential — the loopback bind *is* its access control. The collector is outbound-only;
+nothing it serves is reachable off-host. A container also cannot publish a port it reaches over another
+container's loopback, so the compose file runs a small `alpine/socat` bridge inside the collector's network
+namespace and publishes **that** — on `127.0.0.1` only. Dropping the host address from that publish binds
+`0.0.0.0` *and* `[::]`, which is why `scripts/check-ui-loopback.sh` fails the build on any publish of it
+that does.
+
+Two things the compose file handles that are easy to get wrong by hand. A fresh Docker *named* volume is
+root-owned and the image runs as `nonroot`, so the store cannot create its file and the collector exits with
+`unable to open database file (14)`; a one-shot init service fixes the ownership before the collector
+starts. And restarting the collector gives it a new network namespace, stranding a bridge that cannot tell —
+so the bridge watches the collector's loopback and exits when it can no longer reach it, and its restart
+policy brings it back. Recreating the collector *alone* is the one case left: a new container id cannot be
+rejoined at all, and a plain `docker compose up -d` afterwards repairs it.
+
+Without compose, one container and one bridge:
 
 ```bash
 mkdir -p ./flanj-data
 docker run -d --name flanj \
   --user "$(id -u):$(id -g)" \
   -v "$PWD/flanj-data:/data" \
-  -p 4318:4318 -p 5335:5336 \
+  -p 4318:4318 -p 127.0.0.1:5335:5336 \
   flanj/collector:v0.2.0
-```
 
-The image is `linux/amd64` and `linux/arm64`. `:latest` tracks the newest release; pin the version tag for
-anything you deploy. To build it yourself instead: `docker build -t flanj-collector .`, then substitute
-that name below.
-
-`:4318` is the OTLP ingest your app points at. `/data` holds the embedded SQLite store — bind-mount it and
-run as yourself, or the store cannot open its file (the image runs as `nonroot`, and a fresh Docker *named*
-volume is root-owned: that combination fails at start with `unable to open database file (14)`).
-
-**The UI binds container loopback, by design, and that is not a setting to relax.** The collector is
-outbound-only; nothing it serves is reachable off-host. `-p 5335:5335` therefore publishes nothing. Bridge
-it from *inside* the network namespace instead, which is what Flanj's own integration harness does.
-The port is published on the collector above because a container
-sharing another's network namespace cannot publish its own:
-
-```bash
 docker run -d --name flanj-ui --network container:flanj \
   alpine/socat TCP-LISTEN:5336,fork,reuseaddr TCP:127.0.0.1:5335
 ```
 
-Then open <http://localhost:5335>; health is at <http://localhost:5335/api/health>. On Linux,
-`--network host` works instead of the sidecar (`localhost:5335` is then the same loopback); on Docker
-Desktop it is not equivalent, so use the sidecar. In Kubernetes it is `kubectl port-forward <pod>
-5335:5335`. Either way the bind stays loopback: tunnel to it, never rebind it.
+A bind mount owned by you avoids the named-volume problem; the UI port is published on the collector because
+the bridge shares its namespace and cannot publish its own. Restarting the collector orphans the bridge here
+— recreate it rather than `docker start` it. Tear the whole thing down with `docker rm -f flanj flanj-ui`.
 
-### MCP needs no spec. REST does.
+On Linux, `--network host` works instead of the bridge (`localhost:5335` is then the same loopback); on
+Docker Desktop it is not equivalent, so use the bridge. Either way the bind stays loopback: tunnel to it,
+never rebind it.
+
+## MCP needs no spec. REST does.
 
 REST drift detection needs a spec somebody published and kept accurate. MCP servers publish their
 contract on every single call — `tools/list` **is** the spec. So this collector has the baseline from
@@ -89,29 +172,21 @@ spec into the **Contracts** tab, where it binds to exactly one host and stays on
 That is not a convenience difference. "Nobody publishes an accurate OpenAPI spec" is the strongest
 practical objection to the REST half of this, and it does not apply to MCP at all.
 
-## Run it on Kubernetes
+## Point your app at the collector
 
-```bash
-helm install flanj oci://registry-1.docker.io/flanj/flanj-collector \
-  --namespace flanj --create-namespace \
-  --set specToken.value="$(openssl rand -hex 32)"
-```
-
-That is the tiered shape: N stateless front collectors and one store pod, which is where the UI and the
-rolling window live. Values, tiers (sqlite on an emptyDir / sqlite on a PVC / postgres) and what the chart
-refuses to install: [`charts/flanj-collector`](charts/flanj-collector/README.md). The single-pod and
-shared-postgres shapes, and the objects behind all three, are in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
-
-Point your app at the collector with the [SDK](https://github.com/flanj-io/sdk):
+With the [SDK](https://github.com/flanj-io/sdk):
 
 ```bash
 npm install @flanj/sdk
 ```
 
 ```bash
-export FLANJ_OTLP_ENDPOINT=http://localhost:4318/v1/logs   # this is the default
 node -r @flanj/sdk/register app.js
 ```
+
+On Docker there is nothing to set: `http://localhost:4318/v1/logs` is the SDK's own default, and the
+compose file publishes `:4318` there. On Kubernetes, give your workload the `FLANJ_OTLP_ENDPOINT` shown
+above — the variable goes on the container that sends, never on the collector.
 
 Also read: `OTEL_SERVICE_NAME`, `FLANJ_BODY_CAP_BYTES` (default 16384), `FLANJ_IGNORE_URLS`
 (comma-separated; the SDK always ignores its own OTLP host). Make some calls, then watch **Traffic** fill.
@@ -130,16 +205,17 @@ baked path. No token is needed to Connect: the panel asks for a collector name a
 the contact's confirmation click is what adds the collector to their Flanj workspace
 (`cp_deploy_token` is optional — for an operator's or per-account token). The panel asks for no
 organization name: the contact names the workspace on the confirmation page, and that name — the one
-other organizations see on your threads — shows in the UI once it is set:
+other organizations see on your threads — shows in the UI once it is set. With compose, add the file to
+the `collector` service:
 
-```bash
-docker run -d --name flanj \
-  --user "$(id -u):$(id -g)" \
-  -v "$PWD/flanj-data:/data" \
-  -v "$PWD/config.yaml:/etc/flanj/config.yaml:ro" \
-  -p 4318:4318 -p 5335:5336 \
-  flanj/collector:v0.2.0
+```yaml
+    volumes:
+      - flanj-data:/data
+      - ./config.yaml:/etc/flanj/config.yaml:ro
 ```
+
+On Kubernetes the chart renders both role configs from its values instead — set `controlPlane.baseUrl`
+(and `controlPlane.publicUrl`, the address *your browser* can open).
 
 **What leaves your network: nothing, until you Connect.** Unconnected, the collector makes no outbound
 calls at all; the sync loop returns early with no collector key. After Connect it talks only to
@@ -155,9 +231,6 @@ Measured on this build (Docker Desktop, Apple silicon, single pod, idle; one run
 | Resident memory | 13 MiB |
 | `/api/health` | 20 ms from the host through the sidecar hop (1 ms in-container) |
 | Restart to serving | 0.1 s (container start to "Everything is ready") |
-
-Restarting the collector orphans the sidecar (it borrows the collector's network namespace): recreate it
-rather than `docker start` it. Tear the whole thing down with `docker rm -f flanj flanj-ui`.
 
 ## Point an agent at it (MCP)
 
@@ -205,6 +278,25 @@ changed with it; there are no compatibility aliases:
 - **Go module path:** `github.com/vinifera-io/collector` → `github.com/flanj-io/collector`.
 
 See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the operator checklist.
+
+## Upgrading: the collector derives the integration key
+
+The collector works out which integration a record belongs to when the record arrives, instead of
+reading an id from the SDK. An outbound HTTP call and every MCP record take the key from the peer
+host (`api.acme.com` → `api-acme-com`); an inbound call takes the service name it reached. The SDKs no
+longer send an id, and one that still does is ignored, so old and new SDKs land on the same key.
+
+What that means when you upgrade:
+
+- **Records captured before the upgrade keep their old keys, and there is no backfill.** They are
+  never merged with the new ones. Old calls age out with the rolling retention window; nothing has to
+  be migrated by hand.
+- **An open finding reopens once.** A finding's identity starts with its integration, so the next
+  occurrence of an already-open outbound or MCP finding opens a new finding under the derived key, and
+  the old one stops accruing. Findings from your own published contract are unaffected.
+- **MCP catalogues re-key themselves once, at startup.** A tool list stored under an SDK-sent id moves
+  to the derived key; when two collapse onto one key the newest wins; starting again moves nothing.
+- **Nothing to configure.** There is no id to set any more, in the collector or in an SDK.
 
 ## Status
 

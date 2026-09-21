@@ -371,8 +371,16 @@ func (e *uiExtension) previewFor(st store.Store, host string, sum drift.SpecSumm
 	return p
 }
 
-// diffOnReplace computes the breaking changes between the document an upload
-// displaced and the one that replaced it, and records them. Returns how many.
+// diffOnReplace computes the changes between the document an upload displaced
+// and the one that replaced it, records them all, and returns how many were
+// BREAKING.
+//
+// Stored and counted are deliberately different populations. The diff also
+// yields DEPRECATION findings — a surface the new document says is going away
+// — and those are worth storing and listing, but they are not breaking
+// changes: nothing has stopped working. The caller puts this number behind the
+// words "breaking changes against the version it replaced", so counting a
+// deprecation here would make that sentence false.
 func (e *uiExtension) diffOnReplace(st store.Store, integration string, prev, current []byte) int {
 	if len(prev) == 0 {
 		return 0
@@ -382,15 +390,17 @@ func (e *uiExtension) diffOnReplace(st store.Store, integration string, prev, cu
 		e.telemetry.Logger.Warn("contracts: version diff on replace failed for " + integration + ": " + err.Error())
 		return 0
 	}
-	stored := 0
+	breaking := 0
 	for _, f := range findings {
 		if err := st.InsertFinding(f); err != nil {
 			e.telemetry.Logger.Warn("contracts: storing a version-diff finding failed: " + err.Error())
 			continue
 		}
-		stored++
+		if f.Severity == model.SeverityBreaking {
+			breaking++
+		}
 	}
-	return stored
+	return breaking
 }
 
 // specInfoFromDoc builds the row an upload writes.

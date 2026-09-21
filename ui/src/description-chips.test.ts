@@ -3,10 +3,15 @@
 // UX review 2026-09-14 (must-fix): one wording-only MCP change was rendered
 // under four severities at once — a red Overview headline, a copper-FILLED tab
 // pill, a copper-filled `1 NON-BREAKING` card chip, and a steel DESCRIPTION
-// row badge. The description class now has ONE vocabulary end to end: the
-// row's steel outline and its own word on the card chip and the tab pill; the
-// copper fill is kept for genuine NON-BREAKING schema classes. Mounted,
-// because which chip renders with which class is a template fact.
+// row badge. The description class now has ONE vocabulary end to end: its own
+// word on the card chip and its own sentence on the tab pill.
+//
+// The colour half of that rule went further when the tab took three tiers
+// (ui/src/contract-tiers.ts): copper now means "would break when a newer
+// contract version takes effect", so the informational tier is ALWAYS steel —
+// NON-BREAKING included. Two coppers meaning two different things is the one
+// outcome to avoid; the two informational classes stay apart by their words.
+// Mounted, because which chip renders with which class is a template fact.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mount, type VueWrapper } from '@vue/test-utils';
 import App from './App.vue';
@@ -90,19 +95,26 @@ async function mountApp(findings: unknown[]): Promise<VueWrapper> {
 }
 
 describe('a DESCRIPTION change wears one vocabulary from the tab to the row', () => {
-  it('description-only: the tab pill keeps its class and count but takes the steel outline; the card chip says DESCRIPTION', async () => {
+  it('description-only: the steel pill keeps its count and says wording only; the card chip says DESCRIPTION', async () => {
     const w = await mountApp([DESCRIPTION]);
-    // The integration tests read `.tab-count.warn` and its title's tail.
-    const pill = w.find('.tab-count.warn');
+    const pill = w.find('.tab-count.worth-knowing');
     expect(pill.exists()).toBe(true);
     expect(pill.text()).toBe('1');
-    expect(pill.classes()).toContain('desc');
+    // The steel outline is now the tier's one colour, so it no longer depends
+    // on every row happening to be a wording change — but the SENTENCE still
+    // does, and it still ends with the tier's shared tail.
     expect(pill.attributes('title')).toBe('1 description change — wording only, non-breaking — acknowledge to clear');
     expect(pill.attributes('title')).toMatch(/non-breaking — acknowledge to clear$/);
-    // The card: a steel DESCRIPTION chip, and NO copper NON-BREAKING chip.
+    expect(pill.attributes('aria-label')).toBe(pill.attributes('title'));
+    // Nothing is failing and nothing would break: no other pill at all.
+    expect(w.find('.tab-count.bad').exists()).toBe(false);
+    expect(w.find('.tab-count.would-break').exists()).toBe(false);
+    // The card: a steel DESCRIPTION chip, and NO NON-BREAKING chip.
     expect(w.find('.provider .tag.desc').exists()).toBe(true);
     expect(w.find('.provider .tag.desc').text()).toBe('1 DESCRIPTION');
-    expect(w.find('.provider .tag.warn').exists()).toBe(false);
+    expect(w.find('.provider .tag.nonbreaking').exists()).toBe(false);
+    // Copper belongs to the would-break tier now; a wording change never wears it.
+    expect(w.find('.provider .tag.would-break').exists()).toBe(false);
     // The row carries TWO labels: the severity, coloured, and the
     // change kind, neutral — where one mixed DESCRIPTION badge used to be.
     const badges = w.findAll(`#finding-${DESCRIPTION.id} .badge`);
@@ -112,17 +124,19 @@ describe('a DESCRIPTION change wears one vocabulary from the tab to the row', ()
     expect(badges[1].classes()).toContain('kind');
   });
 
-  it('a genuine NON-BREAKING schema class keeps the copper fill, and the two chips add up to the pill', async () => {
+  it('a genuine NON-BREAKING schema class keeps its own word, and the two chips add up to the pill', async () => {
     const w = await mountApp([DESCRIPTION, NON_BREAKING]);
-    const pill = w.find('.tab-count.warn');
+    const pill = w.find('.tab-count.worth-knowing');
     expect(pill.text()).toBe('2');
-    expect(pill.classes()).not.toContain('desc');
+    // Mixed classes: the tier's shared sentence, not the wording-only one.
     expect(pill.attributes('title')).toBe('2 non-breaking — acknowledge to clear');
-    const warn = w.find('.provider .tag.warn');
+    // Both chips are steel now — copper means "would break" — but they keep
+    // two different words, so the classes are still told apart without hue.
+    const nb = w.find('.provider .tag.nonbreaking');
     const desc = w.find('.provider .tag.desc');
-    expect(warn.text()).toBe('1 NON-BREAKING');
+    expect(nb.text()).toBe('1 NON-BREAKING');
     expect(desc.text()).toBe('1 DESCRIPTION');
-    expect(parseInt(warn.text(), 10) + parseInt(desc.text(), 10)).toBe(parseInt(pill.text(), 10));
+    expect(parseInt(nb.text(), 10) + parseInt(desc.text(), 10)).toBe(parseInt(pill.text(), 10));
   });
 
   it('the snapshot labels keep their case — a digest is a machine identifier — and render the surface timestamp', async () => {

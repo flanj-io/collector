@@ -210,7 +210,20 @@ func judgeLiveVsSpec(doc *openapi3.T, call model.RedactedCall) ([]model.Finding,
 		Route:      route,
 	}
 
-	endpoint := endpointLabel(call.Method, call.Route)
+	// The CONTRACT'S path, not the URL this call happened to use. CONTRACTS §4:
+	// "a drift is per endpoint, not per call" — `endpoint` is part of the
+	// signature, so anything that varies per call and leaks into it splits one
+	// drift into one finding per call. Two things vary in ordinary traffic and
+	// both used to land here: a query string, and a path PARAMETER. A provider
+	// whose `/v1/accounts/{id}/balance` returns the wrong type has ONE thing
+	// wrong with it, however many accounts you read; keying on the called URL
+	// filed a fresh finding for every id, each with occurrence_count 1, and the
+	// endpoint list grew without bound.
+	//
+	// route.Path is the template the router matched, which is the same string
+	// the contract itself is written in — so the finding names the endpoint the
+	// provider would recognise.
+	endpoint := endpointLabel(call.Method, route.Path)
 	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00")
 
 	// An ABSENT header is not a header: the validator still assumes JSON (a
@@ -222,6 +235,16 @@ func judgeLiveVsSpec(doc *openapi3.T, call model.RedactedCall) ([]model.Finding,
 	if wireAbsent {
 		wireContentType = "application/json"
 	}
+
+	// Deprecation findings ride EVERY path out of this function, including the
+	// ones that judge no schema at all. Whether the response conformed and
+	// whether the surface is being withdrawn are two different questions, and
+	// only the second is answered by the resolved route alone — so a call whose
+	// body could not be judged still reports the deprecated operation it used.
+	// They are warnings (deprecation.go), so they never move the per-call
+	// verdict: VerdictOf reads severity, and a deprecated-but-conforming call
+	// stays clean.
+	deprecated := deprecatedUsage(route, req, pathParams, call, endpoint, now, wireContentType)
 
 	// The contract lookup, RFC 6839-aware. kin-openapi resolves a response's
 	// media type verbatim, then parameter-stripped, then `type/*`, then `*/*` —
@@ -250,7 +273,7 @@ func judgeLiveVsSpec(doc *openapi3.T, call model.RedactedCall) ([]model.Finding,
 			case !wireAbsent && statusDeclared(route.Operation, call.StatusCode):
 				// The provider's own published response shape departed: one
 				// finding, and the verdict follows the finding (drifted).
-				fs := []model.Finding{contentTypeMismatchFinding(call, endpoint, now, wireContentType, declared)}
+				fs := append([]model.Finding{contentTypeMismatchFinding(call, endpoint, now, wireContentType, declared)}, deprecated...)
 				return fs, model.VerdictOf(fs), nil
 			}
 		}
@@ -285,9 +308,9 @@ func judgeLiveVsSpec(doc *openapi3.T, call model.RedactedCall) ([]model.Finding,
 		// responses, a declared response with no body content, and a media type
 		// declared without a schema. Only a schema actually compared earns clean.
 		if nothingToCompare(route.Operation, call.Method, call.StatusCode, lookupType) {
-			return nil, model.NotValidated(model.NotValidatedNoSchema), nil
+			return deprecated, model.NotValidated(model.NotValidatedNoSchema), nil
 		}
-		return nil, model.Validation{Verdict: model.ValidatedClean}, nil
+		return deprecated, model.Validation{Verdict: model.ValidatedClean}, nil
 	}
 
 	schemaErrs := collectSchemaErrors(verr)
@@ -296,9 +319,10 @@ func judgeLiveVsSpec(doc *openapi3.T, call model.RedactedCall) ([]model.Finding,
 		// status or media type is not in the document, or its body would not
 		// decode. No finding (the detector reports schema violations only), and
 		// NOT clean: nothing was compared.
-		return nil, model.NotValidated(unjudgedReason(verr, route, call.StatusCode, call.ResponseHeaders)), nil
+		return deprecated, model.NotValidated(unjudgedReason(verr, route, call.StatusCode, call.ResponseHeaders)), nil
 	}
-	findings := make([]model.Finding, 0, len(schemaErrs))
+	findings := make([]model.Finding, 0, len(schemaErrs)+len(deprecated))
+	findings = append(findings, deprecated...)
 	for _, se := range schemaErrs {
 		if redactedValue(se.Value) {
 			// Drift runs AFTER the redaction floor, so this constraint may have

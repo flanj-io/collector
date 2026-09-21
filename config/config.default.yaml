@@ -23,7 +23,7 @@
 #
 # TO CONNECT: copy config/config.example.yaml, set cp_base_url (a deploy token
 # is optional since 2026-09-14), and mount it over
-# /etc/flanj/config.yaml (README "Run it on a laptop"). Every key is frozen in
+# /etc/flanj/config.yaml (README "Run it with Docker"). Every key is frozen in
 # contracts/CONTRACTS.md §8; the example documents all of them, this file
 # documents none, and that split is the point.
 #

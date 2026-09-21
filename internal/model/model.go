@@ -310,6 +310,12 @@ func VerdictOf(findings []Finding) Validation {
 var PerCallDriftKinds = []string{KindLiveVsSpec, KindOutputMismatch}
 
 // MarksCallDrifted reports whether kind is one of PerCallDriftKinds.
+//
+// Deliberately kind-only. A deprecation does not depart from a contract — the
+// operation is still declared and the response still conformed — and it is
+// kept out of this answer by being its own KIND (KindDeprecation), never by a
+// severity test here. Severity is how much a departure matters; whether there
+// was a departure at all is what this asks.
 func MarksCallDrifted(kind string) bool {
 	for _, k := range PerCallDriftKinds {
 		if kind == k {
@@ -351,6 +357,14 @@ const (
 	// (observed_failure / BREAKING, collector-only, 2026-09-17). Provider-side,
 	// so it is flaggable, unlike stale_client.
 	KindInputRejection = "input_rejection"
+	// KindDeprecation: a surface this deployment USES is going away — an
+	// operation, parameter or body field the contract marks deprecated, or a
+	// replacement document that deprecated one. Its own kind, not a severity of
+	// live-vs-spec, because its EVIDENCE is different in kind: nothing failed.
+	// Being its own kind is also what keeps it out of PerCallDriftKinds (the
+	// call conformed) and out of the live-drift headline, with no special case
+	// anywhere. Severity is always warning.
+	KindDeprecation = "deprecation"
 
 	// MCPResultTypeComplete / MCPResultTypeInputRequired are the two `resultType`
 	// values MCP revision 2026-07-28 defines. They are compared, never assumed:

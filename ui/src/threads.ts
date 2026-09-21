@@ -95,7 +95,7 @@ export function truncationNote(count: number, total: number): string {
 /** A finding's thread state is only knowable from the control plane. When the
  *  list has never loaded, say so — never fall back to "no thread", which offers
  *  Create thread for a thread that already exists. */
-export const THREAD_STATE_UNKNOWN = "Thread status unknown — couldn't reach the control plane.";
+export const THREAD_STATE_UNKNOWN = "Thread status unknown — couldn't reach Flanj.";
 
 export type ConnectStatus = 'disconnected' | 'pending' | 'connected';
 

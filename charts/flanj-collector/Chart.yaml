@@ -5,7 +5,10 @@ description: >-
   forwarding to one store pod that owns the window and serves the local UI.
 type: application
 
-# Chart version. Bump on every chart change (SemVer).
+# Chart version. Bump on every chart change (SemVer). Minor, not patch: this
+# release adds the fixed-name front Service and ConfigMap/flanj-endpoint, and
+# until a chart carrying them is PUBLISHED the address the README prints does
+# not exist for anyone who installs from the registry.
 version: 0.2.0
 
 # The collector image tag this chart is written against; `image.tag` defaults to

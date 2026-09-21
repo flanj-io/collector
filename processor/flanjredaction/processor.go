@@ -152,7 +152,7 @@ func (p *redactionProcessor) redactRecord(lr plog.LogRecord) {
 		for _, id := range res.Patterns {
 			fired[id] = true
 		}
-		// Only the two BODIES map to a field part; url/target/headers carry no
+		// Only the two BODIES map to a field part; url/target/route/headers carry no
 		// field records (a field path is a pointer into a body).
 		if part := partForAttr(key); part != "" {
 			for _, f := range res.Fields {

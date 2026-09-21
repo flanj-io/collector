@@ -493,3 +493,47 @@ func TestFlagBody_NeverCarriesServiceName(t *testing.T) {
 		t.Fatalf("Build mutated the caller's call: service_name = %q", call.ServiceName)
 	}
 }
+
+// TestDeprecationThreadAsksRatherThanAccuses: the default message a flag carries
+// is read by the PROVIDER, and a deprecation is not a defect report. They are
+// keeping their contract and announcing that they will stop — so the thread must
+// not open by telling them their API drifted, and it should ask for the one
+// thing this org actually needs: the date and the replacement.
+//
+// Same reasoning as the DESCRIPTION-only definition change above, which is why
+// that case exists: what fails the bar is the CLAIM, not the evidence.
+func TestDeprecationThreadAsksRatherThanAccuses(t *testing.T) {
+	f := model.Finding{
+		SchemaVersion: model.SchemaVersion,
+		ID:            "01a0c0ed-0000-7000-8000-00000000dep1",
+		Kind:          model.KindDeprecation,
+		Severity:      model.SeverityWarning,
+		Integration:   "api-acme-test",
+		Endpoint:      "GET /v1/balance",
+		Rule:          "deprecated-operation",
+		Expected:      "not deprecated",
+		Actual:        "deprecated, sunset 2026-12-31",
+		Detail:        "Operation `GET /v1/balance` is deprecated (sunset 2026-12-31).",
+	}
+	msg := defaultMessage(f)
+
+	if strings.Contains(strings.ToLower(msg), "drift") {
+		t.Errorf("a deprecation thread opens by calling it drift: %q — the provider is honouring "+
+			"the contract and giving notice, which is the opposite of drift", msg)
+	}
+	for _, want := range []string{"GET /v1/balance", "sunset", "replaces it"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message %q does not mention %q", msg, want)
+		}
+	}
+	if !strings.Contains(msg, "2026-12-31") {
+		t.Errorf("the published sunset date is the actionable half and must survive into the thread: %q", msg)
+	}
+
+	// With no detail the sentence must still stand on its own.
+	f.Detail = ""
+	bare := defaultMessage(f)
+	if strings.Contains(strings.ToLower(bare), "drift") || !strings.Contains(bare, "GET /v1/balance") {
+		t.Errorf("detail-less deprecation message is wrong: %q", bare)
+	}
+}

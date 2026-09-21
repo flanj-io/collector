@@ -191,7 +191,7 @@ async function submit(resend = false) {
     touched.value = untouched(); // the server state is now the truth; future seeds may fill every field
     emit('update:state', s);
   } catch (e) {
-    errorMsg.value = e instanceof ApiError ? e.message : "Couldn't reach the control plane — nothing was sent.";
+    errorMsg.value = e instanceof ApiError ? e.message : "Couldn't reach Flanj — nothing was sent.";
   } finally {
     busy.value = false;
   }

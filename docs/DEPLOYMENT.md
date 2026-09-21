@@ -23,7 +23,7 @@ One image, three shapes, role chosen by `--config`:
 
 | Shape | Run when | Pods | State | Installed by |
 |---|---|---|---|---|
-| **Single pod** | evaluation, small production | 1 | sqlite on one PVC (default) or postgres | the objects below |
+| **Single pod** | evaluation, small production | 1 | sqlite on one PVC (default) or postgres | `docker-compose.yml` on one host, or the objects below |
 | **N pods + shared postgres** | you already run postgres; BYO-DB | N identical | postgres, no PVC | the objects below |
 | **Tiered: N fronts → 1 store pod** | many collectors, zero-ops store | N fronts (stateless) + 1 store | store pod: sqlite on one PVC (or postgres) | **the Helm chart** |
 
@@ -45,6 +45,46 @@ before anything is created — an install that would come up broken rather than
 broken-looking: no spec token, `store.replicas > 1` on sqlite, a PVC on the
 postgres tier. Its three tiers are `store.persistence.enabled=false` (eval),
 the defaults (sqlite on a PVC), and `store.backend=postgres` (scale).
+
+Point your application at the fronts by putting this on **your own** workload's
+container — the variable belongs to what sends, not to what receives:
+
+```yaml
+env:
+  - name: FLANJ_OTLP_ENDPOINT
+    value: http://flanj-collector.flanj:4318/v1/logs
+```
+
+`flanj-collector` is a Service the chart renders **in addition** to the
+release-scoped `<release>-flanj-collector-front`, on the same pods and port, at
+a name that does not move with the release name — so one address is right for
+every install of the command above and can be printed literally. Two releases
+in one namespace collide on it, which Helm refuses outright before creating
+anything; `service.front.fixedName: ""` turns it off on the second. The chart
+also renders `ConfigMap/flanj-endpoint` with that same value under
+`FLANJ_OTLP_ENDPOINT`, for workloads that prefer `envFrom` — but **a pod can
+only reference a ConfigMap in its own namespace**, so name the application
+namespaces in `endpointConfigMap.namespaces` and the chart writes one into each
+(they must already exist).
+
+## On one host: Docker Compose
+
+For a single machine — an evaluation, a developer's own services, a small
+deployment that does not need the tiered shape:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/flanj-io/collector/main/docker-compose.yml
+docker compose up -d
+```
+
+`docker-compose.yml` at the repo root runs the collector, publishes OTLP ingest
+on `:4318` and serves the UI on `127.0.0.1:5335`. Nothing has to be pointed
+anywhere: `http://localhost:4318/v1/logs` is already the SDKs' default. It also
+carries the two things this shape gets wrong by hand — a one-shot init service
+that makes the root-owned named volume writable by the image's `nonroot` uid
+(`unable to open database file (14)` otherwise), and a UI bridge that recovers
+by itself when the collector restarts under it. The collector README's "Run it
+with Docker" has the plain `docker run` equivalent.
 
 **The rest of this page stays the reference, and not only as background.** The
 chart covers the tiered shape only: the single-pod and shared-postgres shapes
@@ -158,7 +198,7 @@ example Service names):
 
 | Role | Args | Env | Objects |
 |---|---|---|---|
-| front | `--config /etc/flanj/front.yaml` | `FLANJ_STORE_ENDPOINT=http://flanj-store:4318`, **`FLANJ_SPEC_TOKEN`** (Secret), optionally `FLANJ_STORE_SPEC_ENDPOINT` (default `http://flanj-store:5337`) | `Deployment` (replicas or `HorizontalPodAutoscaler` on cpu/memory), `Service flanj-collector:4318` ← the SDK's target |
+| front | `--config /etc/flanj/front.yaml` | `FLANJ_STORE_ENDPOINT=http://flanj-store:4318`, **`FLANJ_SPEC_TOKEN`** (Secret), optionally `FLANJ_STORE_SPEC_ENDPOINT` (default `http://flanj-store:5337`) | `Deployment` (replicas or `HorizontalPodAutoscaler` on cpu/memory), `Service flanj-collector:4318` ← the SDK's target. The chart renders this one at a **fixed name** plus a release-scoped `<release>-flanj-collector-front`, and a `ConfigMap/flanj-endpoint` carrying the address |
 | store | `--config /etc/flanj/store.yaml` | `CP_DEPLOY_TOKEN` (Secret), **`FLANJ_SPEC_TOKEN`** (Secret); postgres: `FLANJ_PG_DSN` | `StatefulSet` replicas **1** + PVC (sqlite) — or `Deployment` with postgres; `Service flanj-store:4318` (ClusterIP) ← the fronts' target; `Service flanj-store:5337` (ClusterIP) ← the fronts' contract reads |
 
 **`FLANJ_SPEC_TOKEN` is required on this shape, on BOTH roles, with the same
@@ -340,6 +380,14 @@ Flow specifics:
     - `HTTP_PROXY`/`HTTPS_PROXY` are **not** honoured by these requests: through
       a proxy the collector never sees the target's address, and this policy
       would silently stop applying.
+  - **One document, one request.** A bound contract is never allowed to pull in
+    further documents: a `$ref` that points outside the document — to a URL, a
+    `file://` URI, or an absolute or relative path — is refused when the
+    contract is parsed, before anything is read, so what a provider serves can
+    neither make the collector issue a second request (to an address this
+    policy never judged) nor open a file on the pod. The same holds for an
+    upload. A contract split across files has to be bundled into one document
+    first.
   - **Egress policy.** If you run a default-deny egress NetworkPolicy, these
     fail closed with a stated error in the UI and nothing else breaks — drift
     detection on uploaded contracts is unaffected. To allow them, the UI pod
@@ -418,9 +466,13 @@ pull request (`.github/workflows/ci.yml`), on **both** store backends, and
 asserts behaviour — the UI answers through a port-forward to the store pod's
 loopback bind, `serves_fronts` is true (so `spec_endpoint` really is bound), a
 call POSTed to the *front* Service arrives in the *store's* window, and no front
-is logging a contract-refresh `401`. It also asserts the refusals: an install
-with no spec token, a sqlite store with `replicas > 1`, and a PVC on the
-postgres tier all have to fail.
+is logging a contract-refresh `401`. It sends a second call through the FIXED
+Service name — the address every quickstart prints — and asserts that one lands
+too, and that `ConfigMap/flanj-endpoint` carries exactly that address in the
+release namespace and in an extra one. It also asserts the refusals: an install
+with no spec token, a sqlite store with `replicas > 1`, a PVC on the postgres
+tier, and a `service.front.fixedName` aimed at a name the chart already uses,
+all have to fail.
 
 Run it against a locally built image with
 `bash scripts/helm-smoke.sh flanj-collector:<tag>`.
