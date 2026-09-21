@@ -3502,9 +3502,18 @@ pre.body { background: var(--surface); border: var(--border-w) solid var(--rule)
    have no per-row action) keeps the column anyway, empty, rather than
    collapsing it and shifting every column after it out of the shared grid. */
 .edges-table col.col-status { width: 190px; }
-.edges-table col.col-calls { width: 92px; }
+/* Wide enough for the worst case this cell ever renders — a 5-digit count
+   plus a 3-digit rpm ("12,345 · 120/min") — with room to spare for a
+   locally-installed IBM Plex Mono, which measures wider than the system
+   monospace fallback most visitors actually see. 92px clipped ordinary
+   values ("764 · 9/min") past FIRST SEEN; a Playwright check in e2e pins
+   scrollWidth <= clientWidth on this cell so a future value can't regress it. */
+.edges-table col.col-calls { width: 128px; }
 .edges-table col.col-first { width: 124px; }
-.edges-table col.col-last { width: 168px; }
+/* Same reasoning as col-calls: fits "2026-09-21 · just now" (the longest
+   `timeAgo()` ever prints alongside a date) with margin instead of clipping
+   it by a handful of pixels. */
+.edges-table col.col-last { width: 190px; }
 .edges-table col.col-actions { width: 136px; }
 .edges-table th.cell-spacer, .edges-table td.cell-spacer { padding: 10px 0; }
 .edges-cap { caption-side: top; text-align: left; padding: 0 0 8px; }
@@ -3525,7 +3534,10 @@ pre.body { background: var(--surface); border: var(--border-w) solid var(--rule)
 .edges-table td, .edges-table th[scope='row'] { padding: 10px 12px; border-bottom: var(--border-w-hair) solid var(--rule-soft); vertical-align: top; text-align: left; font-weight: 400; }
 .edges-table tbody tr:last-child > td, .edges-table tbody tr:last-child > th[scope='row'] { border-bottom: 0; }
 .edge-row:hover { background: var(--surface-sunk); }
-.edge-row.drift td:first-of-type, .edge-row.drift th[scope='row'] { box-shadow: inset var(--border-w-stripe) 0 0 var(--sev-breaking); }
+/* Only the counterparty <th> gets the stripe: `td:first-of-type` used to mean
+   the STATUS cell (the first td, since the name cell is a th), drawing a
+   second breaking stripe in the middle of the row instead of at its edge. */
+.edge-row.drift th[scope='row'] { box-shadow: inset var(--border-w-stripe) 0 0 var(--sev-breaking); }
 
 .cell-name { min-width: 200px; }
 .edge-name-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
@@ -3717,7 +3729,7 @@ pre.body { background: var(--surface); border: var(--border-w) solid var(--rule)
   /* The drift stripe moves from the first cell to the whole row, and the row
      gains the stripe's width back as padding so the first character does not
      sit under it. */
-  .edge-row.drift td:first-of-type, .edge-row.drift th[scope='row'] { box-shadow: none; }
+  .edge-row.drift th[scope='row'] { box-shadow: none; }
   .edge-row.drift { box-shadow: inset var(--border-w-stripe) 0 0 var(--sev-breaking); padding-left: calc(16px + var(--border-w-stripe)); }
 }
 
