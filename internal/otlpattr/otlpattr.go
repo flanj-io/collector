@@ -167,8 +167,9 @@ const (
 )
 
 // bodyAttrs are the redactable string attributes the defense-in-depth pass
-// re-scans on a call record.
-var bodyAttrs = []string{AttrReqBody, AttrRespBody, AttrReqHeaders, AttrRespHeaders, AttrTarget, AttrURLFull}
+// re-scans on a call record. The route is stored and shown beside the target, and
+// the collector accepts OTLP from any sender, so it is floored like the target.
+var bodyAttrs = []string{AttrReqBody, AttrRespBody, AttrReqHeaders, AttrRespHeaders, AttrTarget, AttrURLFull, AttrRoute}
 
 // BodyAttrs returns the attribute keys carrying redactable free text.
 func BodyAttrs() []string { return bodyAttrs }

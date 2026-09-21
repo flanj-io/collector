@@ -16,7 +16,9 @@ re-applies the Flanj floor to every `call` record's free-text attributes
 - `factory.go` — `NewFactory()`, type `flanjredaction`, logs processor via
   `processorhelper.NewLogs` (MutatesData: true).
 - `config.go` — one optional knob, `enable_ip` (off by default).
-- `processor.go` — re-scans the attributes in `otlpattr.BodyAttrs()`; on any new
+- `processor.go` — re-scans the attributes in `otlpattr.BodyAttrs()` (bodies,
+  headers, target, full URL and `flanj.http.route` — a stored, displayed value any
+  OTLP sender can fill; each scanned on its own, never derived from another); on any new
   hit, sets `flanj.redaction.applied=true` and unions fired ids into
   `flanj.redaction.patterns` (add-only).
 
