@@ -7,9 +7,18 @@
 # The version triad is pinned in builder-config.yaml (ocb v0.159.0, beta v0.159.0,
 # stable v1.65.0). CGO is OFF — modernc.org/sqlite is pure Go — so the binary is
 # static and runs on distroless/static.
+#
+# Multi-platform builds CROSS-COMPILE. Stages 1 and 2 are pinned to the machine
+# doing the build ($BUILDPLATFORM) and run natively whatever `--platform` asks
+# for; only stage 3 is the target platform. Because CGO is off, Go cross-compiles
+# by setting GOOS/GOARCH — nothing below runs a foreign-architecture toolchain
+# under emulation. The UI's dist/ is architecture-independent, so it is built once
+# and shared by every target. A build stage that ran per target under QEMU took
+# well over 15 minutes for the second platform (the ocb compile is a full
+# OpenTelemetry Collector distribution).
 
 # ---- 1. UI ----------------------------------------------------------------
-FROM node:22-alpine AS ui
+FROM --platform=$BUILDPLATFORM node:22-alpine AS ui
 WORKDIR /ui
 COPY ui/package.json ui/package-lock.json* ./
 RUN npm install --no-audit --no-fund
@@ -17,14 +26,10 @@ COPY ui/ ./
 RUN npm run build   # -> /ui/dist
 
 # ---- 2. build -------------------------------------------------------------
-FROM golang:1.26 AS build
+FROM --platform=$BUILDPLATFORM golang:1.26 AS build
+# Static, pure-Go: this is what makes GOOS/GOARCH below a complete cross-compile.
 ENV CGO_ENABLED=0
 WORKDIR /src
-
-# Release version stamped into the binary (GET /api/health `collector_version`,
-# X-Flanj-Collector-Version on flag POSTs). Set with
-# `docker build --build-arg VERSION=v0.6.0 .`; unset builds report "dev".
-ARG VERSION=dev
 
 # Prime the module cache from the root + component manifests before copying all
 # sources, so dependency downloads cache across rebuilds.
@@ -42,10 +47,25 @@ COPY builder-config.yaml ./
 RUN rm -rf extension/flanjui/web/dist
 COPY --from=ui /ui/dist ./extension/flanjui/web/dist
 
-# Install the pinned builder and compile the distribution. Passing --ldflags
-# REPLACES ocb's default ("-s -w"), so restate it alongside the version stamp.
+# The builder is installed for, and runs on, the BUILD platform — GOOS/GOARCH are
+# deliberately not set until the compile step, or it would be built for the target
+# and fail to execute here.
 RUN go install go.opentelemetry.io/collector/cmd/builder@v0.159.0
-RUN builder --config builder-config.yaml \
+
+# Release version stamped into the binary (GET /api/health `collector_version`,
+# X-Flanj-Collector-Version on flag POSTs). Set with
+# `docker build --build-arg VERSION=v0.6.0 .`; unset builds report "dev".
+# TARGETOS/TARGETARCH are BuildKit's automatic per-platform args. They are declared
+# here, after everything both targets share, so those layers are built once.
+ARG VERSION=dev
+ARG TARGETOS
+ARG TARGETARCH
+
+# Compile the distribution for the target. ocb passes its environment through to
+# `go build`, so GOOS/GOARCH set on this one command retarget only the compile.
+# Passing --ldflags REPLACES ocb's default ("-s -w"), so restate it alongside the
+# version stamp.
+RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} builder --config builder-config.yaml \
     --ldflags="-s -w -X github.com/flanj-io/collector/extension/flanjui.collectorVersion=${VERSION}"
 
 # ---- 3. runtime -----------------------------------------------------------
