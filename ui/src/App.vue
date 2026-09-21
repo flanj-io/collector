@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { ApiError, apiGet, apiPost, openThreadInNewTab } from './api';
+import { cpNotConfigured } from './connect-not-configured';
 import ConnectPanel from './ConnectPanel.vue';
 import ContractUploader from './ContractUploader.vue';
 import FlagSheet from './FlagSheet.vue';
@@ -2723,7 +2724,7 @@ watch(tab, (t) => {
       <section>
         <h2>Settings <small>this collector · {{ health?.collector_version }}</small></h2>
         <p v-if="health && !health.cp_configured" class="empty">
-          This collector is not set up to connect to Flanj (set <code>cp_base_url</code> and <code>cp_deploy_token</code>). Local capture, detection and this UI work without it.
+          <template v-for="(part, i) in cpNotConfigured()" :key="i"><code v-if="part.code">{{ part.text }}</code><template v-else>{{ part.text }}</template></template>
         </p>
         <ConnectPanel
           v-else
