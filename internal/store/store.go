@@ -106,6 +106,19 @@ type Store interface {
 	// local column that never leaves) when the store first holds both the
 	// finding and its call, whichever arrived first.
 	InboundFindingIDs() (map[string]bool, error)
+	// ResolveFinding records an operator's resolution on a finding row and
+	// ReopenFinding clears it. Neither deletes or rewrites the finding: a
+	// resolution is a row's LOCAL state, held in its own columns and never in
+	// the finding document (which is what a flag sends to the control plane).
+	// Both report false, with no error, for an id the store does not hold.
+	ResolveFinding(id string, r model.Resolution) (bool, error)
+	ReopenFinding(id string) (bool, error)
+	// FindingResolutions returns every stored resolution by finding id. A
+	// resolution that no longer COVERS its finding (model.Resolution.Covers)
+	// is still returned: whether it covers is the reader's question, asked
+	// against the finding as it is now, and a lapsed one is how a row can say
+	// it was resolved once and came back.
+	FindingResolutions() (map[string]model.Resolution, error)
 	// CallPeerHosts resolves call ids to the peer host each call was captured
 	// against. Ids with no stored call — and calls stored without a host, e.g.
 	// a local-process MCP server — are absent from the map rather than present
@@ -757,6 +770,47 @@ func (b *base) InboundFindingIDs() (map[string]bool, error) {
 	return inboundFindingIDs(b.db)
 }
 
+// ResolveFinding: see Store.ResolveFinding.
+func (b *base) ResolveFinding(id string, r model.Resolution) (bool, error) {
+	res, err := b.db.Exec(b.rebind(
+		`UPDATE findings SET resolved_at=?, resolved_evidence_version=?, resolved_occurrence_count=?, resolved_note=? WHERE id=?`),
+		r.ResolvedAt, r.EvidenceVersion, r.OccurrenceCount, r.Note, id)
+	if err != nil {
+		return false, fmt.Errorf("resolve finding: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("resolve finding: %w", err)
+	}
+	return n > 0, nil
+}
+
+// ReopenFinding: see Store.ResolveFinding.
+func (b *base) ReopenFinding(id string) (bool, error) {
+	return b.ResolveFinding(id, model.Resolution{})
+}
+
+// FindingResolutions: see Store.FindingResolutions.
+func (b *base) FindingResolutions() (map[string]model.Resolution, error) {
+	rows, err := b.db.Query(
+		`SELECT id, resolved_at, resolved_evidence_version, resolved_occurrence_count, resolved_note
+		   FROM findings WHERE resolved_at <> ''`)
+	if err != nil {
+		return nil, fmt.Errorf("list finding resolutions: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]model.Resolution{}
+	for rows.Next() {
+		var id string
+		var r model.Resolution
+		if err := rows.Scan(&id, &r.ResolvedAt, &r.EvidenceVersion, &r.OccurrenceCount, &r.Note); err != nil {
+			return nil, fmt.Errorf("list finding resolutions: %w", err)
+		}
+		out[id] = r
+	}
+	return out, rows.Err()
+}
+
 // callPeerHostBatch caps how many ids go into one IN list. A read-API page asks
 // about far fewer, but a bounded batch keeps a larger caller comfortably inside
 // postgres's parameter limit.
@@ -826,18 +880,6 @@ func (b *base) CallPeerHosts(ids []string) (map[string]string, error) {
 	return out, nil
 }
 
-// findingEvidenceVersion is the content hash a finding's EVIDENCE is bound to:
-// the AFTER snapshot hash of a definition_change — the same hash the UI renders
-// as "AFTER (snapshot sha256:…)" and that a local acknowledgement keys on
-// (evidence-version key). Empty for every other kind, whose evidence is a call and
-// whose recurrence is counted rather than re-evidenced.
-func findingEvidenceVersion(f model.Finding) string {
-	if f.Kind != model.KindDefinitionChange || f.SpecVersionTo == nil {
-		return ""
-	}
-	return *f.SpecVersionTo
-}
-
 // evidenceOrder is the sortable stamp of a finding's evidence: the AFTER
 // snapshot's observed-at, falling back to when the drift was detected.
 func evidenceOrder(f model.Finding) string {
@@ -850,7 +892,11 @@ func evidenceOrder(f model.Finding) string {
 // refreshedFindingDoc decides whether a REPEAT occurrence must replace the
 // stored doc instead of leaving it frozen, and returns the replacement JSON.
 //
-// definition_change is the one kind that needs this. Its signature
+// Every kind with an evidence version (model.Finding.EvidenceVersion) needs
+// this: definition_change, version-diff and deprecation. The reasoning below is
+// written for definition_change, where it was first found, and holds for all
+// three — a resolution bound to a version that can never advance covers every
+// later version unseen. A finding's signature
 // (integration|endpoint|kind|rule|field_path) is STABLE across successive
 // changes to the same field, so a second change to the same tool description
 // dedups onto the row the FIRST change created. Leaving that first doc in place
@@ -874,7 +920,7 @@ func evidenceOrder(f model.Finding) string {
 // front collector replaying, a re-delivered batch), which must never revert the
 // row to stale evidence.
 func refreshedFindingDoc(storedDoc string, f model.Finding) (string, bool) {
-	ev := findingEvidenceVersion(f)
+	ev := f.EvidenceVersion()
 	if ev == "" {
 		return "", false
 	}
@@ -882,7 +928,7 @@ func refreshedFindingDoc(storedDoc string, f model.Finding) (string, bool) {
 	if err := json.Unmarshal([]byte(storedDoc), &stored); err != nil {
 		return "", false // unreadable stored doc: leave it alone, just count
 	}
-	if findingEvidenceVersion(stored) == ev {
+	if stored.EvidenceVersion() == ev {
 		return "", false
 	}
 	// Content hashes carry no order, so the AFTER snapshot's observed-at does
@@ -898,7 +944,11 @@ func refreshedFindingDoc(storedDoc string, f model.Finding) (string, bool) {
 	if stored.FirstSeen != "" {
 		next.FirstSeen = stored.FirstSeen
 	}
-	if next.SourceCallID == nil {
+	// The stored source call is the one this row PINNED. A refreshed record
+	// evidenced by traffic (a deprecation seen in a call) names a newer call
+	// that nothing pinned; adopting it would leave the finding pointing at a
+	// call free to age out. A definition_change names none on either side.
+	if stored.SourceCallID != nil {
 		next.SourceCallID = stored.SourceCallID
 	}
 	b, err := json.Marshal(next)

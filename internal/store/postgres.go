@@ -214,6 +214,13 @@ ALTER TABLE calls ADD COLUMN IF NOT EXISTS validated TEXT NOT NULL DEFAULT '';
 -- service name that never leaves the collector (Store.InboundFindingIDs). A
 -- row from before the column is 0, and was keyed by the constant 'self'.
 ALTER TABLE findings ADD COLUMN IF NOT EXISTS inbound INTEGER NOT NULL DEFAULT 0;
+-- findings.resolved_*: an operator's resolution of the row
+-- (Store.ResolveFinding). Columns, like inbound, never part of the finding
+-- document; '' = not resolved.
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS resolved_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS resolved_evidence_version TEXT NOT NULL DEFAULT '';
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS resolved_occurrence_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS resolved_note TEXT NOT NULL DEFAULT '';
 `
 	tx, err := p.db.Begin()
 	if err != nil {

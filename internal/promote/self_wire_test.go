@@ -106,7 +106,7 @@ func TestBuildFindingShapes_SelfFindingNeverSendsTheServiceName(t *testing.T) {
 	provider := selfSpecFinding()
 	provider.ID, provider.Integration = "fnd_out", "api-acme-test"
 	provider.Signature = provider.ComputeSignature()
-	shapes := BuildFindingShapes([]model.Finding{selfSpecFinding(), provider}, map[string]bool{"fnd_self": true})
+	shapes := BuildFindingShapes([]model.Finding{selfSpecFinding(), provider}, map[string]bool{"fnd_self": true}, nil)
 	wire, err := json.Marshal(FindingsRequest{Findings: shapes})
 	if err != nil {
 		t.Fatal(err)

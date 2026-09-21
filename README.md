@@ -182,7 +182,7 @@ Four tools, all read-only: `drift_summary` (start here), `list_edges`, `list_fin
   same code: an agent and a person see one story.
 - **No raw body, ever.** No tool returns a body, a header map or a full URL, and the free-value fields of a
   finding pass the redaction floor once more on the way out.
-- **Read-only, deliberately.** There is no tool that flags, acknowledges or uploads. Raising a thread with a
+- **Read-only, deliberately.** There is no tool that flags, resolves or uploads. Raising a thread with a
   provider is a person's act, in the UI.
 - **An empty answer is never an all-clear on its own.** Every answer carries how many calls were actually
   validated against a contract, and says so in prose when the answer is "nothing has been checked yet".

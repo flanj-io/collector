@@ -6,7 +6,9 @@ package flanjui
 // control-plane dashboard can list them and deep-link back to this UI
 // (#contracts/<finding_id>). The observed values (expected / actual / detail)
 // NEVER leave the collector on this path: the payload builder is an explicit
-// allow-list (internal/promote.BuildFindingShapes) with a wire-bytes test.
+// allow-list (internal/promote.BuildFindingShapes) with a wire-bytes test. The
+// one free-text field on it is the note of a resolution that still holds, which
+// was floored before it was stored and which the UI says is sent.
 //
 // The findings POST is on by default and disabled with `finding_sync: false`
 // (CONTRACTS §8). A tick skips silently unless the control plane is
@@ -128,7 +130,13 @@ func (e *uiExtension) syncFindingsOnce(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	shapes := promote.BuildFindingShapes(findings, inbound)
+	// Same rule for a resolution: a tick that cannot read them must not tell the
+	// dashboard that every finding is open.
+	resolutions, err := st.FindingResolutions()
+	if err != nil {
+		return
+	}
+	shapes := promote.BuildFindingShapes(findings, inbound, resolutions)
 	if len(shapes) == 0 {
 		return
 	}

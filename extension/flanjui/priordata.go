@@ -45,7 +45,9 @@ func heldPriorData(st store.Store) bool {
 }
 
 // probePriorData looks for any trace of a collector that has been used: a
-// Connect registration, an acknowledgement, or stored calls/findings.
+// Connect registration, or stored calls/findings. A resolution needs no probe
+// of its own: it is a column on a finding row, and finding rows are never
+// evicted, so the findings count already answers for it.
 //
 // There is deliberately no thread probe: a thread can only be created by a
 // Connected collector, so the Connect check above subsumes it. (It used to read
@@ -53,9 +55,6 @@ func heldPriorData(st store.Store) bool {
 func probePriorData(st store.Store) bool {
 	if cs, err := loadConnect(st); err == nil &&
 		(cs.CollectorKey != "" || cs.ContactEmail != "" || cs.LegacyConsumerDisplayName != "" || cs.WorkspaceDisplayName != "" || cs.RegisteredAt != "") {
-		return true
-	}
-	if sigs, err := loadAckIndex(st); err == nil && len(sigs) > 0 {
 		return true
 	}
 	if calls, findings, err := st.Counts(); err == nil && (calls > 0 || findings > 0) {

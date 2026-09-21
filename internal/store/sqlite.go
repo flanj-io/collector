@@ -232,6 +232,14 @@ var callsAddedColumns = []string{
 // by the constant "self", never by a service name.
 var findingsAddedColumns = []string{
 	`inbound INTEGER NOT NULL DEFAULT 0`,
+	// resolved_*: an operator's resolution of the row (Store.ResolveFinding).
+	// Columns, like `inbound`, and never part of the finding document: the note
+	// is free text, and the document is what a flag sends to a counterparty.
+	// '' in resolved_at means "never resolved, or reopened by hand".
+	`resolved_at TEXT NOT NULL DEFAULT ''`,
+	`resolved_evidence_version TEXT NOT NULL DEFAULT ''`,
+	`resolved_occurrence_count INTEGER NOT NULL DEFAULT 0`,
+	`resolved_note TEXT NOT NULL DEFAULT ''`,
 }
 
 var specInfoAddedColumns = []string{

@@ -363,6 +363,9 @@ func (e *uiExtension) handleConnectGet(w http.ResponseWriter, r *http.Request) {
 	// that sentence would be a lie, and a disclosure that overstates what leaves
 	// is as wrong as one that understates it.
 	out["edge_sync"] = e.cfg.EdgeSync
+	// finding_sync: whether findings — and with them a resolution's note — leave
+	// this deployment at all. The note editor states it beside the field.
+	out["finding_sync"] = e.cfg.FindingSync
 	// The UI's one link OUT to the control plane. Emitted only when this
 	// deployment is actually Connected, so the SPA can never offer a door to a
 	// place this collector has no identity at. The collector composes the path
@@ -732,6 +735,9 @@ func (e *uiExtension) handleConnectPost(w http.ResponseWriter, r *http.Request) 
 	// here would blank the disclosure the instant the operator pressed Connect,
 	// until the next background poll put it back.
 	out["edge_sync"] = e.cfg.EdgeSync
+	// finding_sync: whether findings — and with them a resolution's note — leave
+	// this deployment at all. The note editor states it beside the field.
+	out["finding_sync"] = e.cfg.FindingSync
 	if cs.status() == "connected" {
 		writeJSON(w, http.StatusOK, out)
 		return

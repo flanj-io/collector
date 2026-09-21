@@ -31,7 +31,8 @@ API + the flag action.
   three MCP kinds plus the optional `snapshot_observed_at` (CONTRACTS §4). All
   MCP rendering lives in the SPA (`ui/src/mcp.ts`).
   `/api/findings` rows also carry two LOCAL read-API joins that never touch
-  `model.Finding`: the ack state, and **`peer_host`** — the host of the
+  `model.Finding`: the resolution (`resolved` / `resolved_at` / `resolved_note`, or
+  `reopened_after` on a row that came back — see Resolve below), and **`peer_host`** — the host of the
   finding's pinned source call, which is how the Contracts tab pairs a finding
   with its provider card (`ui/src/contracts.ts` `findingBelongsToContract`).
   It is joined here rather than in the browser because `/api/calls` returns only
@@ -42,6 +43,42 @@ API + the flag action.
   {error: "store_error", message: …}`, with the raw error going to the log and
   nowhere else — a pgx connection error is the DSN in prose, and the read routes
   used to hand it to the browser verbatim at 500.
+- **Resolve (`resolve.go`) — the ONE "dealt with it" mark, for every row kind.**
+  `POST /api/findings/{id}/resolve {note?, seen_occurrence_count?}` and
+  `POST /api/findings/{id}/reopen`. LOCAL mutations (`guardLocalMutating`: they
+  work on a collector that was never Connected, and the request sends nothing).
+  Every kind but `stale_client` (`model.Finding.Resolvable`, else `403
+  not_resolvable`). It replaced the informational-only acknowledge; there must
+  never be a second mechanism beside it. Nothing is deleted: the resolution is
+  four columns on the finding row (`store.ResolveFinding`), NEVER part of
+  `model.Finding` — that JSON is what a flag sends to the control plane, and
+  the note is free text.
+  **A resolution can never hide new trouble**, and the rule lives in ONE place,
+  `model.Resolution.Covers`, judged on every read (`findingRows`, the sync, the
+  agent surface) so nothing has to be written when trouble returns: document- or
+  announcement-evidenced kinds (`definition_change`, `version-diff`,
+  `deprecation`) bind to `Finding.EvidenceVersion()` by EQUALITY; traffic kinds
+  bind to the occurrence COUNT (not a timestamp — the detecting pod's clock is
+  not the UI pod's), and one more occurrence reopens the same finding id. The
+  live-traffic deprecation binds to its announcement (`actual`), not its count:
+  the count rises with every call for the whole deprecation window. The store
+  must refresh the row's document when the evidence version moves
+  (`internal/store` `refreshedFindingDoc`) or the binding is inert.
+  `seen_occurrence_count` is the count the row showed; it can only LOWER what is
+  covered, so an occurrence the operator never saw is never resolved — the
+  answer then says `resolved: false`. The note is capped at 500 characters and
+  REFUSED over it (`400 note_too_long`), never cut, and passes the redaction
+  floor on the way in: the agent surface returns these rows, and floors
+  `resolved_note` once more on the way out. The finding sync sends `resolved_at`
+  and `resolved_note` only while `Covers` holds (`promote.BuildFindingShapes`) —
+  the one free-text field on that path, which is why the note is floored BEFORE
+  it is stored and why the editor states the egress beside the field
+  (`GET /api/connect` carries `finding_sync` for that line). Never the evidence
+  version or the count. `GET /api/edges` rows carry `open_drift_findings`
+  (`openDriftFindings`): the DRIFTED chip is drawn from a cumulative tally of
+  drifted calls that no resolution lowers, and this is what lets it stand down
+  so the edge rows and the Overview headline never disagree — nil when it cannot
+  be known, and the chip then shows.
 - **Control-plane relay (v0.1a — CONTRACTS §5).** The UI never
   holds a bearer; the relay does, and every mutating route is guarded
   (`guard.go`): POST only (405), `X-Flanj-UI: 1` (403 `ui_header_required`),
@@ -206,7 +243,7 @@ API + the flag action.
   `/mcp` on THIS listener.** Streamable HTTP (`github.com/modelcontextprotocol/go-sdk`),
   stateless, JSON responses; four tools, every one annotated read-only:
   `drift_summary` · `list_edges` · `list_findings` (filters: `edge`, `kind`,
-  `severity`, `include_acknowledged`, `limit`) · `get_finding`. A prerequisite for the
+  `severity`, `include_resolved`, `limit`) · `get_finding`. A prerequisite for the
   AI-reliability directory submissions.
   - **It is a route, not a listener.** The whole security story is that
     `ui_endpoint` is already validated loopback (`Config.Validate`), so the agent
@@ -216,7 +253,7 @@ API + the flag action.
     DNS-rebinding check. Non-browser clients send neither `Sec-Fetch-Site` nor
     `Origin` and pass untouched.
   - **Read-only, and that is structural.** There is no tool for any route behind
-    `guardMutating` / `guardLocalMutating` — no flag, no acknowledge, no
+    `guardMutating` / `guardLocalMutating` — no flag, no resolve, no
     connect, no contract upload. An agent does not satisfy the browser guard and
     is not meant to; suggest-and-approve is a later slice, and this is NOT that.
   - **One builder for the rows.** `handlers.go` exposes `findingRows` and

@@ -28,6 +28,29 @@ stays marked conforming; nothing that counts live drift counts a deprecation. Pa
 traffic red would accuse a provider of breaking a promise they are in fact keeping while giving notice
 of ending it.
 
+## Resolving a finding
+
+Findings are never deleted and never age out — only calls do. A finding that has been dealt with is
+**resolved** instead: one press on its row, with an optional note. It leaves every count of open
+findings, stays listed as resolved with when and why, and can be reopened by hand. Nothing is removed
+from the store, and a thread started from the finding is untouched.
+
+A resolution can never hide new trouble. A finding evidenced by traffic is resolved *as of the
+occurrences seen so far* — "this stopped" — and one more occurrence opens it again, the same finding
+under the same id. A finding evidenced by a document or an announcement (a changed tool definition, a
+newer contract version, a deprecation) is resolved *for that version*; the next change to the same
+field comes back open rather than arriving already resolved. A deprecation seen in live traffic is
+bound to the announcement, not to its occurrence count — the count rises with every call until you
+migrate, which is the normal state of a deprecation window, not news — so it returns only if the
+announcement changes, for instance when a sunset date is published or moved.
+
+What a resolution is bound to stays on the collector. A Connected collector tells Flanj *that* a
+finding was resolved — when, and the note — so the dashboard stops counting what the collector
+stopped counting. The note passes the redaction floor when it is saved, before anything can read
+it, and the editor says beside the field that it is sent. It goes to your own dashboard only: never
+into a thread, to a counterparty, or into a log. With `finding_sync: false` nothing about findings
+leaves at all, the note included.
+
 ## Two planes
 
 - **Local plane (self-hosted, this is the OSS part):** capture, redaction, storage, drift detection, and a

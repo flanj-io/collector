@@ -127,7 +127,7 @@ func TestInboundMarker_StorePodPersistsItWithoutTheCall(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			wire, _ := json.Marshal(promote.FindingsRequest{Findings: promote.BuildFindingShapes(findings, inbound)})
+			wire, _ := json.Marshal(promote.FindingsRequest{Findings: promote.BuildFindingShapes(findings, inbound, nil)})
 			if strings.Contains(string(wire), service) {
 				t.Errorf("the findings sync carries the service name: %s", wire)
 			}

@@ -46,6 +46,7 @@ var shapeAllowedKeys = map[string]bool{
 	"integration": true, "endpoint": true, "field_path": true, "rule": true,
 	"occurrence_count": true, "first_seen": true, "last_seen": true,
 	"detected_at": true, "snapshot_observed_at": true, "snapshot_observed_from": true,
+	"resolved_at": true, "resolved_note": true,
 }
 
 // TestBuildFindingShapesWireBytes is the wire-bytes law: the marshalled sync
@@ -53,7 +54,7 @@ var shapeAllowedKeys = map[string]bool{
 // body content — asserted on the BYTES, not the struct, so an accidental
 // embed or rename cannot sneak an observed value out.
 func TestBuildFindingShapesWireBytes(t *testing.T) {
-	shapes := BuildFindingShapes([]model.Finding{shapeSentinelFinding("f_1")}, nil)
+	shapes := BuildFindingShapes([]model.Finding{shapeSentinelFinding("f_1")}, nil, nil)
 	raw, err := json.Marshal(FindingsRequest{Findings: shapes})
 	if err != nil {
 		t.Fatal(err)
@@ -112,7 +113,7 @@ func TestBuildFindingShapesNormalization(t *testing.T) {
 		Endpoint: "GET /v1/things", Rule: "undocumented-enum", DetectedAt: "2026-08-01T00:00:00Z",
 		Expected: "x", Actual: "y",
 	}
-	shapes := BuildFindingShapes([]model.Finding{old}, nil)
+	shapes := BuildFindingShapes([]model.Finding{old}, nil, nil)
 	if len(shapes) != 1 {
 		t.Fatalf("shapes = %d", len(shapes))
 	}
@@ -135,7 +136,7 @@ func TestBuildFindingShapesNormalization(t *testing.T) {
 	for i := range many {
 		many[i] = shapeSentinelFinding(fmt.Sprintf("f_%d", i))
 	}
-	if got := len(BuildFindingShapes(many, nil)); got != FindingsSyncMaxItems {
+	if got := len(BuildFindingShapes(many, nil, nil)); got != FindingsSyncMaxItems {
 		t.Errorf("builder emitted %d rows, cap is %d", got, FindingsSyncMaxItems)
 	}
 }
@@ -148,7 +149,7 @@ func TestBuildFindingShapesTruncatesToCaps(t *testing.T) {
 	oversized.FieldPath = model.Ptr(strings.Repeat("a", 300) + "é") // 301 runes, 303 bytes
 	oversized.Signature = strings.Repeat("s", 2000)
 
-	shapes := BuildFindingShapes([]model.Finding{oversized, shapeSentinelFinding("f_ok")}, nil)
+	shapes := BuildFindingShapes([]model.Finding{oversized, shapeSentinelFinding("f_ok")}, nil, nil)
 	if len(shapes) != 2 {
 		t.Fatalf("shapes = %d, want 2", len(shapes))
 	}
@@ -164,7 +165,7 @@ func TestBuildFindingShapesTruncatesToCaps(t *testing.T) {
 	// A multi-byte rune straddling the cut is dropped whole — never split.
 	multi := shapeSentinelFinding("f_multi")
 	multi.FieldPath = model.Ptr(strings.Repeat("a", capFieldPath-1) + "é") // é starts at byte 255, ends past the cap
-	if got := BuildFindingShapes([]model.Finding{multi}, nil)[0].FieldPath; got != strings.Repeat("a", capFieldPath-1) {
+	if got := BuildFindingShapes([]model.Finding{multi}, nil, nil)[0].FieldPath; got != strings.Repeat("a", capFieldPath-1) {
 		t.Errorf("rune-straddling cut produced %d bytes ending %q", len(got), got[len(got)-1:])
 	}
 
@@ -212,7 +213,7 @@ func TestPostFindings(t *testing.T) {
 	}))
 	t.Cleanup(s.srv.Close)
 
-	shapes := BuildFindingShapes([]model.Finding{shapeSentinelFinding("f_1"), shapeSentinelFinding("f_2")}, nil)
+	shapes := BuildFindingShapes([]model.Finding{shapeSentinelFinding("f_1"), shapeSentinelFinding("f_2")}, nil, nil)
 	out, status, err := NewClient(s.srv.URL, "deploy_secret", "v-test").WithCollectorKey("ckey_secret").
 		PostFindings(context.Background(), FindingsRequest{Findings: shapes})
 	if err != nil || status != 200 {
@@ -244,5 +245,65 @@ func TestPostFindings(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "secret") {
 		t.Errorf("bearer leaked into error: %v", err)
+	}
+}
+
+// A resolution crosses as a timestamp and the operator's note, and ONLY while it
+// still covers the finding — asserted on the bytes. A lapsed resolution's note
+// describes trouble that has since come back; sending it would mute a live
+// finding on the dashboard and explain it with a stale sentence.
+func TestBuildFindingShapesResolution(t *testing.T) {
+	f := shapeSentinelFinding("f_1") // live-vs-spec, occurrence_count 12
+	covering := model.Resolution{ResolvedAt: "2026-08-23T11:00:00Z", OccurrenceCount: 12, EvidenceVersion: "", Note: "SENTINEL_NOTE fixed in the client"}
+	lapsed := model.Resolution{ResolvedAt: "2026-08-23T08:30:00Z", OccurrenceCount: 11, Note: "SENTINEL_NOTE"}
+
+	wireOf := func(r model.Resolution) (string, map[string]any) {
+		t.Helper()
+		shapes := BuildFindingShapes([]model.Finding{f}, nil, map[string]model.Resolution{"f_1": r})
+		raw, err := json.Marshal(FindingsRequest{Findings: shapes})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded struct {
+			Findings []map[string]any `json:"findings"`
+		}
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		return string(raw), decoded.Findings[0]
+	}
+
+	wire, row := wireOf(covering)
+	if row["resolved_at"] != "2026-08-23T11:00:00Z" || row["resolved_note"] != covering.Note {
+		t.Errorf("resolved_at / resolved_note = %v / %v, want the resolution's", row["resolved_at"], row["resolved_note"])
+	}
+	for k := range row {
+		if !shapeAllowedKeys[k] {
+			t.Errorf("a resolved row carries a key outside the allow-list: %q", k)
+		}
+	}
+	// What the resolution is BOUND to is this collector's business alone.
+	for _, leak := range []string{`"evidence_version"`, `"resolved_occurrence_count"`, `"resolved_evidence_version"`} {
+		if strings.Contains(wire, leak) {
+			t.Errorf("wire bytes carry %s: %s", leak, wire)
+		}
+	}
+
+	// One more occurrence than was resolved: the finding is open, and the
+	// dashboard must hear exactly that — no timestamp, and no note either.
+	wire, row = wireOf(lapsed)
+	if _, has := row["resolved_at"]; has {
+		t.Errorf("a LAPSED resolution crossed as resolved_at=%v — the dashboard would mute a finding that came back", row["resolved_at"])
+	}
+	if strings.Contains(wire, "SENTINEL_NOTE") || strings.Contains(wire, `"resolved_note"`) {
+		t.Errorf("a lapsed resolution's note crossed: %s", wire)
+	}
+
+	// The liveness backstop: one over-long value must not 400 the whole batch on
+	// every tick forever.
+	long := covering
+	long.Note = strings.Repeat("é", capResolvedNote)
+	if _, row = wireOf(long); len(row["resolved_note"].(string)) > capResolvedNote {
+		t.Errorf("resolved_note on the wire = %d bytes, want at most %d", len(row["resolved_note"].(string)), capResolvedNote)
 	}
 }

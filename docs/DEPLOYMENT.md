@@ -371,7 +371,8 @@ Flow specifics:
   Connected, one 15s ticker on the store pod runs three independently gated
   legs, each with its own key in the `flanjui` block (all default `true`):
   `finding_sync` posts the SHAPE of current findings (never `expected` /
-  `actual` / `detail`); `directory_sync` is a pure FETCH of the display-name
+  `actual` / `detail`), plus — for a finding an operator has resolved — when,
+  and the note they typed, which passed the redaction floor when it was saved; `directory_sync` is a pure FETCH of the display-name
   table (nothing about your edges is sent); and
   `edge_sync` registers each **external** edge as `{registrable_domain,
   direction, first_seen, last_seen}` and nothing more. No calls, no bodies, no

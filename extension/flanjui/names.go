@@ -13,12 +13,11 @@ import (
 // and persisted in the store's settings KV so every pod of a deployment agrees
 // and a name survives a restart. Never a per-pod file.
 //
-// Storage follows the acks precedent exactly (acks.go): one record per domain
-// under `edge.name.<registrable_domain>`, plus the index `edge.names` — a JSON
-// array of named domains. Every write is a single blind PutSetting; the KV has
-// no delete, so removing a name is a tombstone (empty value) + index removal,
-// and the index mutation carries the same bounded re-read-verify retry as the
-// ack index (see indexWriteAttempts for the residual-race honesty).
+// Storage: one record per domain under `edge.name.<registrable_domain>`, plus
+// the index `edge.names` — a JSON array of named domains. Every write is a
+// single blind PutSetting; the KV has no delete, so removing a name is a
+// tombstone (empty value) + index removal, and the index mutation carries a
+// bounded re-read-verify retry (see indexWriteAttempts for the residual race).
 //
 // Only `user` names are STORED here — a name the operator typed. The other
 // three tiers are resolved at read time (directory.go) and never persisted:
@@ -67,12 +66,32 @@ func loadEdgeNameIndex(st store.Store) ([]string, error) {
 	return domains, nil
 }
 
-// errEdgeNameIndexRace mirrors errAckIndexRace: the record itself is persisted,
-// only the index entry may be missing after every attempt lost the race.
+// indexWriteAttempts bounds the read-modify-write retry on edge.names.
+//
+// edge.names is a single JSON array behind a plain settings KV (no
+// compare-and-swap), so adding or removing a domain is a read-modify-write: the
+// index is re-read IMMEDIATELY before each write and the write is verified by a
+// re-read afterwards, up to this many times. RESIDUAL RACE: two writers that
+// both read, both write and both verify inside each other's window can still
+// drop an entry — without CAS in the KV this cannot be made airtight from here.
+const indexWriteAttempts = 3
+
+// containsID reports whether ids holds id.
+func containsID(ids []string, id string) bool {
+	for _, x := range ids {
+		if x == id {
+			return true
+		}
+	}
+	return false
+}
+
+// errEdgeNameIndexRace: the record itself is persisted, only the index entry
+// may be missing after every attempt lost the race.
 var errEdgeNameIndexRace = errors.New("edge.names: concurrent writer won every attempt; record saved, index entry missing")
 
-// mutateEdgeNameIndex adds or removes one domain in edge.names with the same
-// re-read-before-write + verify retry as the ack index (acks.go).
+// mutateEdgeNameIndex adds or removes one domain in edge.names with the
+// re-read-before-write + verify retry described on indexWriteAttempts.
 func mutateEdgeNameIndex(st store.Store, domain string, add bool) error {
 	var lastErr error
 	for attempt := 0; attempt < indexWriteAttempts; attempt++ {

@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/flanj-io/collector/internal/edge"
+	"github.com/flanj-io/collector/internal/integration"
 	"github.com/flanj-io/collector/internal/model"
 	"github.com/flanj-io/collector/internal/promote"
 	"github.com/flanj-io/collector/internal/redact"
@@ -42,8 +43,8 @@ func (e *uiExtension) routes() http.Handler {
 	mux.HandleFunc("/api/calls/{id}", e.handleCall)
 	mux.HandleFunc("/api/findings", e.handleFindings)
 	// Local acknowledge (never a relay route — guarded WITHOUT the CP check).
-	mux.HandleFunc("/api/findings/{id}/ack", e.handleFindingAck)
-	mux.HandleFunc("/api/findings/{id}/unack", e.handleFindingUnack)
+	mux.HandleFunc("/api/findings/{id}/resolve", e.handleFindingResolve)
+	mux.HandleFunc("/api/findings/{id}/reopen", e.handleFindingReopen)
 	mux.HandleFunc("/api/contracts", e.handleContracts)
 	mux.HandleFunc("/api/contracts/spec", e.handleContractSpec)
 	mux.HandleFunc("/api/contracts/preview", e.handleContractPreview)
@@ -201,6 +202,15 @@ type edgeWithRPM struct {
 	RegistrableDomain string  `json:"registrable_domain"`
 	DisplayName       string  `json:"display_name"`
 	NameSource        string  `json:"name_source"`
+	// OpenDriftFindings is how many OPEN findings of the call-drifting kinds
+	// belong to this edge — see openDriftFindings. The row's DRIFTED chip is
+	// drawn from DriftCount, a cumulative tally of drifted CALLS that no
+	// resolution ever lowers; this is what lets the chip stand down once every
+	// finding behind it is resolved, so the edge rows and the Overview headline
+	// (which counts open findings) can never disagree. Nil when it cannot be
+	// known, and a reader must then show the chip: drift is never hidden on a
+	// guess.
+	OpenDriftFindings *int `json:"open_drift_findings,omitempty"`
 }
 
 // decorateEdge builds the API row for one discovered edge.
@@ -231,11 +241,63 @@ func (e *uiExtension) edgeRows(st store.Store) ([]edgeWithRPM, string, error) {
 	// One resolution context per REQUEST — never a lookup per edge, and never
 	// a CP call from here (the directory tier reads only the KV + baked seed).
 	names := e.newNameResolver(st)
+	open, op, err := e.openDriftFindings(st, edges)
+	if err != nil {
+		return nil, op, err
+	}
 	all := make([]edgeWithRPM, 0, len(edges))
-	for _, ed := range edges {
-		all = append(all, decorateEdge(ed, float64(counts[ed.PeerHost+"|"+ed.Direction]), names))
+	for i, ed := range edges {
+		row := decorateEdge(ed, float64(counts[ed.PeerHost+"|"+ed.Direction]), names)
+		if open != nil {
+			n := open[i]
+			row.OpenDriftFindings = &n
+		}
+		all = append(all, row)
 	}
 	return all, "", nil
+}
+
+// openDriftFindings counts, per edge (by index), the OPEN findings of the kinds
+// that mark a call drifted (model.PerCallDriftKinds). It reads the same rows
+// the Contracts tab does (findingRows), so "open" means exactly what it means
+// there: not covered by a resolution.
+//
+// Which edge a finding belongs to: an inbound finding (raised against the
+// contract this deployment publishes) is about our responses to every caller,
+// so it counts on every inbound row; any other finding counts on the row whose
+// host its source call reached, or — when that call has aged out — whose host
+// derives the finding's integration, which is how every outbound record is
+// keyed.
+//
+// It answers nil, "cannot say", when the store holds more findings than the
+// rows it read: an open finding past the page would otherwise read as none.
+func (e *uiExtension) openDriftFindings(st store.Store, edges []model.Edge) ([]int, string, error) {
+	views, op, err := e.findingRows(st)
+	if err != nil {
+		return nil, op, err
+	}
+	if _, total, err := st.Counts(); err != nil {
+		return nil, "count findings", err
+	} else if total > len(views) {
+		return nil, "", nil
+	}
+	open := make([]int, len(edges))
+	for _, v := range views {
+		if v.Resolved || !model.MarksCallDrifted(v.Kind) {
+			continue
+		}
+		for i, ed := range edges {
+			inboundEdge := ed.Direction == edge.DirectionServer
+			switch {
+			case v.Inbound != inboundEdge:
+			case v.Inbound:
+				open[i]++
+			case v.PeerHost == ed.PeerHost, v.PeerHost == "" && v.Integration == integration.ForHost(ed.PeerHost):
+				open[i]++
+			}
+		}
+	}
+	return open, "", nil
 }
 
 // handleEdges returns the discovered EXTERNAL edges (inbound + outbound), each
@@ -489,19 +551,22 @@ func (e *uiExtension) handleCall(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, call)
 }
 
-// findingView decorates a stored finding for the UI with its LOCAL ack state
+// findingView decorates a stored finding for the UI with its LOCAL resolution
 // and the host of its source call — read-API joins only. model.Finding itself
 // gains neither (it mirrors the frozen schema and is what promotes to the CP;
-// the ack never leaves).
+// a resolution's note never leaves).
 type findingView struct {
 	model.Finding
-	Acked   bool   `json:"acked,omitempty"`
-	AckedAt string `json:"acked_at,omitempty"`
-	// AckedEvidenceVersion is the evidence hash the ack covers (the AFTER
-	// snapshot hash on a definition_change; absent otherwise). Surfaced so the
-	// SPA can apply the SAME match rule client-side — a second, independent
-	// check that a new change can never inherit an old acknowledgement.
-	AckedEvidenceVersion string `json:"acked_evidence_version,omitempty"`
+	// Resolved: a stored resolution still COVERS this finding
+	// (model.Resolution.Covers). ResolvedAt and ResolvedNote ride with it.
+	Resolved     bool   `json:"resolved,omitempty"`
+	ResolvedAt   string `json:"resolved_at,omitempty"`
+	ResolvedNote string `json:"resolved_note,omitempty"`
+	// ReopenedAfter is the resolved_at of a resolution that NO LONGER covers the
+	// finding — it recurred, or its evidence moved on. The row is open, in its
+	// own colour, and this is how it can say why it is back. Never set together
+	// with Resolved.
+	ReopenedAfter string `json:"reopened_after,omitempty"`
 	// PeerHost is the provider host this finding is ABOUT: the peer host of its
 	// pinned source call, resolved here rather than in the browser.
 	//
@@ -548,7 +613,7 @@ func findingPeerHosts(st store.Store, findings []model.Finding) (map[string]stri
 
 // findingRows builds the decorated finding rows GET /api/findings returns.
 // Like edgeRows it is the ONE builder for that shape — the agent MCP surface
-// reads findings through it, so a change to the ack join or the peer-host join
+// reads findings through it, so a change to the resolution join or the peer-host join
 // cannot land on the human surface and miss the agent one. The failing store op
 // is named for storeErr.
 func (e *uiExtension) findingRows(st store.Store) ([]findingView, string, error) {
@@ -556,9 +621,9 @@ func (e *uiExtension) findingRows(st store.Store) ([]findingView, string, error)
 	if err != nil {
 		return nil, "list findings", err
 	}
-	acks, err := loadAckSet(st)
+	resolutions, err := st.FindingResolutions()
 	if err != nil {
-		return nil, "load acknowledgements", err
+		return nil, "load resolutions", err
 	}
 	hosts, err := findingPeerHosts(st, findings)
 	if err != nil {
@@ -574,13 +639,17 @@ func (e *uiExtension) findingRows(st store.Store) ([]findingView, string, error)
 		if f.SourceCallID != nil {
 			views[i].PeerHost = hosts[*f.SourceCallID]
 		}
-		// ackMatches is what makes the acknowledged band's promise true: a
-		// definition_change whose after-snapshot hash has moved on is NOT
-		// covered by the old record and comes back un-acknowledged.
-		if rec, ok := acks[findingSignature(f)]; ok && ackable(f) && ackMatches(f, rec) {
-			views[i].Acked = true
-			views[i].AckedAt = rec.AckedAt
-			views[i].AckedEvidenceVersion = rec.EvidenceVersion
+		// Covers is what makes the Resolved band's promise true: a finding that
+		// recurred, or whose evidence moved on, is NOT covered by the old
+		// resolution and comes back open.
+		if res, ok := resolutions[f.ID]; ok {
+			if res.Covers(f) {
+				views[i].Resolved = true
+				views[i].ResolvedAt = res.ResolvedAt
+				views[i].ResolvedNote = res.Note
+			} else {
+				views[i].ReopenedAfter = res.ResolvedAt
+			}
 		}
 	}
 	return views, "", nil

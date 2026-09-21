@@ -13,7 +13,7 @@ package flanjui
 // nothing new is reachable off-host, and an operator who has decided where the
 // local UI listens has already decided where this listens.
 //
-// It is READ-ONLY. There is no flag tool, no acknowledge tool, no contract
+// It is READ-ONLY. There is no flag tool, no resolve tool, no contract
 // upload — every mutation on this collector stays behind the browser guard
 // (guard.go: POST + `X-Flanj-UI: 1` + JSON + same-origin), which an agent does
 // not satisfy and is not meant to. Raising a thread with a provider is a human
@@ -154,7 +154,7 @@ func (e *uiExtension) mcpServer() *mcp.Server {
 			Name:  "list_findings",
 			Title: "List open drift findings",
 			Description: "Open drift findings — where a provider's live behaviour departed from its contract. " +
-				"Same rows the local UI shows. Acknowledged findings are excluded unless you ask for them.",
+				"Same rows the local UI shows. Resolved findings are excluded unless you ask for them.",
 			Annotations: readOnly,
 		}, e.mcpListFindings)
 
@@ -283,7 +283,9 @@ type mcpFindingRow = map[string]any
 // Which fields, and why only these: `expected`, `actual` and `detail` are the
 // only ones carrying observed content — `actual` can quote a scalar lifted from
 // a response body (internal/drift actualFromValue), and `detail` embeds it in
-// prose. Everything else is structural (ids, hashes, timestamps, kind, rule,
+// prose — and `resolved_note` is the one field a person typed. The note passed
+// the floor when it was written (resolve.go); it passes again here because this
+// is the hop that can end at a model provider. Everything else is structural (ids, hashes, timestamps, kind, rule,
 // endpoint, field_path, integration) and running a redactor over those could
 // only corrupt an identifier the caller correlates on.
 //
@@ -291,7 +293,7 @@ type mcpFindingRow = map[string]any
 // byte and shape parity with the browser's row is preserved.
 func redactFindingValues(row mcpFindingRow) {
 	r := redact.New()
-	for _, k := range []string{"expected", "actual", "detail"} {
+	for _, k := range []string{"expected", "actual", "detail", "resolved_note"} {
 		if s, ok := row[k].(string); ok && s != "" {
 			row[k] = r.Redact(s).Text
 		}
@@ -371,7 +373,7 @@ type mcpDriftSummaryOutput struct {
 	Headline     string           `json:"headline"`
 	Edges        []mcpEdgeSummary `json:"edges"`
 	OpenFindings int              `json:"open_findings_total"`
-	Acknowledged int              `json:"acknowledged_findings_total"`
+	Resolved     int              `json:"resolved_findings_total"`
 	// Unattributed are open findings that reach no edge: call-less, and with no
 	// contract bound to a host to attribute them through. They are in
 	// OpenFindings but on no edge line, so the per-edge counts would otherwise
@@ -422,8 +424,10 @@ func (e *uiExtension) mcpDriftSummary(ctx context.Context, _ *mcp.CallToolReques
 	openByHost := map[string]int{}
 	sevByHost := map[string]map[string]int{}
 	for _, row := range rows {
-		if acked, _ := row["acked"].(bool); acked {
-			out.Acknowledged++
+		// A resolved finding is not an open one, at any severity: an operator
+		// dealt with it, and it comes back by itself if the trouble does.
+		if resolved, _ := row["resolved"].(bool); resolved {
+			out.Resolved++
 			continue
 		}
 		out.OpenFindings++
@@ -502,9 +506,9 @@ func mcpSummaryText(out mcpDriftSummaryOutput) string {
 			out.Unattributed, plural(out.Unattributed, "finding is", "findings are"),
 			plural(out.Unattributed, "it", "them"))
 	}
-	if out.Acknowledged > 0 {
-		fmt.Fprintf(&b, "\n\n%d %s acknowledged locally and excluded above.",
-			out.Acknowledged, plural(out.Acknowledged, "finding is", "findings are"))
+	if out.Resolved > 0 {
+		fmt.Fprintf(&b, "\n\n%d %s resolved locally and excluded above.",
+			out.Resolved, plural(out.Resolved, "finding is", "findings are"))
 	}
 	return b.String()
 }
@@ -577,18 +581,18 @@ func mcpEdgesText(out mcpListEdgesOutput) string {
 // ─── list_findings ───────────────────────────────────────────────────────────
 
 type mcpListFindingsInput struct {
-	Edge                string `json:"edge,omitempty" jsonschema:"Only findings about this dependency — the peer_host of a list_edges row, exactly as reported (host or host:port)."`
-	Kind                string `json:"kind,omitempty" jsonschema:"Only this finding kind: type-mismatch, version-diff, output_mismatch, definition_change or stale_client."`
-	Severity            string `json:"severity,omitempty" jsonschema:"Only this severity: breaking, non-breaking or info."`
-	IncludeAcknowledged bool   `json:"include_acknowledged,omitempty" jsonschema:"Include findings a person has acknowledged locally. Excluded by default — acknowledged means someone already read it."`
-	Limit               int    `json:"limit,omitempty" jsonschema:"Maximum rows to return (default 50)."`
+	Edge            string `json:"edge,omitempty" jsonschema:"Only findings about this dependency — the peer_host of a list_edges row, exactly as reported (host or host:port)."`
+	Kind            string `json:"kind,omitempty" jsonschema:"Only this finding kind: type-mismatch, version-diff, output_mismatch, definition_change or stale_client."`
+	Severity        string `json:"severity,omitempty" jsonschema:"Only this severity: breaking, non-breaking or info."`
+	IncludeResolved bool   `json:"include_resolved,omitempty" jsonschema:"Include findings a person has resolved locally. Excluded by default — resolved means someone dealt with it, and it reopens by itself if the trouble returns."`
+	Limit           int    `json:"limit,omitempty" jsonschema:"Maximum rows to return (default 50)."`
 }
 
 type mcpListFindingsOutput struct {
 	Findings     []mcpFindingRow `json:"findings"`
 	Count        int             `json:"count"`
 	TotalMatched int             `json:"total_matched"`
-	Acknowledged int             `json:"acknowledged_excluded"`
+	Resolved     int             `json:"resolved_excluded"`
 	Evidence     mcpEvidence     `json:"evidence"`
 	Note         string          `json:"note,omitempty"`
 	// KnownEdges is filled ONLY when `edge` named a host this collector has
@@ -641,9 +645,9 @@ func (e *uiExtension) mcpListFindings(ctx context.Context, _ *mcp.CallToolReques
 		out.KnownEdges = nil
 	}
 
-	// The scope filters run BEFORE the ack filter, so `acknowledged_excluded`
-	// counts what was excluded from THIS answer. Counting acks first made the
-	// note say "3 acknowledged findings excluded" on an edge that had none.
+	// The scope filters run BEFORE the resolved filter, so `resolved_excluded`
+	// counts what was excluded from THIS answer. Counting first made the note
+	// say "3 resolved findings excluded" on an edge that had none.
 	matched := make([]mcpFindingRow, 0, len(rows))
 	for _, row := range rows {
 		if edgeFilter != "" && findingEdgeHost(row, specHosts) != edgeFilter {
@@ -659,8 +663,8 @@ func (e *uiExtension) mcpListFindings(ctx context.Context, _ *mcp.CallToolReques
 				continue
 			}
 		}
-		if acked, _ := row["acked"].(bool); acked && !in.IncludeAcknowledged {
-			out.Acknowledged++
+		if resolved, _ := row["resolved"].(bool); resolved && !in.IncludeResolved {
+			out.Resolved++
 			continue
 		}
 		matched = append(matched, row)
@@ -693,9 +697,9 @@ func (e *uiExtension) mcpListFindings(ctx context.Context, _ *mcp.CallToolReques
 func mcpFindingsNote(out mcpListFindingsOutput, scope string) string {
 	ev := out.Evidence.sentence(scope)
 	if out.TotalMatched == 0 {
-		if out.Acknowledged > 0 {
-			return fmt.Sprintf("No open drift findings for %s. %s (%d acknowledged %s excluded — pass include_acknowledged to see them.)",
-				scope, ev, out.Acknowledged, plural(out.Acknowledged, "finding", "findings"))
+		if out.Resolved > 0 {
+			return fmt.Sprintf("No open drift findings for %s. %s (%d resolved %s excluded — pass include_resolved to see them.)",
+				scope, ev, out.Resolved, plural(out.Resolved, "finding", "findings"))
 		}
 		return fmt.Sprintf("No open drift findings for %s. %s", scope, ev)
 	}

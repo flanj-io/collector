@@ -144,7 +144,7 @@ func relayMessages() []string {
 		msgNotConnected, msgContactUnconfirmed, msgCPUnreachableFlag, msgCPUnreachableSend, msgCPUnreachable,
 		msgCPNotConfigured, msgCPPlaceholderHost, msgStoreUnavailable, msgPostOnly, msgUIHeaderRequired, msgJSONRequired, msgForeignOrigin,
 		msgInvalidJSON, msgConnectFields, msgInvalidEmail, msgFindingRequired, msgFindingNotFound, msgFindingNoCall,
-		msgCallEvicted, msgThreadNotFound, msgWrongOrigin, msgKeyMissing, msgNotAckable, contactUnconfirmedMessage("ops@example.test"),
+		msgCallEvicted, msgThreadNotFound, msgWrongOrigin, msgKeyMissing, msgNotResolvable, msgResolveNoteTooLong, contactUnconfirmedMessage("ops@example.test"),
 		msgEdgeHostRequired, msgEdgeNotFound, msgNameTooLong, msgNameEmpty, msgNameSavedSuggestFailed,
 		msgNameSuggestRefused("The name is too long."),
 		// The contract-upload refusal sentences. They were outside this scan, which is

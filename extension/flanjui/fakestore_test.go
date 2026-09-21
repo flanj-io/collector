@@ -11,12 +11,13 @@ import (
 // fakeStore is an in-memory store.Store for handler tests: findings, calls and
 // the settings KV behave; everything else is inert.
 type fakeStore struct {
-	mu       sync.Mutex
-	calls    map[string]model.RedactedCall
-	findings map[string]model.Finding
-	settings map[string]string
-	promoted []string
-	inbound  map[string]bool // InsertInboundFinding's mark
+	mu          sync.Mutex
+	calls       map[string]model.RedactedCall
+	findings    map[string]model.Finding
+	settings    map[string]string
+	promoted    []string
+	inbound     map[string]bool             // InsertInboundFinding's mark
+	resolutions map[string]model.Resolution // ResolveFinding's column
 	// edges + specInfos back the v1p1 naming surface: ListEdges serves the
 	// seeded rows (externalOnly filters on class) and ListSpecInfos serves the
 	// seeded spec rows (config→edge linkage for the boot migration).
@@ -301,4 +302,37 @@ func (f *fakeStore) settingsSnapshot() map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+// ResolveFinding / ReopenFinding / FindingResolutions: the resolved_* columns of
+// the real backends, by finding id.
+func (f *fakeStore) ResolveFinding(id string, r model.Resolution) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.findings[id]; !ok {
+		return false, nil
+	}
+	if f.resolutions == nil {
+		f.resolutions = map[string]model.Resolution{}
+	}
+	if r.ResolvedAt == "" {
+		delete(f.resolutions, id)
+	} else {
+		f.resolutions[id] = r
+	}
+	return true, nil
+}
+
+func (f *fakeStore) ReopenFinding(id string) (bool, error) {
+	return f.ResolveFinding(id, model.Resolution{})
+}
+
+func (f *fakeStore) FindingResolutions() (map[string]model.Resolution, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[string]model.Resolution, len(f.resolutions))
+	for id, r := range f.resolutions {
+		out[id] = r
+	}
+	return out, nil
 }

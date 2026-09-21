@@ -222,7 +222,7 @@ func hasID(ids []string, want string) bool {
 // TestMCPClientListsTheReadOnlyToolSet is the first half of the acceptance: a
 // real MCP client connects to a running collector and lists what it can do.
 // It also pins the boundary — every tool is annotated read-only, and NO tool
-// exists for a mutation the browser guard protects (flag, acknowledge, connect,
+// exists for a mutation the browser guard protects (flag, resolve, connect,
 // contract upload). An agent that could flag would put a person's name on a
 // message no person wrote.
 func TestMCPClientListsTheReadOnlyToolSet(t *testing.T) {
@@ -254,7 +254,7 @@ func TestMCPClientListsTheReadOnlyToolSet(t *testing.T) {
 	if len(got) != 4 {
 		t.Fatalf("the agent surface is read-only: expected exactly 4 tools, got %d (%v)", len(got), res.Tools)
 	}
-	for _, banned := range []string{"flag", "create_thread", "acknowledge", "ack_finding", "connect", "upload_contract"} {
+	for _, banned := range []string{"flag", "create_thread", "acknowledge", "ack_finding", "resolve", "resolve_finding", "reopen_finding", "connect", "upload_contract"} {
 		if _, ok := got[banned]; ok {
 			t.Errorf("mutating tool %q is exposed on the agent surface", banned)
 		}
@@ -291,7 +291,7 @@ func TestMCPFindingRowsAreTheUIRows(t *testing.T) {
 	}
 
 	sess := mcpConnect(t, ui)
-	_, out := callTool(t, sess, "list_findings", map[string]any{"include_acknowledged": true})
+	_, out := callTool(t, sess, "list_findings", map[string]any{"include_resolved": true})
 	rows, _ := out["findings"].([]any)
 	if len(rows) != len(byID) {
 		t.Fatalf("agent surface returned %d finding(s), the UI %d", len(rows), len(byID))
@@ -488,7 +488,7 @@ func TestMCPNeverEmitsARawBody(t *testing.T) {
 		{"list_edges", nil},
 		{"list_edges", map[string]any{"direction": "client"}},
 		{"list_findings", nil},
-		{"list_findings", map[string]any{"include_acknowledged": true, "limit": 500}},
+		{"list_findings", map[string]any{"include_resolved": true, "limit": 500}},
 		{"list_findings", map[string]any{"edge": "api.acme.com"}},
 		{"list_findings", map[string]any{"edge": "mcp.acme.com"}},
 		{"list_findings", map[string]any{"kind": model.KindLiveVsSpec}},
@@ -692,11 +692,11 @@ func TestMCPStoreFailureNeverReachesTheAgent(t *testing.T) {
 	}
 }
 
-// ackFinding drives the local acknowledge route the way the SPA does, so these
-// tests exercise the real ack join rather than hand-writing the KV.
-func ackFinding(t *testing.T, ui *httptest.Server, id string) {
+// resolveFinding drives the local resolve route the way the SPA does, so these
+// tests exercise the real resolution join rather than hand-writing the store.
+func resolveFinding(t *testing.T, ui *httptest.Server, id string) {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodPost, ui.URL+"/api/findings/"+id+"/ack", strings.NewReader(`{}`))
+	req, err := http.NewRequest(http.MethodPost, ui.URL+"/api/findings/"+id+"/resolve", strings.NewReader(`{}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -708,38 +708,38 @@ func ackFinding(t *testing.T, ui *httptest.Server, id string) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("ack %s: %d", id, resp.StatusCode)
+		t.Fatalf("resolve %s: %d", id, resp.StatusCode)
 	}
 }
 
-// TestMCPAcknowledgedCountIsScopedToTheQuery: the note tells the caller how many
+// TestMCPResolvedCountIsScopedToTheQuery: the note tells the caller how many
 // findings were hidden from THIS answer, so the count has to be taken after the
-// scope filters. Counting acks first reported "1 acknowledged finding excluded"
+// scope filters. Counting first reported "1 resolved finding excluded"
 // on an edge that had none — an invitation to re-query for something that was
 // never there.
-func TestMCPAcknowledgedCountIsScopedToTheQuery(t *testing.T) {
+func TestMCPResolvedCountIsScopedToTheQuery(t *testing.T) {
 	_, ui, _ := newMCPExt(t, seedTwoEdges(t))
-	ackFinding(t, ui, "finding-mcp") // an informational definition_change on mcp.acme.com
+	resolveFinding(t, ui, "finding-mcp") // an informational definition_change on mcp.acme.com
 	sess := mcpConnect(t, ui)
 
 	_, other := callTool(t, sess, "list_findings", map[string]any{"edge": "api.acme.com"})
-	if n, _ := other["acknowledged_excluded"].(float64); n != 0 {
-		t.Errorf("api.acme.com has no acknowledged findings; reported %v", n)
+	if n, _ := other["resolved_excluded"].(float64); n != 0 {
+		t.Errorf("api.acme.com has no resolved findings; reported %v", n)
 	}
-	if note, _ := other["note"].(string); strings.Contains(note, "acknowledged") {
-		t.Errorf("note should not mention acknowledgements for an edge that has none: %q", note)
+	if note, _ := other["note"].(string); strings.Contains(note, "resolved") {
+		t.Errorf("note should not mention resolutions for an edge that has none: %q", note)
 	}
 
 	_, acked := callTool(t, sess, "list_findings", map[string]any{"edge": "mcp.acme.com"})
-	if n, _ := acked["acknowledged_excluded"].(float64); n != 1 {
-		t.Fatalf("mcp.acme.com should report its one acknowledged finding excluded; got %v", n)
+	if n, _ := acked["resolved_excluded"].(float64); n != 1 {
+		t.Fatalf("mcp.acme.com should report its one resolved finding excluded; got %v", n)
 	}
 	if ids := findingIDs(t, acked); len(ids) != 0 {
-		t.Fatalf("an acknowledged finding is not open; got %v", ids)
+		t.Fatalf("a resolved finding is not open; got %v", ids)
 	}
-	_, included := callTool(t, sess, "list_findings", map[string]any{"edge": "mcp.acme.com", "include_acknowledged": true})
+	_, included := callTool(t, sess, "list_findings", map[string]any{"edge": "mcp.acme.com", "include_resolved": true})
 	if ids := findingIDs(t, included); len(ids) != 1 || ids[0] != "finding-mcp" {
-		t.Fatalf("include_acknowledged should bring it back; got %v", ids)
+		t.Fatalf("include_resolved should bring it back; got %v", ids)
 	}
 }
 

@@ -68,14 +68,14 @@ func (r *testRig) postRaw(t *testing.T, path string, body []byte) (*http.Respons
 }
 
 func TestSmallEnvelopeRoutesRefuseAnOversizedBodyAsTooLarge(t *testing.T) {
-	// An ackable finding: findingAck checks ackable() BEFORE it reads the body,
+	// A resolvable finding: the handler checks Resolvable() BEFORE it reads the body,
 	// so the ack route's boundary is only reachable through one of these.
-	const ackable = "fnd_ackable"
-	newAckRig := func(t *testing.T) *testRig {
+	const resolvable = "fnd_resolvable"
+	newResolveRig := func(t *testing.T) *testRig {
 		r := newRig(t)
 		r.start(t)
 		_ = r.st.InsertFinding(model.Finding{
-			SchemaVersion: 1, ID: ackable, Kind: model.KindDefinitionChange,
+			SchemaVersion: 1, ID: resolvable, Kind: model.KindDefinitionChange,
 			Severity: model.SeverityInfo, Integration: "acme-payments",
 			Endpoint: "charge", Rule: model.RuleDescriptionChanged,
 			DetectedAt: "2026-09-08T10:00:00Z",
@@ -114,12 +114,12 @@ func TestSmallEnvelopeRoutesRefuseAnOversizedBodyAsTooLarge(t *testing.T) {
 			suffix: `"}`,
 		},
 		{
-			// acks.go decodeAckBody — the io.LimitReader one.
-			name:   "finding ack",
-			path:   "/api/findings/" + ackable + "/ack",
+			// resolve.go handleFindingResolve — once the io.LimitReader one.
+			name:   "finding resolve",
+			path:   "/api/findings/" + resolvable + "/resolve",
 			prefix: `{"note":"`,
 			suffix: `"}`,
-			rig:    newAckRig,
+			rig:    newResolveRig,
 		},
 	}
 
@@ -162,11 +162,11 @@ func TestSmallEnvelopeRoutesRefuseAnOversizedBodyAsTooLarge(t *testing.T) {
 	}
 }
 
-// TestAckStillAcceptsAnAbsentOrEmptyBody: the ack body is OPTIONAL — the
+// TestResolveStillAcceptsAnAbsentOrEmptyBody: the resolve body is OPTIONAL — the
 // shipped UI sends `{}` and older builds send nothing at all. Routing it through
 // the shared reader must not turn that into a 400, which is why the ack route
 // gets readOptionalJSONBody rather than readJSONBody.
-func TestAckStillAcceptsAnAbsentOrEmptyBody(t *testing.T) {
+func TestResolveStillAcceptsAnAbsentOrEmptyBody(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		body []byte
@@ -178,37 +178,37 @@ func TestAckStillAcceptsAnAbsentOrEmptyBody(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newRig(t)
 			r.start(t)
-			const id = "fnd_ackable"
+			const id = "fnd_resolvable"
 			_ = r.st.InsertFinding(model.Finding{
 				SchemaVersion: 1, ID: id, Kind: model.KindDefinitionChange,
 				Severity: model.SeverityInfo, Integration: "acme-payments",
 				Endpoint: "charge", Rule: model.RuleDescriptionChanged,
 				DetectedAt: "2026-09-08T10:00:00Z",
 			})
-			resp, out, raw := r.postRaw(t, "/api/findings/"+id+"/ack", tc.body)
+			resp, out, raw := r.postRaw(t, "/api/findings/"+id+"/resolve", tc.body)
 			if resp.StatusCode != http.StatusOK {
 				t.Fatalf("status = %d, want 200: %s", resp.StatusCode, raw)
 			}
-			if out["acked"] != true {
-				t.Errorf("acked = %v, want true: %s", out["acked"], raw)
+			if out["resolved"] != true {
+				t.Errorf("resolved = %v, want true: %s", out["resolved"], raw)
 			}
 		})
 	}
 }
 
-// TestAckStillRefusesMalformedJSON: the size branch must not swallow the syntax
+// TestResolveStillRefusesMalformedJSON: the size branch must not swallow the syntax
 // branch. A body that is neither empty nor valid JSON is still 400 invalid_json.
-func TestAckStillRefusesMalformedJSON(t *testing.T) {
+func TestResolveStillRefusesMalformedJSON(t *testing.T) {
 	r := newRig(t)
 	r.start(t)
-	const id = "fnd_ackable"
+	const id = "fnd_resolvable"
 	_ = r.st.InsertFinding(model.Finding{
 		SchemaVersion: 1, ID: id, Kind: model.KindDefinitionChange,
 		Severity: model.SeverityInfo, Integration: "acme-payments",
 		Endpoint: "charge", Rule: model.RuleDescriptionChanged,
 		DetectedAt: "2026-09-08T10:00:00Z",
 	})
-	resp, out, raw := r.postRaw(t, "/api/findings/"+id+"/ack", []byte(`{"note": `))
+	resp, out, raw := r.postRaw(t, "/api/findings/"+id+"/resolve", []byte(`{"note": `))
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400: %s", resp.StatusCode, raw)
 	}

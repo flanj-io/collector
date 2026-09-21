@@ -90,10 +90,11 @@ const (
 	msgNotFlaggable             = "This finding is a local notice — stale-client calls stay on this collector and can't be flagged to the provider."
 	// An info finding is refused by the same 403, but the
 	// stale-client sentence above is false about it, so it has its own.
-	msgInfoNotFlaggable = "This finding is informational — info findings stay on this collector and are never flagged to another organisation."
-	msgNotAckable       = "Only non-breaking informational findings can be acknowledged — breaking findings need a fix or a thread."
-	msgFindingNotFound  = "That finding is no longer in the local store."
-	msgCallNotFound     = "That call is no longer in the local store."
+	msgInfoNotFlaggable   = "This finding is informational — info findings stay on this collector and are never flagged to another organisation."
+	msgNotResolvable      = "That notice is about this deployment's own client and has nothing to resolve."
+	msgResolveNoteTooLong = "That note is too long — keep it under 500 characters."
+	msgFindingNotFound    = "That finding is no longer in the local store."
+	msgCallNotFound       = "That call is no longer in the local store."
 	// RETIRED as a refusal by v1p4-2026-09-08: a finding with no source call is
 	// now flaggable on every kind (the message carries the ask), so nothing
 	// answers 400 finding_has_no_call any more. The string stays because the

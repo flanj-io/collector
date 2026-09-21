@@ -185,9 +185,19 @@ func copyFindings(src *sql.DB, tx *sql.Tx) (int, error) {
 	} else if ok {
 		inbound = "inbound"
 	}
+	// The resolved_* columns arrived later still, all four together: a file
+	// without them holds no resolutions, and selecting a missing column would
+	// abort the whole import (the source is opened read-only, so migrate()
+	// never ran on it).
+	resolved := "'', '', 0, ''"
+	if ok, err := sqliteHasColumn(src, "findings", "resolved_at"); err != nil {
+		return 0, fmt.Errorf("migrate-from-sqlite: probe findings.resolved_at: %w", err)
+	} else if ok {
+		resolved = "resolved_at, resolved_evidence_version, resolved_occurrence_count, resolved_note"
+	}
 	rows, err := src.Query(
 		`SELECT id, signature, kind, severity, integration, endpoint, rule, source_call_id,
-		        occurrence_count, first_seen, last_seen, detected_at, doc, ` + inbound + `
+		        occurrence_count, first_seen, last_seen, detected_at, doc, ` + inbound + `, ` + resolved + `
 		   FROM findings ORDER BY seq ASC`)
 	if err != nil {
 		return 0, fmt.Errorf("migrate-from-sqlite: read findings: %w", err)
@@ -200,23 +210,27 @@ func copyFindings(src *sql.DB, tx *sql.Tx) (int, error) {
 			firstSeen, lastSeen, detectedAt, doc                       string
 			sourceCallID                                               sql.NullString
 			occ, in                                                    int
+			res                                                        model.Resolution
 		)
 		if err := rows.Scan(&id, &signature, &kind, &severity, &integration, &endpoint, &rule, &sourceCallID,
-			&occ, &firstSeen, &lastSeen, &detectedAt, &doc, &in); err != nil {
+			&occ, &firstSeen, &lastSeen, &detectedAt, &doc, &in,
+			&res.ResolvedAt, &res.EvidenceVersion, &res.OccurrenceCount, &res.Note); err != nil {
 			return n, fmt.Errorf("migrate-from-sqlite: scan finding: %w", err)
 		}
-		res, err := tx.Exec(
+		ins, err := tx.Exec(
 			`INSERT INTO findings
-			  (id, signature, kind, severity, integration, endpoint, rule, source_call_id, occurrence_count, first_seen, last_seen, detected_at, doc, inbound)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+			  (id, signature, kind, severity, integration, endpoint, rule, source_call_id, occurrence_count, first_seen, last_seen, detected_at, doc, inbound,
+			   resolved_at, resolved_evidence_version, resolved_occurrence_count, resolved_note)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
 			 ON CONFLICT (signature) DO NOTHING`,
 			id, signature, kind, severity, integration, endpoint, rule, sourceCallID,
 			occ, firstSeen, lastSeen, detectedAt, doc, in,
+			res.ResolvedAt, res.EvidenceVersion, res.OccurrenceCount, res.Note,
 		)
 		if err != nil {
 			return n, fmt.Errorf("migrate-from-sqlite: insert finding %s: %w", id, err)
 		}
-		if c, _ := res.RowsAffected(); c > 0 {
+		if c, _ := ins.RowsAffected(); c > 0 {
 			n++
 		}
 	}

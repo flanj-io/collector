@@ -7,7 +7,8 @@ package promote
 // observed values (`expected`, `actual`, `detail`) and any document content
 // NEVER leave the collector on this path: FindingShape is an explicit
 // allow-list, BuildFindingShapes copies exactly the listed fields, and the
-// wire-bytes test pins their absence.
+// wire-bytes test pins their absence. One field is free text by design — the
+// note an operator attached to a resolution (FindingShape.ResolvedNote).
 
 import (
 	"context"
@@ -36,6 +37,10 @@ const (
 	capFieldPath   = 256
 	capRule        = 128
 	capTimestamp   = 64
+	// capResolvedNote sits well above the 500 characters the resolve route
+	// accepts: redaction tokens can lengthen a note, and this cap is only the
+	// liveness backstop every field here has.
+	capResolvedNote = 2000
 )
 
 // truncateToCap bounds s to at most max bytes, cut on a rune boundary. The CP
@@ -71,6 +76,19 @@ type FindingShape struct {
 	DetectedAt           string `json:"detected_at"`
 	SnapshotObservedAt   string `json:"snapshot_observed_at,omitempty"`
 	SnapshotObservedFrom string `json:"snapshot_observed_from,omitempty"`
+	// ResolvedAt / ResolvedNote: an operator's resolution of this finding — when,
+	// and the optional note — sent only while that resolution still covers the
+	// finding (model.Resolution.Covers) and absent otherwise. The dashboard
+	// therefore mirrors this collector's answer on every tick, and a finding
+	// that came back is open there one tick later with no logic of its own.
+	//
+	// The note is the ONE field on this path a person typed, which makes it the
+	// one exception to "shape only". It was passed through the redaction floor
+	// before it was stored (the UI extension's resolve handler), the editor says
+	// beside the field that it is sent, and the control plane scans it again
+	// before storing it. Nothing else about the resolution crosses.
+	ResolvedAt   string `json:"resolved_at,omitempty"`
+	ResolvedNote string `json:"resolved_note,omitempty"`
 }
 
 // FindingsRequest is the POST /api/v1/findings body. An empty list is a valid
@@ -99,11 +117,20 @@ type FindingsResponse struct {
 // (store.Store.InboundFindingIDs): they are keyed locally by the service the
 // call reached, a name that never leaves the collector (CONTRACTS §3), so they
 // cross as integration "self" with the signature recomputed on it.
-func BuildFindingShapes(findings []model.Finding, inbound map[string]bool) []FindingShape {
+//
+// resolutions are the stored resolutions by finding id
+// (store.Store.FindingResolutions). Whether one still covers its finding is
+// judged HERE, against the finding exactly as it is about to be sent: a lapsed
+// resolution must never cross as a live one.
+func BuildFindingShapes(findings []model.Finding, inbound map[string]bool, resolutions map[string]model.Resolution) []FindingShape {
 	out := make([]FindingShape, 0, len(findings))
 	for _, f := range findings {
 		if len(out) == FindingsSyncMaxItems {
 			break
+		}
+		resolvedAt, resolvedNote := "", ""
+		if r, ok := resolutions[f.ID]; ok && r.Covers(f) {
+			resolvedAt, resolvedNote = r.ResolvedAt, r.Note
 		}
 		if inbound[f.ID] {
 			f = wireSelf(f)
@@ -143,6 +170,8 @@ func BuildFindingShapes(findings []model.Finding, inbound map[string]bool) []Fin
 			DetectedAt:           truncateToCap(f.DetectedAt, capTimestamp),
 			SnapshotObservedAt:   truncateToCap(f.SnapshotObservedAt, capTimestamp),
 			SnapshotObservedFrom: truncateToCap(f.SnapshotObservedFrom, capTimestamp),
+			ResolvedAt:           truncateToCap(resolvedAt, capTimestamp),
+			ResolvedNote:         truncateToCap(resolvedNote, capResolvedNote),
 		})
 	}
 	return out
