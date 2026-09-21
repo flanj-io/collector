@@ -6,9 +6,15 @@ name: release
 # remembering `--build-arg VERSION=` — omit it and /api/health reports "dev" on a
 # tagged release, which nothing would have caught (issue #56).
 #
-# ci.yml's docker-build job is NOT this. It builds one platform, passes no
+# ci.yml's docker-build job is NOT this. It builds both platforms, passes no
 # VERSION, and throws the result away; it proves the Dockerfile still builds on
 # a PR. This is the only thing in the repo that publishes.
+#
+# The arm64 image is CROSS-COMPILED on this amd64 runner, not emulated: the
+# Dockerfile pins its build stages to the runner's own platform and sets
+# GOOS/GOARCH for the compile (CGO is off). QEMU is still set up, but only to RUN
+# the arm64 binary once below — a smoke test, not a build. Running the whole
+# build under emulation made the two-platform step take over 15 minutes.
 #
 # BEFORE YOU TAG: the workflow is read from the TAG's own tree, so a tag placed
 # on an old commit runs that commit's workflows — or, if the file did not exist
@@ -79,15 +85,17 @@ jobs:
           echo "$TOKEN" | docker login -u "$USER" --password-stdin
           echo "authenticated to Docker Hub as $USER"
 
-      # Built for THIS runner's platform only and loaded locally, so the next
-      # step can actually run it. The multi-arch build below reuses every layer
-      # from this one's cache, so the second build is cheap.
+      # Each platform is built once and loaded locally, so the next steps can
+      # actually run it. Single-platform on purpose: the local image store cannot
+      # hold a two-platform build. The multi-platform build below reuses every
+      # layer from these (the UI, the module cache, the builder), so it adds
+      # nothing but the final assembly.
       - name: Build amd64 locally, to run it
         uses: docker/build-push-action@v6
         with:
           context: .
           load: true
-          tags: flanj-collector:verify
+          tags: flanj-collector:verify-amd64
           platforms: linux/amd64
           build-args: |
             VERSION=${{ steps.v.outputs.version }}
@@ -96,41 +104,81 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # The arm64 binary is cross-compiled, so this compile is the one part of
+      # the arm64 image that is not shared with the amd64 build above.
+      - name: Build arm64 locally, to run it
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: flanj-collector:verify-arm64
+          platforms: linux/arm64
+          build-args: |
+            VERSION=${{ steps.v.outputs.version }}
+            REVISION=${{ github.sha }}
+            CREATED=${{ steps.v.outputs.created }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       # The mismatch issue #56 names: forget the build-arg and a tagged release
-      # reports "dev" from /api/health, with nothing to catch it. The UI binds
-      # CONTAINER loopback, so the check runs curl inside the collector's own
-      # network namespace rather than publishing a port.
+      # reports "dev" from /api/health, with nothing to catch it. Both platforms
+      # are run — arm64 under QEMU — because a cross-compile is only proven by
+      # the binary it produced. The UI binds CONTAINER loopback, so the check
+      # runs curl inside the collector's own network namespace rather than
+      # publishing a port.
       - name: The binary must report the tag it was built for
         env:
           WANT: ${{ steps.v.outputs.version }}
         run: |
           set -euo pipefail
-          # --tmpfs, because the image declares VOLUME /data and runs as
-          # nonroot(65532): an anonymous volume is created root-owned, the
-          # store cannot open its sqlite file there, and the collector exits 1
-          # before it serves anything. The README's run command bind-mounts a
-          # directory instead; this check just needs somewhere writable.
-          docker run -d --name verify --tmpfs /data:uid=65532,gid=65532 flanj-collector:verify >/dev/null
-          trap 'docker rm -f verify >/dev/null 2>&1 || true' EXIT
-          for _ in $(seq 1 30); do
-            got=$(docker run --rm --network container:verify curlimages/curl:8.11.1 \
-                    -sf http://127.0.0.1:5335/api/health 2>/dev/null \
-                  | sed -n 's/.*"collector_version":"\([^"]*\)".*/\1/p') || true
-            [ -n "${got:-}" ] && break
-            sleep 2
+          for arch in amd64 arm64; do
+            name="verify-$arch"
+            # --tmpfs, because the image declares VOLUME /data and runs as
+            # nonroot(65532): an anonymous volume is created root-owned, the
+            # store cannot open its sqlite file there, and the collector exits 1
+            # before it serves anything. The README's run command bind-mounts a
+            # directory instead; this check just needs somewhere writable.
+            docker run -d --platform "linux/$arch" --name "$name" \
+              --tmpfs /data:uid=65532,gid=65532 "flanj-collector:$name" >/dev/null
+            got=""
+            # 60 tries, not 30: the arm64 binary starts under emulation.
+            for _ in $(seq 1 60); do
+              got=$(docker run --rm --network "container:$name" curlimages/curl:8.11.1 \
+                      -sf http://127.0.0.1:5335/api/health 2>/dev/null \
+                    | sed -n 's/.*"collector_version":"\([^"]*\)".*/\1/p') || true
+              [ -n "$got" ] && break
+              sleep 2
+            done
+            [ -n "$got" ] || { echo "::error::the $arch collector never answered /api/health"; docker logs "$name"; exit 1; }
+            echo "$arch: tag=$WANT  binary reports=$got"
+            docker rm -f "$name" >/dev/null
+            [ "$got" = "$WANT" ] || { echo "::error::the $arch image reports '$got' but is being published as '$WANT' — the VERSION build-arg did not reach the binary"; exit 1; }
           done
-          [ -n "${got:-}" ] || { echo "::error::the collector never answered /api/health"; docker logs verify; exit 1; }
-          echo "tag=$WANT  binary reports=$got"
-          [ "$got" = "$WANT" ] || { echo "::error::the image reports '$got' but is being published as '$WANT' — the VERSION build-arg did not reach the binary"; exit 1; }
 
-      - name: Labels must carry the commit
+      # The image's own architecture comes from the platform it was asked for, so
+      # it would read arm64 even if the compile had produced an amd64 binary —
+      # hence the second check reads the ELF machine type out of the binary itself.
+      - name: Labels must carry the commit, and each binary its architecture
         run: |
           set -euo pipefail
-          rev=$(docker image inspect flanj-collector:verify \
-                  --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')
-          echo "revision label=$rev"
-          [ "$rev" = "${GITHUB_SHA}" ] || { echo "::error::revision label is '$rev', expected ${GITHUB_SHA} — an image nobody can trace to a commit is what this workflow exists to stop"; exit 1; }
+          for arch in amd64 arm64; do
+            img="flanj-collector:verify-$arch"
+            rev=$(docker image inspect "$img" \
+                    --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')
+            echo "$arch: revision label=$rev"
+            [ "$rev" = "${GITHUB_SHA}" ] || { echo "::error::$arch revision label is '$rev', expected ${GITHUB_SHA} — an image nobody can trace to a commit is what this workflow exists to stop"; exit 1; }
+            cid=$(docker create --platform "linux/$arch" "$img")
+            docker cp "$cid:/flanj-collector" "$RUNNER_TEMP/flanj-collector-$arch"
+            docker rm "$cid" >/dev/null
+            kind=$(file -b "$RUNNER_TEMP/flanj-collector-$arch")
+            echo "$arch: binary is $kind"
+            case "$arch:$kind" in
+              amd64:*"x86-64"*|arm64:*"ARM aarch64"*) ;;
+              *) echo "::error::the $arch image does not contain an $arch binary"; exit 1 ;;
+            esac
+          done
 
+      # Reuses the layers built above: the only work left is the final assembly.
       - name: Build both platforms and push
         if: github.event_name == 'push' || inputs.dry_run == false
         uses: docker/build-push-action@v6

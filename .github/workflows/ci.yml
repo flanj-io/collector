@@ -208,6 +208,26 @@ jobs:
       - uses: docker/setup-buildx-action@v4
       - name: Build collector image
         run: docker build -t flanj-collector:ci .
+      # The release publishes linux/arm64 too, and the Dockerfile CROSS-COMPILES it
+      # (GOOS/GOARCH on the build stage's native toolchain) rather than emulating.
+      # Without this step a break in that path — a cgo dependency, a stage that
+      # lost its --platform pin — first shows at release time. Built, not pushed.
+      # The binary is inspected, not just the image: the image's architecture
+      # comes from the requested platform, so it would read arm64 even if the
+      # compile had silently produced an amd64 binary.
+      - name: Cross-build the linux/arm64 image (build only, not pushed)
+        run: |
+          set -euo pipefail
+          docker buildx build --platform linux/arm64 --load -t flanj-collector:ci-arm64 .
+          cid=$(docker create --platform linux/arm64 flanj-collector:ci-arm64)
+          docker cp "$cid:/flanj-collector" "$RUNNER_TEMP/flanj-collector-arm64"
+          docker rm "$cid" >/dev/null
+          kind=$(file -b "$RUNNER_TEMP/flanj-collector-arm64")
+          echo "binary: $kind"
+          case "$kind" in
+            *"ARM aarch64"*) ;;
+            *) echo "::error::the linux/arm64 image does not contain an arm64 binary"; exit 1 ;;
+          esac
 
   helm:
     # The chart is greenfield and the tiered shape has two failures that are

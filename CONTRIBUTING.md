@@ -28,6 +28,11 @@ Use `git commit -s`. CI enforces the DCO check; unsigned commits will not be mer
 ## Workflow
 
 1. Branch, write tests first, implement, build in Docker (`docker build .`).
+   The Dockerfile cross-compiles: `docker buildx build --platform linux/amd64,linux/arm64 .`
+   builds the UI and runs the Go toolchain natively on your machine and only sets `GOOS`/`GOARCH`
+   for the target, so the arm64 image costs one extra compile, not an emulated build. That relies
+   on `CGO_ENABLED=0` (the store drivers are pure Go) — a dependency that needs cgo breaks it, and
+   CI's arm64 cross-build catches that in the PR.
 2. `git commit -s`, open a PR. CI runs the multi-stage build, the Go unit and contract tests, the UI
    build and the Helm smoke.
 
