@@ -145,18 +145,25 @@ describe('a version-diff finding renders on the card its contract owns', () => {
     expect(document.getElementById(`finding-${VERSION_DIFF.id}`)).not.toBeNull();
   });
 
-  it('counts in the red tab pill, because the model calls it breaking', async () => {
+  it('counts in the copper would-break pill, because nothing is failing yet', async () => {
     const w = await mountApp();
-    // Two-tier taxonomy: red counts breaking-severity rows from EVERY source —
-    // severity decides the tier, never the protocol. A version diff is
-    // severity=breaking (CONTRACTS §4), so it belongs in the red count.
-    const red = w.find('.tab-count.bad');
-    expect(red.exists()).toBe(true);
-    expect(red.text()).toBe('1');
-    // ...and in no other tier.
-    expect(w.find('.tab-count.warn').exists()).toBe(false);
-    // The per-card chip is the same taxonomy, so the sum of chips equals the pill.
-    expect(w.find('.provider').text()).toContain('1');
+    // A version diff is severity=breaking (CONTRACTS §4) and its row says so.
+    // But its evidence is two DOCUMENTS, not a call: it describes what will
+    // break when the newer version takes effect, and providers usually run a
+    // deprecation window. That is the copper tier, not red — red is reserved
+    // for what is failing in live traffic now, so the red number always equals
+    // the Overview headline's.
+    const copper = w.find('.tab-count.would-break');
+    expect(copper.exists()).toBe(true);
+    expect(copper.text()).toBe('1');
+    expect(copper.attributes('title')).toBe(
+      '1 breaking change in a newer contract version — nothing is breaking yet'
+    );
+    // ...and in no other tier. There is no live drift here, so no red pill.
+    expect(w.find('.tab-count.bad').exists()).toBe(false);
+    expect(w.find('.tab-count.worth-knowing').exists()).toBe(false);
+    // The per-card chip is the same tier, so the chips of a tier sum to its pill.
+    expect(w.find('.provider .tag.would-break').text()).toBe('1 WOULD BREAK');
   });
 
   it('does not fabricate a call count for a finding found by diffing documents', async () => {

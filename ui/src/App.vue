@@ -72,7 +72,6 @@ import {
   afterColLabel,
   beforeColLabel,
   breakingChipLabel,
-  breakingCountTitle,
   defChangeDetail,
   defChangeNoCallSub,
   definitionClass,
@@ -80,10 +79,8 @@ import {
   changeKindOf,
   descriptionChipLabel,
   descriptionChipTitle,
-  descriptionCountTitle,
   informationalChipLabel,
   informationalChipTitle,
-  informationalCountTitle,
   isAckable,
   isAcked,
   isBreakingFinding,
@@ -145,6 +142,16 @@ import {
   type Coverage,
   type CoverageVerdict
 } from './coverage';
+import {
+  breakingNowTitle,
+  countTiers,
+  tabAriaLabel,
+  unresolvedCount,
+  wouldBreakChipLabel,
+  wouldBreakTitle,
+  worthKnowingTitle,
+  type TierCounts
+} from './contract-tiers';
 import {
   ALSO_CALLS_YOU,
   INBOUND_CAPTION,
@@ -1058,7 +1065,12 @@ const contractCards = computed<{ self: ContractCard[]; mcpServers: ContractCard[
   // see findingBelongsToContract. An uploaded contract's integration is derived
   // from its host while a finding's comes from the call, so an
   // integration-only join split one provider into two cards.
-  const unclaimed = [...liveFindings.value, ...versionDiffFindings.value, ...mcpContractFindings.value];
+  const unclaimed = [
+    ...liveFindings.value,
+    ...versionDiffFindings.value,
+    ...deprecationFindings.value,
+    ...mcpContractFindings.value
+  ];
   const hostOfCall = (id: string) => callsById.value[id]?.peer_host;
   const claim = (spec: SpecInfo): Finding[] => {
     const mine: Finding[] = [];
@@ -1285,6 +1297,25 @@ const liveFindings = computed(() => findings.value.filter((f) => f.kind === 'liv
 // `#contracts/<id>` deep link landed on an anchor that did not exist.
 const versionDiffFindings = computed(() => findings.value.filter((f) => f.kind === 'version-diff'));
 
+/**
+ * Deprecation findings: a provider announcing that something your traffic uses
+ * is going away. NOTHING DETECTS THESE YET — this filter matches no row today.
+ *
+ * It exists because the tiering seam is inert without it. `contract-tiers.ts`
+ * counts a deprecation row in the would-break tier, but the tab only ever sees
+ * the rows in `contractTabRows`, and a kind that is in none of the filters
+ * below reaches no surface at all: not its provider's card, not any pill, not
+ * a Flag control. That is exactly how the version diff was lost once — in the
+ * model, produced by the upload path, and rendered nowhere.
+ *
+ * So the row set accepts the kind now. A deprecation row renders through the
+ * generic finding row like every other kind, and carries the same Flag control
+ * (`!isLocalNotice`). Its own badge wording and whatever a sunset date should
+ * look like belong with the change that detects them; this is the plumbing
+ * only, and it adds no detection.
+ */
+const deprecationFindings = computed(() => findings.value.filter((f) => f.kind === 'deprecation'));
+
 // ─── MCP (v0.5 Step D) ───────────────────────────────────────────────────
 // The MCP contract surface is SELF-DELIVERING: the server's observed
 // tools/list arrives with the traffic and is stored as an MCP catalogue, apart
@@ -1410,31 +1441,60 @@ const mcpContractFindings = computed(() =>
     f.kind === 'output_mismatch' || f.kind === 'definition_change' || f.kind === 'value_change' || f.kind === 'input_rejection')
 );
 
-// Contracts tab pills (two-tier): red = breaking-severity rows (all sources —
-// severity decides the tier, never the protocol); amber = informational rows
-// (NON-BREAKING + DESCRIPTION) not yet acknowledged. Invariant: red + amber +
-// acknowledged = the rows listed on the tab.
-const contractTabRows = computed(() => [...liveFindings.value, ...versionDiffFindings.value, ...mcpContractFindings.value]);
-const contractBreakingCount = computed(() => contractTabRows.value.filter((f) => isBreakingFinding(f)).length);
-const contractInfoCount = computed(
-  () => contractTabRows.value.filter((f) => !isBreakingFinding(f) && !isAcked(f)).length
-);
-// Every un-acked informational row is a DESCRIPTION change: the pill keeps its
-// class and its count (tests read `.tab-count.warn`) but wears the steel
-// outline, not the copper fill — a wording change is not a warning.
+// Contracts tab pills — three tiers, one colour each, in order of urgency
+// (ui/src/contract-tiers.ts holds the rule and the reasoning):
+//
+//   red    = breaking NOW    — breaking-severity LIVE rows (live-vs-spec plus
+//                              the MCP kinds this tab already treats as live
+//                              evidence). Same population as the Overview
+//                              headline, so the two numbers agree by
+//                              construction rather than by coincidence.
+//   copper = would break     — breaking changes found by diffing two VERSIONS
+//                              of a contract. Nothing is failing yet.
+//   steel  = worth knowing   — un-acknowledged informational rows
+//                              (NON-BREAKING + DESCRIPTION), always steel now
+//                              that copper means "would break".
+//
+// Invariant: red + copper + steel + acknowledged = the rows listed on the tab.
+const contractTabRows = computed(() => [
+  ...liveFindings.value,
+  ...versionDiffFindings.value,
+  ...deprecationFindings.value,
+  ...mcpContractFindings.value
+]);
+const contractTiers = computed(() => countTiers(contractTabRows.value));
+const contractBreakingNowCount = computed(() => contractTiers.value.breakingNow);
+const contractWouldBreakCount = computed(() => contractTiers.value.wouldBreak);
+const contractWorthKnowingCount = computed(() => contractTiers.value.worthKnowing);
+// Every un-acked informational row is a DESCRIPTION change. The steel tier
+// wears one colour either way now; this picks which SENTENCE it carries, so a
+// lone wording change still says "wording only" rather than borrowing the
+// shared non-breaking line.
 const contractDescOnly = computed(
   () =>
-    contractInfoCount.value > 0 &&
+    contractWorthKnowingCount.value > 0 &&
     contractTabRows.value.every((f) => isBreakingFinding(f) || isAcked(f) || definitionClass(f) === 'DESCRIPTION')
 );
 
-// Per-card chip counts — the same taxonomy as the tab pills, so the sum of
-// card chips always equals the pills.
-function cardBreakingCount(p: ContractCard): number {
-  return p.findings.filter((f) => isBreakingFinding(f)).length;
+// Per-card chip counts — the same tiers as the tab pills, tier by tier, so the
+// card chips of each tier sum to that tier's pill.
+function cardTiers(p: ContractCard): TierCounts {
+  return countTiers(p.findings);
+}
+function cardBreakingNowCount(p: ContractCard): number {
+  return cardTiers(p).breakingNow;
+}
+function cardWouldBreakCount(p: ContractCard): number {
+  return cardTiers(p).wouldBreak;
 }
 function cardInfoCount(p: ContractCard): number {
-  return p.findings.filter((f) => !isBreakingFinding(f) && !isAcked(f)).length;
+  return cardTiers(p).worthKnowing;
+}
+/** Everything the three pills count on this card. Zero is what lets the card
+ *  claim `conforming` — a row in ANY tier, including a version diff, means the
+ *  card has something to say. */
+function cardUnresolvedCount(p: ContractCard): number {
+  return unresolvedCount(cardTiers(p));
 }
 // The card splits its informational chip by class — copper `N NON-BREAKING`
 // for schema changes, steel `N DESCRIPTION` for wording — so each class wears
@@ -1830,11 +1890,42 @@ watch(tab, (t) => {
       <button role="tab" :aria-selected="tab === 'traffic'" :class="{ active: tab === 'traffic' }" @click="setTab('traffic')">
         Traffic
       </button>
-      <button role="tab" :aria-selected="tab === 'contract'" :class="{ active: tab === 'contract' }" @click="setTab('contract')">
+      <!-- The tab names itself. Without this the three pills' sentences — each
+           there so no tier rests on colour alone — concatenate into the tab's
+           accessible name, and a screen reader reads all forty words on every
+           focus. A name on the button wins over its contents, so the pills keep
+           their own sentences for anything that inspects them directly. -->
+      <button
+        role="tab"
+        :aria-selected="tab === 'contract'"
+        :aria-label="tabAriaLabel('Contracts', contractTiers)"
+        :class="{ active: tab === 'contract' }"
+        @click="setTab('contract')"
+      >
         Contracts
-        <!-- red = act (breaking) · copper = review (informational, un-acked) -->
-        <span v-if="contractBreakingCount" class="tab-count bad" :title="breakingCountTitle(contractBreakingCount)">{{ contractBreakingCount }}</span>
-        <span v-if="contractInfoCount" class="tab-count warn" :class="{ desc: contractDescOnly }" :title="contractDescOnly ? descriptionCountTitle(contractInfoCount) : informationalCountTitle(contractInfoCount)">{{ contractInfoCount }}</span>
+        <!-- Three tiers, in order of urgency: red = breaking in live traffic
+             now · copper = would break when a newer contract version takes
+             effect · steel = worth knowing (un-acked informational). Each
+             carries its own sentence as title AND accessible name, so the
+             tier is never conveyed by colour alone. -->
+        <span
+          v-if="contractBreakingNowCount"
+          class="tab-count bad"
+          :title="breakingNowTitle(contractBreakingNowCount)"
+          :aria-label="breakingNowTitle(contractBreakingNowCount)"
+        >{{ contractBreakingNowCount }}</span>
+        <span
+          v-if="contractWouldBreakCount"
+          class="tab-count would-break"
+          :title="wouldBreakTitle(contractTabRows)"
+          :aria-label="wouldBreakTitle(contractTabRows)"
+        >{{ contractWouldBreakCount }}</span>
+        <span
+          v-if="contractWorthKnowingCount"
+          class="tab-count worth-knowing"
+          :title="worthKnowingTitle(contractWorthKnowingCount, contractDescOnly)"
+          :aria-label="worthKnowingTitle(contractWorthKnowingCount, contractDescOnly)"
+        >{{ contractWorthKnowingCount }}</span>
       </button>
       <button role="tab" :aria-selected="tab === 'threads'" :class="{ active: tab === 'threads' }" @click="setTab('threads')">
         Threads
@@ -2258,22 +2349,27 @@ watch(tab, (t) => {
                    yet" forever, and without this the operator reads that as a
                    quiet edge rather than as a channel that is refusing. -->
               <span v-if="cardOverCap(p)" class="tag warn">{{ CONTRACT_OVER_CAP_TAG }}</span>
-              <!-- Tier-split chips — same taxonomy as the tab pills, so the sums always agree. -->
-              <span v-if="cardBreakingCount(p)" class="tag drift">{{ breakingChipLabel(cardBreakingCount(p)) }}</span>
-              <span v-if="cardNonBreakingCount(p)" class="tag warn" :title="cardNonBreakingTitle(p)">{{ informationalChipLabel(cardNonBreakingCount(p)) }}</span>
-              <!-- A wording change is not a warning: steel outline, the row badge's own word. -->
+              <!-- Tier-split chips — the same three tiers as the tab pills, so
+                   each tier's card chips sum to that tier's pill. -->
+              <span v-if="cardBreakingNowCount(p)" class="tag drift" :title="breakingNowTitle(cardBreakingNowCount(p))">{{ breakingChipLabel(cardBreakingNowCount(p)) }}</span>
+              <!-- Copper: breaking against the version this contract replaced,
+                   not against live traffic. Nothing is failing yet. -->
+              <span v-if="cardWouldBreakCount(p)" class="tag would-break" :title="wouldBreakTitle(p.findings)">{{ wouldBreakChipLabel(cardWouldBreakCount(p)) }}</span>
+              <!-- The steel tier, split by class so each keeps its own word.
+                   Both are steel: copper now means "would break". -->
+              <span v-if="cardNonBreakingCount(p)" class="tag nonbreaking" :title="cardNonBreakingTitle(p)">{{ informationalChipLabel(cardNonBreakingCount(p)) }}</span>
               <span v-if="cardDescriptionCount(p)" class="tag desc" :title="descriptionChipTitle(cardDescriptionCount(p))">{{ descriptionChipLabel(cardDescriptionCount(p)) }}</span>
               <span
-                v-if="!cardBreakingCount(p) && !cardInfoCount(p) && p.spec && cardValidatedCalls(p)"
+                v-if="!cardUnresolvedCount(p) && p.spec && cardValidatedCalls(p)"
                 class="tag ok"
               >conforming</span>
               <!-- Loaded, but nothing has run against it yet: "conforming" would
                    be a clean bill of health nobody performed. -->
               <span
-                v-else-if="!cardBreakingCount(p) && !cardInfoCount(p) && p.spec"
+                v-else-if="!cardUnresolvedCount(p) && p.spec"
                 class="tag none"
               >no calls validated yet</span>
-              <span v-else-if="!cardBreakingCount(p) && !cardInfoCount(p)" class="tag none">no contract loaded</span>
+              <span v-else-if="!cardUnresolvedCount(p)" class="tag none">no contract loaded</span>
             </span>
           </div>
 
@@ -3026,14 +3122,17 @@ code { font-family: var(--f-mono); }
 .tabs button.active { color: var(--ink); border-bottom-color: var(--ink); }
 .tabs button.active::before { content: ''; position: absolute; left: 0; right: 0; bottom: calc(-1 * var(--border-w)); height: var(--border-w-hair); background: var(--accent); }
 .tab-right { margin-left: auto; }
-/* Square count chips: red = breaking (act), copper = review — each carries its
-   number, so the two filled chips never rely on hue alone. */
+/* Square count chips, one class per tier: red = breaking in live traffic now,
+   copper = would break when a newer contract version takes effect, steel =
+   worth knowing. Each carries its number and its own sentence (title +
+   aria-label), so no chip relies on hue alone. */
 .tab-count { font: 500 10px/1.4 var(--f-mono); letter-spacing: 0; text-transform: none; padding: 1px 6px; min-width: 20px; text-align: center; border: var(--border-w-hair) solid var(--rule); border-radius: var(--radius); color: var(--ink-soft); background: var(--surface); }
 .tab-count.bad { background: var(--sev-breaking); border-color: var(--sev-breaking); color: var(--sev-breaking-contrast); }
-.tab-count.warn { background: var(--sev-warning); border-color: var(--sev-warning); color: var(--sev-warning-contrast); }
-/* Every row in the count is a DESCRIPTION change: the steel outline the row
-   badge wears, not the warning fill — a wording change is not a warning. */
-.tab-count.warn.desc { background: var(--surface); border-color: var(--ink-soft); color: var(--ink-soft); }
+.tab-count.would-break { background: var(--sev-warning); border-color: var(--sev-warning); color: var(--sev-warning-contrast); }
+/* The steel outline the informational row badges wear. Always steel now:
+   copper carries the would-break tier, and two coppers meaning two different
+   things is the confusion the tiers exist to end. */
+.tab-count.worth-knowing { background: var(--surface); border-color: var(--ink-soft); color: var(--ink-soft); }
 .tab-dot { width: 8px; height: 8px; border-radius: var(--radius); background: var(--accent); display: inline-block; }
 .tab-dot.disconnected { background: var(--ink-soft); }
 
@@ -3184,8 +3283,12 @@ h2 small { font: 400 12.5px/1.5 var(--f-sans); letter-spacing: 0.04em; text-tran
 .tag.ok { color: var(--ok-ink); border-color: var(--ok); }
 .tag.drift { background: var(--sev-breaking); border-color: var(--sev-breaking); color: var(--sev-breaking-contrast); }
 .tag.warn { background: var(--sev-warning); border-color: var(--sev-warning); color: var(--sev-warning-contrast); }
-/* `N DESCRIPTION`: the row badge's steel outline — one vocabulary per class. */
-.tag.desc { color: var(--ink-soft); border-color: var(--ink-soft); }
+/* `N WOULD BREAK`: the copper tier's card chip — breaking against the version
+   this contract replaced, with a deprecation window still to run. */
+.tag.would-break { background: var(--sev-warning); border-color: var(--sev-warning); color: var(--sev-warning-contrast); }
+/* `N NON-BREAKING` and `N DESCRIPTION`: the steel tier's two chips, each with
+   the row badge's own word. Steel, not copper — copper is would-break. */
+.tag.desc, .tag.nonbreaking { color: var(--ink-soft); border-color: var(--ink-soft); }
 .tag.none { color: var(--ink-soft); border-color: var(--rule); }
 
 /* Traffic counterparty cell. Direction is a fact, not a verdict: `out` is the

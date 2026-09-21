@@ -373,7 +373,7 @@ export function endpointCount(n?: number): string {
  * The card's meta line: what this contract is, and when it got here.
  *
  * Relative time, deliberately, and NOTHING else about age. No threshold, no
- * amber, no dot, and contract age never feeds the tab's red/amber counters —
+ * amber, no dot, and contract age never feeds any of the tab's tier counts —
  * those count what the PROVIDER did, and "your file is old" does not belong in
  * the same severity class as "the provider changed something". The slot is
  * designed as provenance + recency rather than "upload date" so the deferred
