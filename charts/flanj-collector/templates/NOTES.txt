@@ -3,9 +3,30 @@
   fronts   {{ if .Values.collector.autoscaling.enabled }}HPA {{ .Values.collector.autoscaling.minReplicas }}–{{ .Values.collector.autoscaling.maxReplicas }}{{ else }}{{ .Values.collector.replicas }} replica(s){{ end }}   {{ include "flanj-collector.front.fullname" . }}
   store    {{ .Values.store.backend }}{{ if eq .Values.store.backend "sqlite" }}{{ if .Values.store.persistence.enabled }} on a {{ .Values.store.persistence.size }} PVC{{ else }} on an emptyDir — EVALUATION: the window dies with the pod{{ end }}{{ else }}, {{ int .Values.store.replicas }} replica(s){{ if .Values.postgres.enabled }}, bundled evaluation database{{ end }}{{ end }}   {{ include "flanj-collector.store.fullname" . }}
 
-1. Point the SDK at the fronts:
+1. Point your application at the fronts. This goes on YOUR workload's
+   container — it is the application that sends, not the collector that
+   receives, and not your shell:
+{{- $svc := .Values.service.front.fixedName | default (include "flanj-collector.front.fullname" .) }}
 
-     FLANJ_OTLP_ENDPOINT=http://{{ include "flanj-collector.front.fullname" . }}.{{ .Release.Namespace }}:{{ int .Values.service.front.port }}/v1/logs
+     env:
+       - name: FLANJ_OTLP_ENDPOINT
+         value: http://{{ $svc }}.{{ .Release.Namespace }}:{{ int .Values.service.front.port }}/v1/logs
+{{ if .Values.service.front.fixedName }}
+   That address is the same for every install that used the documented command,
+   because `service.front.fixedName` gives the front Service a name that does
+   not move with the release name.
+{{- else }}
+   `service.front.fixedName` is empty, so this is the release-scoped Service
+   name — it changes if you rename the release, and it is not the address the
+   documentation prints.
+{{- end }}
+{{- if .Values.endpointConfigMap.enabled }}
+   The same value is in ConfigMap/flanj-endpoint (key FLANJ_OTLP_ENDPOINT) in
+   {{ .Release.Namespace }}{{ with .Values.endpointConfigMap.namespaces }} and in {{ join ", " . }}{{ end }}, if you would rather write
+   `envFrom: [{configMapRef: {name: flanj-endpoint}}]`. A pod can only
+   reference a ConfigMap in its OWN namespace: add yours to
+   endpointConfigMap.namespaces.
+{{- end }}
 
 2. Open the UI. It binds container loopback on the STORE pod by design — the
    collector is outbound-only and nothing it serves is reachable off-host:

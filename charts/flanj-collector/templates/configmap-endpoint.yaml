@@ -1,0 +1,45 @@
+{{- include "flanj-collector.validate" . -}}
+{{- if .Values.endpointConfigMap.enabled }}
+{{/*
+ConfigMap/flanj-endpoint — one key, FLANJ_OTLP_ENDPOINT, holding the address an
+application points its Flanj SDK at. For teams who would rather write
+
+    envFrom:
+      - configMapRef: { name: flanj-endpoint }
+
+than the literal string. It is a convenience, never the primary form: A POD CAN
+ONLY REFERENCE A CONFIGMAP IN ITS OWN NAMESPACE, and this chart installs into
+the collector's namespace, not the application's. So the map is rendered into
+the release namespace AND into every namespace named in
+`endpointConfigMap.namespaces` — which must already exist (`--create-namespace`
+makes the release's, and nothing else), and which the installing credential must
+be allowed to write.
+
+The value follows `service.front.fixedName`, falling back to the release-scoped
+front Service when that is empty, so the map can never name an address the
+release does not serve.
+
+Two releases in one namespace collide on this name, exactly as they do on the
+fixed Service; `endpointConfigMap.enabled: false` on the second is the way out.
+*/}}
+{{- $svc := .Values.service.front.fixedName | default (include "flanj-collector.front.fullname" .) }}
+{{- $endpoint := printf "http://%s.%s:%d/v1/logs" $svc .Release.Namespace (int .Values.service.front.port) }}
+{{- $namespaces := concat (list .Release.Namespace) .Values.endpointConfigMap.namespaces | uniq }}
+{{- range $ns := $namespaces }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: flanj-endpoint
+  namespace: {{ $ns }}
+  labels:
+    {{- include "flanj-collector.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: front
+  {{- with $.Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+data:
+  FLANJ_OTLP_ENDPOINT: {{ $endpoint | quote }}
+{{- end }}
+{{- end }}

@@ -481,6 +481,12 @@
             },
             "annotations": {
               "type": "object"
+            },
+            "fixedName": {
+              "type": "string",
+              "description": "Name of an ADDITIONAL front Service that does not move with the release name, so one documented address is right for every install. \"\" disables it. Two releases in one namespace collide on it — Helm refuses the second install, which is the intended failure.",
+              "maxLength": 63,
+              "pattern": "^$|^[a-z]([-a-z0-9]*[a-z0-9])?$"
             }
           }
         },
@@ -490,6 +496,24 @@
             "annotations": {
               "type": "object"
             }
+          }
+        }
+      }
+    },
+    "endpointConfigMap": {
+      "type": "object",
+      "description": "ConfigMap/flanj-endpoint — one key, FLANJ_OTLP_ENDPOINT, for workloads that prefer envFrom to the literal address. A pod can only reference a ConfigMap in its OWN namespace, so list the application namespaces; they must already exist.",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "namespaces": {
+          "type": "array",
+          "description": "Extra namespaces to render it into. The release namespace is always included.",
+          "items": {
+            "type": "string",
+            "maxLength": 63,
+            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
           }
         }
       }

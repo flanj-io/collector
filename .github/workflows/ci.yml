@@ -65,6 +65,16 @@ jobs:
       - uses: actions/checkout@v7
       - name: Operator env contract — config/*.example.yaml vs DEPLOYMENT.md
         run: bash scripts/check-env-documented.sh
+      - name: UI stays on loopback — every documented and composed publish
+        # The UI has no credential. Its loopback bind is its access control, and
+        # the socat bridge that makes it reachable from the host UNDOES that
+        # bind the moment its port is published with no host address: `-p
+        # 5335:5336` binds 0.0.0.0 and [::]. That is one character away from
+        # correct, it reads as a local convenience, and it shipped in the README
+        # for months. Same reason as the env check above: a doc and a shipped
+        # compose file are part of the operator contract, and neither may drift
+        # away from what the code guarantees.
+        run: bash scripts/check-ui-loopback.sh
 
   fmt:
     # Formatting went unchecked from day one and ten files had drifted off

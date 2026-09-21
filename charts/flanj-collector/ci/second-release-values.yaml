@@ -1,0 +1,21 @@
+# A SECOND release sharing a namespace with another one.
+#
+# The fixed front Service and ConfigMap/flanj-endpoint are fixed names, so two
+# releases in one namespace collide on them — Helm refuses the second install
+# outright, which is the intended failure rather than a silent takeover of an
+# address the first release's applications are using. These two values are the
+# documented way out: this release's applications use the release-scoped
+# Service name instead.
+specToken:
+  value: ci-second-release-token-not-a-real-secret
+service:
+  front:
+    fixedName: ""
+endpointConfigMap:
+  enabled: false
+collector:
+  replicas: 1
+store:
+  backend: sqlite
+  persistence:
+    enabled: false

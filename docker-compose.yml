@@ -1,0 +1,89 @@
+# The Flanj collector on one host: `docker compose up -d` and nothing else.
+#
+#   4318            OTLP ingest — what the SDK points at (its default already).
+#   127.0.0.1:5335  the UI and its read API (/api/health), LOOPBACK ONLY.
+#
+# The UI binds container loopback and that is not a setting to relax: it carries
+# every captured call and it has no credential of its own, so the loopback bind
+# IS its access control. A container cannot publish a port it reaches over
+# another container's loopback, which is why the `ui` service below exists — and
+# why its published port carries an explicit `127.0.0.1` host address. Drop that
+# address and Docker binds 0.0.0.0 AND [::], and the UI is on the network.
+# `scripts/check-ui-loopback.sh` fails the build on any publish of it that does.
+name: flanj
+
+services:
+  # A fresh named volume is created root-owned. The collector image runs as
+  # `nonroot` (uid 65532, distroless), so on the first start the store cannot
+  # create its file and the collector exits with
+  # `unable to open database file (14)`. One short-lived root container fixes
+  # the ownership first; `service_completed_successfully` on the collector is
+  # what makes that a precondition rather than a race. It is idempotent, so it
+  # also costs nothing on every later start.
+  init:
+    image: alpine/socat:1.8.0.3
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["chown 65532:65532 /data && chmod 700 /data"]
+    volumes:
+      - flanj-data:/data
+    restart: "no"
+
+  collector:
+    image: flanj/collector:v0.1.0
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    # Both publishes belong here even though only the first port is this
+    # container's: `ui` shares this network namespace and therefore cannot
+    # publish anything of its own.
+    ports:
+      - "4318:4318"
+      - "127.0.0.1:5335:5336"
+    volumes:
+      - flanj-data:/data
+    restart: unless-stopped
+
+  # The UI bridge: listens on :5336 inside the collector's network namespace and
+  # forwards to the collector's own 127.0.0.1:5335. The published loopback port
+  # above is the only way in.
+  #
+  # The loop is not decoration. Restarting the collector gives it a NEW network
+  # namespace, and this container is still attached to the old one: socat does
+  # not notice — it keeps a healthy-looking listener in a namespace nothing can
+  # reach, and the UI just stops answering. So the bridge probes the collector's
+  # loopback it is meant to forward to, and exits when two probes in a row fail;
+  # `restart: unless-stopped` then brings it back, attached to the collector's
+  # current namespace. Measured recovery after `docker compose restart
+  # collector`: about fifteen seconds, unattended.
+  #
+  # The case this does NOT cover: a RECREATED collector (a new container id, as
+  # an image or port change produces) cannot be rejoined by an existing
+  # container at all. `docker compose up -d` already recreates this service
+  # along with it, so that path is only a problem if you recreate the collector
+  # alone — `docker compose up -d` afterwards fixes it.
+  ui:
+    image: alpine/socat:1.8.0.3
+    network_mode: "service:collector"
+    depends_on:
+      collector:
+        condition: service_started
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        socat TCP-LISTEN:5336,fork,reuseaddr TCP:127.0.0.1:5335 &
+        bridge=$$!
+        fails=0
+        while kill -0 $$bridge 2>/dev/null; do
+          sleep 5
+          if socat -u /dev/null TCP:127.0.0.1:5335 >/dev/null 2>&1; then
+            fails=0
+          else
+            fails=$$((fails + 1))
+            if [ $$fails -ge 2 ]; then exit 1; fi
+          fi
+        done
+    restart: unless-stopped
+
+volumes:
+  flanj-data:
