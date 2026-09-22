@@ -127,8 +127,8 @@ Full list with comments: [`values.yaml`](values.yaml). The ones that matter:
 |---|---|---|
 | `image.repository` / `image.tag` | `flanj/collector` / chart `appVersion` | |
 | `specToken.value` / `.existingSecret` | — | **required** (see above) |
-| `controlPlane.baseUrl` | `""` | unset = fully local: captures and detects, cannot create thread links; `https://app.flanj.io` is the hosted control plane |
-| `controlPlane.publicUrl` | `""` | the origin **your browser** can open; set it whenever `baseUrl` is an in-cluster name — for the hosted control plane it is `https://app.flanj.io`, the same as `baseUrl` |
+| `controlPlane.baseUrl` | `https://app.flanj.io` | the hosted control plane; an in-cluster address reaches one through your own network. Nothing is sent until Connect, whatever it names. `""` = fully local: captures and detects, cannot create thread links |
+| `controlPlane.publicUrl` | `https://app.flanj.io` | the origin **your browser** can open; change it with `baseUrl` whenever that becomes an in-cluster name |
 | `controlPlane.deployToken.value` | `""` | optional (2026-09-14): an operator's or per-account deploy token, used once at Connect when set; Connect needs none |
 | `collector.replicas` | `2` | the fronts — the tier you scale |
 | `collector.autoscaling.*` | off | HPA on cpu/memory; fronts are stateless |
