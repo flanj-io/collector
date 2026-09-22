@@ -213,22 +213,19 @@ Also read: `OTEL_SERVICE_NAME`, `FLANJ_BODY_CAP_BYTES` (default 16384), `FLANJ_I
 Every body the SDK exports was redacted in your process before it left; the collector re-applies the same
 floor on arrival.
 
-**Before you press Connect, give it a config.** The image bakes `config/config.default.yaml` at
-`/etc/flanj/config.yaml`, and that file carries **no identity and no control plane** on purpose: nothing in
-the image knows who installed it, so it claims nothing. Traffic capture, drift detection, edge discovery and
-the UI all work on the first run with no configuration at all — looking around without connecting is the
-point. **Connect** is the one thing that needs you first, and until it has a control plane it says so:
-`This collector is not set up to connect to Flanj (set cp_base_url).`
+**Before you press Connect, there is nothing to configure.** The image bakes `config/config.default.yaml`
+at `/etc/flanj/config.yaml`. That file knows the hosted control plane, `https://app.flanj.io`, and carries
+**no identity**: nothing in the image knows who installed it, so it claims nothing. Traffic capture, drift
+detection, edge discovery and the UI all work on the first run — looking around without connecting is the
+point. **Connect** (Settings) is the one thing that needs you: it asks for a collector name and a contact
+email, no token, and the contact's confirmation click is what adds the collector to their Flanj workspace.
+The panel asks for no organization name: the contact names the workspace on the confirmation page, and
+that name — the one other organizations see on your threads — shows in the UI once it is set.
 
-Copy `config/config.example.yaml`, which documents every key, set `cp_base_url`, and mount it over the
-baked path. The hosted control plane is `https://app.flanj.io`: set `cp_base_url` to it, and `cp_public_url`
-is the same address (it only differs when the collector reaches the control plane through an in-network
-address your browser cannot open). No token is needed to Connect: the panel asks for a collector name and
-a contact email, and the contact's confirmation click is what adds the collector to their Flanj workspace
-(`cp_deploy_token` is optional — for an operator's or per-account token). The panel asks for no
-organization name: the contact names the workspace on the confirmation page, and that name — the one
-other organizations see on your threads — shows in the UI once it is set. With compose, add the file to
-the `collector` service:
+A config mount is for overriding: a control plane reached through an in-network address, an operator's
+or per-account deploy token (`cp_deploy_token`, optional), window sizes. Copy `config/config.example.yaml`,
+which documents every key, edit it, and mount it over the baked path — with compose, add it to the
+`collector` service:
 
 ```yaml
     volumes:
@@ -237,14 +234,17 @@ the `collector` service:
 ```
 
 then `docker compose up -d` again: compose recreates the container with the mount, and the bridge follows.
+An in-network `cp_base_url` wants `cp_public_url` beside it — the address *your browser* can open, which the
+Connected pill's dashboard link is minted from. Blanking `cp_base_url` runs fully local, and Connect then
+says so: `This collector is not set up to connect to Flanj (set cp_base_url).`
 
-On Kubernetes the chart renders both role configs from its values instead — set `controlPlane.baseUrl`
-(and `controlPlane.publicUrl`, the address *your browser* can open); for the hosted control plane both are
-`https://app.flanj.io`.
+On Kubernetes the chart renders both role configs from its values instead, with the same defaults
+(`controlPlane.baseUrl` and `controlPlane.publicUrl`); override them the same way, for the same reasons.
 
-**What leaves your network: nothing, until you Connect.** Unconnected, the collector makes no outbound
-calls at all; the sync loop returns early with no collector key. After Connect it talks only to
-`cp_base_url`: finding *shapes* (id, signature, kind, severity, endpoint, counts — never the observed
+**What leaves your network: nothing, until you Connect.** Knowing the control plane's address sends
+nothing to it: every outbound path is gated on the collector key that only Connect mints, so an
+unconnected collector makes no outbound call at all — the sync loop returns early with no key. After
+Connect it talks only to `cp_base_url`: finding *shapes* (id, signature, kind, severity, endpoint, counts — never the observed
 expected/actual/detail values), a directory name-table fetch that sends nothing about your edges, and the
 threads you explicitly create by pressing Flag. Raw calls never leave, on any path.
 

@@ -137,10 +137,13 @@ edge; repeats bump `occurrence_count`); `spec_info` → upsert by integration.
   manifest). Container: `flanj-collector`, default
   `CMD --config /etc/flanj/config.yaml` (mount your own over it, or a
   ConfigMap). `EXPOSE 4318` (OTLP from the SDK). That baked file is
-  `config/config.default.yaml` and is **neutral** — no display names, no
-  `cp_base_url` — so an unconfigured pod captures, redacts and
-  serves its UI but reports `cp_configured: false` and refuses Connect with
-  `cp_not_configured` rather than claiming an identity nobody gave it. The two
+  `config/config.default.yaml`: it names the hosted control plane
+  (`cp_base_url: https://app.flanj.io`) and carries **no identity** — no
+  display names, no token — so an unconfigured pod captures, redacts and
+  serves its UI, reports `cp_configured: true`, and opens on the Connect form
+  rather than claiming an identity nobody gave it. Knowing the address sends
+  nothing: every outbound path is gated on the collector key that only Connect
+  mints, so a pod that is never Connected makes no outbound request. The two
   ROLE configs beside it (`front.yaml`, `store.yaml`) still carry example
   identity; the chart renders its own over them.
 - State: `/data` on a PVC (sqlite). `user` is `nonroot` (uid 65532) — pre-chown
@@ -242,8 +245,8 @@ token, rather than installing a store pod that exits at startup. It cannot take
 the *other* half out of your hands: with `specToken.existingSecret`, a value
 that changes underneath a running deployment produces exactly the 401 above.
 
-Mount your own `front.yaml`/`store.yaml` when you need your own
-display names, `cp_base_url` / `cp_public_url`, or window sizes — the baked
+Mount your own `front.yaml`/`store.yaml` when you need an in-network
+`cp_base_url` / `cp_public_url`, a deploy token, or window sizes — the baked
 files are the annotated templates (`config/config.front.example.yaml`,
 `config/config.store.example.yaml`). **Provider contracts are not among those
 knobs**: they are uploaded in the UI (Contracts → Add contract), never

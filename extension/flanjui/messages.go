@@ -27,8 +27,8 @@ const (
 	// The OTHER shape of "not configured": cp_base_url IS set, but to a name
 	// reserved for documentation, so no host was ever going to answer it. Saying
 	// "couldn't reach" there sends the operator to debug a network that is not the
-	// problem. Reached by anyone who copied config.example.yaml and kept its
-	// cp_base_url; the image itself no longer bakes one (issue #55).
+	// problem. Reached by anyone whose mounted config names such a host; the
+	// image itself bakes the hosted control plane (issue #55 for the history).
 	msgCPPlaceholderHost   = "This collector's cp_base_url is an example address that can never exist — set it to your Flanj workspace's address, then Connect again."
 	msgStoreUnavailable    = "The local store is not available."
 	msgPostOnly            = "POST only."

@@ -73,16 +73,19 @@ integration:
 
 # -- Control plane (store pod only; the fronts never talk off-cluster) -------
 controlPlane:
-  # Where THIS COLLECTOR's requests go. May be an in-cluster address.
-  # The hosted control plane is https://app.flanj.io.
-  # Leave empty to run fully local — the collector captures normally, it just
-  # cannot create thread links.
-  baseUrl: ""
+  # Where THIS COLLECTOR's requests go. The default is the hosted control
+  # plane; point it at an in-cluster address to reach a control plane through
+  # your own network. Knowing the address sends nothing: every outbound path
+  # is gated on the collector key that only Connect (Settings, in the UI)
+  # mints, so an installed-but-unconnected deployment makes no outbound
+  # request at all. Set it to "" to run fully local — the collector captures
+  # normally, it just cannot create thread links.
+  baseUrl: https://app.flanj.io
   # The control-plane origin YOUR BROWSER can open, for the Connected pill's
-  # dashboard link. Set it whenever baseUrl is an address a laptop cannot
-  # resolve — which includes every in-cluster Service name. For the hosted
-  # control plane it is https://app.flanj.io, the same as baseUrl.
-  publicUrl: ""
+  # dashboard link. For the hosted control plane it is the same as baseUrl.
+  # Change it together with baseUrl whenever baseUrl becomes an address a
+  # laptop cannot resolve — which includes every in-cluster Service name.
+  publicUrl: https://app.flanj.io
   deployToken:
     value: ""
     existingSecret: ""

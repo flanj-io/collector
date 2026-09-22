@@ -2,30 +2,38 @@
 #
 # It is deliberately NOT config.example.yaml. That file is the annotated teaching
 # document, and it is full of illustrative values: `acme-payments`, `Acme Consumer
-# Ltd`, a `cp_base_url` of `https://cp.flanj.test`. Baking it meant a stranger's
-# first `docker run` came up wearing somebody else's org identity, reported
-# `cp_configured: true` on a machine nobody had configured, and met a Connect that
-# failed with "couldn't reach the control plane" — which reads as a network fault
-# and was in fact a placeholder host in the image's own config (issue #55).
+# Ltd`. Baking it meant a stranger's first `docker run` came up wearing somebody
+# else's org identity (issue #55).
 #
-# So this file carries NO identity and NO control plane. What that buys:
+# So this file carries NO identity. It does know the hosted control plane —
+# `cp_base_url` below — because that address is the same for everyone who
+# installs from the registry, and asking every reader to type it in by hand was
+# the one configuration step left between `docker run` and Connect.
+#
+# Knowing the control plane's address is not the same as talking to it. The
+# collector sends nothing until Connect: every outbound path — registration,
+# the finding sync, the directory fetch, the edge sync, thread reads — is gated
+# on the collector KEY, which only Connect mints. Setting the URL constructs the
+# client and nothing else. A collector on this config, never Connected, makes
+# no outbound request at all (extension/flanjui: the sync legs return early
+# with no key). What that buys:
 #
 #   - no organization name is shown anywhere: the workspace's name is chosen by
 #     its contact on the control plane's confirmation page, after Connect
-#   - `cp_configured` is false, which is true of this config AND of reality
-#   - Connect answers `cp_not_configured`, naming the two keys to set, instead of
-#     failing as if the operator's network were at fault
+#   - `cp_configured` is true, so the UI opens straight onto the Connect form:
+#     a collector name and a contact email, no token
+#   - nothing leaves the network until a person presses Connect
 #
 # Everything else works on the first run with no configuration at all: OTLP
 # ingest, the redaction floor, drift, edge discovery, the store and the UI. That
 # is deliberate — looking around without connecting is a property of this thing,
 # so an unconfigured collector must boot rather than refuse.
 #
-# TO CONNECT: copy config/config.example.yaml, set cp_base_url (a deploy token
-# is optional since 2026-09-14), and mount it over
-# /etc/flanj/config.yaml (README "Run it with Docker"). Every key is frozen in
-# contracts/CONTRACTS.md §8; the example documents all of them, this file
-# documents none, and that split is the point.
+# TO OVERRIDE (an in-network control plane, a deploy token, window sizes): copy
+# config/config.example.yaml, edit it, and mount it over /etc/flanj/config.yaml
+# (README "Run it with Docker"). Every key is frozen in contracts/CONTRACTS.md
+# §8; the example documents all of them, this file documents none, and that
+# split is the point.
 #
 # The two tiered-topology role configs are baked alongside this one, unchanged:
 # /etc/flanj/front.yaml and /etc/flanj/store.yaml (docs/STORE.md "Topologies").
@@ -39,18 +47,20 @@ extensions:
 
   flanjui:
     ui_endpoint: 127.0.0.1:5335 # loopback only — the collector is outbound-only
+    # The hosted control plane. Where THIS COLLECTOR's requests go once it is
+    # Connected — and nowhere before: with no collector key the sync switches
+    # (finding_sync, directory_sync, edge_sync — default true) return early and
+    # Connect is the only thing that ever sends. cp_public_url is not needed:
+    # this host is public, so the Connected pill's dashboard link is minted
+    # from it directly. cp_deploy_token is optional everywhere: Connect needs
+    # no pre-issued token.
+    cp_base_url: https://app.flanj.io
     # consumer_display_name, provider_display_name: ABSENT on purpose — both are
     # deprecated and ignored (2026-09-19). An identity belongs to whoever
     # installed this collector, and the image has never met them. Connect asks
     # for the collector's NAME in the UI (the deployment's identity — CONTRACTS
     # §5, 2026-09-14); the workspace's name is chosen by the contact on the
     # control plane's confirmation page.
-    #
-    # cp_base_url: ABSENT on purpose. With no base URL the CP client is never
-    # built, so nothing outbound exists to fail. (cp_deploy_token is optional
-    # everywhere: Connect needs no pre-issued token.) The sync
-    # switches (finding_sync, directory_sync, edge_sync) default true and are
-    # inert without it — they return early with no collector key.
 
 receivers:
   otlp:
