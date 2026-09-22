@@ -153,6 +153,23 @@ describe('design tokens', () => {
     expect(clipped, 'grouped-control wrappers that would clip the offset focus ring').toEqual([]);
   });
 
+  it('the outbound Status cell\'s linked clause gets the same block gap as its plain-text sibling', () => {
+    // `.edge-status-word` and the clause that follows it sit on separate
+    // source lines in App.vue, so Vue's whitespace-condense removes the
+    // newline between them entirely (see the word-boundary comment above the
+    // `.st-lines` template). The plain-text clause variant, `.edge-status-clause`,
+    // compensates with `display: block`; the linked-button variant,
+    // `.edge-contract-link`, did not get the same rule and sat flush against the
+    // word with zero gap ("not checked· Add REST contract").
+    const style = styleOf('App.vue');
+    const clauseRule = style.match(/\.edge-status-clause\s*\{[^}]*\}/);
+    const linkRule = style.match(/\.edge-contract-link\s*\{[^}]*\}/);
+    expect(clauseRule, '.edge-status-clause rule missing from App.vue').not.toBeNull();
+    expect(linkRule, '.edge-contract-link rule missing from App.vue').not.toBeNull();
+    expect(clauseRule![0]).toContain('display: block');
+    expect(linkRule![0], '.edge-contract-link must match .edge-status-clause\'s block separation').toContain('display: block');
+  });
+
   it('no surface rule declares a custom property the canonical file already defines', () => {
     // peek.css once declared `--ok-ink: #1f6d3a` on the same :root as the
     // vendored file and, loaded second, silently shadowed the canonical value.

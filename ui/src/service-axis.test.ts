@@ -9,7 +9,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mount, type VueWrapper } from '@vue/test-utils';
 import App from './App.vue';
-import { NOTHING_VALIDATED_YET_CLAUSE } from './headline';
 import { identifiableServerRefs, mcpHeadline, serviceSlices } from './mcp';
 import type { ContractSpec } from './contracts';
 import type { Finding, RedactedCall } from './types';
@@ -123,56 +122,106 @@ async function mountApp(): Promise<VueWrapper> {
   return w;
 }
 
-const overviewLines = (w: VueWrapper) => w.findAll('section.mcp-headline strong').map((s) => s.text());
+const statusEl = (w: VueWrapper) => w.find('.headline.status');
+const statusLines = (w: VueWrapper) => w.findAll('.st-lines .st-text').map((s) => s.text());
 
-describe('the Overview MCP lines, per calling service', () => {
-  it('splits ONE contract row two services call into two lines, each naming its service', async () => {
+describe('the Overview status, per calling service', () => {
+  it('two services clean on one server: no drift line — the tally counts the SERVER once, not per caller', async () => {
     // The default install: neither SDK configures an integration, both derive
-    // the same one from the host, so both services land on one row.
+    // the same one from the host, so both services land on one row — proven
+    // directly against serviceSlices/identifiableServerRefs below (still two
+    // distinct, named refs). Neither call drifted, so `mcpHeadline` returns
+    // null for both (ui/src/mcp.ts) — a clean per-service line is gone, not
+    // folded — and the status card's tally counts the one underlying MCP
+    // server `checkedCounts` saw checked calls on, not the two callers.
     stub([contract('mcp-acme-test')], [call('mcp-acme-test', 'org-app', 'clean'), call('mcp-acme-test', 'org-app-py', 'clean')]);
-    const lines = overviewLines(await mountApp());
-    expect(lines).toEqual([
-      `${LEAD} · called by org-app — no drift detected.`,
-      `${LEAD} · called by org-app-py — no drift detected.`
-    ]);
+    const w = await mountApp();
+    expect(statusLines(w)).toEqual([]);
+    expect(statusEl(w).classes()).toContain('ok');
+    expect(statusEl(w).text()).toContain('1 MCP server');
   });
 
-  it('tells apart two rows on one server by service, with no integration id', async () => {
+  it('two servers, one service each, both clean: the tally counts both', async () => {
     // The integration stack: two configured integrations, one service each.
+    // The per-row, per-service distinctness itself is asserted directly
+    // against serviceSlices/identifiableServerRefs in the describe block
+    // below.
     stub([contract('acme-tools'), contract('acme-tools-py')], [call('acme-tools', 'org-app', 'clean'), call('acme-tools-py', 'org-app-py', 'clean')]);
-    const lines = overviewLines(await mountApp());
-    expect(lines).toHaveLength(2);
-    expect(lines[0]).not.toBe(lines[1]);
-    expect(lines.some((l) => l.includes('· called by org-app —'))).toBe(true);
-    expect(lines.some((l) => l.includes('· called by org-app-py —'))).toBe(true);
-    for (const l of lines) expect(l).not.toContain('integration:');
+    const w = await mountApp();
+    expect(statusLines(w)).toEqual([]);
+    expect(statusEl(w).classes()).toContain('ok');
+    expect(statusEl(w).text()).toContain('2 MCP servers');
   });
 
-  it('puts an output mismatch on the line of the service whose calls drifted, not the other', async () => {
+  it('puts an output mismatch on the line of the service whose calls drifted; the clean service says nothing at all', async () => {
     stub(
       [contract('mcp-acme-test')],
       [call('mcp-acme-test', 'org-app', 'clean'), call('mcp-acme-test', 'org-app-py', 'drifted')],
       [mismatch('mcp-acme-test')]
     );
-    const lines = overviewLines(await mountApp());
-    expect(lines.find((l) => l.includes('called by org-app —'))).toBe(`${LEAD} · called by org-app — no drift detected.`);
+    const w = await mountApp();
+    const lines = statusLines(w);
+    // org-app-py's own line is drift — positive evidence about ONE service.
     expect(lines.find((l) => l.includes('called by org-app-py —'))).toMatch(/— output mismatch on search — 4 calls since /);
+    // org-app came back clean: it never had a line to fold — there is none.
+    expect(lines.find((l) => l.includes('called by org-app —'))).toBeUndefined();
+    expect(lines).toHaveLength(1);
+    expect(statusEl(w).classes()).toContain('drift');
+    // There is exactly one MCP server here (integration mcp-acme-test), and
+    // it is the one drifting — org-app's clean call is evidence about a
+    // server that is, as a whole, drifting. The sub-line must never count
+    // that same server as part of "the rest of what was checked": with
+    // nothing else checked, it has nothing left to name and disappears.
+    expect(statusEl(w).text()).not.toContain('No drift in the rest of what was checked');
   });
 
-  it('puts a mismatch no call in view can place on EVERY line — evicted evidence never reads green', async () => {
+  it('puts a mismatch no call in view can place on EVERY line — evicted evidence never reads clean', async () => {
     stub(
       [contract('mcp-acme-test')],
       [call('mcp-acme-test', 'org-app', 'clean'), call('mcp-acme-test', 'org-app-py', 'clean')],
       [mismatch('mcp-acme-test')]
     );
-    const lines = overviewLines(await mountApp());
+    const w = await mountApp();
+    const lines = statusLines(w);
     expect(lines).toHaveLength(2);
     for (const l of lines) expect(l).toContain('— output mismatch on search');
+    expect(statusEl(w).text()).toContain('Drift detected in 2 places');
   });
 
-  it('renders a row nobody has called yet exactly as before — one line, no service', async () => {
+  it('a row nobody has called yet: neutral, no line, no Not validated row — zero calls means zero items', async () => {
     stub([contract('acme-tools')], []);
-    expect(overviewLines(await mountApp())).toEqual([`${LEAD} — ${NOTHING_VALIDATED_YET_CLAUSE}`]);
+    const w = await mountApp();
+    expect(statusLines(w)).toEqual([]);
+    expect(statusEl(w).classes()).toContain('neutral');
+    expect(statusEl(w).text()).toContain('Nothing validated yet');
+    expect(w.find('.not-validated').exists()).toBe(false);
+  });
+
+  it('two distinct inbound consumers, both checked: the tally counts 2, not a flag pinned at 1', async () => {
+    const inboundCall = (id: string, peerHost: string): RedactedCall =>
+      ({
+        schema_version: 1,
+        id,
+        captured_at: AT,
+        integration: 'self',
+        direction: 'server',
+        peer_host: peerHost,
+        edge_class: 'external',
+        method: 'GET',
+        url: 'https://self.example/v1/x',
+        route: '/v1/x',
+        status_code: 200,
+        transport: 'http',
+        correlation: {},
+        redaction: { applied: false, patterns: [], spec_aware: false },
+        validated: 'clean',
+        drifted: false
+      }) as unknown as RedactedCall;
+    stub([], [inboundCall('i1', 'client-a.example'), inboundCall('i2', 'client-b.example')]);
+    const w = await mountApp();
+    expect(statusEl(w).classes()).toContain('ok');
+    expect(statusEl(w).text()).toContain('2 inbound consumers');
+    expect(statusEl(w).text()).not.toContain('1 inbound consumer');
   });
 });
 
@@ -219,8 +268,11 @@ describe('serviceSlices + identifiableServerRefs', () => {
     const ref = (integration: string, service: string) => ({ name: 'acme-tools-mcp', version: '1.2.0', origin: 'mcp.acme.test', service, integration });
     const [a, b, c] = identifiableServerRefs([ref('one', 'org-app'), ref('two', 'org-app'), ref('three', 'org-app-py')]);
     const fmt = (iso: string) => iso;
-    expect(mcpHeadline(a, [], fmt, 1).text).toBe(`${LEAD} · called by org-app · integration: one — no drift detected.`);
-    expect(mcpHeadline(b, [], fmt, 1).text).toBe(`${LEAD} · called by org-app · integration: two — no drift detected.`);
-    expect(mcpHeadline(c, [], fmt, 1).text).toBe(`${LEAD} · called by org-app-py — no drift detected.`);
+    // mcpHeadline only ever speaks drift (ui/src/mcp.ts) — the disambiguation
+    // is proven on the one branch that still renders a sentence.
+    const finding = mismatch('x');
+    expect(mcpHeadline(a, [finding], fmt)?.text).toBe(`${LEAD} · called by org-app · integration: one — output mismatch on search — 4 calls since ${AT}.`);
+    expect(mcpHeadline(b, [finding], fmt)?.text).toBe(`${LEAD} · called by org-app · integration: two — output mismatch on search — 4 calls since ${AT}.`);
+    expect(mcpHeadline(c, [finding], fmt)?.text).toBe(`${LEAD} · called by org-app-py — output mismatch on search — 4 calls since ${AT}.`);
   });
 });

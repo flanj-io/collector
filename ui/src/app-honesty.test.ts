@@ -361,9 +361,8 @@ const MCP_SNAPSHOT = {
 };
 
 const REST_CALLS = CAPTURED_BEFORE.map((t, i) => call(`c${i}`, t));
-const REST_HEADLINE = '.headline:not(.mcp-headline)';
 
-describe('the Overview headline spends evidence only on its own edge', () => {
+describe('the all-clear never shows without the list of what nothing checked', () => {
   /** Serve a window of `calls` with ONLY the MCP server's contract loaded — no
    *  REST contract at all, which is the state the walk found. */
   function serve(calls: unknown[]) {
@@ -378,61 +377,89 @@ describe('the Overview headline spends evidence only on its own edge', () => {
     delete OK_BODIES['/api/contracts/spec'];
   });
 
-  it('the repro: acme captured with no contract, MCP tools validated → REST line neutral, MCP line green', async () => {
+  it('the repro: acme captured with no contract, MCP tools checked → ok, with the REST gap under Not validated', async () => {
     // Fresh stack, no contract: POST /__drive {target:"acme"}, {target:"mcp"},
-    // reload. The MCP calls to the two outputSchema tools were validated against
-    // the snapshot; nothing checked the acme calls. The REST line read
-    // "No drift detected on integration acme-payments" in green, one line
-    // above "0 of 1 provider checked against a contract".
+    // reload. The MCP calls to the two outputSchema tools were checked against
+    // the snapshot; nothing checked the acme calls. This USED to read "No
+    // drift detected on integration acme-payments" in green, one line above
+    // "0 of 1 provider checked against a contract" — the REST line spending
+    // the MCP server's evidence on a provider it never observed. The premise
+    // is now reversed: one status card speaks for the whole collector, its
+    // `ok` tone is earned by the MCP evidence, and the REST gap it does NOT
+    // cover sits under Not validated instead of being silently implied.
     serve([...REST_CALLS, mcpCall('m1', 'get_balance'), mcpCall('m2', 'create_refund')]);
     const w = await mountApp();
 
-    const rest = w.find(REST_HEADLINE);
-    expect(rest.text()).toContain('Nothing validated yet');
-    expect(rest.text()).not.toContain('No drift detected');
-    expect(rest.classes()).toContain('neutral');
-    expect(rest.classes()).not.toContain('ok');
-    // No integration scope rides the line any more (2026-09-14): the subline
-    // names the collector once Connected, which this stub is not.
-    expect(rest.text()).not.toContain('on integration');
+    const status = w.find('.headline.status');
+    expect(status.exists()).toBe(true);
+    expect(status.text()).toContain('No drift detected');
+    expect(status.classes()).toContain('ok');
+    expect(status.classes()).not.toContain('drift');
+    expect(status.classes()).not.toContain('neutral');
+    // The sub-line's tally names what earned the all-clear — one MCP
+    // server — and never claims the REST host it never checked.
+    expect(status.text()).toContain('1 MCP server');
+    expect(status.text()).not.toContain(HOST);
+    // The old per-server MCP card is gone entirely — its facts moved here.
+    expect(w.find('.mcp-headline').exists()).toBe(false);
 
-    // The MCP server's evidence lands on ITS line, which has earned its all-clear.
-    const mcp = w.find('.mcp-headline');
-    expect(mcp.exists()).toBe(true);
-    expect(mcp.text()).toContain(`Server: acme-tools-mcp v1.2.0 · ${MCP_HOST}`);
-    expect(mcp.text()).toContain('no drift detected');
-    expect(mcp.classes()).toContain('ok');
+    // The all-clear is paired with the disclosure: closed by default…
+    const nvBtn = w.find('.nv-row-btn');
+    expect(nvBtn.exists()).toBe(true);
+    expect(nvBtn.attributes('aria-expanded')).toBe('false');
+    expect(nvBtn.text()).toContain('Not validated');
+    // …and opens IN PLACE, in a row of its own directly under the status
+    // card — never a control inside it — to the REST gap it was hiding.
+    await nvBtn.trigger('click');
+    expect(nvBtn.attributes('aria-expanded')).toBe('true');
+    const panel = w.find('#nv-panel');
+    expect(panel.exists()).toBe(true);
+    expect(panel.text()).toContain(HOST);
+    expect(panel.text()).toContain('No contract uploaded');
+    // The MCP badge and its sentence sit flush together in the template (a
+    // flex `gap` supplies the VISUAL space), so their textContent used to
+    // concatenate with no word boundary once before ("MCP1 MCP server — no
+    // drift detected."). The badge now lives on the Not validated panel's
+    // MCP group header rather than a per-server Overview line; assert the
+    // real text node still carries a space there too.
+    expect(w.find('#nv-panel').text()).not.toMatch(/\bMCPacme/);
   });
 
-  it('MCP traffic alone: the REST line names no integration it has never observed', async () => {
+  it('MCP traffic alone: the status names no REST provider it has never observed', async () => {
     // /api/health carries the config slug once ANY outbound edge exists — the
     // MCP edge here — but no REST call has ever been made under it.
     serve([mcpCall('m1', 'get_balance')]);
     const w = await mountApp();
 
-    const rest = w.find(REST_HEADLINE);
-    expect(rest.text()).toContain('Nothing validated yet');
-    expect(rest.classes()).toContain('neutral');
-    expect(rest.text()).not.toContain('on integration');
-    expect(w.find('.mcp-headline').classes()).toContain('ok');
+    const status = w.find('.headline.status');
+    expect(status.classes()).toContain('ok');
+    expect(status.text()).not.toContain('on integration');
+    // No REST traffic at all means no REST row either — nothing to add.
+    expect(w.find('.nv-row-btn').exists()).toBe(false);
+    expect(w.find('.mcp-headline').exists()).toBe(false);
   });
 
-  it('an MCP server whose snapshot has validated nothing is neutral, not green', async () => {
+  it('an MCP server that validated nothing is neutral, and the panel names why', async () => {
     // The snapshot is loaded and the Contracts tab lists the server, but the
     // only calls are to the tool without an outputSchema and an isError result
     // — nothing was judged (ui/src/coverage.ts), so "no drift detected" would
-    // be the REST line's original lie, per server.
+    // be the old REST line's original lie, per server.
     serve([mcpCall('m1', 'list_transactions'), mcpCall('m2', 'get_balance', { mcp_is_error: true })]);
     const w = await mountApp();
 
-    const mcp = w.find('.mcp-headline');
-    expect(mcp.exists()).toBe(true);
-    expect(mcp.text()).toContain('nothing validated yet');
-    expect(mcp.text()).not.toContain('no drift detected');
-    expect(mcp.classes()).toContain('neutral');
-    expect(mcp.classes()).not.toContain('ok');
-    expect(mcp.classes()).not.toContain('drift');
-/* ── 4. The processor's verdict, on the card ───────────────────────────── */
+    const status = w.find('.headline.status');
+    expect(status.classes()).toContain('neutral');
+    expect(status.text()).not.toContain('No drift detected');
+    expect(w.find('.mcp-headline').exists()).toBe(false);
+
+    const nvBtn = w.find('.nv-row-btn');
+    expect(nvBtn.exists()).toBe(true);
+    await nvBtn.trigger('click');
+    const panelText = w.find('#nv-panel').text();
+    // list_transactions declares no output schema (its own row); get_balance's
+    // isError call is a per-call skip, not its own row, and the server has no
+    // OTHER checked call either — so it explains itself too.
+    expect(panelText).toContain('declares no output schema');
   });
 });
 

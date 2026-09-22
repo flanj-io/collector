@@ -45,6 +45,7 @@ import {
   mcpDisclosureTail,
   mcpEvidenceLine,
   mcpHeadline,
+  mcpDescriptionNote,
   mcpIdsLine,
   mcpIdsLineFor,
   mcpStatusLabel,
@@ -219,42 +220,40 @@ describe('health', () => {
   const t = (iso: string) => (iso ? '14:02' : '');
 
   it('drift headline', () => {
-    const h = mcpHeadline(server, [finding({})], t, 12);
-    expect(h.tone).toBe('drift');
-    expect(h.text).toBe('Server: acme-mcp v1.4.0 — output mismatch on get_balance — 12 calls since 14:02.');
+    const h = mcpHeadline(server, [finding({})], t);
+    expect(h?.tone).toBe('drift');
+    expect(h?.text).toBe('Server: acme-mcp v1.4.0 — output mismatch on get_balance — 12 calls since 14:02.');
   });
 
   it('definition-change headline (no output mismatch)', () => {
-    const h = mcpHeadline(server, [defChange()], t, 3);
-    expect(h.tone).toBe('drift');
-    expect(h.text).toBe('Server: acme-mcp v1.4.0 — definition change on get_balance — breaking, no calls affected yet.');
+    const h = mcpHeadline(server, [defChange()], t);
+    expect(h?.tone).toBe('drift');
+    expect(h?.text).toBe('Server: acme-mcp v1.4.0 — definition change on get_balance — breaking, no calls affected yet.');
   });
 
-  it('clean headline (local notices do not tip it)', () => {
-    const h = mcpHeadline(server, [finding({ kind: 'stale_client' })], t, 3);
-    expect(h.tone).toBe('ok');
-    expect(h.text).toBe('Server: acme-mcp v1.4.0 — no drift detected.');
+  it('clean headline (local notices do not tip it): no line at all', () => {
+    // A clean server, and one whose only finding is a local notice, has
+    // nothing to say here any more — no per-server "no drift detected." line
+    // repeats what the system status (ui/src/status.ts) already says once
+    // for the whole collector.
+    expect(mcpHeadline(server, [finding({ kind: 'stale_client' })], t)).toBeNull();
+    expect(mcpHeadline(server, [], t)).toBeNull();
   });
 
   // qfix2-2026-08-26: a description change left the Local notices
-  // band when it became flaggable. If the headline had no clause for it, a
-  // server whose ONLY drift is a wording change would say "no drift detected"
-  // here while the Contracts tab showed a row with a primary `Flag this` — and
-  // the finding would appear nowhere on Overview at all. So the WORDS name it.
-  // UX review 2026-09-14: the TONE, however, is never `drift` — the same
-  // finding is chipped DESCRIPTION (steel) on the tab and the row, and a red
-  // headline over a wording change was a false alarm the row then retracted.
-  it('description-only server names the change and is never red', () => {
-    const h = mcpHeadline(server, [descChange()], t, 3);
-    expect(h.tone).toBe('ok');
-    expect(h.text).toBe(
-      'Server: acme-mcp v1.4.0 — definition change on get_balance — description only, no schema change.'
-    );
-    // …and never green either while nothing has been validated: the tone is
-    // the verdict the calls earned, the clause is the change.
-    const cold = mcpHeadline(server, [descChange()], t, 0);
-    expect(cold.tone).toBe('neutral');
-    expect(cold.text).toBe(h.text);
+  // band when it became flaggable. It is not drift (UX review 2026-09-14: the
+  // same finding is chipped DESCRIPTION (steel) on the tab and the row, and a
+  // red headline over a wording change was a false alarm the row then
+  // retracted), so it is not this function's job any more either —
+  // `mcpDescriptionNote` names it as one quiet line on the status card's foot,
+  // independent of whether the server validated anything.
+  it('description-only server: no status line, but a quiet note', () => {
+    expect(mcpHeadline(server, [descChange()], t)).toBeNull();
+    const note = mcpDescriptionNote(server, [descChange()]);
+    expect(note?.text).toBe('acme-mcp reworded the description of get_balance. Wording only, no schema change.');
+    expect(note?.tool).toBe('get_balance');
+    expect(mcpDescriptionNote(server, [])).toBeNull();
+    expect(mcpDescriptionNote(server, [finding({ kind: 'stale_client' })])).toBeNull();
     // A wording change is chipped DESCRIPTION everywhere it is counted — the
     // tab's steel title and the card's steel chip use the row badge's word.
     expect(descriptionCountTitle(1)).toBe('1 description change — wording only, non-breaking — acknowledge to clear');
@@ -264,48 +263,21 @@ describe('health', () => {
   });
 
   it('a breaking definition change still outranks a description one', () => {
-    const h = mcpHeadline(server, [descChange({ id: 'f2', endpoint: 'list_txns' }), defChange()], t, 3);
-    expect(h.tone).toBe('drift');
-    expect(h.text).toBe('Server: acme-mcp v1.4.0 — definition change on get_balance — breaking, no calls affected yet.');
-  });
-
-  // 2026-09-07 (the second exploratory pass): the REST headline's neutral zero state,
-  // per server. A tools/list that has arrived lists the server on the
-  // Contracts tab and renders this line — and may still have validated
-  // nothing: every call so far hit a tool with no outputSchema, or came back
-  // isError, or was captured before the snapshot landed. "no drift detected"
-  // in green there is an all-clear nothing performed.
-  it('a snapshot that has validated nothing is neutral, never green', () => {
-    const h = mcpHeadline(server, [], t, 0);
-    expect(h.tone).toBe('neutral');
-    expect(h.text).toBe('Server: acme-mcp v1.4.0 — nothing validated yet.');
-    // A local notice is not evidence either way.
-    expect(mcpHeadline(server, [finding({ kind: 'stale_client' })], t, 0).tone).toBe('neutral');
-    // One validated call earns the all-clear.
-    const ok = mcpHeadline(server, [], t, 1);
-    expect(ok.tone).toBe('ok');
-    expect(ok.text).toBe('Server: acme-mcp v1.4.0 — no drift detected.');
+    const h = mcpHeadline(server, [descChange({ id: 'f2', endpoint: 'list_txns' }), defChange()], t);
+    expect(h?.tone).toBe('drift');
+    expect(h?.text).toBe('Server: acme-mcp v1.4.0 — definition change on get_balance — breaking, no calls affected yet.');
   });
 
   it('findings are evidence in themselves: they report with zero validated calls', () => {
     // An output mismatch's call can be evicted while the finding outlives it,
-    // and a definition change never had a call. Neither may fall to neutral.
-    expect(mcpHeadline(server, [finding({})], t, 0).tone).toBe('drift');
-    expect(mcpHeadline(server, [defChange()], t, 0).tone).toBe('drift');
-    // A description change is named, but it is not drift: with nothing
-    // validated the line is neutral and still says what changed.
-    const desc = mcpHeadline(server, [descChange()], t, 0);
-    expect(desc.tone).toBe('neutral');
-    expect(desc.text).toContain('description only, no schema change');
+    // and a definition change never had a call. Neither may fall silent.
+    expect(mcpHeadline(server, [finding({})], t)?.tone).toBe('drift');
+    expect(mcpHeadline(server, [defChange()], t)?.tone).toBe('drift');
   });
 
-  it('the three tones are distinct states, never a boolean in disguise', () => {
-    const tones = [
-      mcpHeadline(server, [], t, 0).tone,
-      mcpHeadline(server, [], t, 1).tone,
-      mcpHeadline(server, [finding({})], t, 1).tone
-    ];
-    expect(tones).toEqual(['neutral', 'ok', 'drift']);
+  it('the three tones now live in one drift line or null — mcpHeadline is never a third tone', () => {
+    expect(mcpHeadline(server, [], t)).toBeNull();
+    expect(mcpHeadline(server, [finding({})], t)?.tone).toBe('drift');
   });
 
   it('local notices band copy', () => {
@@ -612,21 +584,23 @@ describe('flag sheet, DESCRIPTION variant', () => {
   });
 });
 
-describe('the Overview headline distinguishes servers that share a name', () => {
+describe('the Overview status distinguishes servers that share a name', () => {
   // REGRESSION: the live stack runs two MCP servers publishing the SAME
-  // serverInfo.name, so Overview rendered two byte-identical health lines and
+  // serverInfo.name, so Overview rendered two byte-identical drift lines and
   // an operator reasonably read it as a duplicate.
-  it('two servers with one name produce two different lines', () => {
-    const http = mcpHeadline({ name: 'acme-tools-mcp', version: '1.2.0', origin: 'mcp.acme.test' }, [], () => '', 1);
-    const stdio = mcpHeadline({ name: 'acme-tools-mcp', version: '1.2.0', origin: 'stdio' }, [], () => '', 1);
-    expect(http.text).toBe('Server: acme-tools-mcp v1.2.0 · mcp.acme.test — no drift detected.');
-    expect(stdio.text).toBe('Server: acme-tools-mcp v1.2.0 · stdio — no drift detected.');
-    expect(http.text).not.toBe(stdio.text);
+  const t = (iso: string) => (iso ? '14:02' : '');
+
+  it('two servers with one name produce two different drift lines', () => {
+    const http = mcpHeadline({ name: 'acme-tools-mcp', version: '1.2.0', origin: 'mcp.acme.test' }, [finding({})], t);
+    const stdio = mcpHeadline({ name: 'acme-tools-mcp', version: '1.2.0', origin: 'stdio' }, [finding({})], t);
+    expect(http?.text).toBe('Server: acme-tools-mcp v1.2.0 · mcp.acme.test — output mismatch on get_balance — 12 calls since 14:02.');
+    expect(stdio?.text).toBe('Server: acme-tools-mcp v1.2.0 · stdio — output mismatch on get_balance — 12 calls since 14:02.');
+    expect(http?.text).not.toBe(stdio?.text);
   });
 
   it('a server with no origin reads exactly as before', () => {
-    expect(mcpHeadline({ name: 'acme-tools-mcp', version: '1.2.0' }, [], () => '', 1).text).toBe(
-      'Server: acme-tools-mcp v1.2.0 — no drift detected.'
+    expect(mcpHeadline({ name: 'acme-tools-mcp', version: '1.2.0' }, [finding({})], t)?.text).toBe(
+      'Server: acme-tools-mcp v1.2.0 — output mismatch on get_balance — 12 calls since 14:02.'
     );
   });
 });

@@ -13,7 +13,7 @@
 // the control.
 
 import { VERSION_NOT_SPECIFIED, versionLabel } from './contracts';
-import { NOTHING_VALIDATED_YET_CLAUSE, type HeadlineTone } from './headline';
+import type { HeadlineTone } from './headline';
 import { requestIdsLine } from './threads';
 import type { Correlation, Finding, RedactedCall } from './types';
 
@@ -321,51 +321,25 @@ export function serviceSlices(findings: Finding[], calls: McpRowCall[]): McpServ
   }));
 }
 
-/** One MCP server's Overview health line, and its tone — three of them, like
- *  the REST headline's (ui/src/headline.ts HeadlineTone). */
+/** One MCP server's Overview status line: positive evidence about exactly
+ *  ONE server — an output mismatch or a breaking definition change. There is
+ *  no "clean" or "neutral" branch any more: those said nothing a per-server
+ *  line needed to say once the system status (ui/src/status.ts) covers the
+ *  whole collector, and a server whose only news is a wording change gets a
+ *  quiet note instead (`mcpDescriptionNote` below), never a status line. */
 export interface McpHeadline {
   text: string;
   tone: HeadlineTone;
 }
 
 /**
- * The per-server MCP health headline. Priority: output mismatch (drift) →
- * breaking definition change (no calls affected yet) → description change →
- * nothing validated yet (neutral) → clean.
- *
- * The NEUTRAL clause (2026-09-07): a server whose tools/list has arrived — so
- * the Contracts tab lists it and this line renders at all — can still have
- * validated nothing. Every call so far hit a tool that declares no
- * outputSchema, or came back isError, or was captured before the snapshot
- * landed; the processor judged none of them (ui/src/coverage.ts). Reporting
- * `no drift detected` in green there is the REST headline's original lie,
- * told per server. So the all-clear costs at least one validated call to THIS
- * server, and the zero state reads as the same neutral the REST line uses —
- * neither verdict tone, because no verdict was reached. Findings outrank it:
- * a drift or a definition change is positive evidence in itself.
- *
- * The DESCRIPTION clause exists because qfix2-2026-08-26 moved description
- * changes OUT of the Overview "Local notices" band (they are flaggable now, and
- * that band promises nothing in it can be flagged). Without a clause here a
- * server whose only drift is a wording change would report "no drift detected"
- * while the Contracts tab listed a row with a primary `Flag this` — the tab and
- * the headline contradicting each other. So the line
- * names the wording change. Its TONE, though, is not `drift` (UX review
- * 2026-09-14): a description change is chipped `DESCRIPTION` on the row and
- * the tab, and the design's own detail copy says wording is not a severity claim —
- * a red bolt and a red rule over it were a false alarm the row then retracted.
- * The clause rides the verdict the validated calls earned: `ok` when this
- * server has validated at least one call, `neutral` when it has validated
- * none. The words carry the change; the tone carries the verdict.
+ * The per-server MCP status line — drift only: output mismatch first, then a
+ * breaking definition change. `null` for every server with nothing to report
+ * here (clean, description-only, or nothing validated yet): those facts now
+ * live in the system status's own tallies and the Not validated list
+ * (ui/src/status.ts), not in a line per server.
  */
-export function mcpHeadline(
-  s: McpServerRef,
-  findings: Finding[],
-  fmtTime: (iso: string) => string,
-  /** Calls to THIS server that its snapshot actually validated: a tool with an
-   *  outputSchema, answering without isError, captured after the snapshot. */
-  validatedCalls: number
-): McpHeadline {
+export function mcpHeadline(s: McpServerRef, findings: Finding[], fmtTime: (iso: string) => string): McpHeadline | null {
   const mismatches = findings.filter((f) => f.kind === 'output_mismatch');
   if (mismatches.length > 0) {
     const tools = Array.from(new Set(mismatches.map((f) => f.endpoint))).join(', ');
@@ -384,18 +358,28 @@ export function mcpHeadline(
     const tools = Array.from(new Set(breaking.map((f) => f.endpoint))).join(', ');
     return { text: serverLead(s) + `definition change on ${tools} — breaking, no calls affected yet.`, tone: 'drift' };
   }
+  return null;
+}
+
+/**
+ * The status card's quiet foot-note for a DESCRIPTION-class definition
+ * change: a wording-only change never earns the drift tone (UX review
+ * 2026-09-14) — it is chipped `DESCRIPTION` on the row and the tab, and the
+ * design's own detail copy says wording is not a severity claim. Detail and
+ * Acknowledge stay on Contracts; this is one sentence naming what changed.
+ * `null` when the server has no un-acked DESCRIPTION change to report.
+ */
+export function mcpDescriptionNote(
+  s: Pick<McpServerRef, 'name'>,
+  findings: Finding[]
+): { text: string; tool: string } | null {
   const described = findings.filter((f) => f.kind === 'definition_change' && definitionClass(f) === 'DESCRIPTION');
-  if (described.length > 0) {
-    const tools = Array.from(new Set(described.map((f) => f.endpoint))).join(', ');
-    return {
-      text: serverLead(s) + `definition change on ${tools} — description only, no schema change.`,
-      tone: validatedCalls > 0 ? 'ok' : 'neutral'
-    };
-  }
-  if (validatedCalls <= 0) {
-    return { text: serverLead(s) + NOTHING_VALIDATED_YET_CLAUSE, tone: 'neutral' };
-  }
-  return { text: serverLead(s) + 'no drift detected.', tone: 'ok' };
+  if (described.length === 0) return null;
+  const tools = Array.from(new Set(described.map((f) => f.endpoint)));
+  return {
+    text: `${s.name} reworded the description of ${tools.join(', ')}. Wording only, no schema change.`,
+    tool: tools[0]
+  };
 }
 
 /** Local notices band: title + sub. Items carry no Flag control, ever. */
