@@ -60,8 +60,8 @@ extensions:
     #                         It never named an edge either: edge names come from the UI rename, the
     #                         uploaded contract's title, or the directory (Overview → Edges → Rename).
     # provider_display_name: Acme Payments
-    cp_base_url: https://cp.flanj.test # where THIS COLLECTOR's requests go (register/me, flags, threads, syncs) — may be in-network
-    # cp_public_url: https://cp.flanj.test # OPTIONAL — the control-plane origin YOUR BROWSER can open. The Connected pill's
+    cp_base_url: https://app.flanj.io # the hosted control plane; where THIS COLLECTOR's requests go (register/me, flags, threads, syncs) — may be in-network
+    # cp_public_url: https://app.flanj.io # OPTIONAL — the control-plane origin YOUR BROWSER can open. The Connected pill's
     #                                     dashboard link is minted from it. Set it whenever cp_base_url is an in-network address
     #                                     a laptop cannot resolve (a docker service name, a k8s Service, a VPC-private ingress).
     #                                     Unset: the link falls back to cp_base_url only when that host is not obviously

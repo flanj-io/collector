@@ -31,7 +31,12 @@ application that sends:
 env:
   - name: FLANJ_OTLP_ENDPOINT
     value: http://flanj-collector.flanj:4318/v1/logs
+  - name: NODE_OPTIONS
+    value: "--require @flanj/sdk/register"
 ```
+
+The second variable is the SDK preload: without it the app sends nothing, because nothing loads the SDK.
+A Python app needs no `NODE_OPTIONS` — `import flanj.register` as its first line is the preload.
 
 That address is the same on every cluster that ran the command above: the chart gives the front collectors
 a Service called `flanj-collector` whose name does not move with the release name (see
@@ -41,6 +46,9 @@ Service, so reach it with a port-forward:
 ```bash
 kubectl -n flanj port-forward sts/flanj-flanj-collector-store 5335:5335
 ```
+
+If `5335` is already taken — the Docker quickstart publishes it — forward `15335:5335` and open
+<http://localhost:15335> instead.
 
 The operator's reference for the shapes, the flows and what each object is for
 is [`docs/DEPLOYMENT.md`](../../docs/DEPLOYMENT.md); the store's backends,
@@ -119,8 +127,8 @@ Full list with comments: [`values.yaml`](values.yaml). The ones that matter:
 |---|---|---|
 | `image.repository` / `image.tag` | `flanj/collector` / chart `appVersion` | |
 | `specToken.value` / `.existingSecret` | — | **required** (see above) |
-| `controlPlane.baseUrl` | `""` | unset = fully local: captures and detects, cannot create thread links |
-| `controlPlane.publicUrl` | `""` | the origin **your browser** can open; set it whenever `baseUrl` is an in-cluster name |
+| `controlPlane.baseUrl` | `""` | unset = fully local: captures and detects, cannot create thread links; `https://app.flanj.io` is the hosted control plane |
+| `controlPlane.publicUrl` | `""` | the origin **your browser** can open; set it whenever `baseUrl` is an in-cluster name — for the hosted control plane it is `https://app.flanj.io`, the same as `baseUrl` |
 | `controlPlane.deployToken.value` | `""` | optional (2026-09-14): an operator's or per-account deploy token, used once at Connect when set; Connect needs none |
 | `collector.replicas` | `2` | the fronts — the tier you scale |
 | `collector.autoscaling.*` | off | HPA on cpu/memory; fronts are stateless |
@@ -231,7 +239,11 @@ The roles fail differently on purpose, so `kubectl get pods` is not the check:
 kubectl -n flanj logs deploy/flanj-flanj-collector-front | grep -i 'contract refresh'
 ```
 
-Silence is the healthy result. `contract refresh failed … 401 Unauthorized`
+Silence is the healthy result, with one exception on a fresh install: the
+fronts come up before the store pod is Ready, so each logs a single
+`contract refresh failed … store pod unreachable … context deadline exceeded`
+at startup and the next refresh succeeds. A `401` is never expected:
+`contract refresh failed … 401 Unauthorized`
 means the two roles hold different tokens — which this chart prevents unless
 you supplied an `existingSecret` whose value changed underneath it.
 
@@ -253,9 +265,17 @@ now, which an init container does not. What matters is whether it settles, and
 load-bearing, upgrade the store alone first:
 
 ```bash
-helm upgrade flanj <chart> --set collector.replicas=0 ...   # store only
-helm upgrade flanj <chart> --set collector.replicas=3 ...   # then the fronts
+helm upgrade flanj <chart> --reuse-values --set collector.replicas=0 ...   # store only
+helm upgrade flanj <chart> --reuse-values --set collector.replicas=3 ...   # then the fronts
 ```
+
+Every upgrade needs `--reuse-values` (or the same `--set specToken.value=…`
+as the install): without it helm re-renders from the chart's defaults, the
+token you generated at install is dropped, and the upgrade fails with
+`specToken: Must validate "then" as "if" was valid` — that error means
+specToken was dropped, not that the token is wrong. An upgrade that replaces
+the store pod also ends an open `kubectl port-forward` to it; run the
+port-forward again afterwards.
 
 ## Publishing the chart
 
