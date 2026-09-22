@@ -195,8 +195,14 @@ install_and_check() {
 
   # 2. the UI, on the store pod's loopback bind, through a port-forward — the
   #    only way it is ever reachable.
+  # One pod name, WITHOUT `| head -1`: under `set -o pipefail` a two-replica
+  # store (the postgres cell) can end this script with 141 — kubectl is still
+  # writing the second name when head has already closed the pipe, SIGPIPE
+  # kills it, and pipefail reports the kill. jsonpath picks one name inside
+  # kubectl, so nothing is left to race.
   local store_pod
-  store_pod=$(kubectl -n "$NS" get pod -l "app.kubernetes.io/instance=$release,app.kubernetes.io/component=store" -o name | head -1)
+  store_pod=$(kubectl -n "$NS" get pod -l "app.kubernetes.io/instance=$release,app.kubernetes.io/component=store" -o jsonpath='pod/{.items[0].metadata.name}')
+  [ "$store_pod" != "pod/" ] || fail "$release: no store pod found"
   kubectl -n "$NS" port-forward "$store_pod" "5335:5335" >/dev/null 2>&1 &
   PF_PID=$!
   # ...and the FRONT Service, which is what the SDK targets.
