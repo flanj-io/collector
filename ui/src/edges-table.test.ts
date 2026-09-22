@@ -9,7 +9,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mount, type VueWrapper } from '@vue/test-utils';
 import App from './App.vue';
-import { START_THREAD_LABEL, REMOVE_NAME_LABEL } from './edge-names';
+import { REMOVE_NAME_LABEL } from './edge-names';
 import { INBOUND_CAPTION, INBOUND_DRIFT_CLAUSE, INBOUND_EMPTY, OUTBOUND_CAPTION, OUTBOUND_EMPTY, ALSO_CALLS_YOU } from './edges-view';
 
 const HEALTH = { status: 'ok', connect_status: 'disconnected' };
@@ -93,8 +93,36 @@ const CONTRACTS = [
     loaded_at: '2026-08-02T00:00:00Z',
     source: 'upload',
     edge_class: 'external'
+  },
+  // A local-process MCP server: its own table (no Calls / First seen data at
+  // all — that table's grid still has to share the other tables' column x).
+  {
+    integration: 'acme-tools-mcp',
+    role: 'provider',
+    format: 'mcp',
+    peer_host: null,
+    title: 'acme-tools-mcp',
+    version: null,
+    endpoints: 3,
+    loaded_at: '2026-09-21T00:00:00Z',
+    source: 'observed',
+    edge_class: 'local-process'
   }
 ];
+
+// An edge with neither 'client' nor 'server' direction — renders in its own
+// "Unknown direction" table, which (like Inbound) carries no per-row action.
+const UNKNOWN_DIR_EDGE = {
+  peer_host: 'relay.unknown-dir.test',
+  registrable_domain: 'unknown-dir.test',
+  direction: 'unknown',
+  role: 'provider',
+  class: 'external',
+  first_seen: '2026-09-10T00:00:00Z',
+  last_seen: '2026-09-20T00:15:00Z',
+  call_count: 40,
+  drift_count: 0
+};
 
 const CALLS = [
   {
@@ -193,17 +221,20 @@ describe('the Edges section renders two real tables, split by direction', () => 
     }
   });
 
-  it('an inbound row carries no Actions cell — Start a thread is outbound only', async () => {
+  it('no row on any table offers "Start a thread" any more — the actions cell is a reserved spacer', async () => {
     stubFetch();
     const w = await mountApp();
+    expect(w.findAll('button').some((b) => b.text() === 'Start a thread')).toBe(false);
+
     const inboundRow = w.find('#edge-in-webhooks-acme-test');
     expect(inboundRow.exists()).toBe(true);
-    expect(inboundRow.text()).not.toContain(START_THREAD_LABEL);
     expect(inboundRow.find('.cell-actions').exists()).toBe(false);
 
+    // Outbound carries no actions cell either now — Rename moved to the name
+    // line, so its actions column is a spacer, same as Inbound's.
     const outboundRow = w.find('#edge-out-api-globex-test');
-    expect(outboundRow.find('.cell-actions').exists()).toBe(true);
-    expect(outboundRow.text()).toContain(START_THREAD_LABEL);
+    expect(outboundRow.find('.cell-actions').exists()).toBe(false);
+    expect(outboundRow.find('.cell-spacer').exists()).toBe(true);
   });
 
   it('an INBOUND drifted row says whose drift it is — your responses, never the consumer’s', async () => {
@@ -257,14 +288,15 @@ describe('the Edges section renders two real tables, split by direction', () => 
     expect(window.location.hash).toBe('#contracts');
   });
 
-  it('the naming control sits on the name line and opens the existing inline editor', async () => {
+  it('the naming control sits on the name line, after the MCP chip, and opens the existing inline editor', async () => {
     stubFetch();
     const w = await mountApp();
     const row = w.find('#edge-out-api-globex-test');
+    // Rename lives on the name line now, not in the (now-empty) actions cell.
     const editBtn = row.find('.cell-name .edge-name-edit');
     expect(editBtn.exists()).toBe(true);
     expect(editBtn.text()).toBe('Edit name'); // name_source: 'user'
-    expect(row.find('.cell-actions').text()).not.toContain('Edit name');
+    expect(row.find('.cell-actions').exists()).toBe(false);
 
     await editBtn.trigger('click');
     await settle(w);
@@ -274,6 +306,55 @@ describe('the Edges section renders two real tables, split by direction', () => 
     // Remove name now lives inside the editor, not as a permanent row button.
     const removeBtn = editor.findAll('button').find((b) => b.text() === REMOVE_NAME_LABEL);
     expect(removeBtn?.exists()).toBe(true);
+  });
+
+  it('on an MCP outbound row, Rename renders after the MCP chip on the name line — collector#121', async () => {
+    // Regression: Rename used to live in the actions cell beside "Start a
+    // thread", which is gone (collector#121). It now sits on the name line,
+    // and this pins its position relative to the MCP chip when there is one.
+    const contractsWithMcp = [
+      ...CONTRACTS,
+      { integration: 'mcp-tools-test', role: 'provider', format: 'mcp', peer_host: 'mcp.tools.test', title: 'mcp.tools.test', version: null, endpoints: 2, loaded_at: '2026-09-21T00:00:00Z', source: 'observed', edge_class: 'external' }
+    ];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const path = String(input).split('?')[0];
+        const bodies: Record<string, unknown> = {
+          '/api/health': HEALTH,
+          '/api/findings': { findings: [] },
+          '/api/calls': { calls: CALLS },
+          '/api/edges': { edges: [...EDGES, {
+            peer_host: 'mcp.tools.test',
+            registrable_domain: 'tools.test',
+            direction: 'client',
+            role: 'consumer',
+            class: 'external',
+            first_seen: '2026-08-02T00:00:00Z',
+            last_seen: '2026-09-20T00:02:00Z',
+            call_count: 4,
+            drift_count: 0
+          }] },
+          '/api/contracts': { contracts: contractsWithMcp },
+          '/api/connect': CONNECT,
+          '/api/threads': { threads: [], total: 0, has_more: false }
+        };
+        const body = bodies[path];
+        return json(body ?? {}, body === undefined ? 404 : 200);
+      })
+    );
+    const w = await mountApp();
+    const row = w.find('#edge-out-mcp-tools-test');
+    expect(row.exists()).toBe(true);
+    const nameLine = row.find('.edge-name-line');
+    const order = Array.from(nameLine.element.children).map((el) => el.className);
+    const mcpIdx = order.findIndex((c) => c.includes('mcp-badge'));
+    const renameIdx = order.findIndex((c) => c.includes('edge-name-edit'));
+    expect(mcpIdx).toBeGreaterThanOrEqual(0);
+    expect(renameIdx).toBeGreaterThan(mcpIdx);
+
+    // No "Start a thread" control anywhere on this row, or on any other.
+    expect(row.findAll('button').some((b) => b.text() === 'Start a thread')).toBe(false);
   });
 
   it('a NEW badge marks a row first seen within 7 days, and not an older one', async () => {
@@ -326,5 +407,55 @@ describe('the Edges section renders two real tables, split by direction', () => 
     await settle(w);
     expect(byText('Calls').attributes('aria-sort')).toBe('ascending');
     expect(byText('Counterparty').attributes('aria-sort')).toBe('none');
+  });
+
+  it('every stacked table shares one column grid — Outbound, Inbound, Local MCP servers, Unknown direction', async () => {
+    // Local MCP servers (no Calls / First seen data) and Unknown direction
+    // (no per-row action) are both present here, alongside Outbound and
+    // Inbound, so every stacked table renders at once.
+    stubFetch([...EDGES, UNKNOWN_DIR_EDGE]);
+    const w = await mountApp();
+    const tables = w.findAll('table.edges-table');
+    // All four tables this fixture produces, or the fixture stopped
+    // exercising the shape this test is pinning.
+    expect(tables.length).toBe(4);
+
+    const gridOf = (t: (typeof tables)[number]) =>
+      t.findAll('colgroup col').map((c) => c.classes().find((cls) => cls.startsWith('col-')));
+
+    const grids = tables.map(gridOf);
+    // Every table declares the exact same six columns, in the exact same
+    // order — name, status, calls, first seen, last seen, actions — whether
+    // or not that table has data (or even a header) for all of them. A table
+    // that dropped a column here would shift every column after it out of
+    // the shared grid the other tables use.
+    const expectedGrid = ['col-name', 'col-status', 'col-calls', 'col-first', 'col-last', 'col-actions'];
+    for (const grid of grids) expect(grid).toEqual(expectedGrid);
+
+    // A column that has no data for a given table (Local MCP's Calls / First
+    // seen; Inbound's and Unknown's actions) still occupies a real cell in
+    // every row and in the header, empty rather than omitted — that is what
+    // keeps the grid shared instead of merely coincidentally the same width.
+    for (const table of tables) {
+      const headerCount = table.findAll('thead th').length;
+      expect(headerCount).toBe(6);
+      for (const row of table.findAll('tbody tr.edge-row')) {
+        expect(row.findAll('th, td').length).toBe(6);
+      }
+    }
+  });
+
+  it('a status secondary line never starts with the bullet separator', async () => {
+    // Covers every row shape that carries a secondary status line: a
+    // checked/contract-linked row, an unchecked row (Add REST contract), an
+    // inbound drifted row, and a Local MCP row's tools/list clause.
+    stubFetch([...EDGES]);
+    const w = await mountApp();
+    const secondaryLines = w.findAll('.edge-status-clause, .edge-contract-link');
+    expect(secondaryLines.length).toBeGreaterThan(0);
+    for (const line of secondaryLines) {
+      const text = line.text();
+      expect(text.startsWith('·')).toBe(false);
+    }
   });
 });

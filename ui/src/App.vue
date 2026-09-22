@@ -129,7 +129,6 @@ import {
   suggestTooLong,
   toggleSuggest,
   typeDraft,
-  START_THREAD_LABEL,
   type EdgeNameEdit
 } from './edge-names';
 import {
@@ -283,10 +282,7 @@ const threadsKnown = ref(false);
 const threadsTotal = ref(0);
 const threadsHasMore = ref(false);
 const sheetFinding = ref<Finding | null>(null);
-/** The edge "Start a thread" was pressed on. Mutually exclusive
- *  with `sheetFinding`: the sheet reads QUESTION mode off the missing finding. */
-const sheetEdge = ref<{ host: string; domain: string; name: string } | null>(null);
-const sheetOpen = computed(() => sheetFinding.value !== null || sheetEdge.value !== null);
+const sheetOpen = computed(() => sheetFinding.value !== null);
 const highlightThreadId = ref<string | null>(null);
 // `#contracts/<finding_id>` deep link IN (the control plane's findings index
 // links here): the Contracts tab opens with that finding's row highlighted and
@@ -483,32 +479,12 @@ function providerNameFor(f: Finding): string {
 }
 
 function openSheet(f: Finding) {
-  sheetEdge.value = null;
   sheetFinding.value = f;
-  if (connectStatus.value !== 'connected') loadConnect();
-}
-
-/**
- * "Start a thread" on an outbound edge row: the SAME sheet, minus
- * the evidence block. Connect-gated identically — the sheet shows the inline
- * Connect prompt and unlocks the moment the confirmation click lands, which is
- * why this starts the same poll the flag path does.
- */
-function openEdgeSheet(e: Edge) {
-  sheetFinding.value = null;
-  sheetEdge.value = {
-    host: e.peer_host,
-    domain: e.registrable_domain || e.peer_host,
-    // The name the row the operator clicked is rendering — never a humanized
-    // host standing in for one that was never given.
-    name: e.display_name || e.peer_host
-  };
   if (connectStatus.value !== 'connected') loadConnect();
 }
 
 function closeSheet() {
   sheetFinding.value = null;
-  sheetEdge.value = null;
 }
 
 function onThreadCreated(_r: FlagResult) {
@@ -2013,6 +1989,14 @@ watch(tab, (t) => {
                 <span class="edges-cap-title">{{ OUTBOUND_CAPTION }}</span>
                 <span class="edges-cap-sub">{{ outboundCaptionSubText }}</span>
               </caption>
+              <colgroup>
+                <col class="col-name" />
+                <col class="col-status" />
+                <col class="col-calls" />
+                <col class="col-first" />
+                <col class="col-last" />
+                <col class="col-actions" />
+              </colgroup>
               <thead>
                 <tr>
                   <th scope="col" :aria-sort="headerAriaSort('name')">
@@ -2028,7 +2012,10 @@ watch(tab, (t) => {
                   <th scope="col" class="num" :aria-sort="headerAriaSort('last')">
                     <button type="button" class="th-sort" @click="sortBy('last')">Last seen<span class="th-arrow" aria-hidden="true">{{ edgeSort.key === 'last' ? (edgeSort.dir === 'desc' ? '↓' : '↑') : '' }}</span></button>
                   </th>
-                  <th scope="col" class="cell-actions"><span class="vh">Actions</span></th>
+                  <!-- No row action lives in this column any more — Rename moved to
+                       the name line — but the column stays reserved (Local MCP still
+                       uses it for View catalogue) so every stacked table shares one grid. -->
+                  <th scope="col" class="cell-spacer" aria-hidden="true"></th>
                 </tr>
               </thead>
               <tbody>
@@ -2045,9 +2032,9 @@ watch(tab, (t) => {
                         <span class="edge-name" :class="{ unnamed: !row.e.display_name }" :title="row.e.display_name || row.e.peer_host">{{ row.e.display_name || row.e.peer_host }}</span>
                         <span v-if="mcpHosts.has(row.e.peer_host)" class="mcp-badge" :title="MCP_BADGE_TOOLTIP">{{ mcpBadgeLabel(row.e.class) }}</span>
                         <span v-if="isNewEdge(row.e)" class="edge-new" :title="'First seen ' + isoDate(row.e.first_seen)">{{ NEW_LABEL }}</span>
-                        <!-- Naming lives beside the name it renames — the row's Actions
-                             cell holds one button, the only action that reaches the other
-                             organization; a rename is local housekeeping. -->
+                        <!-- Naming lives here, on the name line, after the MCP chip
+                             where there is one — one quiet control, not glued to the
+                             text (the name-line flex gap gives it real spacing). -->
                         <button type="button" class="edge-name-edit" @click="startRename(row.e)">{{ renameLabel(row.e.name_source) }}</button>
                       </span>
                       <span v-if="row.e.display_name" class="edge-host" :title="row.e.peer_host">{{ row.e.peer_host }}</span>
@@ -2069,18 +2056,14 @@ watch(tab, (t) => {
                           class="edge-contract-link"
                           :class="{ add: row.status.clauseIsAdd }"
                           @click="goToContracts(row.e.peer_host)"
-                        >· {{ row.status.clause }}</button>
-                        <span v-else-if="row.status.clause" class="edge-status-clause" :title="statusClauseTitle(row)">· {{ row.status.clause }}</span>
+                        >{{ row.status.clause }}</button>
+                        <span v-else-if="row.status.clause" class="edge-status-clause" :title="statusClauseTitle(row)">{{ row.status.clause }}</span>
                       </template>
                     </td>
                     <td class="cell-calls num" data-label="Calls">{{ row.e.call_count }}<span v-if="row.e.rpm" class="unit">· {{ fmtRPM(row.e.rpm) }}/min</span></td>
                     <td class="cell-first num" data-label="First seen">{{ isoDate(row.e.first_seen) }}</td>
                     <td class="cell-last num" data-label="Last seen">{{ isoDate(row.e.last_seen) }}<span class="seen-rel">· {{ timeAgo(row.e.last_seen) }}</span></td>
-                    <td class="cell-actions">
-                      <span class="edge-actions">
-                        <button type="button" class="btn ghost small" @click="openEdgeSheet(row.e)">{{ START_THREAD_LABEL }}</button>
-                      </span>
-                    </td>
+                    <td class="cell-spacer" aria-hidden="true"></td>
                   </tr>
                   <tr v-if="nameEdit && nameEdit.host === row.e.peer_host" class="edge-edit-row">
                     <td colspan="6">
@@ -2144,6 +2127,14 @@ watch(tab, (t) => {
                 <span class="edges-cap-title">{{ INBOUND_CAPTION }}</span>
                 <span class="edges-cap-sub">{{ inboundCaptionSubText }}</span>
               </caption>
+              <colgroup>
+                <col class="col-name" />
+                <col class="col-status" />
+                <col class="col-calls" />
+                <col class="col-first" />
+                <col class="col-last" />
+                <col class="col-actions" />
+              </colgroup>
               <thead>
                 <tr>
                   <th scope="col" :aria-sort="headerAriaSort('name')">
@@ -2159,11 +2150,14 @@ watch(tab, (t) => {
                   <th scope="col" class="num" :aria-sort="headerAriaSort('last')">
                     <button type="button" class="th-sort" @click="sortBy('last')">Last seen<span class="th-arrow" aria-hidden="true">{{ edgeSort.key === 'last' ? (edgeSort.dir === 'desc' ? '↓' : '↑') : '' }}</span></button>
                   </th>
+                  <!-- No row action applies on this side; the column is kept empty
+                       (not omitted) so this table shares Outbound's exact grid. -->
+                  <th scope="col" class="cell-spacer" aria-hidden="true"></th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-if="!inboundRows.length" class="edges-empty">
-                  <td colspan="5">{{ INBOUND_EMPTY }}</td>
+                  <td colspan="6">{{ INBOUND_EMPTY }}</td>
                 </tr>
                 <tr v-for="row in inboundRows" :key="'i-' + row.e.peer_host" class="edge-row" :class="{ drift: row.status.kind === 'drift' }" :id="edgeRowId('server', row.e.peer_host)" tabindex="-1">
                   <th scope="row" class="cell-name">
@@ -2183,15 +2177,16 @@ watch(tab, (t) => {
                       :title="driftChipTitle(row.e.drift_count, 'server')"
                       @click="goToContracts(row.e.peer_host)"
                     >{{ driftLabel(row.e.drift_count) }}</button>
-                    <span v-if="row.status.kind === 'drift'" class="edge-status-clause">· {{ INBOUND_DRIFT_CLAUSE }}</span>
+                    <span v-if="row.status.kind === 'drift'" class="edge-status-clause">{{ INBOUND_DRIFT_CLAUSE }}</span>
                     <template v-else>
                       <span class="edge-status-word" :title="row.status.kind === 'mcp' ? MCP_BADGE_TOOLTIP : undefined">{{ row.status.word }}</span>
-                      <span v-if="row.status.clause" class="edge-status-clause" :title="statusClauseTitle(row)">· {{ row.status.clause }}</span>
+                      <span v-if="row.status.clause" class="edge-status-clause" :title="statusClauseTitle(row)">{{ row.status.clause }}</span>
                     </template>
                   </td>
                   <td class="cell-calls num" data-label="Calls">{{ row.e.call_count }}<span v-if="row.e.rpm" class="unit">· {{ fmtRPM(row.e.rpm) }}/min</span></td>
                   <td class="cell-first num" data-label="First seen">{{ isoDate(row.e.first_seen) }}</td>
                   <td class="cell-last num" data-label="Last seen">{{ isoDate(row.e.last_seen) }}<span class="seen-rel">· {{ timeAgo(row.e.last_seen) }}</span></td>
+                  <td class="cell-spacer" aria-hidden="true"></td>
                 </tr>
               </tbody>
             </table>
@@ -2207,10 +2202,23 @@ watch(tab, (t) => {
                 <span class="edges-cap-title">{{ LOCAL_MCP_CAPTION }}</span>
                 <span class="edges-cap-sub">{{ LOCAL_MCP_SUB }}</span>
               </caption>
+              <colgroup>
+                <col class="col-name" />
+                <col class="col-status" />
+                <col class="col-calls" />
+                <col class="col-first" />
+                <col class="col-last" />
+                <col class="col-actions" />
+              </colgroup>
               <thead>
                 <tr>
                   <th scope="col">Counterparty</th>
                   <th scope="col">Status</th>
+                  <!-- Local MCP servers carry no per-call count and no first-seen —
+                       these two columns stay empty (not omitted) so Status and Last
+                       seen land at the exact x every other stacked table uses. -->
+                  <th scope="col" class="cell-spacer" aria-hidden="true"></th>
+                  <th scope="col" class="cell-spacer" aria-hidden="true"></th>
                   <th scope="col" class="num">Last seen</th>
                   <th scope="col" class="cell-actions"><span class="vh">Actions</span></th>
                 </tr>
@@ -2225,8 +2233,10 @@ watch(tab, (t) => {
                   </th>
                   <td class="cell-status" data-label="Status">
                     <span class="edge-status-word" :title="MCP_BADGE_TOOLTIP">self-reported</span>
-                    <span class="edge-status-clause">· tools/list · {{ endpointCount(s.endpoints) }}</span>
+                    <span class="edge-status-clause">tools/list · {{ endpointCount(s.endpoints) }}</span>
                   </td>
+                  <td class="cell-spacer" aria-hidden="true"></td>
+                  <td class="cell-spacer" aria-hidden="true"></td>
                   <td class="cell-last num" data-label="Last seen">{{ isoDate(s.loaded_at) }}<span class="seen-rel">· {{ timeAgo(s.loaded_at) }}</span></td>
                   <td class="cell-actions">
                     <span class="edge-actions">
@@ -2247,6 +2257,14 @@ watch(tab, (t) => {
                 <span class="edges-cap-title">{{ UNKNOWN_DIRECTION_CAPTION }}</span>
                 <span class="edges-cap-sub">{{ UNKNOWN_DIRECTION_SUB }}</span>
               </caption>
+              <colgroup>
+                <col class="col-name" />
+                <col class="col-status" />
+                <col class="col-calls" />
+                <col class="col-first" />
+                <col class="col-last" />
+                <col class="col-actions" />
+              </colgroup>
               <thead>
                 <tr>
                   <th scope="col">Counterparty</th>
@@ -2254,6 +2272,7 @@ watch(tab, (t) => {
                   <th scope="col" class="num">Calls</th>
                   <th scope="col" class="num">First seen</th>
                   <th scope="col" class="num">Last seen</th>
+                  <th scope="col" class="cell-spacer" aria-hidden="true"></th>
                 </tr>
               </thead>
               <tbody>
@@ -2277,6 +2296,7 @@ watch(tab, (t) => {
                   <td class="cell-calls num" data-label="Calls">{{ e.call_count }}<span v-if="e.rpm" class="unit">· {{ fmtRPM(e.rpm) }}/min</span></td>
                   <td class="cell-first num" data-label="First seen">{{ isoDate(e.first_seen) }}</td>
                   <td class="cell-last num" data-label="Last seen">{{ isoDate(e.last_seen) }}<span class="seen-rel">· {{ timeAgo(e.last_seen) }}</span></td>
+                  <td class="cell-spacer" aria-hidden="true"></td>
                 </tr>
               </tbody>
             </table>
@@ -2990,19 +3010,6 @@ watch(tab, (t) => {
       @created="onThreadCreated"
       @update:connect="onConnectUpdated"
     />
-    <!-- QUESTION mode: no finding, no call, no correlation. The sheet branches
-         on the missing finding, so nothing here may pass one. -->
-    <FlagSheet
-      v-else-if="sheetEdge"
-      :key="'edge-' + sheetEdge.host"
-      :edge="sheetEdge"
-      :provider="sheetEdge.name"
-      :consumer="consumerName"
-      :connect="connect"
-      @close="closeSheet"
-      @created="onThreadCreated"
-      @update:connect="onConnectUpdated"
-    />
     <footer class="foot">
       <span>Flanj Collector · ELv2</span>
       <span>Redacted at source · outbound only · UI on localhost</span>
@@ -3448,7 +3455,32 @@ pre.body { background: var(--surface); border: var(--border-w) solid var(--rule)
    caption already says which table this is, so a per-row chip repeating it
    would be pure redundancy. */
 .edges-wrap { overflow-x: auto; margin: 0 0 18px; }
-.edges-table { width: 100%; border-collapse: collapse; background: var(--surface); border: var(--border-w) solid var(--rule); font-size: 13.5px; }
+.edges-table { width: 100%; border-collapse: collapse; background: var(--surface); border: var(--border-w) solid var(--rule); font-size: 13.5px; table-layout: fixed; }
+/* One column grid, shared by every stacked table (Outbound, Inbound, Local MCP
+   servers, Unknown direction). The name column is the only one left to `auto`
+   — table-layout:fixed hands it whatever width the fixed columns don't use —
+   so STATUS/CALLS/FIRST SEEN/LAST SEEN/actions land at the same x in all of
+   them, whether or not a given table has data for every column. A table that
+   has no such data (Local MCP has no Calls/First seen; Outbound, Inbound and
+   Unknown have no per-row action — Rename lives on Outbound's name line
+   instead, and Local MCP is the only table that still uses this column, for
+   View catalogue) keeps the column anyway, empty, rather than collapsing it
+   and shifting every column after it out of the shared grid. */
+.edges-table col.col-status { width: 190px; }
+/* Wide enough for the worst case this cell ever renders — a 5-digit count
+   plus a 3-digit rpm ("12,345 · 120/min") — with room to spare for a
+   locally-installed IBM Plex Mono, which measures wider than the system
+   monospace fallback most visitors actually see. 92px clipped ordinary
+   values ("764 · 9/min") past FIRST SEEN. ui/src/edges-table-columns.test.ts
+   pins the minimum width, so a narrower value can't come back. */
+.edges-table col.col-calls { width: 128px; }
+.edges-table col.col-first { width: 124px; }
+/* Same reasoning as col-calls: fits "2026-09-21 · just now" (the longest
+   `timeAgo()` ever prints alongside a date) with margin instead of clipping
+   it by a handful of pixels. */
+.edges-table col.col-last { width: 190px; }
+.edges-table col.col-actions { width: 136px; }
+.edges-table th.cell-spacer, .edges-table td.cell-spacer { padding: 10px 0; }
 .edges-cap { caption-side: top; text-align: left; padding: 0 0 8px; }
 .edges-cap-title { display: block; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; color: var(--ink); }
 .edges-cap-sub { display: block; font-size: 12.5px; color: var(--ink-soft); margin-top: 2px; }
@@ -3467,7 +3499,10 @@ pre.body { background: var(--surface); border: var(--border-w) solid var(--rule)
 .edges-table td, .edges-table th[scope='row'] { padding: 10px 12px; border-bottom: var(--border-w-hair) solid var(--rule-soft); vertical-align: top; text-align: left; font-weight: 400; }
 .edges-table tbody tr:last-child > td, .edges-table tbody tr:last-child > th[scope='row'] { border-bottom: 0; }
 .edge-row:hover { background: var(--surface-sunk); }
-.edge-row.drift td:first-of-type, .edge-row.drift th[scope='row'] { box-shadow: inset var(--border-w-stripe) 0 0 var(--sev-breaking); }
+/* Only the counterparty <th> gets the stripe: `td:first-of-type` used to mean
+   the STATUS cell (the first td, since the name cell is a th), drawing a
+   second breaking stripe in the middle of the row instead of at its edge. */
+.edge-row.drift th[scope='row'] { box-shadow: inset var(--border-w-stripe) 0 0 var(--sev-breaking); }
 
 .cell-name { min-width: 200px; }
 .edge-name-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
@@ -3494,14 +3529,20 @@ pre.body { background: var(--surface); border: var(--border-w) solid var(--rule)
   background: var(--sev-breaking); border: var(--border-w-hair) solid var(--sev-breaking); color: var(--sev-breaking-contrast);
   padding: 2px 8px; border-radius: var(--radius); cursor: pointer;
 }
-/* Naming moves to the name line: a quiet link-button in the same muted
-   dotted-underline register as `Add REST contract`, so it never competes
-   with the name it sits beside. */
-.edge-name-edit { background: none; border: 0; padding: 0; margin: 0; font: inherit; font-size: 12px; color: var(--ink-soft); cursor: pointer; border-bottom: 1px dotted var(--rule); }
+/* Rename lives on the name line, after the counterparty name and the MCP chip
+   where there is one — the name-line flex gap (`.edge-name-line`) gives it
+   real spacing, so it never glues onto the text the way "name [MCP]Rename"
+   ran together before. A quiet link-button in the same muted dotted-underline
+   register as `Add REST contract`, so it never competes with the name it
+   sits beside. */
+.edge-name-edit { background: none; border: 0; padding: 0; margin: 0; font: inherit; font-size: 12px; color: var(--ink-soft); cursor: pointer; border-bottom: 1px dotted var(--rule); align-self: center; }
 .edge-name-edit:hover, .edge-name-edit:focus-visible { color: var(--ink); border-bottom-color: currentColor; }
+/* The same primary-word-plus-muted-secondary-line shape as `.edge-status-clause`
+   (block, its own line, no leading separator) — this is the clickable variant
+   of that secondary line, not a different shape glued onto the word above it. */
 .edge-contract-link {
-  background: none; border: 0; padding: 0; margin: 0;
-  font: inherit; color: var(--ink-soft); cursor: pointer;
+  display: block; background: none; border: 0; padding: 0; margin: 0;
+  font: inherit; font-size: 12px; color: var(--ink-soft); cursor: pointer;
   text-align: left; text-decoration: none; transition: color var(--dur-fast) var(--ease);
 }
 .edge-contract-link:hover, .edge-contract-link:focus-visible { color: var(--ink); text-decoration: underline; }
@@ -3516,8 +3557,8 @@ pre.body { background: var(--surface); border: var(--border-w) solid var(--rule)
 .edges-table td.num { text-align: right; }
 .unit, .seen-rel { color: var(--ink-soft); font-size: 11px; margin-left: 4px; }
 .cell-actions { white-space: nowrap; }
-/* One button now, so flex-wrap and the right-aligned justify stay but
-   nothing in it wraps at desktop width any more. */
+/* Only Local MCP servers still puts a control in this cell (View catalogue) —
+   Outbound's Rename moved to the name line and Inbound/Unknown never had one. */
 .edge-actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
 .edges-empty td { color: var(--ink-soft); font-size: 13px; }
 .edge-edit-row > td { padding: 0; }
@@ -3642,6 +3683,10 @@ pre.body { background: var(--surface); border: var(--border-w) solid var(--rule)
   .edges-table th[scope='row'] { display: block; margin-bottom: 8px; }
   .edges-table th[scope='row']::before { content: none; } /* the name needs no label */
   .edges-table td.cell-actions::before, .edges-empty td::before, .edge-edit-row td::before, .edge-note-row td::before { content: none; }
+  /* Spacer cells exist only to hold the desktop grid's column widths steady —
+     on the stacked mobile layout there is no grid to hold, so they render
+     nothing rather than an empty labelled line. */
+  .edges-table th.cell-spacer, .edges-table td.cell-spacer { display: none; }
   /* The rename editor and the name-notice rows carry free-form content (a
      form, a sentence + Retry) that spans the full row width, not a
      label/value pair — block, not the labelled flex row every other cell is. */
@@ -3650,7 +3695,7 @@ pre.body { background: var(--surface); border: var(--border-w) solid var(--rule)
   /* The drift stripe moves from the first cell to the whole row, and the row
      gains the stripe's width back as padding so the first character does not
      sit under it. */
-  .edge-row.drift td:first-of-type, .edge-row.drift th[scope='row'] { box-shadow: none; }
+  .edge-row.drift th[scope='row'] { box-shadow: none; }
   .edge-row.drift { box-shadow: inset var(--border-w-stripe) 0 0 var(--sev-breaking); padding-left: calc(16px + var(--border-w-stripe)); }
 }
 
