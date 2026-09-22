@@ -100,6 +100,7 @@ import {
   isSearchCatalog,
   serverCommandLine,
   mcpHeadline,
+  mcpDescriptionNote,
   mcpStatusLabel,
   methodFacetOf,
   noOutputContractNote,
@@ -186,7 +187,15 @@ import {
   type EdgeSortKey,
   type EdgeSortState
 } from './edges-view';
-import { headlineFor } from './headline';
+import {
+  systemStatus,
+  groupRestFindings,
+  notValidatedItems,
+  SKIPPED_PER_CALL_FOOTNOTE,
+  type RestDriftLine,
+  type McpDriftLine,
+  type NotValidatedItem
+} from './status';
 import { isoDate, isoStamp } from './time';
 import type { Correlation, Finding, FlagResult, Health, RedactedCall } from './types';
 
@@ -1353,10 +1362,46 @@ const mcpHosts = computed(() => {
 // serves REST keeps its REST contract (or its missing one) on all three.
 const mcpOnly = computed(() => mcpOnlyHosts(mcpHosts.value, contracts.value, calls.value));
 
-// Per-server MCP health headline: output mismatch → definition
-// change (breaking, no calls affected yet) → nothing validated yet (neutral)
-// → clean. Three tones, like the REST line above it.
-const mcpOverview = computed(() => {
+// ─── The one system status (ui/src/status.ts) ─────────────────────────────
+//
+// Drift anywhere makes the STATUS drift; the all-clear needs at least one
+// checked call anywhere and no drift anywhere; every surface nothing has
+// checked yet is named once, under its own disclosure, instead of by
+// omission. This replaces two computeds that used to speak separately: the
+// REST `headline` (`headlineFor`, ui/src/headline.ts) and the per-server MCP
+// lines with their own clean-line fold (`mcpOverview` / `foldMcpOverviewLines`,
+// ui/src/mcp.ts) — a REST provider with no contract could sit unmentioned
+// next to a green REST all-clear, and an MCP output mismatch could sit
+// unmentioned next to it too.
+//
+// `systemStatus` and `notValidatedItems` take ALREADY-DERIVED evidence; they
+// do not walk calls themselves. The computeds below do that walk, each on its
+// own terms, so the two pure functions stay testable without a mounted App.
+
+// LIVE REST findings, grouped by provider host into one line each — the REST
+// half of "Drift detected in N places" (ui/src/status.ts groupRestFindings).
+// `liveFindings` (kind `live-vs-spec`) is REST-only by construction: an MCP
+// finding is never that kind.
+const restDriftLines = computed(() =>
+  groupRestFindings(
+    liveFindings.value.map((f) => ({
+      name: providerNameFor(f),
+      host: f.peer_host || f.integration,
+      endpoint: f.endpoint,
+      occurrence_count: f.occurrence_count,
+      first_seen: f.first_seen,
+      detected_at: f.detected_at
+    })),
+    humanTime
+  )
+);
+
+// One drift line per (MCP server, calling service) — output mismatch or a
+// breaking definition change only (ui/src/mcp.ts mcpHeadline). A clean or
+// nothing-yet-validated server has nothing to say here any more: that fact
+// now lives in `checkedCounts` and `notValidated` below, not in a line per
+// server.
+const mcpDriftLines = computed(() => {
   // One line per (contract row, calling service) — serviceSlices in
   // ui/src/mcp.ts decides which of the row's findings each line reports.
   const lines = mcpContracts.value.flatMap((s) => {
@@ -1367,8 +1412,8 @@ const mcpOverview = computed(() => {
     return serviceSlices(rowFindings, rowCalls).map((slice) => ({ s, slice }));
   });
   // Same origin rule as the Contracts card, from the same function — so the
-  // two surfaces cannot drift apart and render two identical health lines
-  // for two different servers again.
+  // two surfaces cannot drift apart and render two identical lines for two
+  // different servers again.
   const refs = identifiableServerRefs(
     lines.map(({ s, slice }) => ({
       name: s.title || s.integration,
@@ -1378,14 +1423,150 @@ const mcpOverview = computed(() => {
       integration: s.integration
     }))
   );
-  return lines.map(({ s, slice }, i) => ({
-    key: s.integration + '|' + slice.service,
-    // Evidence for THIS line only: the validated calls of this service to this
-    // server. Zero is the neutral state — a snapshot that has judged nothing is
-    // not an all-clear, however complete the Contracts card beside it looks.
-    headline: mcpHeadline(refs[i], slice.findings, humanTime, slice.validatedCalls)
-  }));
+  // `integration` is the contract row's own id, not `refs[i].integration` —
+  // identifiableServerRefs drops that field whenever the display line does
+  // not need it to disambiguate, but checkedCounts below needs it on every
+  // line to know which server this one is about.
+  const out: { name: string; text: string; integration: string }[] = [];
+  lines.forEach(({ s, slice }, i) => {
+    const h = mcpHeadline(refs[i], slice.findings, humanTime);
+    if (h) out.push({ name: refs[i].name, text: h.text, integration: s.integration });
+  });
+  return out;
 });
+
+// One quiet foot-note per MCP server with an un-acked DESCRIPTION-class
+// definition change — never the drift tone (ui/src/mcp.ts mcpDescriptionNote).
+const mcpNotes = computed(() => {
+  const notes: { text: string; tool: string }[] = [];
+  for (const s of mcpContracts.value) {
+    const rowFindings = mcpFindings.value.filter((f) => f.integration === s.integration);
+    const note = mcpDescriptionNote({ name: s.title || s.integration }, rowFindings);
+    if (note) notes.push(note);
+  }
+  return notes;
+});
+
+// Surfaces with at least one CHECKED call in the window, MINUS any surface
+// that has a drift line of its own (restDriftLines / mcpDriftLines above) —
+// the status card's "Checked: …" and, in the drift tone, "No drift in the
+// rest of what was checked: …" tallies both read this. A REST provider or
+// MCP server that is drifting is never "the rest" of anything: it is named
+// once, on its own line, and dropped here so it cannot also be counted as
+// clean. Inbound counts distinct checked peers (`peer_host`), not a flag —
+// two consumers now read as 2, not 1.
+const checkedCounts = computed(() => {
+  const driftedRestHosts = new Set(restDriftLines.value.map((l) => l.host));
+  const driftedMcpIntegrations = new Set(mcpDriftLines.value.map((l) => l.integration));
+  const restHosts = new Set<string>();
+  const mcpServers = new Set<string>();
+  const inboundPeers = new Set<string>();
+  for (const c of calls.value) {
+    if (coverageVerdictOf(c).coverage !== 'checked') continue;
+    if (c.transport === 'mcp') {
+      if (c.integration && !driftedMcpIntegrations.has(c.integration)) mcpServers.add(c.integration);
+    } else if (c.direction === 'server') {
+      inboundPeers.add(c.peer_host || '');
+    } else if (c.peer_host && !driftedRestHosts.has(c.peer_host)) {
+      restHosts.add(c.peer_host);
+    }
+  }
+  return { restProviders: restHosts.size, inbound: inboundPeers.size, mcpServers: mcpServers.size };
+});
+
+// Every surface this collector captured but could not check — one row per
+// REST provider / your inbound API / MCP server (ui/src/status.ts
+// notValidatedItems). Names resolve through the same lookups the rest of the
+// Overview and Contracts tabs already use, so a row never invents a name the
+// operator has not seen elsewhere.
+const notValidated = computed(() => {
+  const tools: Record<string, McpToolRow[]> = {};
+  for (const [integration, entry] of Object.entries(mcpTools.value)) tools[integration] = entry.rows;
+  return notValidatedItems(calls.value, contracts.value, tools, {
+    restName: (host) => edges.value.find((e) => e.peer_host === host)?.display_name || host,
+    mcpServer: (integration) => {
+      const s = mcpContracts.value.find((c) => c.integration === integration);
+      return { name: s?.title || integration, version: s?.version, origin: s ? contractOrigin(s) : undefined, host: s?.peer_host };
+    }
+  });
+});
+
+const notValidatedRest = computed(() => notValidated.value.filter((i) => i.group === 'rest'));
+const notValidatedInbound = computed(() => notValidated.value.filter((i) => i.group === 'inbound'));
+const notValidatedMcp = computed(() => notValidated.value.filter((i) => i.group === 'mcp'));
+
+// The one status for the whole collector (ui/src/status.ts systemStatus): the
+// truth table lives there, beside the tests that pin it.
+const status = computed(() =>
+  systemStatus({
+    restLines: restDriftLines.value,
+    mcpLines: mcpDriftLines.value,
+    checked: checkedCounts.value,
+    notes: mcpNotes.value,
+    itemCount: notValidated.value.length
+  })
+);
+
+/** A status line is REST when it carries a `host` — the McpDriftLine shape
+ *  does not (ui/src/status.ts). */
+function isRestStatusLine(l: RestDriftLine | McpDriftLine): l is RestDriftLine {
+  return 'host' in l;
+}
+
+// The Not validated row: collapsed by default, its own row directly under the
+// status card — never a control inside it, so the all-clear is never read as
+// covering what the row lists. Open state is per-view only.
+const nvOpen = ref(false);
+const nvButtonEl = ref<HTMLButtonElement | null>(null);
+function toggleNv() {
+  nvOpen.value = !nvOpen.value;
+}
+function collapseNv() {
+  if (!nvOpen.value) return;
+  nvOpen.value = false;
+  nextTick(() => nvButtonEl.value?.focus());
+}
+// Close (but never re-open) when the count drops to zero out from under the
+// operator — a contract lands, or the row's calls age out of the window.
+watch(
+  () => status.value.showButton,
+  (shown) => {
+    if (!shown) nvOpen.value = false;
+  }
+);
+
+function showNotCheckedCalls(host: string) {
+  setTab('traffic');
+  fPeer.value = host;
+  fContract.value = 'not-checked';
+}
+
+function goToSelfContract() {
+  setTab('contract');
+  nextTick(() => document.querySelector('.provider.self')?.scrollIntoView({ block: 'center' }));
+}
+
+/** The Not validated row's per-item action — routes to the surface that
+ *  fixes the gap (ui/src/status.ts notValidatedItems), never fixes it here. */
+function onNotValidatedAction(item: NotValidatedItem) {
+  switch (item.kind) {
+    case 'rest-no-contract':
+      if (item.host) goToContracts(item.host);
+      break;
+    case 'rest-contract-gap':
+      if (item.host) showNotCheckedCalls(item.host);
+      break;
+    case 'inbound-no-self':
+      goToSelfContract();
+      break;
+    case 'mcp-no-output-schema':
+      if (item.host) goToContracts(item.host);
+      else setTab('contract');
+      break;
+    default:
+      break;
+  }
+}
 
 // Local notices: stale_client ONLY since qfix2-2026-08-26. A
 // DESCRIPTION definition change is now flaggable, so it cannot sit under a band
@@ -1520,23 +1701,6 @@ const sheetSpec = computed(() => {
   return host ? contractByHost.value.get(host) || null : null;
 });
 
-// Headline counts LIVE drift only — spec-version diffs are informational and
-// intentionally excluded from the divergence status. The wording, the neutral
-// zero state and the reason it exists all live in ui/src/headline.ts, where
-// vitest can see them: this line used to assert `No drift detected` on an
-// install where nothing had ever been validated.
-//
-// It gets the window's calls, each with its per-call validated fact, NOT a
-// count: it counted every validated call in the window here, MCP tool calls
-// included, and spent an MCP server's evidence on the REST provider it names
-// beneath. Which calls are evidence for THIS line — the REST ones — is decided
-// in headline.ts, beside the tests that pin it.
-const headline = computed(() =>
-  headlineFor({
-    liveFindings: liveFindings.value,
-    calls: calls.value.map((c) => ({ transport: c.transport, integration: c.integration, validated: isValidated(c) }))
-  })
-);
 // The headline's scope line names THIS DEPLOYMENT — its collector name, the CP's copy — once it is
 // Connected. It replaced "on integration <slug>", which named a REST integration from static config
 // (2026-09-14): the name is an identity the operator chose, never a claim about traffic.
@@ -1916,41 +2080,111 @@ watch(tab, (t) => {
 
     <!-- ───────────────────────── OVERVIEW ───────────────────────── -->
     <div v-show="tab === 'overview'" class="panel">
-      <!-- Three tones, not two: `neutral` is the install where nothing has been
-           validated yet, and it must read as neither the green all-clear nor
-           the red drift banner (ui/src/headline.ts). -->
-      <section class="headline" :class="headline.tone">
-        <svg class="hx" :class="toneClass(headline.tone)" aria-hidden="true" focusable="false"><use href="#hxbolt" /></svg>
-        <div>
-          <!-- Observed state only — the collector does not measure provider
-               health. No "You:" prefix (Blueprint): the subline carries scope. -->
-          <div class="hl-you">
-            <strong>{{ headline.you }}</strong>
+      <!-- ONE status for the whole collector (ui/src/status.ts systemStatus).
+           Three tones, not two: `neutral` is the install where nothing has
+           been validated yet, and it must read as neither the green all-clear
+           nor the red drift banner. Drift anywhere (a REST finding, an MCP
+           output mismatch, an MCP breaking definition change) makes this
+           card drift; the all-clear needs at least one checked call anywhere
+           and no drift anywhere. What the status does not cover is never a
+           control on this card — it is the row directly below (`.not-validated`). -->
+      <section class="headline status" :class="status.tone" aria-labelledby="ov-status-title">
+        <svg class="hx" :class="toneClass(status.tone)" aria-hidden="true" focusable="false"><use href="#hxbolt" /></svg>
+        <div class="st-body">
+          <div class="hl-you" id="ov-status-title">
+            <strong>{{ status.title }}</strong>
           </div>
+          <!-- One line per place that drifted — REST findings grouped by
+               provider host, MCP output mismatches / breaking definition
+               changes grouped by server (ui/src/status.ts). -->
+          <!-- Badge and text sit on ONE source line, on purpose: a
+               whitespace-only text node containing a newline is compiled
+               away entirely (Vue's default whitespace condensing), which ran
+               "MCP" straight into the sentence with no word boundary once
+               before (see .mcp-badge below) — invisible visually (flex `gap`
+               supplies the space), but wrong for an anchored assertion and a
+               screen reader alike. -->
+          <ul v-if="status.lines.length" class="st-lines">
+            <li v-for="(l, i) in status.lines" :key="i">
+              <span v-if="isRestStatusLine(l)" class="rest-badge">REST</span> <span v-else class="mcp-badge" :title="MCP_BADGE_TOOLTIP">MCP</span> <span class="st-text">{{ l.text }}</span>
+            </li>
+          </ul>
+          <!-- `sub`: what else was checked and came back clean (drift tone),
+               the full tally (ok tone), or the neutral clause — all decided
+               in ui/src/status.ts, beside the tests that pin the wording. -->
+          <div v-if="status.sub" class="hl-sub">{{ status.sub }}</div>
           <!-- The scope line names this deployment by its collector name once
                Connected (2026-09-14) — an identity the operator chose, so it
                may render pre-traffic. Absent until then: no fallback slug. -->
           <div v-if="collectorName" class="hl-sub">observed here, by collector <code>{{ collectorName }}</code></div>
+          <!-- DESCRIPTION-only definition changes: named, never the drift
+               tone. Detail and Acknowledge stay on Contracts. -->
+          <div v-for="n in status.notes" :key="n.tool" class="st-note">
+            <span class="tag desc">Description</span>
+            <span>{{ n.text }}</span>
+            <button type="button" class="st-link" @click="setTab('contract')">Review in Contracts</button>
+          </div>
         </div>
       </section>
 
-      <!-- MCP servers (v0.5): one headline per observed server, on
-           the same three tones as the REST line: a server whose snapshot has
-           validated nothing yet is neutral, not green (ui/src/mcp.ts). -->
-      <section
-        v-for="m in mcpOverview"
-        :key="'mcp-hl-' + m.key"
-        class="headline mcp-headline"
-        :class="m.headline.tone"
-      >
-        <svg class="hx" :class="toneClass(m.headline.tone)" aria-hidden="true" focusable="false"><use href="#hxbolt" /></svg>
-        <!-- The sentence stays whole (`Server: … — …`): its clause is
-             pinned lowercase by tests. A description-only change
-             names itself in the clause but never takes the drift tone
-             (ui/src/mcp.ts). -->
-        <div class="hl-you">
-          <span class="mcp-badge" :title="MCP_BADGE_TOOLTIP">MCP</span>
-          <strong>{{ m.headline.text }}</strong>
+      <!-- "Not validated": its own row, directly under the status card, never
+           a control inside it — collapsed by default, and the whole row is
+           the button. Renders only while something was captured and never
+           checked (ui/src/status.ts notValidatedItems). -->
+      <section v-if="status.showButton" class="not-validated" @keydown.esc="collapseNv">
+        <button
+          ref="nvButtonEl"
+          type="button"
+          class="nv-row-btn"
+          :aria-expanded="nvOpen"
+          aria-controls="nv-panel"
+          @click="toggleNv"
+        >
+          <span class="nv-row-text">Not validated <span class="nv-dot" aria-hidden="true">·</span> <span class="nv-count">{{ notValidated.length }}</span></span>
+          <span class="nv-chev" :class="{ open: nvOpen }" aria-hidden="true">▾</span>
+        </button>
+        <div v-show="nvOpen" id="nv-panel" role="region" aria-label="Not validated" class="nv-panel">
+          <p class="nv-lead">These calls were captured but not checked against any contract — the status above does not cover them.</p>
+          <template v-if="notValidatedRest.length">
+            <h3 class="nv-h">REST providers <span class="n">{{ notValidatedRest.length }}</span></h3>
+            <ul class="nv-list">
+              <li v-for="it in notValidatedRest" :key="it.key">
+                <div>
+                  <div class="nv-who"><span class="nv-name">{{ it.name }}</span><span v-if="it.host" class="nv-host">{{ it.host }}</span></div>
+                  <div class="nv-why">{{ it.why }}</div>
+                </div>
+                <button v-if="it.action" type="button" class="btn ghost small" @click="onNotValidatedAction(it)">{{ it.action.label }}</button>
+              </li>
+            </ul>
+          </template>
+          <!-- Exactly one line, whatever the number of inbound consumers or
+               calls — never one per caller, never one per edge. -->
+          <template v-if="notValidatedInbound.length">
+            <h3 class="nv-h">Your API (inbound) <span class="n">{{ notValidatedInbound.length }}</span></h3>
+            <ul class="nv-list">
+              <li v-for="it in notValidatedInbound" :key="it.key">
+                <div>
+                  <div class="nv-who"><span class="nv-name">{{ it.name }}</span></div>
+                  <div class="nv-why">{{ it.why }}</div>
+                </div>
+                <button v-if="it.action" type="button" class="btn ghost small" @click="onNotValidatedAction(it)">{{ it.action.label }}</button>
+              </li>
+            </ul>
+          </template>
+          <template v-if="notValidatedMcp.length">
+            <h3 class="nv-h">MCP tool calls <span class="n">{{ notValidatedMcp.length }}</span></h3>
+            <p class="nv-note">MCP tool calls can't be validated when the tool declares no output schema. A tool call is checked against the output schema its server lists in tools/list, and these tools list none.</p>
+            <ul class="nv-list">
+              <li v-for="it in notValidatedMcp" :key="it.key">
+                <div>
+                  <div class="nv-who"><span class="mcp-badge">MCP</span> <span class="nv-name">{{ it.name }}</span><span v-if="it.host" class="nv-host">{{ it.host }}</span></div>
+                  <div class="nv-why">{{ it.why }}</div>
+                </div>
+                <button v-if="it.action" type="button" class="btn ghost small" @click="onNotValidatedAction(it)">{{ it.action.label }}</button>
+              </li>
+            </ul>
+          </template>
+          <p class="nv-foot">{{ SKIPPED_PER_CALL_FOOTNOTE }}</p>
         </div>
       </section>
 
@@ -3165,24 +3399,61 @@ h2 small { font: 400 12.5px/1.5 var(--f-sans); letter-spacing: 0.04em; text-tran
 .hint-inline { color: var(--ink-soft); font-size: 12.5px; }
 .small-err { font-size: 12.5px; }
 
-/* Headline cards: a 6px left rule carries the tone, a bolt leads the line.
+/* Headline card: a 6px left rule carries the tone, a bolt leads the line.
    Three tones, not two — `neutral` is the install where nothing has been
    validated yet, and it must read as neither the green all-clear nor the red
-   drift banner (ui/src/headline.ts). */
+   drift banner (ui/src/status.ts). ONE card for the whole collector — the
+   per-server MCP cards this used to repeat are gone. */
 .headline { display: grid; grid-template-columns: auto 1fr; gap: 16px; align-items: start; margin: 0 0 14px; padding: 16px 18px; border: var(--border-w) solid var(--rule); border-left-width: var(--border-w-stripe-lg); border-radius: var(--radius); background: var(--surface); }
 .headline.drift { border-left-color: var(--sev-breaking); }
 .headline.ok { border-left-color: var(--ok); }
 .headline.neutral { border-left-color: var(--rule); }
 .headline > .hx { margin-top: 6px; }
+.status .st-body { min-width: 0; }
 .hl-you { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
 .headline.drift .hl-you strong { color: var(--sev-breaking-ink); }
 .headline.ok .hl-you strong { color: var(--ok-ink); }
 .headline.neutral .hl-you strong { color: var(--ink-soft); }
 .hl-sub { color: var(--ink-soft); font-size: 12.5px; margin-top: 4px; }
 .hl-sub code { background: var(--surface-sunk); padding: 1px 6px; }
-/* The MCP line is the whole sentence, so it steps down one size. */
-.mcp-headline .hl-you { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 15px; }
-.mcp-headline .mcp-badge { margin-left: 0; }
+/* One line per place that drifted — REST findings grouped by host, MCP
+   output mismatches / breaking definition changes grouped by server. */
+.st-lines { list-style: none; margin: 10px 0 0; padding: 0; }
+.st-lines li { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; padding: 8px 0; border-top: var(--border-w-hair) solid var(--rule-soft); font-size: 14.5px; font-weight: 600; color: var(--sev-breaking-ink); }
+.st-lines li:first-child { border-top: 0; padding-top: 2px; }
+.st-lines .st-text { flex: 1 1 320px; min-width: 0; }
+.rest-badge { font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); border: var(--border-w-hair) solid var(--ink-soft); border-radius: var(--radius); padding: 1px 6px; white-space: nowrap; }
+.st-link { background: none; border: 0; padding: 0; font: 500 12.5px/1.5 var(--f-sans); color: var(--ink-soft); cursor: pointer; border-bottom: 1px dotted var(--rule); white-space: nowrap; }
+.st-link:hover, .st-link:focus-visible { color: var(--ink); border-bottom-color: currentColor; }
+/* DESCRIPTION-only definition changes: one quiet line at the card foot,
+   never the drift tone (ui/src/mcp.ts mcpDescriptionNote). */
+.st-note { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-top: 10px; padding-top: 10px; border-top: var(--border-w-hair) solid var(--rule-soft); font-size: 13px; color: var(--ink-soft); }
+
+/* "Not validated": its own row below the status card — never a control
+   inside it, and never rendered while nothing is unvalidated
+   (ui/src/status.ts notValidatedItems). The whole row IS the disclosure
+   button, per the WAI-ARIA APG "Disclosure" pattern. */
+.not-validated { margin: 0 0 14px; border: var(--border-w) solid var(--rule); border-radius: var(--radius); background: var(--surface); }
+.nv-row-btn { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; background: none; border: 0; border-left: var(--border-w-stripe-lg) solid var(--accent); padding: 14px 18px; font: 600 14.5px/1.5 var(--f-sans); color: var(--ink); cursor: pointer; text-align: left; }
+.nv-row-btn:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
+.nv-row-text { display: inline-flex; align-items: baseline; gap: 6px; }
+.nv-dot { color: var(--ink-soft); }
+.nv-count { font: 500 10.5px/1.4 var(--f-mono); padding: 1px 6px; min-width: 20px; text-align: center; border: var(--border-w-hair) solid var(--ink); border-radius: var(--radius); color: var(--ink); }
+.nv-chev { font-size: 14px; line-height: 1; color: var(--ink-soft); display: inline-block; transition: transform var(--dur-fast) var(--ease); }
+.nv-chev.open { transform: rotate(180deg); }
+.nv-panel { border-top: var(--border-w) solid var(--rule); padding: 14px 18px 16px; }
+.nv-lead { margin: 0 0 4px; font-size: 13.5px; color: var(--ink); max-width: 90ch; }
+.nv-h { display: flex; align-items: baseline; gap: 8px; margin: 16px 0 4px; font: 500 10.5px/1.5 var(--f-mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-soft); }
+.nv-h .n { color: var(--ink); }
+.nv-note { margin: 0 0 6px; font-size: 13px; color: var(--ink-soft); max-width: 90ch; }
+.nv-list { list-style: none; margin: 0; padding: 0; border: var(--border-w-hair) solid var(--rule-soft); }
+.nv-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 16px; align-items: center; padding: 10px 12px; border-top: var(--border-w-hair) solid var(--rule-soft); }
+.nv-list li:first-child { border-top: 0; }
+.nv-who { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.nv-name { font-weight: 600; font-size: 13.5px; }
+.nv-host { font-family: var(--f-mono); font-size: 12px; color: var(--ink-soft); }
+.nv-why { font-size: 13px; color: var(--ink-soft); margin-top: 2px; }
+.nv-foot { margin: 14px 0 0; font-size: 12.5px; color: var(--ink-soft); max-width: 90ch; }
 
 /* Local notices band (v0.5): visible to you only, never a flag control. */
 .local-notices { margin: 0 0 14px; padding: 14px 18px; border: var(--border-w) solid var(--rule); border-radius: var(--radius); background: var(--surface); }
@@ -3697,6 +3968,11 @@ pre.body { background: var(--surface); border: var(--border-w) solid var(--rule)
      sit under it. */
   .edge-row.drift th[scope='row'] { box-shadow: none; }
   .edge-row.drift { box-shadow: inset var(--border-w-stripe) 0 0 var(--sev-breaking); padding-left: calc(16px + var(--border-w-stripe)); }
+
+  .nv-row-btn { padding: 12px 14px; }
+  .nv-panel { padding: 12px 14px 14px; }
+  .nv-list li { grid-template-columns: minmax(0, 1fr); }
+  .nv-list li .btn { justify-self: start; margin-top: 4px; }
 }
 
 /* Reduced motion keeps the colour fades and drops everything that moves. */
