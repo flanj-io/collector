@@ -9,7 +9,7 @@ type: application
 # release adds the fixed-name front Service and ConfigMap/flanj-endpoint, and
 # until a chart carrying them is PUBLISHED the address the README prints does
 # not exist for anyone who installs from the registry.
-version: 0.2.0
+version: 0.3.0
 
 # The collector image tag this chart is written against; `image.tag` defaults to
 # it, so this is the tag a plain `helm install` pulls. It MUST name a tag that
@@ -18,7 +18,7 @@ version: 0.2.0
 # chart. Keep it equal to the published Docker Hub tag: the chart renders
 # configs whose keys are frozen in contracts/CONTRACTS.md §8, so a chart ahead
 # of the image can also render a config the image refuses to load.
-appVersion: "v0.2.0"
+appVersion: "v0.3.0"
 
 home: https://flanj.io
 # Rendered by chart browsers; an absolute raw URL because the chart is served
