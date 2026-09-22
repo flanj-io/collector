@@ -213,6 +213,23 @@ describe('notValidatedItems', () => {
     expect(items[0].action?.label).toBe(SHOW_THESE_CALLS_ACTION);
   });
 
+  it('rest-contract-not-reached names a call count, like every other REST row', () => {
+    // A contract IS bound for this host (`spec`), but the call carries no
+    // `validated_reason` — the pre-processor state — so `serverReason`
+    // (ui/src/coverage.ts) derives 'contract-not-reached' rather than
+    // 'no-contract'.
+    const spec: CoverageSpec = { role: 'provider', peer_host: 'api.acme.test', format: 'openapi', loaded_at: '2026-09-01T00:00:00Z' };
+    const call = restCall({
+      peer_host: 'api.acme.test',
+      captured_at: '2026-09-15T00:00:00Z',
+      validated: 'not-validated'
+    });
+    const items = notValidatedItems([call, call], [spec], {}, names);
+    expect(items.length).toBe(1);
+    expect(items[0].kind).toBe('rest-contract-not-reached');
+    expect(items[0].why).toContain('2 calls not checked.');
+  });
+
   it('case 12: inbound with no self contract → inbound-no-self, "How to add it"', () => {
     const call = restCall({ peer_host: '', direction: 'server', validated: 'not-validated', validated_reason: 'no-contract' });
     const items = notValidatedItems([call], [], {}, names);

@@ -372,7 +372,7 @@ export function notValidatedItems(
     let action: NotValidatedAction | undefined;
     switch (kind) {
       case 'rest-contract-not-reached':
-        why = 'A contract is bound but had not reached the drift check when these calls went through.';
+        why = `A contract is bound but had not reached the drift check when these calls went through. ${n} call${n === 1 ? '' : 's'} not checked.${everyOther}`;
         break;
       case 'rest-contract-gap': {
         const which = b.sample?.method && b.sample?.route ? `${b.sample.method} ${b.sample.route}` : 'these calls';
