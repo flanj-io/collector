@@ -129,7 +129,6 @@ import {
   suggestTooLong,
   toggleSuggest,
   typeDraft,
-  START_THREAD_LABEL,
   type EdgeNameEdit
 } from './edge-names';
 import {
@@ -283,10 +282,7 @@ const threadsKnown = ref(false);
 const threadsTotal = ref(0);
 const threadsHasMore = ref(false);
 const sheetFinding = ref<Finding | null>(null);
-/** The edge "Start a thread" was pressed on. Mutually exclusive
- *  with `sheetFinding`: the sheet reads QUESTION mode off the missing finding. */
-const sheetEdge = ref<{ host: string; domain: string; name: string } | null>(null);
-const sheetOpen = computed(() => sheetFinding.value !== null || sheetEdge.value !== null);
+const sheetOpen = computed(() => sheetFinding.value !== null);
 const highlightThreadId = ref<string | null>(null);
 // `#contracts/<finding_id>` deep link IN (the control plane's findings index
 // links here): the Contracts tab opens with that finding's row highlighted and
@@ -483,32 +479,12 @@ function providerNameFor(f: Finding): string {
 }
 
 function openSheet(f: Finding) {
-  sheetEdge.value = null;
   sheetFinding.value = f;
-  if (connectStatus.value !== 'connected') loadConnect();
-}
-
-/**
- * "Start a thread" on an outbound edge row: the SAME sheet, minus
- * the evidence block. Connect-gated identically — the sheet shows the inline
- * Connect prompt and unlocks the moment the confirmation click lands, which is
- * why this starts the same poll the flag path does.
- */
-function openEdgeSheet(e: Edge) {
-  sheetFinding.value = null;
-  sheetEdge.value = {
-    host: e.peer_host,
-    domain: e.registrable_domain || e.peer_host,
-    // The name the row the operator clicked is rendering — never a humanized
-    // host standing in for one that was never given.
-    name: e.display_name || e.peer_host
-  };
   if (connectStatus.value !== 'connected') loadConnect();
 }
 
 function closeSheet() {
   sheetFinding.value = null;
-  sheetEdge.value = null;
 }
 
 function onThreadCreated(_r: FlagResult) {
@@ -2036,7 +2012,10 @@ watch(tab, (t) => {
                   <th scope="col" class="num" :aria-sort="headerAriaSort('last')">
                     <button type="button" class="th-sort" @click="sortBy('last')">Last seen<span class="th-arrow" aria-hidden="true">{{ edgeSort.key === 'last' ? (edgeSort.dir === 'desc' ? '↓' : '↑') : '' }}</span></button>
                   </th>
-                  <th scope="col" class="cell-actions"><span class="vh">Actions</span></th>
+                  <!-- No row action lives in this column any more — Rename moved to
+                       the name line — but the column stays reserved (Local MCP still
+                       uses it for View catalogue) so every stacked table shares one grid. -->
+                  <th scope="col" class="cell-spacer" aria-hidden="true"></th>
                 </tr>
               </thead>
               <tbody>
@@ -2053,6 +2032,10 @@ watch(tab, (t) => {
                         <span class="edge-name" :class="{ unnamed: !row.e.display_name }" :title="row.e.display_name || row.e.peer_host">{{ row.e.display_name || row.e.peer_host }}</span>
                         <span v-if="mcpHosts.has(row.e.peer_host)" class="mcp-badge" :title="MCP_BADGE_TOOLTIP">{{ mcpBadgeLabel(row.e.class) }}</span>
                         <span v-if="isNewEdge(row.e)" class="edge-new" :title="'First seen ' + isoDate(row.e.first_seen)">{{ NEW_LABEL }}</span>
+                        <!-- Naming lives here, on the name line, after the MCP chip
+                             where there is one — one quiet control, not glued to the
+                             text (the name-line flex gap gives it real spacing). -->
+                        <button type="button" class="edge-name-edit" @click="startRename(row.e)">{{ renameLabel(row.e.name_source) }}</button>
                       </span>
                       <span v-if="row.e.display_name" class="edge-host" :title="row.e.peer_host">{{ row.e.peer_host }}</span>
                       <a v-if="outboundTwin(row.e)" class="edge-also" :href="'#' + edgeRowId('server', outboundTwin(row.e)!.peer_host)">{{ ALSO_CALLS_YOU }}</a>
@@ -2080,14 +2063,7 @@ watch(tab, (t) => {
                     <td class="cell-calls num" data-label="Calls">{{ row.e.call_count }}<span v-if="row.e.rpm" class="unit">· {{ fmtRPM(row.e.rpm) }}/min</span></td>
                     <td class="cell-first num" data-label="First seen">{{ isoDate(row.e.first_seen) }}</td>
                     <td class="cell-last num" data-label="Last seen">{{ isoDate(row.e.last_seen) }}<span class="seen-rel">· {{ timeAgo(row.e.last_seen) }}</span></td>
-                    <td class="cell-actions">
-                      <span class="edge-actions">
-                        <!-- Naming lives here, one deliberate place beside the other
-                             row action, rather than glued inline after the name. -->
-                        <button type="button" class="edge-name-edit" @click="startRename(row.e)">{{ renameLabel(row.e.name_source) }}</button>
-                        <button type="button" class="btn ghost small" @click="openEdgeSheet(row.e)">{{ START_THREAD_LABEL }}</button>
-                      </span>
-                    </td>
+                    <td class="cell-spacer" aria-hidden="true"></td>
                   </tr>
                   <tr v-if="nameEdit && nameEdit.host === row.e.peer_host" class="edge-edit-row">
                     <td colspan="6">
@@ -3034,19 +3010,6 @@ watch(tab, (t) => {
       @created="onThreadCreated"
       @update:connect="onConnectUpdated"
     />
-    <!-- QUESTION mode: no finding, no call, no correlation. The sheet branches
-         on the missing finding, so nothing here may pass one. -->
-    <FlagSheet
-      v-else-if="sheetEdge"
-      :key="'edge-' + sheetEdge.host"
-      :edge="sheetEdge"
-      :provider="sheetEdge.name"
-      :consumer="consumerName"
-      :connect="connect"
-      @close="closeSheet"
-      @created="onThreadCreated"
-      @update:connect="onConnectUpdated"
-    />
     <footer class="foot">
       <span>Flanj Collector · ELv2</span>
       <span>Redacted at source · outbound only · UI on localhost</span>
@@ -3498,9 +3461,11 @@ pre.body { background: var(--surface); border: var(--border-w) solid var(--rule)
    — table-layout:fixed hands it whatever width the fixed columns don't use —
    so STATUS/CALLS/FIRST SEEN/LAST SEEN/actions land at the same x in all of
    them, whether or not a given table has data for every column. A table that
-   has no such data (Local MCP has no Calls/First seen; Inbound and Unknown
-   have no per-row action) keeps the column anyway, empty, rather than
-   collapsing it and shifting every column after it out of the shared grid. */
+   has no such data (Local MCP has no Calls/First seen; Outbound, Inbound and
+   Unknown have no per-row action — Rename lives on Outbound's name line
+   instead, and Local MCP is the only table that still uses this column, for
+   View catalogue) keeps the column anyway, empty, rather than collapsing it
+   and shifting every column after it out of the shared grid. */
 .edges-table col.col-status { width: 190px; }
 /* Wide enough for the worst case this cell ever renders — a 5-digit count
    plus a 3-digit rpm ("12,345 · 120/min") — with room to spare for a
@@ -3564,11 +3529,12 @@ pre.body { background: var(--surface); border: var(--border-w) solid var(--rule)
   background: var(--sev-breaking); border: var(--border-w-hair) solid var(--sev-breaking); color: var(--sev-breaking-contrast);
   padding: 2px 8px; border-radius: var(--radius); cursor: pointer;
 }
-/* Rename lives in the actions cell, beside Start a thread — one deliberate
-   place, not glued inline after the name (which used to run "name [MCP]
-   Rename" together). A quiet link-button in the same muted dotted-underline
-   register as `Add REST contract`, so it never competes with the primary
-   action beside it. */
+/* Rename lives on the name line, after the counterparty name and the MCP chip
+   where there is one — the name-line flex gap (`.edge-name-line`) gives it
+   real spacing, so it never glues onto the text the way "name [MCP]Rename"
+   ran together before. A quiet link-button in the same muted dotted-underline
+   register as `Add REST contract`, so it never competes with the name it
+   sits beside. */
 .edge-name-edit { background: none; border: 0; padding: 0; margin: 0; font: inherit; font-size: 12px; color: var(--ink-soft); cursor: pointer; border-bottom: 1px dotted var(--rule); align-self: center; }
 .edge-name-edit:hover, .edge-name-edit:focus-visible { color: var(--ink); border-bottom-color: currentColor; }
 /* The same primary-word-plus-muted-secondary-line shape as `.edge-status-clause`
@@ -3591,8 +3557,8 @@ pre.body { background: var(--surface); border: var(--border-w) solid var(--rule)
 .edges-table td.num { text-align: right; }
 .unit, .seen-rel { color: var(--ink-soft); font-size: 11px; margin-left: 4px; }
 .cell-actions { white-space: nowrap; }
-/* One button now, so flex-wrap and the right-aligned justify stay but
-   nothing in it wraps at desktop width any more. */
+/* Only Local MCP servers still puts a control in this cell (View catalogue) —
+   Outbound's Rename moved to the name line and Inbound/Unknown never had one. */
 .edge-actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
 .edges-empty td { color: var(--ink-soft); font-size: 13px; }
 .edge-edit-row > td { padding: 0; }

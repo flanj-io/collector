@@ -6,16 +6,6 @@
 // compose (evidence line, "what leaves this collector", the optional message,
 // Create thread) and the success state (the link, Copy thread link, Copy link +
 // message, View thread). Nothing is emailed by Flanj on flag.
-//
-// QUESTION MODE. With an `edge` and no `finding` this is the same
-// sheet minus the evidence block: "Start a thread" on an edge row. It is the
-// SAME component on purpose — the Connect prompt, the 412 handling, the
-// disclosure, the focus trap, the copy/share path and the success state are the
-// parts that must not diverge between the two doors, and a second component is
-// how they would. Only three things change, and each because the flag version
-// would otherwise assert evidence that is not there: no evidence line, a
-// REQUIRED message (it is the whole artifact), and a disclosure/share copy that
-// names the domain instead of a call.
 import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'vue';
 import { ApiError, apiGet, apiPost, openThreadInNewTab } from './api';
 import { copyText, selectInput } from './clipboard';
@@ -28,10 +18,6 @@ import {
   pasteText,
   CALL_LESS_DISCLOSURE_LEAD,
   CALL_LESS_DISCLOSURE_TAIL,
-  QUESTION_DISCLOSURE_TAIL,
-  QUESTION_LEAD,
-  QUESTION_MESSAGE_LABEL,
-  QUESTION_MESSAGE_REQUIRED,
   OPEN_TO_DEFAULT_MODE,
   OPEN_TO_DOMAINS_HELP,
   OPEN_TO_DOMAINS_PLACEHOLDER,
@@ -46,9 +32,6 @@ import {
   parseOpenTo,
   peopleShareWarning,
   type OpenToMode,
-  questionDisclosureLead,
-  questionPasteText,
-  questionShareWarning,
   requestIdsLine,
   shortDate,
   type ConnectState
@@ -68,14 +51,11 @@ import type { ContractSpec } from './contracts';
 import type { Correlation, DirectoryHint, Finding, FlagResult, RedactedCall } from './types';
 
 const props = defineProps<{
-  /** Absent in QUESTION mode — an edge is a domain, not a drift. */
   finding?: Finding | null;
   correlation?: Correlation | null;
   /** The finding's representative source call (MCP server identity rides on it). */
   call?: RedactedCall | null;
-  /** Present in QUESTION mode: the edge row "Start a thread" was pressed on. */
-  edge?: { host: string; domain: string } | null;
-  /** FLAG mode: the provider host the finding is about (its pinned call's peer
+  /** The provider host the finding is about (its pinned call's peer
    *  host) — what the "Open to" prefill asks the directory about. */
   providerHost?: string | null;
   /** The contract bound to this provider, when one is. Passed so the default
@@ -95,14 +75,6 @@ const emit = defineEmits<{
 }>();
 
 const DISCLOSURE_KEY = 'flanj.flag.disclosure.seen';
-
-// QUESTION mode is decided by the ABSENCE of a finding, not by the presence of
-// an edge: the flag path must never take a question branch because a caller
-// passed both.
-const isQuestion = computed(() => !props.finding);
-const edgeDomain = computed(() => props.edge?.domain || props.edge?.host || '');
-/** In question mode the message IS the thread, so an empty one cannot be sent. */
-const messageMissing = computed(() => isQuestion.value && message.value.trim().length === 0);
 
 // ─── Who can open the thread (thread-domain-gate; three modes 2026-09-15) ──
 // A fieldset of three radios — specific people, anyone at a domain (the
@@ -154,7 +126,7 @@ const openToIds = {
 };
 /** What the created thread was opened to — read by the success state's warning. */
 const createdOpenTo = ref<{ mode: OpenToMode; list: string[] } | null>(null);
-const hintHost = computed(() => props.edge?.host || props.providerHost || props.call?.peer_host || props.finding?.peer_host || '');
+const hintHost = computed(() => props.providerHost || props.call?.peer_host || props.finding?.peer_host || '');
 
 async function loadOpenToHint() {
   const host = hintHost.value;
@@ -169,18 +141,12 @@ async function loadOpenToHint() {
     // No hint is the required-input case, not an error: the operator types the domain.
   }
 }
-/** One id per open sheet: what makes a retry after a failed create replay onto
- *  the SAME thread instead of opening a second one. Minted once, here. */
-const requestId = typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(36).slice(2);
-
 // v0.5: MCP findings carry the MCP evidence / IDs / disclosure / prefill
 // copy; HTTP findings keep the v0.1a strings unchanged.
 const isMcp = computed(() => !!props.finding && isMcpFinding(props.finding));
 const mcpServer = computed(() => props.call?.mcp_server_name || props.provider);
 const mcpTool = computed(() => props.finding?.endpoint ?? '');
 
-// A question starts EMPTY: prefilling one would be putting words in the
-// operator's mouth on a thread where their words are the entire content.
 /** The provenance sentence a stranger can check, or '' — one phrasing, shared
  *  with the contract card and the finding (contracts.ts). MCP is excluded by
  *  construction: its baseline is `observed`, so there is no URL to name. */
@@ -236,21 +202,20 @@ const idsLine = computed(() => {
     : requestIdsLine(correlationCount(props.correlation));
 });
 const disclosureLead = computed(() => {
-  if (!props.finding) return questionDisclosureLead(edgeDomain.value);
+  if (!props.finding) return '';
   if (isMcp.value) return mcpDisclosureLead(props.finding, mcpTool.value);
   if (!props.finding.source_call_id) return CALL_LESS_DISCLOSURE_LEAD;
   return 'This redacted request/response, the finding, the correlation keys, the endpoint, your message, and';
 });
 const disclosureTail = computed(() => {
-  if (!props.finding) return QUESTION_DISCLOSURE_TAIL;
+  if (!props.finding) return '';
   if (isMcp.value) return mcpDisclosureTail(props.finding);
   if (!props.finding.source_call_id) return CALL_LESS_DISCLOSURE_TAIL;
   return 'Raw calls never leave.';
 });
 const since = computed(() => shortDate(props.finding?.first_seen || props.finding?.last_seen || ''));
 const paste = computed(() => {
-  if (!result.value) return '';
-  if (!props.finding) return questionPasteText({ domain: edgeDomain.value, link: result.value.thread_url });
+  if (!result.value || !props.finding) return '';
   return pasteText({
     endpoint: props.finding.endpoint,
     since: since.value,
@@ -258,18 +223,15 @@ const paste = computed(() => {
     link: result.value.thread_url
   });
 });
-/** The share warning. The flag line names "the redacted evidence" — which a
- *  question thread does not carry — and a thread opened to people or a domain
- *  says who can open it instead of "Anyone with this link", which is what the
- *  operator chose against. */
+/** The share warning. A thread opened to people or a domain says who can open
+ *  it instead of "Anyone with this link", which is what the operator chose
+ *  against. */
 const shareWarning = computed(() => {
-  const what = props.finding ? 'evidence' : 'message';
+  const what = 'evidence';
   const created = createdOpenTo.value;
   if (created?.mode === 'emails') return peopleShareWarning(created.list, props.provider, what);
   if (created?.mode === 'domains') return gatedShareWarning(created.list, props.provider, what);
-  return !props.finding
-    ? questionShareWarning(props.provider)
-    : `Anyone with this link can read the redacted evidence and reply. Paste it where you already talk to ${props.provider}'s team. It lasts 30 days and extends with each reply.`;
+  return `Anyone with this link can read the redacted evidence and reply. Paste it where you already talk to ${props.provider}'s team. It lasts 30 days and extends with each reply.`;
 });
 
 function toggleDisclosure() {
@@ -279,7 +241,7 @@ function toggleDisclosure() {
 }
 
 async function createThread() {
-  if (busy.value || messageMissing.value) return;
+  if (busy.value) return;
   createAttempted.value = true;
   if (openToBlocked.value) {
     // The guard is showing now; put the operator in the field it is about. Nothing is posted.
@@ -294,21 +256,12 @@ async function createThread() {
   const list = mode === 'emails' ? emailsParsed.value.list : mode === 'domains' ? domainsParsed.value.list : [];
   const access = openToBody(mode, emailsParsed.value.list, domainsParsed.value.list);
   try {
-    // Two routes, one flow. The question route sends the sheet's own request id
-    // so a retry after a failed create replays onto the same thread.
-    const r = props.finding
-      ? await apiPost<FlagResult>('/api/flag', {
-          finding_id: props.finding.id,
-          message: message.value,
-          provider_display_name: props.provider,
-          ...access
-        })
-      : await apiPost<FlagResult>('/api/edges/thread', {
-          host: props.edge?.host ?? '',
-          message: message.value,
-          request_id: requestId,
-          ...access
-        });
+    const r = await apiPost<FlagResult>('/api/flag', {
+      finding_id: props.finding?.id,
+      message: message.value,
+      provider_display_name: props.provider,
+      ...access
+    });
     createdOpenTo.value = { mode, list };
     result.value = r;
     localStorage.setItem(DISCLOSURE_KEY, '1');
@@ -506,11 +459,7 @@ watch(result, (r) => {
       <!-- ─── Compose ─── -->
       <template v-else-if="!result">
         <h2 id="sheet-title" class="sheet-title">New thread with {{ provider }}</h2>
-        <!-- The evidence block, and its absence. A question thread renders NO
-             "Evidence (1)" line — an empty one would be worse than none — and
-             says plainly what it does carry instead. -->
-        <p v-if="!isQuestion" class="evidence"><span class="k">Evidence (1):</span> {{ evidence }}</p>
-        <p v-else class="ids">{{ QUESTION_LEAD }}</p>
+        <p class="evidence"><span class="k">Evidence (1):</span> {{ evidence }}</p>
         <p v-if="idsLine" class="ids">{{ idsLine }}</p>
 
         <button type="button" class="disclosure" :aria-expanded="disclosureOpen" @click="toggleDisclosure">
@@ -522,10 +471,9 @@ watch(result, (r) => {
         </p>
 
         <label class="field">
-          <span class="field-label">{{ isQuestion ? QUESTION_MESSAGE_LABEL : 'Message (optional)' }}</span>
+          <span class="field-label">Message (optional)</span>
           <textarea v-model="message" rows="4" :disabled="busy"></textarea>
         </label>
-        <p v-if="messageMissing" class="guard">{{ QUESTION_MESSAGE_REQUIRED }}</p>
 
         <!-- Who can open it: three radios in spec order, each followed by its
              own input and help; only the selected option's render. Each guard
@@ -611,7 +559,7 @@ watch(result, (r) => {
         <p v-if="errorMsg" class="error">{{ errorMsg }}</p>
         <div class="sheet-actions">
           <!-- Stays enabled over an unusable Who can open it: the click shows the guard and focuses the field. -->
-          <button type="button" class="btn primary" :disabled="busy || messageMissing" @click="createThread">
+          <button type="button" class="btn primary" :disabled="busy" @click="createThread">
             {{ busy ? 'Creating…' : errorMsg ? 'Retry' : 'Create thread' }}
           </button>
           <button type="button" class="btn ghost" :disabled="busy" @click="emit('close')">Cancel</button>

@@ -12,7 +12,7 @@
 //   3. what is typed: `Name <addr>`, the cross-field hints, long entries;
 //   4. the aria wiring of each input to its label, help and guard;
 //   5. the POST body per mode — always both keys;
-//   6. the success warning per mode, on a flag and on a question;
+//   6. the success warning per mode;
 //   7. the directory prefill and both domain helps.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -45,12 +45,9 @@ const FINDING: Finding = {
   peer_host: 'api.acme-payments.test'
 };
 
-const EDGE = { host: 'api.globex.test', domain: 'globex.test' };
-
 const CREATED = { thread_id: 'thr_1', thread_public_id: 'pub', thread_url: 'https://cp.test/t/pub#k=tok', state: 'open', status: 'created' };
 
 const FLAG_PROPS = { finding: FINDING, correlation: null, call: null, provider: 'Acme Payments', consumer: 'Acme', connect: CONNECTED, providerHost: 'api.acme-payments.test' };
-const QUESTION_PROPS = { finding: null, correlation: null, call: null, providerHost: null, edge: EDGE, provider: 'Globex' };
 
 const DOMAINS_HELP = "Their email domain, like acme.com — not always the API's domain. Separate several with commas.";
 const EMAILS_HELP = 'Only these addresses can open the thread, after confirming once.';
@@ -86,7 +83,6 @@ async function open(props: Record<string, unknown> = {}): Promise<VueWrapper> {
   await flush(w);
   return w;
 }
-const openQuestion = () => open(QUESTION_PROPS);
 
 async function flush(w: VueWrapper): Promise<void> {
   for (let i = 0; i < 8; i += 1) {
@@ -149,13 +145,6 @@ describe('the choice: three modes, in spec order', () => {
     expect(radios.map((r) => (r.element as HTMLInputElement).checked)).toEqual([false, true, false]);
   });
 
-  it('the edge sheet (question mode) opens on a domain too', async () => {
-    stubFetch([]);
-    const w = await openQuestion();
-    expect((radio(w, 'domains').element as HTMLInputElement).checked).toBe(true);
-    expect(domains(w).exists()).toBe(true);
-  });
-
   it('each option’s input and help sit right after its radio, and only the selected option’s render', async () => {
     stubFetch([]);
     const w = await open();
@@ -178,13 +167,6 @@ describe('the choice: three modes, in spec order', () => {
     expect(detailAfter(w, 'anyone')?.querySelector('input')).toBeNull();
     expect(w.findAll('fieldset.open-to-choice input[type="text"]')).toHaveLength(0);
     expect(notes(w)).toEqual(['Anyone holding the link can read the redacted evidence. Paste it only where just their team can see it.']);
-  });
-
-  it('the anyone help on a question says "your message", not the redacted evidence', async () => {
-    stubFetch([]);
-    const w = await openQuestion();
-    await choose(w, 'anyone');
-    expect(notes(w)).toEqual(['Anyone holding the link can read your message. Paste it only where just their team can see it.']);
   });
 
   it('what was typed in one mode is still there after a trip through another', async () => {
@@ -251,16 +233,13 @@ describe('guards wait for a touch or a Create, and Create thread stays enabled',
     expect(guard(w).text()).toBe('A thread can be open to at most 20 people.');
   });
 
-  it('Create thread is disabled only in question mode while the message is empty, and while a create is in flight', async () => {
+  it('Create thread disables while a create is in flight', async () => {
     const calls: Recorded[] = [];
     stubFetch(calls, null, true);
-    const w = await openQuestion();
-    expect(createButton(w).attributes('disabled')).toBeDefined();
-    await w.find('textarea').setValue('Are you versioning /v1/refunds?');
-    // Enabled over an EMPTY domains field: the field is not what disables it.
+    const w = await open();
     expect(createButton(w).attributes('disabled')).toBeUndefined();
 
-    await domains(w).setValue('globex.test');
+    await domains(w).setValue('acme-payments.test');
     await create(w);
     expect(calls).toHaveLength(1);
     expect(createButton(w).text()).toBe('Creating…');
@@ -402,26 +381,10 @@ describe('what reaches the wire: always both keys', () => {
     expect(calls[0].body.allowed_domains).toBeNull();
     expect(calls[0].body.allowed_emails).toBeNull();
   });
-
-  it('the edge route carries both keys the same way', async () => {
-    const calls: Recorded[] = [];
-    stubFetch(calls);
-    const w = await openQuestion();
-    await w.find('textarea').setValue('Are you versioning /v1/refunds?');
-    await choose(w, 'emails');
-    await emails(w).setValue('dana@globex.test');
-    await create(w);
-    expect(calls).toHaveLength(1);
-    expect(calls[0].url).toBe('/api/edges/thread');
-    expect(calls[0].body.allowed_emails).toEqual(['dana@globex.test']);
-    expect('allowed_domains' in calls[0].body).toBe(true);
-    expect(calls[0].body.allowed_domains).toBeNull();
-  });
 });
 
 describe('the success warning says who can open it', () => {
   const TAIL_FLAG = "Nobody else can read it. Paste it where you already talk to Acme Payments's team. It lasts 30 days and extends with each reply.";
-  const TAIL_QUESTION = "Nobody else can read it. Paste it where you already talk to Globex's team. It lasts 30 days and extends with each reply.";
 
   it('a domain thread names every domain with its @', async () => {
     stubFetch([]);
@@ -455,41 +418,13 @@ describe('the success warning says who can open it', () => {
     );
   });
 
-  it('a question says "read your message and reply", in both gated modes', async () => {
+  it('Anyone with the link keeps the open-link sentence', async () => {
     stubFetch([]);
-    let w = await openQuestion();
-    await w.find('textarea').setValue('Are you versioning /v1/refunds?');
-    await choose(w, 'emails');
-    await emails(w).setValue('dana@globex.test');
-    await create(w);
-    expect(w.find('.warning').text()).toBe(
-      `Only dana@globex.test can open this link — they confirm their address once, then read your message and reply. ${TAIL_QUESTION}`
-    );
-
-    w = await openQuestion();
-    await w.find('textarea').setValue('Are you versioning /v1/refunds?');
-    await domains(w).setValue('globex.test');
-    await create(w);
-    expect(w.find('.warning').text()).toBe(
-      `People with an @globex.test address can open this link — they confirm it once, then read your message and reply. ${TAIL_QUESTION}`
-    );
-  });
-
-  it('Anyone with the link keeps the open-link sentence, on a flag and on a question', async () => {
-    stubFetch([]);
-    let w = await open();
+    const w = await open();
     await choose(w, 'anyone');
     await create(w);
     expect(w.find('.warning').text()).toBe(
       "Anyone with this link can read the redacted evidence and reply. Paste it where you already talk to Acme Payments's team. It lasts 30 days and extends with each reply."
-    );
-
-    w = await openQuestion();
-    await w.find('textarea').setValue('Are you versioning /v1/refunds?');
-    await choose(w, 'anyone');
-    await create(w);
-    expect(w.find('.warning').text()).toBe(
-      "Anyone with this link can read your message and reply. Paste it where you already talk to Globex's team. It lasts 30 days and extends with each reply."
     );
   });
 });
@@ -524,23 +459,23 @@ describe('the directory prefill', () => {
     expect(calls).toHaveLength(0);
   });
 
-  it('asks about the edge host in question mode, and never overwrites what was typed', async () => {
+  it('asks about the provider host, and never overwrites what was typed', async () => {
     let resolveHint: (() => void) | null = null;
     const gate = new Promise<void>((r) => (resolveHint = r));
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string, init?: RequestInit) => {
         if (init?.method === 'POST') return { ok: true, status: 201, text: async () => JSON.stringify(CREATED) } as unknown as Response;
-        expect(url).toBe('/api/directory/hint?host=api.globex.test');
+        expect(url).toBe('/api/directory/hint?host=api.acme-payments.test');
         await gate;
-        return { ok: true, status: 200, text: async () => JSON.stringify({ host: 'api.globex.test', domain: 'globex.test', name: 'Globex', tier: 'claimed', claimed: true }) } as unknown as Response;
+        return { ok: true, status: 200, text: async () => JSON.stringify({ host: 'api.acme-payments.test', domain: 'acme-payments.test', name: 'Acme', tier: 'claimed', claimed: true }) } as unknown as Response;
       })
     );
-    const w = await openQuestion();
-    await domains(w).setValue('mail.globex.test');
+    const w = await open();
+    await domains(w).setValue('mail.acme-payments.test');
     resolveHint!();
     await flush(w);
-    expect((domains(w).element as HTMLInputElement).value).toBe('mail.globex.test');
+    expect((domains(w).element as HTMLInputElement).value).toBe('mail.acme-payments.test');
     expect(notes(w)).toEqual([DOMAINS_HELP]);
   });
 });
