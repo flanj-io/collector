@@ -85,7 +85,8 @@ reader that means a catalogue asks for one by format (`/api/contracts/spec?…&f
 since qfix2-2026-08-26; a human always presses the control) and the local-only `stale_client`; the flag relay REFUSES local-only kinds server-side
 (`403 not_flaggable` — CONTRACTS §4). **Since v1p4-2026-09-08 a finding needs no call to be flagged**
 (the message carries the ask — `400 finding_has_no_call` is gone from the relay), and `POST
-/api/edges/thread` starts a MESSAGE-ONLY thread from an edge row: no call, no finding, `evidence_count: 0`. Both thread-creating routes carry both keys, `allowed_emails` and `allowed_domains` — the chosen list and null, or both null for anyone (CONTRACTS §5, 2026-09-14; three modes 2026-09-15). The Flag sheet's "Who can open it" choice offers Only specific people, Anyone at a domain (the default) and Anyone with the link, and prefills the domain field with a claimed directory domain through the read-only `GET /api/directory/hint`. A drift is **per endpoint** (HTTP: method+route; MCP: the tool name): findings
+/api/edges/thread` starts a MESSAGE-ONLY thread: no call, no finding, `evidence_count: 0`. The route stays; the
+UI no longer has an entry point to it. Both thread-creating routes carry both keys, `allowed_emails` and `allowed_domains` — the chosen list and null, or both null for anyone (CONTRACTS §5, 2026-09-14; three modes 2026-09-15). The Flag sheet's "Who can open it" choice offers Only specific people, Anyone at a domain (the default) and Anyone with the link, and prefills the domain field with a claimed directory domain through the read-only `GET /api/directory/hint`. A drift is **per endpoint** (HTTP: method+route; MCP: the tool name): findings
 dedup by `signature`, so one drift = one finding (with an `occurrence_count`) = one flag.
 
 ## Stack & commands

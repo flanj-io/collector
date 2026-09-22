@@ -158,8 +158,9 @@ API + the flag action.
     `claimed` is true only for a `claimed` entry — a D5 domain proof, the one
     thing that makes a domain honestly someone's email domain; a curated name
     prefills nothing. GET only, `no-store`, nothing leaves the deployment.
-  - `POST /api/edges/thread {host, message, request_id, allowed_emails, allowed_domains}` — **Start a thread**
-    from an EDGE row: a MESSAGE-ONLY thread. Same Connect gate as
+  - `POST /api/edges/thread {host, message, request_id, allowed_emails, allowed_domains}` — starts a
+    MESSAGE-ONLY thread for an outbound edge's host. The route stays; the UI no longer has an entry
+    point to it. Same Connect gate as
     the flag, from the same helper (`requireConnectedForThread`) so the two
     doors answer with the same 412s. Outbound rows only (`404 edge_not_found`
     for an unknown or INBOUND host — an inbound `peer_host` is a forgeable XFF
