@@ -14,6 +14,8 @@ Every call succeeded. That's why nothing caught it.
 [![Helm chart: oci://registry-1.docker.io/flanj/flanj-collector](https://img.shields.io/badge/helm%20chart-oci%3A%2F%2Fregistry--1.docker.io%2Fflanj%2Fflanj--collector-1f2933)](charts/flanj-collector/README.md)
 [![CI](https://github.com/flanj-io/collector/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/flanj-io/collector/actions/workflows/ci.yml)
 
+[flanj.io](https://flanj.io)
+
 The self-hosted side of Flanj: an [OpenTelemetry Collector](https://opentelemetry.io/docs/collector/)
 distribution that receives the calls the [SDK](https://github.com/flanj-io/sdk) already redacted at source,
 redacts them once more, validates them against the provider's contract to detect drift, keeps a rolling
