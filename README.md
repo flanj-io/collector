@@ -60,7 +60,12 @@ container:
 env:
   - name: FLANJ_OTLP_ENDPOINT
     value: http://flanj-collector.flanj:4318/v1/logs
+  - name: NODE_OPTIONS
+    value: "--require @flanj/sdk/register"
 ```
+
+The second variable is the SDK preload: without it the app sends nothing, because nothing loads the SDK.
+A Python app needs no `NODE_OPTIONS` — `import flanj.register` as its first line is the preload.
 
 The chart also renders `ConfigMap/flanj-endpoint` — one key, `FLANJ_OTLP_ENDPOINT`, the same value — if you
 prefer `envFrom: [{configMapRef: {name: flanj-endpoint}}]`. A pod can only reference a ConfigMap in its own
@@ -72,6 +77,10 @@ Then open the UI:
 ```bash
 kubectl -n flanj port-forward sts/flanj-flanj-collector-store 5335:5335
 ```
+
+If `5335` is already taken on your machine — the Docker quickstart below publishes it — forward `15335:5335`
+and open <http://localhost:15335> instead. A `helm upgrade` that replaces the store pod ends an open
+port-forward; run the command again.
 
 Values, tiers (sqlite on an emptyDir / sqlite on a PVC / postgres) and what the chart refuses to install:
 [`charts/flanj-collector`](charts/flanj-collector/README.md). The single-pod and shared-postgres shapes,
@@ -136,9 +145,10 @@ Two things the compose file handles that are easy to get wrong by hand. A fresh 
 root-owned and the image runs as `nonroot`, so the store cannot create its file and the collector exits with
 `unable to open database file (14)`; a one-shot init service fixes the ownership before the collector
 starts. And restarting the collector gives it a new network namespace, stranding a bridge that cannot tell —
-so the bridge watches the collector's loopback and exits when it can no longer reach it, and its restart
-policy brings it back. Recreating the collector *alone* is the one case left: a new container id cannot be
-rejoined at all, and a plain `docker compose up -d` afterwards repairs it.
+so the bridge watches the collector's loopback and exits when it can no longer reach it, and the restart
+policy the compose file gives it brings it back (the manual `docker run` pair below sets none). Recreating
+the collector *alone* is the one case left: a new container id cannot be rejoined at all, and a plain
+`docker compose up -d` afterwards repairs it.
 
 Without compose, one container and one bridge:
 
@@ -155,8 +165,12 @@ docker run -d --name flanj-ui --network container:flanj \
 ```
 
 A bind mount owned by you avoids the named-volume problem; the UI port is published on the collector because
-the bridge shares its namespace and cannot publish its own. Restarting the collector orphans the bridge here
-— recreate it rather than `docker start` it. Tear the whole thing down with `docker rm -f flanj flanj-ui`.
+the bridge shares its namespace and cannot publish its own. Between the first command and the second,
+<http://localhost:5335/api/health> does not answer: the port is published, but only the bridge listens on
+it. Restarting the collector orphans the bridge here, and with no restart policy nothing brings it back:
+after `docker restart flanj` the bridge stays `Up` and answers nothing. Recreate it — `docker rm -f flanj-ui`,
+then the second `docker run` above again — rather than `docker start` it. Tear the whole thing down with
+`docker rm -f flanj flanj-ui`.
 
 On Linux, `--network host` works instead of the bridge (`localhost:5335` is then the same loopback); on
 Docker Desktop it is not equivalent, so use the bridge. Either way the bind stays loopback: tunnel to it,
@@ -186,6 +200,10 @@ npm install @flanj/sdk
 node -r @flanj/sdk/register app.js
 ```
 
+Global `fetch()` (undici) is not captured yet, and silently — zero rows, no warning. `node:http` / `node:https`
+and the clients built on them (`axios`, `got`, `node-fetch`, `superagent`) are; the SDK README's
+[What is captured](https://github.com/flanj-io/sdk#what-is-captured) has the full list.
+
 On Docker there is nothing to set: `http://localhost:4318/v1/logs` is the SDK's own default, and the
 compose file publishes `:4318` there. On Kubernetes, give your workload the `FLANJ_OTLP_ENDPOINT` shown
 above — the variable goes on the container that sends, never on the collector.
@@ -200,11 +218,13 @@ floor on arrival.
 the image knows who installed it, so it claims nothing. Traffic capture, drift detection, edge discovery and
 the UI all work on the first run with no configuration at all — looking around without connecting is the
 point. **Connect** is the one thing that needs you first, and until it has a control plane it says so:
-`The control plane is not configured on this collector (set cp_base_url).`
+`This collector is not set up to connect to Flanj (set cp_base_url).`
 
 Copy `config/config.example.yaml`, which documents every key, set `cp_base_url`, and mount it over the
-baked path. No token is needed to Connect: the panel asks for a collector name and a contact email, and
-the contact's confirmation click is what adds the collector to their Flanj workspace
+baked path. The hosted control plane is `https://app.flanj.io`: set `cp_base_url` to it, and `cp_public_url`
+is the same address (it only differs when the collector reaches the control plane through an in-network
+address your browser cannot open). No token is needed to Connect: the panel asks for a collector name and
+a contact email, and the contact's confirmation click is what adds the collector to their Flanj workspace
 (`cp_deploy_token` is optional — for an operator's or per-account token). The panel asks for no
 organization name: the contact names the workspace on the confirmation page, and that name — the one
 other organizations see on your threads — shows in the UI once it is set. With compose, add the file to
@@ -216,8 +236,11 @@ the `collector` service:
       - ./config.yaml:/etc/flanj/config.yaml:ro
 ```
 
+then `docker compose up -d` again: compose recreates the container with the mount, and the bridge follows.
+
 On Kubernetes the chart renders both role configs from its values instead — set `controlPlane.baseUrl`
-(and `controlPlane.publicUrl`, the address *your browser* can open).
+(and `controlPlane.publicUrl`, the address *your browser* can open); for the hosted control plane both are
+`https://app.flanj.io`.
 
 **What leaves your network: nothing, until you Connect.** Unconnected, the collector makes no outbound
 calls at all; the sync loop returns early with no collector key. After Connect it talks only to

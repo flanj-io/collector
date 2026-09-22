@@ -44,7 +44,7 @@ data:
         {{- end }}
 
     exporters:
-      otlphttp:
+      otlp_http:
         endpoint: {{ include "flanj-collector.storeIngestEndpoint" . | quote }}
         timeout: 10s
         retry_on_failure:
@@ -62,7 +62,7 @@ data:
         logs:
           receivers: [otlp]
           processors: [flanjredaction, flanjdrift]
-          exporters: [otlphttp]
+          exporters: [otlp_http]
       telemetry:
         logs:
           level: info

@@ -61,7 +61,7 @@ func TestDashboardURLComposition(t *testing.T) {
 		{"a public co.uk host still opens", "", "https://dash.acme.co.uk", "https://dash.acme.co.uk/d"},
 		{".internal base is no door", "", "https://cp.flanj.internal", ""},
 		{".local base is no door", "", "https://cp.local", ""},
-		{".test placeholder (the example config) is no door", "", "https://cp.flanj.test", ""},
+		{".test placeholder is no door", "", "https://cp.flanj.test", ""},
 		{".example base is no door", "", "https://cp.example", ""},
 		{"trailing dot does not launder a reserved suffix", "", "https://cp.flanj.internal.", ""},
 		{"case does not launder a reserved suffix", "", "https://CP.FLANJ.INTERNAL", ""},
@@ -468,7 +468,7 @@ func TestReservedDocHost(t *testing.T) {
 // on it); only the sentence changes.
 func TestConnectAgainstAPlaceholderCPSaysSo(t *testing.T) {
 	r := newRig(t)
-	r.ext.cfg.CPBaseURL = "https://cp.flanj.test" // the value config.example.yaml carries
+	r.ext.cfg.CPBaseURL = "https://cp.flanj.test" // a .test placeholder (the example config carried it until 2026-09-22)
 	r.start(t)
 	r.cp.srv.Close()
 
