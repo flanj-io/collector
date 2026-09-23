@@ -252,6 +252,16 @@ API + the flag action.
     contract says so and names the reason; an `edge` argument naming a host this
     collector has never observed is answered as an unknown edge with the known
     ones listed, never as "no findings". None of these is an error.
+    **"Known" is wider than list_edges.** A stdio (local-process) MCP server
+    never appears there — it is not a network edge (`internal/edge.go`) — but
+    its findings ARE attributed to it, through the catalogue it seeded
+    (`specHosts`, keyed by its serverInfo name). The unknown-edge check in
+    `list_findings` therefore also accepts any host bound to a contract or
+    catalogue, or the one documented way to scope to such a server — read its
+    name off a finding's `peer_host` (an unfiltered `list_findings`, or
+    `drift_summary`'s `unattributed_hosts`, which names it precisely because it
+    gets no line of its own among the network edges) and pass it back as
+    `edge` — would itself be refused as "never observed".
   - **Protocol.** The Go SDK speaks 2026-07-28 and negotiates down through
     2025-11-25 — what `@modelcontextprotocol/sdk` 1.30.0 speaks, the version
     test servers pin — to 2024-11-05, so no pin of our

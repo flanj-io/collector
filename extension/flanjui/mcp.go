@@ -136,8 +136,10 @@ func (e *uiExtension) mcpServer() *mcp.Server {
 		mcp.AddTool(s, &mcp.Tool{
 			Name:  "drift_summary",
 			Title: "Drift summary",
-			Description: "Start here. One line per dependency this collector has observed: how much traffic, " +
-				"how much of it was actually validated against a contract, and how many open findings it has. " +
+			Description: "Start here. One line per NETWORK dependency this collector has observed: how much " +
+				"traffic, how much of it was actually validated against a contract, and how many open findings " +
+				"it has. A stdio (local-process) MCP server has no line of its own here — it is not a network " +
+				"edge — but its open findings count in unattributed_open_findings, with its name in the prose. " +
 				"Reports honestly when nothing has been checked yet.",
 			Annotations: readOnly,
 		}, e.mcpDriftSummary)
@@ -145,8 +147,11 @@ func (e *uiExtension) mcpServer() *mcp.Server {
 		mcp.AddTool(s, &mcp.Tool{
 			Name:  "list_edges",
 			Title: "List observed dependencies",
-			Description: "The external integration edges this collector discovered from observed traffic " +
-				"(no target list is configured). Use the `peer_host` of a row as the `edge` argument elsewhere.",
+			Description: "The external NETWORK integration edges this collector discovered from observed " +
+				"traffic (no target list is configured). Use the `peer_host` of a row as the `edge` argument " +
+				"elsewhere. A stdio (local-process) MCP server never appears here — it is not a network edge — " +
+				"even though it can have findings; use list_findings with no `edge` to find one, then pass its " +
+				"`peer_host` back as `edge` to scope to it.",
 			Annotations: readOnly,
 		}, e.mcpListEdges)
 
@@ -372,12 +377,20 @@ type mcpDriftSummaryOutput struct {
 	Edges        []mcpEdgeSummary `json:"edges"`
 	OpenFindings int              `json:"open_findings_total"`
 	Acknowledged int              `json:"acknowledged_findings_total"`
-	// Unattributed are open findings that reach no edge: call-less, and with no
-	// contract bound to a host to attribute them through. They are in
-	// OpenFindings but on no edge line, so the per-edge counts would otherwise
-	// silently sum to less than the total an agent just read.
-	Unattributed int         `json:"unattributed_open_findings,omitempty"`
-	Evidence     mcpEvidence `json:"evidence"`
+	// Unattributed are open findings that reach no edge line above: call-less
+	// with no contract bound to a host, OR attributed to a host that is not a
+	// network edge — chiefly a stdio (local-process) MCP server, which is never
+	// one (internal/edge.go). Either way they are in OpenFindings but on no
+	// edge line, so the per-edge counts would otherwise silently sum to less
+	// than the total an agent just read.
+	Unattributed int `json:"unattributed_open_findings,omitempty"`
+	// UnattributedHosts names the non-empty hosts behind Unattributed (a
+	// call-less, contract-less finding contributes no name here — there is
+	// none to give). Overwhelmingly these are local MCP server names: the one
+	// piece of information an agent needs to then scope list_findings to that
+	// server with `edge`.
+	UnattributedHosts []string    `json:"unattributed_hosts,omitempty"`
+	Evidence          mcpEvidence `json:"evidence"`
 }
 
 func (e *uiExtension) mcpDriftSummary(ctx context.Context, _ *mcp.CallToolRequest, _ mcpDriftSummaryInput) (*mcp.CallToolResult, mcpDriftSummaryOutput, error) {
@@ -421,6 +434,17 @@ func (e *uiExtension) mcpDriftSummary(ctx context.Context, _ *mcp.CallToolReques
 	out := mcpDriftSummaryOutput{Evidence: all, Edges: make([]mcpEdgeSummary, 0, len(edges))}
 	openByHost := map[string]int{}
 	sevByHost := map[string]map[string]int{}
+	// edgeHosts is who gets an mcpEdgeSummary LINE below — network edges only
+	// (edgeRows, same as list_edges). A finding can be attributed to a host
+	// that is not one of these — most commonly a stdio (local-process) MCP
+	// server, which is never a network edge — and such a finding must count as
+	// Unattributed too, or the per-edge counts below would silently sum to
+	// less than OpenFindings with no line explaining the gap.
+	edgeHosts := make(map[string]bool, len(edges))
+	for _, ed := range edges {
+		edgeHosts[ed.PeerHost] = true
+	}
+	unattributedHostSeen := map[string]bool{}
 	for _, row := range rows {
 		if acked, _ := row["acked"].(bool); acked {
 			out.Acknowledged++
@@ -428,8 +452,12 @@ func (e *uiExtension) mcpDriftSummary(ctx context.Context, _ *mcp.CallToolReques
 		}
 		out.OpenFindings++
 		h := findingEdgeHost(row, specHosts)
-		if h == "" {
+		if h == "" || !edgeHosts[h] {
 			out.Unattributed++
+			if h != "" && !unattributedHostSeen[h] {
+				unattributedHostSeen[h] = true
+				out.UnattributedHosts = append(out.UnattributedHosts, h)
+			}
 		}
 		openByHost[h]++
 		sev, _ := row["severity"].(string)
@@ -456,6 +484,7 @@ func (e *uiExtension) mcpDriftSummary(ctx context.Context, _ *mcp.CallToolReques
 		}
 		out.Edges = append(out.Edges, es)
 	}
+	sort.Strings(out.UnattributedHosts)
 
 	out.Headline = mcpSummaryHeadline(out, all)
 	return &mcp.CallToolResult{Content: mcpText(mcpSummaryText(out))}, out, nil
@@ -497,10 +526,16 @@ func mcpSummaryText(out mcpDriftSummaryOutput) string {
 			es.Evidence.sentence(es.PeerHost))
 	}
 	if out.Unattributed > 0 {
-		fmt.Fprintf(&b, "\n\n%d open %s not attributable to any edge above (no evidence call and no contract "+
-			"bound to a host). Call list_findings with no edge to see %s.",
-			out.Unattributed, plural(out.Unattributed, "finding is", "findings are"),
-			plural(out.Unattributed, "it", "them"))
+		fmt.Fprintf(&b, "\n\n%d open %s not attributable to any edge above — either no evidence call and no "+
+			"contract bound to a host, or a local (stdio) MCP server, which never appears as an edge.",
+			out.Unattributed, plural(out.Unattributed, "finding is", "findings are"))
+		if n := len(out.UnattributedHosts); n > 0 {
+			fmt.Fprintf(&b, " Local MCP %s not shown above: %s — its own name is the `edge` argument to "+
+				"list_findings.",
+				plural(n, "server", "servers"), edgeListPhrase(out.UnattributedHosts))
+		} else {
+			b.WriteString(" Call list_findings with no edge to see them.")
+		}
 	}
 	if out.Acknowledged > 0 {
 		fmt.Fprintf(&b, "\n\n%d %s acknowledged locally and excluded above.",
@@ -577,7 +612,7 @@ func mcpEdgesText(out mcpListEdgesOutput) string {
 // ─── list_findings ───────────────────────────────────────────────────────────
 
 type mcpListFindingsInput struct {
-	Edge                string `json:"edge,omitempty" jsonschema:"Only findings about this dependency — the peer_host of a list_edges row, exactly as reported (host or host:port)."`
+	Edge                string `json:"edge,omitempty" jsonschema:"Only findings about this dependency. Usually the peer_host of a list_edges row, exactly as reported (host or host:port). A stdio (local-process) MCP server never appears in list_edges, but its findings still carry its name — read the peer_host off any of its rows from an unfiltered list_findings or drift_summary's unattributed note, then pass that name here."`
 	Kind                string `json:"kind,omitempty" jsonschema:"Only this finding kind: type-mismatch, version-diff, output_mismatch, definition_change or stale_client."`
 	Severity            string `json:"severity,omitempty" jsonschema:"Only this severity: breaking, non-breaking or info."`
 	IncludeAcknowledged bool   `json:"include_acknowledged,omitempty" jsonschema:"Include findings a person has acknowledged locally. Excluded by default — acknowledged means someone already read it."`
@@ -620,17 +655,36 @@ func (e *uiExtension) mcpListFindings(ctx context.Context, _ *mcp.CallToolReques
 	out := mcpListFindingsOutput{Findings: []mcpFindingRow{}}
 
 	// An unknown edge is answered as an unknown edge, never as "no findings".
+	//
+	// "Known" is wider than list_edges: a stdio (local-process) MCP server never
+	// appears there (it is not a network edge — internal/edge.go), but its
+	// findings ARE attributed to it, through the catalogue it seeded (specHosts,
+	// keyed by its serverInfo name). Checking edges alone made the one documented
+	// way to scope to such a server — read its name off a finding's peer_host,
+	// then pass that name back as `edge` — itself answer "never observed",
+	// which is not true.
 	if edgeFilter != "" {
 		edges, op, eErr := e.edgeRows(st)
 		if eErr != nil {
 			return nil, mcpListFindingsOutput{}, e.mcpStoreErr(op, eErr)
 		}
+		seen := map[string]bool{}
 		known := false
-		for _, ed := range edges {
-			out.KnownEdges = append(out.KnownEdges, ed.PeerHost)
-			if ed.PeerHost == edgeFilter {
+		noteHost := func(host string) {
+			if host == "" || seen[host] {
+				return
+			}
+			seen[host] = true
+			out.KnownEdges = append(out.KnownEdges, host)
+			if host == edgeFilter {
 				known = true
 			}
+		}
+		for _, ed := range edges {
+			noteHost(ed.PeerHost)
+		}
+		for _, host := range specHosts {
+			noteHost(host)
 		}
 		if !known {
 			out.Note = fmt.Sprintf(

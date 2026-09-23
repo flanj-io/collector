@@ -779,3 +779,68 @@ func TestMCPUnattributedFindingsAreNotSilentlyDropped(t *testing.T) {
 		t.Error("an unattributed finding must still be listed without an edge filter")
 	}
 }
+
+// TestMCPListFindingsByLocalProcessServerName: a stdio (local-process) MCP
+// server never appears in list_edges — it is not a network edge
+// (internal/edge.go) — but its findings ARE attributed to it by its
+// serverInfo name (mirrors golden-otlp-mcp-snapshot.json's
+// serverInfo.name, a bare single-label name that internal/edge.Classify would
+// call internal even if it were ever asked). An agent has to be able to learn
+// that name from THIS surface (never from list_edges) and then filter by it;
+// before the fix, the "known edge" gate checked list_edges alone and refused
+// the one documented way to scope to such a server as "never observed".
+func TestMCPListFindingsByLocalProcessServerName(t *testing.T) {
+	st := seedTwoEdges(t)
+	const serverName = "acme-payments-mcp"
+	if err := st.PutMCPCatalogue(model.SpecInfo{
+		Integration: serverName, Role: model.SpecRoleProvider, PeerHost: serverName,
+		Format: model.SpecFormatMCP, Source: model.SpecSourceObserved, EdgeClass: model.EdgeClassLocalProcess,
+	}, []byte(`{"tools":[]}`)); err != nil {
+		t.Fatal(err)
+	}
+	local := model.Finding{
+		SchemaVersion: model.SchemaVersion, ID: "finding-local-mcp", Kind: model.KindDefinitionChange,
+		Severity: model.SeverityInfo, Integration: serverName, Endpoint: "get_balance",
+		FieldPath: model.Ptr("currency"), Expected: "the previous definition", Actual: "a new description",
+		Rule: model.RuleDescriptionChanged, SpecVersionFrom: model.Ptr("sha-x"), SpecVersionTo: model.Ptr("sha-y"),
+		DetectedAt: "2026-09-08T10:08:00Z", Detail: "Tool `get_balance` changed the description of `currency`.",
+		OccurrenceCount: 1, FirstSeen: "2026-09-08T10:08:00Z", LastSeen: "2026-09-08T10:08:00Z",
+	}
+	local.Signature = local.ComputeSignature()
+	if err := st.InsertFinding(local); err != nil {
+		t.Fatal(err)
+	}
+	_, ui, _ := newMCPExt(t, st)
+	sess := mcpConnect(t, ui)
+
+	// It never appears in list_edges — that is unchanged and deliberate.
+	_, edges := callTool(t, sess, "list_edges", nil)
+	for _, row := range edges["edges"].([]any) {
+		m, _ := row.(map[string]any)
+		if m["peer_host"] == serverName {
+			t.Fatalf("a local-process server must never appear in list_edges, got %v", m)
+		}
+	}
+
+	// drift_summary names it (no line of its own, but not silently dropped
+	// either) — this is how an agent learns the name without guessing it.
+	res, summary := callTool(t, sess, "drift_summary", nil)
+	hosts, _ := summary["unattributed_hosts"].([]any)
+	if len(hosts) != 1 || hosts[0] != serverName {
+		t.Fatalf("drift_summary should name the local server in unattributed_hosts, got %v", hosts)
+	}
+	if txt := resultText(res); !strings.Contains(txt, serverName) {
+		t.Errorf("drift_summary prose should name the local server so an agent can find it; got %q", txt)
+	}
+
+	// Filtering list_findings by that exact name — the one documented way to
+	// scope to a local-process server — must actually work.
+	_, filtered := callTool(t, sess, "list_findings", map[string]any{"edge": serverName})
+	if note, _ := filtered["note"].(string); strings.Contains(note, "has not observed") {
+		t.Fatalf("a local-process server's own name must be a KNOWN edge value, got note %q", note)
+	}
+	ids := findingIDs(t, filtered)
+	if len(ids) != 1 || ids[0] != "finding-local-mcp" {
+		t.Fatalf("filtering by the local server's name should return exactly its finding, got %v", ids)
+	}
+}
