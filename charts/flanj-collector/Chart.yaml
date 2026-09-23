@@ -9,7 +9,7 @@ type: application
 # changes only defaults — controlPlane.baseUrl and controlPlane.publicUrl now
 # name the hosted control plane, so a plain `helm install` needs no
 # `--set controlPlane.*` before Connect. Nothing rendered changes shape.
-version: 0.3.1
+version: 0.3.2
 
 # The collector image tag this chart is written against; `image.tag` defaults to
 # it, so this is the tag a plain `helm install` pulls. It MUST name a tag that
@@ -18,7 +18,7 @@ version: 0.3.1
 # chart. Keep it equal to the published Docker Hub tag: the chart renders
 # configs whose keys are frozen in contracts/CONTRACTS.md §8, so a chart ahead
 # of the image can also render a config the image refuses to load.
-appVersion: "v0.3.1"
+appVersion: "v0.3.2"
 
 home: https://flanj.io
 # Rendered by chart browsers; an absolute raw URL because the chart is served
