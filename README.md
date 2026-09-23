@@ -203,9 +203,10 @@ npm install @flanj/sdk
 node -r @flanj/sdk/register app.js
 ```
 
-Global `fetch()` (undici) is not captured yet, and silently — zero rows, no warning. `node:http` / `node:https`
-and the clients built on them (`axios`, `got`, `node-fetch`, `superagent`) are; the SDK README's
-[What is captured](https://github.com/flanj-io/sdk#what-is-captured) has the full list.
+`node:http` / `node:https`, the clients built on them (`axios`, `got`, `node-fetch`, `superagent`) and, from
+`@flanj/sdk` 0.4.0, global `fetch()` (undici) are all captured; the SDK README's
+[What is captured](https://github.com/flanj-io/sdk#what-is-captured) has the full list and the two edges
+that remain (a `fetch()` given its own dispatcher, and a `globalThis.fetch` replaced by another library).
 
 On Docker there is nothing to set: `http://localhost:4318/v1/logs` is the SDK's own default, and the
 compose file publishes `:4318` there. On Kubernetes, give your workload the `FLANJ_OTLP_ENDPOINT` shown
