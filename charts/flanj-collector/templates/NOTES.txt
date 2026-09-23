@@ -48,13 +48,15 @@
    token, a front with the wrong one starts, gets 401, and quietly detects no
    REST drift at all. This chart gives both roles the same Secret key, so the
    only way to see this is an existingSecret whose value changed under you.
+   Naming one Deployment only follows one of its pods — add --all-pods (or
+   select on the label) so a 401 on the other front is not missed:
 
-     kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "flanj-collector.front.fullname" . }} | grep -i 'contract refresh'
+     kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "flanj-collector.front.fullname" . }} --all-pods | grep -i 'contract refresh'
 
-   Silence there is the healthy result, with one exception on a fresh install:
-   the fronts come up before the store pod is Ready, so each logs a single
-   `contract refresh failed … store pod unreachable … context deadline exceeded`
-   at startup and the next refresh succeeds. A 401 is never expected.
+   A few refresh failures in the first seconds are expected: the store Service
+   not yet resolvable (`no such host`) or not yet Ready (`context deadline
+   exceeded`), before each front's next refresh succeeds. A 401 is never
+   expected.
 {{ if not .Values.controlPlane.baseUrl }}
 4. controlPlane.baseUrl is empty, so this deployment is fully local: it
    captures, redacts and detects drift, and it cannot create thread links.
