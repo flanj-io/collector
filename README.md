@@ -146,11 +146,14 @@ root-owned and the image runs as `nonroot`, so the store cannot create its file 
 `unable to open database file (14)`; a one-shot init service fixes the ownership before the collector
 starts. And restarting the collector gives it a new network namespace, stranding a bridge that cannot tell —
 so the bridge watches the collector's loopback and exits when it can no longer reach it, and the restart
-policy the compose file gives it brings it back (the manual `docker run` pair below sets none). Recreating
-the collector *alone* is the one case left: a new container id cannot be rejoined at all, and a plain
-`docker compose up -d` afterwards repairs it.
+policy the compose file gives it brings it back — measured recovery after `docker compose restart
+collector` is about fifteen seconds, unattended (the manual `docker run` pair below sets none, so there
+that recovery is the recreate step below, done by hand). Recreating the collector *alone* is the one case
+left: a new container id cannot be rejoined at all, and a plain `docker compose up -d` afterwards repairs
+it.
 
-Without compose, one container and one bridge:
+Without compose, one container and one bridge — pinned to `v0.3.1` for the same reason as the compose
+file: it is the release these commands describe, and `:latest` would drift out from under them:
 
 ```bash
 mkdir -p ./flanj-data

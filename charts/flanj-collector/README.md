@@ -193,27 +193,43 @@ give it its own namespace. The name cannot collide with anything else the chart 
 ### `ConfigMap/flanj-endpoint`
 
 Rendered alongside it: one key, `FLANJ_OTLP_ENDPOINT`, the same address, for workloads that would rather
-write
+reference a ConfigMap than write the literal string. **A pod can only reference a ConfigMap in its own
+namespace**, and this chart installs into the collector's — so pointing a workload in another namespace at
+it is one ordered route:
 
-```yaml
-envFrom:
-  - configMapRef:
-      name: flanj-endpoint
-```
+1. Create the namespace first — `--create-namespace` only creates the release's:
 
-than the literal string. **A pod can only reference a ConfigMap in its own namespace**, and this chart
-installs into the collector's — so list your application namespaces:
+   ```bash
+   kubectl create namespace shop
+   ```
 
-```bash
---set 'endpointConfigMap.namespaces={payments,checkout}'
-```
+2. Add it to the map's namespaces (the release namespace is always included; the installing credential
+   must be allowed to write into each one listed):
 
-They must already exist (`--create-namespace` creates the release's and nothing else) and the installing
-credential must be allowed to write there. The release namespace is always included. The value follows
-`service.front.fixedName`, falling back to the release-scoped Service when that is empty, so the map can
-never name an address the release does not serve. `endpointConfigMap.enabled: false` turns it off — which
-is also the answer for a second release in one namespace, since the name collides exactly as the Service
-does.
+   ```bash
+   helm upgrade flanj oci://registry-1.docker.io/flanj/flanj-collector \
+     --namespace flanj --reuse-values \
+     --set 'endpointConfigMap.namespaces={shop}'
+   ```
+
+3. Reference it from the workload deployed in that namespace:
+
+   ```yaml
+   envFrom:
+     - configMapRef:
+         name: flanj-endpoint
+   ```
+
+4. Restart the workload's pods to pick it up — `envFrom` is read only at pod start:
+
+   ```bash
+   kubectl -n shop rollout restart deployment/<your-workload>
+   ```
+
+The value follows `service.front.fixedName`, falling back to the release-scoped Service when that is
+empty, so the map can never name an address the release does not serve. `endpointConfigMap.enabled: false`
+turns it off — which is also the answer for a second release in one namespace, since the name collides
+exactly as the Service does.
 
 The fixed Service needs no NetworkPolicy of its own: `networkPolicy.enabled` restricts the *store* pod's
 two cluster ports, and this is a second name for the front pods, which that policy does not cover either
@@ -233,16 +249,19 @@ rather than becoming a dead link.
 
 ## After installing, read a front's log
 
-The roles fail differently on purpose, so `kubectl get pods` is not the check:
+The roles fail differently on purpose, so `kubectl get pods` is not the check. `deploy/<name>` alone
+follows a single pod of the Deployment, and a `401` on the *other* front is missed — add `--all-pods`
+(or select on the label instead of naming the Deployment):
 
 ```bash
-kubectl -n flanj logs deploy/flanj-flanj-collector-front | grep -i 'contract refresh'
+kubectl -n flanj logs deploy/flanj-flanj-collector-front --all-pods | grep -i 'contract refresh'
+# or: kubectl -n flanj logs -l app.kubernetes.io/component=front --all-pods | grep -i 'contract refresh'
 ```
 
-Silence is the healthy result, with one exception on a fresh install: the
-fronts come up before the store pod is Ready, so each logs a single
-`contract refresh failed … store pod unreachable … context deadline exceeded`
-at startup and the next refresh succeeds. A `401` is never expected:
+A few refresh failures in the first seconds are expected: the store Service is not yet resolvable
+(`contract refresh failed … dial tcp: lookup flanj-flanj-collector-store: no such host`) or not yet Ready
+(`contract refresh failed … store pod unreachable … context deadline exceeded`), before each front's next
+refresh succeeds. A `401` is never expected:
 `contract refresh failed … 401 Unauthorized`
 means the two roles hold different tokens — which this chart prevents unless
 you supplied an `existingSecret` whose value changed underneath it.
@@ -265,8 +284,8 @@ now, which an init container does not. What matters is whether it settles, and
 load-bearing, upgrade the store alone first:
 
 ```bash
-helm upgrade flanj <chart> --reuse-values --set collector.replicas=0 ...   # store only
-helm upgrade flanj <chart> --reuse-values --set collector.replicas=3 ...   # then the fronts
+helm upgrade flanj <chart> --namespace flanj --reuse-values --set collector.replicas=0 ...   # store only
+helm upgrade flanj <chart> --namespace flanj --reuse-values --set collector.replicas=3 ...   # then the fronts
 ```
 
 Every upgrade needs `--reuse-values` (or the same `--set specToken.value=…`
