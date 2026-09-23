@@ -152,7 +152,7 @@ that recovery is the recreate step below, done by hand). Recreating the collecto
 left: a new container id cannot be rejoined at all, and a plain `docker compose up -d` afterwards repairs
 it.
 
-Without compose, one container and one bridge — pinned to `v0.3.1` for the same reason as the compose
+Without compose, one container and one bridge — pinned to `v0.3.2` for the same reason as the compose
 file: it is the release these commands describe, and `:latest` would drift out from under them:
 
 ```bash
@@ -161,7 +161,7 @@ docker run -d --name flanj \
   --user "$(id -u):$(id -g)" \
   -v "$PWD/flanj-data:/data" \
   -p 4318:4318 -p 127.0.0.1:5335:5336 \
-  flanj/collector:v0.3.1
+  flanj/collector:v0.3.2
 
 docker run -d --name flanj-ui --network container:flanj \
   alpine/socat TCP-LISTEN:5336,fork,reuseaddr TCP:127.0.0.1:5335
