@@ -72,14 +72,38 @@ prefer `envFrom: [{configMapRef: {name: flanj-endpoint}}]`. A pod can only refer
 namespace and the chart installs into `flanj`, so list your application's namespaces in
 `endpointConfigMap.namespaces` and the chart writes one into each.
 
+`envFrom` replaces only `FLANJ_OTLP_ENDPOINT`. A Node workload still needs the preload beside it, so keep
+`NODE_OPTIONS` in `env:` next to the `envFrom:` — swapping the whole `env:` block for `envFrom:` drops it, and
+the pod then starts, holds the endpoint, loads no SDK, captures nothing and warns of nothing:
+
+```yaml
+envFrom:
+  - configMapRef:
+      name: flanj-endpoint
+env:
+  - name: NODE_OPTIONS
+    value: "--require @flanj/sdk/register"
+```
+
+Python does not need the `env:` entry.
+
 Then open the UI:
 
 ```bash
 kubectl -n flanj port-forward sts/flanj-flanj-collector-store 5335:5335
 ```
 
-If `5335` is already taken on your machine — the Docker quickstart below publishes it — forward `15335:5335`
-and open <http://localhost:15335> instead. A `helm upgrade` that replaces the store pod ends an open
+Check that `5335` is free first — the Docker quickstart below publishes it, and another collector may hold it:
+
+```bash
+lsof -nP -iTCP:5335 -sTCP:LISTEN
+```
+
+No output means it is free (macOS and Linux). If something is listening, `kubectl port-forward` does not fail:
+it binds `[::1]` only and prints an ordinary "Forwarding from [::1]:5335" line, and the address you open then
+answers from whatever holds the IPv4 port. Forward a different local port instead — `15335:5335` — and open
+<http://localhost:15335>. Both `localhost` and `127.0.0.1` reach the UI only when the port-forward bound both.
+A `helm upgrade` that replaces the store pod ends an open
 port-forward; run the command again.
 
 Values, tiers (sqlite on an emptyDir / sqlite on a PVC / postgres) and what the chart refuses to install:
@@ -223,6 +247,8 @@ at `/etc/flanj/config.yaml`. That file knows the hosted control plane, `https://
 detection, edge discovery and the UI all work on the first run — looking around without connecting is the
 point. **Connect** (Settings) is the one thing that needs you: it asks for a collector name and a contact
 email, no token, and the contact's confirmation click is what adds the collector to their Flanj workspace.
+Use the address you sign in to app.flanj.io with as the contact email: the confirmation click adds the
+collector to that person's workspace, so a different address lands it in a different workspace.
 The panel asks for no organization name: the contact names the workspace on the confirmation page, and
 that name — the one other organizations see on your threads — shows in the UI once it is set.
 
