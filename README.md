@@ -248,10 +248,7 @@ detection, edge discovery and the UI all work on the first run — looking aroun
 point. **Connect** (Settings) is the one thing that needs you: it asks for a collector name and a contact
 email, no token, and the contact's confirmation click is what adds the collector to their Flanj workspace.
 Use the address you sign in to app.flanj.io with as the contact email: the confirmation click adds the
-collector to that person's workspace, so a different address lands it in a different workspace. Confirmation
-mails are limited per address per day; past the limit the panel answers "That address has reached today's
-limit on contact confirmation emails — try again later.", and you try again the next day or with another
-address you sign in with.
+collector to that person's workspace, so a different address lands it in a different workspace.
 The panel asks for no organization name: the contact names the workspace on the confirmation page, and
 that name — the one other organizations see on your threads — shows in the UI once it is set.
 
