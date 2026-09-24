@@ -31,7 +31,10 @@
    {{ .Release.Namespace }}{{ with .Values.endpointConfigMap.namespaces }} and in {{ join ", " . }}{{ end }}, if you would rather write
    `envFrom: [{configMapRef: {name: flanj-endpoint}}]`. A pod can only
    reference a ConfigMap in its OWN namespace: add yours to
-   endpointConfigMap.namespaces.
+   endpointConfigMap.namespaces. envFrom replaces only FLANJ_OTLP_ENDPOINT:
+   a Node workload still needs `env: [{name: NODE_OPTIONS, value:
+   "--require @flanj/sdk/register"}]` beside it, or the SDK never loads and
+   nothing is captured. Python does not need it.
 {{- end }}
 
 2. Open the UI. It binds container loopback on the STORE pod by design — the
@@ -39,9 +42,14 @@
 
      kubectl -n {{ .Release.Namespace }} port-forward {{ if eq .Values.store.backend "sqlite" }}sts/{{ include "flanj-collector.store.fullname" . }}{{ else }}deploy/{{ include "flanj-collector.store.fullname" . }}{{ end }} 5335:5335
 
-   then http://localhost:5335 (health: /api/health). If 5335 is taken on your
-   machine, forward 15335:5335 and open http://localhost:15335 instead. An
-   upgrade that replaces the store pod ends the port-forward; run it again.
+   then http://localhost:5335 (health: /api/health). Check the port is free
+   first: lsof -nP -iTCP:5335 -sTCP:LISTEN (macOS/Linux; no output = free).
+   If something holds it, kubectl does not fail: it binds [::1] only, prints
+   a normal "Forwarding from [::1]:5335" line, and the UI address then answers
+   from whatever holds the IPv4 port. Forward 15335:5335 and open
+   http://localhost:15335 instead. localhost and 127.0.0.1 both reach the UI
+   only when the port-forward bound both. An upgrade that replaces the store
+   pod ends the port-forward; run it again.
 
 3. CHECK A FRONT'S LOGS, not just that its pods are Ready. The two roles fail
    differently on purpose: the store pod refuses to start without a contract
@@ -53,10 +61,11 @@
 
      kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "flanj-collector.front.fullname" . }} --all-pods | grep -i 'contract refresh'
 
-   A few refresh failures in the first seconds are expected: the store Service
-   not yet resolvable (`no such host`) or not yet Ready (`context deadline
-   exceeded`), before each front's next refresh succeeds. A 401 is never
-   expected.
+   Two refresh failures are expected within the first minute, in either
+   order: the store Service not yet resolvable (`no such host`) or not yet
+   Ready (`context deadline exceeded`), about 15-35 seconds after the pod
+   starts. There is no success line: silence after them is the healthy
+   result. A 401 is never expected.
 {{ if not .Values.controlPlane.baseUrl }}
 4. controlPlane.baseUrl is empty, so this deployment is fully local: it
    captures, redacts and detects drift, and it cannot create thread links.

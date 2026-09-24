@@ -47,8 +47,16 @@ Service, so reach it with a port-forward:
 kubectl -n flanj port-forward sts/flanj-flanj-collector-store 5335:5335
 ```
 
-If `5335` is already taken — the Docker quickstart publishes it — forward `15335:5335` and open
-<http://localhost:15335> instead.
+Check that `5335` is free first — the Docker quickstart publishes it, and another collector may hold it:
+
+```bash
+lsof -nP -iTCP:5335 -sTCP:LISTEN
+```
+
+No output means it is free (macOS and Linux). If something is listening, `kubectl port-forward` does not fail:
+it binds `[::1]` only and prints an ordinary "Forwarding from [::1]:5335" line, and the address you open then
+answers from whatever holds the IPv4 port. Forward a different local port instead — `15335:5335` — and open
+<http://localhost:15335>. Both `localhost` and `127.0.0.1` reach the UI only when the port-forward bound both.
 
 The operator's reference for the shapes, the flows and what each object is for
 is [`docs/DEPLOYMENT.md`](../../docs/DEPLOYMENT.md); the store's backends,
@@ -197,10 +205,11 @@ reference a ConfigMap than write the literal string. **A pod can only reference 
 namespace**, and this chart installs into the collector's — so pointing a workload in another namespace at
 it is one ordered route:
 
-1. Create the namespace first — `--create-namespace` only creates the release's:
+1. Make sure the namespace exists first — `--create-namespace` only creates the release's. Your
+   application's namespace usually exists already; this creates it only if it does not:
 
    ```bash
-   kubectl create namespace shop
+   kubectl create namespace shop --dry-run=client -o yaml | kubectl apply -f -
    ```
 
 2. Add it to the map's namespaces (the release namespace is always included; the installing credential
@@ -212,13 +221,19 @@ it is one ordered route:
      --set 'endpointConfigMap.namespaces={shop}'
    ```
 
-3. Reference it from the workload deployed in that namespace:
+3. Reference it from the workload deployed in that namespace, keeping the SDK preload in `env:` beside it:
 
    ```yaml
    envFrom:
      - configMapRef:
          name: flanj-endpoint
+   env:
+     - name: NODE_OPTIONS
+       value: "--require @flanj/sdk/register"
    ```
+
+   `envFrom` replaces only `FLANJ_OTLP_ENDPOINT`. Node still needs the preload — swapping the whole `env:`
+   block for `envFrom:` drops it, and the pod then captures nothing and warns of nothing. Python does not.
 
 4. Restart the workload's pods to pick it up — `envFrom` is read only at pod start:
 
@@ -258,10 +273,11 @@ kubectl -n flanj logs deploy/flanj-flanj-collector-front --all-pods | grep -i 'c
 # or: kubectl -n flanj logs -l app.kubernetes.io/component=front --all-pods | grep -i 'contract refresh'
 ```
 
-A few refresh failures in the first seconds are expected: the store Service is not yet resolvable
-(`contract refresh failed … dial tcp: lookup flanj-flanj-collector-store: no such host`) or not yet Ready
-(`contract refresh failed … store pod unreachable … context deadline exceeded`), before each front's next
-refresh succeeds. A `401` is never expected:
+Two refresh failures are expected within the first minute, in either order: the store Service is not yet
+resolvable (`contract refresh failed … dial tcp: lookup flanj-flanj-collector-store: no such host`) or not yet
+Ready (`contract refresh failed … store pod unreachable … context deadline exceeded`). They arrive roughly
+15–35 seconds after the pod starts, before each front's next refresh succeeds. There is no success line:
+silence after them is the healthy result. A `401` is never expected:
 `contract refresh failed … 401 Unauthorized`
 means the two roles hold different tokens — which this chart prevents unless
 you supplied an `existingSecret` whose value changed underneath it.
