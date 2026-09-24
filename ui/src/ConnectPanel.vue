@@ -13,7 +13,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { ApiError, apiPost } from './api';
 import { needsCollectorAddress, type ConnectState } from './threads';
-import { applySeed, seededValues, untouched, type ConnectFormTouched } from './connect-form';
+import { applySeed, connectLabel, seededValues, untouched, type ConnectFormTouched } from './connect-form';
 import { mailNotice, type MailAttempt } from './connect-mail';
 import { edgeDisclosure } from './connect-disclosure';
 
@@ -34,6 +34,7 @@ const localUrl = ref('');
 const editing = ref(false);
 const busy = ref(false);
 const errorMsg = ref('');
+const errorStatus = ref(0);
 const validation = ref('');
 
 /**
@@ -124,6 +125,7 @@ async function addAddress() {
   attempt.value = null;
   validation.value = '';
   errorMsg.value = '';
+  errorStatus.value = 0;
   await nextTick();
   localUrlEl.value?.focus();
 }
@@ -143,6 +145,7 @@ async function rename() {
   attempt.value = null;
   validation.value = '';
   errorMsg.value = '';
+  errorStatus.value = 0;
   await nextTick();
   collectorNameEl.value?.focus();
   collectorNameEl.value?.select();
@@ -155,6 +158,7 @@ function validEmail(v: string): boolean {
 async function submit(resend = false) {
   validation.value = '';
   errorMsg.value = '';
+  errorStatus.value = 0;
   if (!collectorName.value.trim()) {
     validation.value = 'Give this collector a name.';
     return;
@@ -192,6 +196,7 @@ async function submit(resend = false) {
     emit('update:state', s);
   } catch (e) {
     errorMsg.value = e instanceof ApiError ? e.message : "Couldn't reach Flanj — nothing was sent.";
+    errorStatus.value = e instanceof ApiError ? e.status : 0;
   } finally {
     busy.value = false;
   }
@@ -208,6 +213,7 @@ function cancelEdit() {
   editing.value = false;
   validation.value = '';
   errorMsg.value = '';
+  errorStatus.value = 0;
   seedForm(true);
   emit('cancel');
 }
@@ -322,13 +328,13 @@ function cancelEdit() {
       <label class="field">
         <span class="field-label">Collector address <span class="dim">(optional)</span></span>
         <input ref="localUrlEl" v-model="localUrl" type="url" :disabled="busy" @input="markTouched('localUrl')" @focus="setFocus('localUrl')" @blur="setFocus(null)" />
-        <span class="field-help">The URL where you open this UI. Sent with your registration and used only in links back here.</span>
+        <span class="field-help">Pre-filled from the address you opened this UI at. Sent with your registration and shown as this collector's address in the confirmation mail and your workspace, and used only in links back here. Clear it if that address only works for you, such as a port-forward.</span>
       </label>
       <p v-if="validation" class="error">{{ validation }}</p>
       <p v-if="errorMsg" class="error">{{ errorMsg }}</p>
       <div class="connect-actions">
         <button type="submit" class="btn primary" :disabled="busy">
-          {{ busy ? 'Connecting…' : errorMsg ? 'Retry' : 'Connect' }}
+          {{ connectLabel(busy, errorMsg, errorStatus) }}
         </button>
         <button v-if="editing || inline" type="button" class="btn ghost" :disabled="busy" @click="cancelEdit">Cancel</button>
       </div>

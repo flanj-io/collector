@@ -89,3 +89,14 @@ describe('connect form seeding (background polls must never clobber typed text)'
     expect(next).toEqual({ collectorName: '', name: '', email: 'kept@typed', localUrl: 'http://origin' });
   });
 });
+
+describe('connectLabel: no Retry beside a rate-limit refusal', () => {
+  it('shows Retry after an ordinary failure, but not after a 429', async () => {
+    const { connectLabel } = await import('./connect-form');
+    expect(connectLabel(false, '', 0)).toBe('Connect');
+    expect(connectLabel(true, '', 0)).toBe('Connecting…');
+    expect(connectLabel(false, "Couldn't reach Flanj — nothing was sent.", 0)).toBe('Retry');
+    expect(connectLabel(false, 'HTTP 502', 502)).toBe('Retry');
+    expect(connectLabel(false, "That address has reached today's limit on contact confirmation emails — try again later.", 429)).toBe('Connect');
+  });
+});

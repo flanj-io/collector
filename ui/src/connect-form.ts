@@ -50,3 +50,15 @@ export function applySeed(
   };
   return { collectorName: pick('collectorName'), name: pick('name'), email: pick('email'), localUrl: pick('localUrl') };
 }
+
+/**
+ * The Connect button's label. "Retry" invites an immediate second press, which is right for a
+ * failure that may pass (an unreachable control plane) and wrong for a rate-limit refusal (429),
+ * e.g. the daily cap on confirmation mails: pressing again cannot succeed. That refusal keeps the
+ * plain "Connect" label, which still lets the reader change the contact address, the other way out.
+ */
+export function connectLabel(busy: boolean, errorMsg: string, errorStatus: number): string {
+  if (busy) return 'Connecting…';
+  if (errorMsg && errorStatus !== 429) return 'Retry';
+  return 'Connect';
+}
