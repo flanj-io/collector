@@ -322,7 +322,7 @@ function cancelEdit() {
       <label class="field">
         <span class="field-label">Collector address <span class="dim">(optional)</span></span>
         <input ref="localUrlEl" v-model="localUrl" type="url" :disabled="busy" @input="markTouched('localUrl')" @focus="setFocus('localUrl')" @blur="setFocus(null)" />
-        <span class="field-help">The URL where you open this UI. Sent with your registration and used only in links back here.</span>
+        <span class="field-help">Pre-filled from the address you opened this UI at. Sent with your registration and shown as this collector's address in the confirmation mail and your workspace, and used only in links back here. Clear it if that address only works for you, such as a port-forward.</span>
       </label>
       <p v-if="validation" class="error">{{ validation }}</p>
       <p v-if="errorMsg" class="error">{{ errorMsg }}</p>

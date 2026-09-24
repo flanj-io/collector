@@ -186,3 +186,11 @@ describe('"Sent again" is said of a delivery, not of a button', () => {
     w.unmount();
   });
 });
+
+describe('Connect panel: the address hint says what the pre-filled address does', () => {
+  it('says the field is pre-filled and when to clear it', () => {
+    wrapper = mount(ConnectPanel, { props: { state: null, defaultOrg: ORG } });
+    const help = wrapper.findAll('.field-help').map((h) => h.text()).find((t) => t.includes('Pre-filled'));
+    expect(help, 'the address hint must say it is pre-filled').toContain('Clear it if');
+  });
+});

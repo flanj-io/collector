@@ -225,6 +225,7 @@ npm install @flanj/sdk
 
 ```bash
 node -r @flanj/sdk/register app.js
+node --import @flanj/sdk/register app.mjs   # the ESM-native flag; equivalent
 ```
 
 `node:http` / `node:https`, the clients built on them (`axios`, `got`, `node-fetch`, `superagent`) and, from
