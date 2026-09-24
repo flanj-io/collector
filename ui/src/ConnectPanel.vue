@@ -13,7 +13,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { ApiError, apiPost } from './api';
 import { needsCollectorAddress, type ConnectState } from './threads';
-import { applySeed, connectLabel, seededValues, untouched, type ConnectFormTouched } from './connect-form';
+import { applySeed, seededValues, untouched, type ConnectFormTouched } from './connect-form';
 import { mailNotice, type MailAttempt } from './connect-mail';
 import { edgeDisclosure } from './connect-disclosure';
 
@@ -34,7 +34,6 @@ const localUrl = ref('');
 const editing = ref(false);
 const busy = ref(false);
 const errorMsg = ref('');
-const errorStatus = ref(0);
 const validation = ref('');
 
 /**
@@ -125,7 +124,6 @@ async function addAddress() {
   attempt.value = null;
   validation.value = '';
   errorMsg.value = '';
-  errorStatus.value = 0;
   await nextTick();
   localUrlEl.value?.focus();
 }
@@ -145,7 +143,6 @@ async function rename() {
   attempt.value = null;
   validation.value = '';
   errorMsg.value = '';
-  errorStatus.value = 0;
   await nextTick();
   collectorNameEl.value?.focus();
   collectorNameEl.value?.select();
@@ -158,7 +155,6 @@ function validEmail(v: string): boolean {
 async function submit(resend = false) {
   validation.value = '';
   errorMsg.value = '';
-  errorStatus.value = 0;
   if (!collectorName.value.trim()) {
     validation.value = 'Give this collector a name.';
     return;
@@ -196,7 +192,6 @@ async function submit(resend = false) {
     emit('update:state', s);
   } catch (e) {
     errorMsg.value = e instanceof ApiError ? e.message : "Couldn't reach Flanj — nothing was sent.";
-    errorStatus.value = e instanceof ApiError ? e.status : 0;
   } finally {
     busy.value = false;
   }
@@ -213,7 +208,6 @@ function cancelEdit() {
   editing.value = false;
   validation.value = '';
   errorMsg.value = '';
-  errorStatus.value = 0;
   seedForm(true);
   emit('cancel');
 }
@@ -334,7 +328,7 @@ function cancelEdit() {
       <p v-if="errorMsg" class="error">{{ errorMsg }}</p>
       <div class="connect-actions">
         <button type="submit" class="btn primary" :disabled="busy">
-          {{ connectLabel(busy, errorMsg, errorStatus) }}
+          {{ busy ? 'Connecting…' : errorMsg ? 'Retry' : 'Connect' }}
         </button>
         <button v-if="editing || inline" type="button" class="btn ghost" :disabled="busy" @click="cancelEdit">Cancel</button>
       </div>

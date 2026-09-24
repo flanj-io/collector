@@ -187,34 +187,10 @@ describe('"Sent again" is said of a delivery, not of a button', () => {
   });
 });
 
-describe('Connect panel: a daily-limit refusal offers no Retry; the address hint says what it does', () => {
-  it('renders the refusal without a Retry button, and a plain failure with one', async () => {
-    let status = 429;
-    let body: unknown = {
-      error: 'rate_limited',
-      message: "That address has reached today's limit on contact confirmation emails — try again later."
-    };
-    vi.stubGlobal('fetch', vi.fn(async () => json(body, status)));
+describe('Connect panel: the address hint says what the pre-filled address does', () => {
+  it('says the field is pre-filled and when to clear it', () => {
     wrapper = mount(ConnectPanel, { props: { state: null, defaultOrg: ORG } });
-    const w = wrapper;
-    await w.find('input[placeholder="e.g. prod-eu"]').setValue('prod-eu');
-    await w.find('input[type="email"]').setValue(EMAIL);
-    await w.find('form').trigger('submit');
-    await settle(w);
-    expect(w.find('.error').text()).toContain("today's limit on contact confirmation emails");
-    const labels = w.findAll('button').map((b) => b.text().trim());
-    expect(labels, 'no Retry beside a daily limit').not.toContain('Retry');
-    expect(labels).toContain('Connect');
-
-    // An ordinary failure still offers Retry.
-    status = 502;
-    body = { error: 'cp_unreachable', message: "Couldn't reach Flanj — nothing was sent." };
-    await w.find('form').trigger('submit');
-    await settle(w);
-    expect(w.findAll('button').map((b) => b.text().trim())).toContain('Retry');
-
-    // The address field is pre-filled, and the hint says so and when to clear it.
-    const help = w.findAll('.field-help').map((h) => h.text()).find((t) => t.includes('Pre-filled'));
+    const help = wrapper.findAll('.field-help').map((h) => h.text()).find((t) => t.includes('Pre-filled'));
     expect(help, 'the address hint must say it is pre-filled').toContain('Clear it if');
   });
 });
